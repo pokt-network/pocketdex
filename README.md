@@ -1,90 +1,169 @@
-# SubQuery - Example Project for Fetch.AI
+![poketdex.png](docs%2Fassets%2Fpoketdex.png)
+![pocketdex-mono.png](docs%2Fassets%2Fpocketdex-mono.png)
+![gotta-cache-em-all2.png](docs%2Fassets%2Fgotta-cache-em-all2.png)
 
-[SubQuery](https://subquery.network) is a fast, flexible, and reliable open-source data indexer that provides you with custom APIs for your web3 project across all of our supported networks. To learn about how to get started with SubQuery, [visit our docs](https://academy.subquery.network).
+Pocketdex is an indexer for the Shannon implementation of the pocket network protocol. 
+It is built using the [SubQuery](https://subquery.network) SDK, which wraps [postgraphile](https://www.graphile.org/postgraphile/) to provide a robust GraphQL API to the indexed data. 
+To learn more about SubQuery, [see their docs](https://academy.subquery.network).
 
-**This SubQuery project indexes all events and messages from Fetch.ai**
+# Developing
 
-## Start
+## Getting Started
 
-First, install SubQuery CLI globally on your terminal by using NPM `npm install -g @subql/cli`
+### 1. Ensure submodules are updated
 
-You can either clone this GitHub repo, or use the `subql` CLI to bootstrap a clean project in the network of your choosing by running `subql init` and following the prompts.
-
-Don't forget to install dependencies with `npm install` or `yarn install`!
-
-## Editing your SubQuery project
-
-Although this is a working example SubQuery project, you can edit the SubQuery project by changing the following files:
-
-- The project manifest in `project.ts` defines the key project configuration and mapping handler filters
-- The GraphQL Schema (`schema.graphql`) defines the shape of the resulting data that you are using SubQuery to index
-- The Mapping functions in `src/mappings/` directory are typescript functions that handle transformation logic
-
-SubQuery supports various layer-1 blockchain networks and provides [dedicated quick start guides](https://academy.subquery.network/quickstart/quickstart.html) as well as [detailed technical documentation](https://academy.subquery.network/build/introduction.html) for each of them.
-
-## Run your project
-
-_If you get stuck, find out how to get help below._
-
-The simplest way to run your project is by running `yarn dev` or `npm run-script dev`. This does all of the following:
-
-1.  `yarn codegen` - Generates types from the GraphQL schema definition and contract ABIs and saves them in the `/src/types` directory. This must be done after each change to the `schema.graphql` file or the contract ABIs
-2.  `yarn build` - Builds and packages the SubQuery project into the `/dist` directory
-3.  `docker-compose pull && docker-compose up` - Runs a Docker container with an indexer, PostgeSQL DB, and a query service. This requires [Docker to be installed](https://docs.docker.com/engine/install) and running locally. The configuration for this container is set from your `docker-compose.yml`
-
-You can observe the three services start, and once all are running (it may take a few minutes on your first start), please open your browser and head to [http://localhost:3000](http://localhost:3000) - you should see a GraphQL playground showing with the schemas ready to query. [Read the docs for more information](https://academy.subquery.network/run_publish/run.html) or [explore the possible service configuration for running SubQuery](https://academy.subquery.network/run_publish/references.html).
-
-## Query your project
-
-For this project, you can try to query with the following GraphQL code to get a taste of how it works.
-
-```graphql
-{
-  query {
-    transferEvents(first: 2, orderBy: BLOCK_HEIGHT_ASC) {
-      totalCount
-      nodes {
-        id
-        blockHeight
-        txHash
-        sender
-        recipient
-        amount
-      }
-    }
-    messages(first: 2) {
-      nodes {
-        id
-        blockHeight
-        txHash
-        from
-        to
-        amount
-      }
-    }
-  }
-}
+```shell
+git submodule update --init --recursive
 ```
 
-You can explore the different possible queries and entities to help you with GraphQL using the documentation draw on the right.
+### 2. Install dependencies
 
-## Publish your project
+```shell
+yarn
 
-SubQuery is open-source, meaning you have the freedom to run it in the following three ways:
+# install submodule dependencies
+(cd ./subql && yarn)
+```
 
-- Locally on your own computer (or a cloud provider of your choosing), [view the instructions on how to run SubQuery Locally](https://academy.subquery.network/run_publish/run.html)
-- By publishing it to our enterprise-level [Managed Service](https://managedservice.subquery.network), where we'll host your SubQuery project in production ready services for mission critical data with zero-downtime blue/green deployments. We even have a generous free tier. [Find out how](https://academy.subquery.network/run_publish/publish.html)
-- [Coming Soon] By publishing it to the decentralised [SubQuery Network](https://subquery.network/network), the most open, performant, reliable, and scalable data service for dApp developers. The SubQuery Network indexes and services data to the global community in an incentivised and verifiable way
+### 3. Generate types
 
-## What Next?
+Types will need to be regenerated any time the graphql.schema is changed.
 
-Take a look at some of our advanced features to take your project to the next level!
+```shell
+yarn codegen
+```
 
-- [**Multi-chain indexing support**](https://academy.subquery.network/build/multi-chain.html) - SubQuery allows you to index data from across different layer-1 networks into the same database, this allows you to query a single endpoint to get data for all supported networks.
-- [**Dynamic Data Sources**](https://academy.subquery.network/build/dynamicdatasources.html) - When you want to index factory contracts, for example on a DEX or generative NFT project.
-- [**Project Optimisation Advice**](https://academy.subquery.network/build/optimisation.html) - Some common tips on how to tweak your project to maximise performance.
-- [**GraphQL Subscriptions**](https://academy.subquery.network/run_publish/subscription.html) - Build more reactive front end applications that subscribe to changes in your SubQuery project.
+### 4. Build
 
-## Need Help?
+The project will need to be rebuilt any time any TypeScript source files are changed, including when types are regenerated.
 
-The fastest way to get support is by [searching our documentation](https://academy.subquery.network), or by [joining our discord](https://discord.com/invite/subquery) and messaging us in the `#technical-support` channel.
+```shell
+yarn build
+
+# build submodule
+(cd ./subql && yarn build)
+```
+
+### 5. Run locally
+
+```shell
+yarn start:docker
+```
+
+## End-to-end Testing
+
+_TODO_
+
+## Tracing
+
+_TODO_
+
+## DB Migrations
+
+This repository uses [graphile-migrate](https://github.com/graphile/migrate) CLI to manage database migrations.
+
+### Install dependencies
+
+Install global npm dependencies:
+
+- [graphile-migrate](https://github.com/graphile/migrate)
+- [plv8ify](https://plv8.github.io/)
+
+```bash
+npm install -g graphile-migrate plv8ify
+```
+
+### Running Migrations
+
+Given that you already have a database with some, potentially outdated, schema, you can catch up to the latest state by running all committed but unapplied migrations:
+
+```bash
+graphile-migrate migrate
+```
+
+_(see: [graphile-migrate README](https://github.com/graphile/migrate#usage) for more)_
+
+### Creating Migrations
+
+#### New table schemas
+
+When introducing schema change which adds an entity / table, it is currently most convenient to allow the subquery node to initially generate any new tables (including indexes and constraints).
+This schema can then be dumped for use in the accompanying migration.
+
+The current schema sql file can be generated from an existing DB schema (optionally, including data) via [`pg_dump`](https://www.postgresql.org/docs/current/app-pgdump.html).
+Package scripts are available for dumping the schema only or for dumping the schema plus any data present:
+```bash
+yarn db:dump:schema
+# OR
+yarn db:dump:all
+```
+
+Additional arguments may be forwarded to the underlying `pg_dump` command by appending `-- <additional args / flags>` when running package scripts (see: [npm-run-script docs](https://docs.npmjs.com/cli/v6/commands/npm-run-script)). For example:
+
+```bash
+# Dumps schema only from blocks and messages tables
+yarn db:dump:schema -- -t blocks -t messages
+```
+
+##### When `pg_dump` is insufficient
+
+In some cases, `pg_dump` may not export a relevant DB object; for example, enums.
+In these cases it is necessary to manually extract the relevant data from the DB and incorporate it into the initial_schema.sql file.
+
+In the case of **enums**, the following queries expose the relevant records, the results from which can be re-written as a COPY or INSERT statements into the respective tables from which they came:
+
+```
+# List enum types
+SELECT oid, typname FROM pg_type WHERE typcategory = 'E';
+
+# List values for a particular enum
+SELECT * from pg_enum where enumtypid = <pg_type.oid>;
+```
+
+#### TypeScript migration
+
+It is not necessary to add any TypeScript source as part of any migration (e.g. 000002).
+In the event that the migration is too complex to be easily reasoned about it in SQL, it may be more straightforward to use the plv8ify workflow:
+
+1. Write a migration in ./migrations/current.ts which exports a single function that kicks off the migration (see: [plv8 docs > built-ins](https://plv8.github.io/#plv8-built-ins)).
+2. Transform the current typescript migration function to a .sql function:
+    ```
+    yarn plv8ify
+    ```
+
+   **This writes the generated SQL to ./migrations/current.sql.**
+3. Since we're using a non-default schema name, it's prudent to prepend the following preamble to current.sql:
+    ```
+    CREATE SCHEMA IF NOT EXISTS app;
+    SET SCHEMA 'app';
+    ```
+4. Lastly, in order for the migration function to execute when the migration is applied, append the following to current.sql (substituting labels identified by surrounding brackets with their respective values):
+    ```
+    SELECT * from <migration function>([arg, ...]);
+    ```
+
+### Committing Migrations
+
+Once you're ready to test / apply the migration:
+```bash
+graphile-migrate commit
+```
+
+If it was successful, graphile-migrate will have moved the contents of current.sql (and reset it) into a file named by the next number in the migration count sequence.
+
+_(see: [graphile-migrate README](https://github.com/graphile/migrate#usage) for more)_
+
+### Cleanup
+
+If the plv8ify workflow was used, until it is automated, it is conventional to manually move the contents of the current.ts file into a file in migrations/src named after its respective generated SQL file.
+**It is against convention to update any import paths as a result of this move.**
+
+##### Debugging
+
+When things aren't going perfectly, [`plv8.elog`](https://plv8.github.io/#plv8-built-ins) is extremely useful for getting more detail out of the running migration.
+Be sure to be looking at the **postgres service's logs** (as opposed to the error message returned by `graphile-migrate`):
+
+```bash
+docker compose logs -f postgres
+```
+

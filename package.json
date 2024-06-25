@@ -1,7 +1,7 @@
 {
   "name": "pocketdex",
   "version": "0.0.1",
-  "description": "Pocketdex is an indexer for the Shannon implemenetation of the pocket network protocol.",
+  "description": "Pocketdex is an indexer for the Shannon implementation of the pocket network protocol.",
   "main": "dist/index.js",
   "scripts": {
     "build": "subql codegen && subql build",
