@@ -12,9 +12,8 @@ COPY . /app
 RUN yarn install # --frozen-lockfile
 
 ## Build forked vendor packages
-WORKDIR /app/vendor
-RUN yarn install
-RUN yarn workspace @subql/node-cosmos build
+RUN yarn run vendor:clean
+RUN yarn run vendor:setup
 
 # Build pocketdex
 WORKDIR /app
