@@ -1,0 +1,31 @@
+syntax = "proto3";
+package poktroll.tokenomics;
+
+option go_package = "github.com/pokt-network/poktroll/x/tokenomics/types";
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+// Params defines the parameters for the tokenomics module.
+message Params {
+  option (amino.name) = "poktroll/x/tokenomics/Params";
+  option (gogoproto.equal) = true;
+
+  // The amount of upokt that a compute unit should translate to when settling a session.
+  uint64 compute_units_to_tokens_multiplier = 1 [(gogoproto.jsontag) = "compute_units_to_tokens_multiplier", (gogoproto.moretags) = "yaml:\"compute_units_to_tokens_multiplier\""];
+
+  // IMPORTANT: Make sure to update all related files if you're modifying or adding a new parameter.
+  // Try the following grep to find all related places: `grep -r compute_units_to_tokens_multiplier`
+  // TODO_IMPROVE: Look into an opportunity to use an enum to avoid using strings throughout the codebase.
+
+  // TODO_ADD: Some parameters we should consider adding next:
+  //   - Service.computeUnitsToTokensMultiplierMap
+  //   - Application.MaxuPOKTPerRelay
+  //   - Application.MinuPOKTPerRelay
+  //   - Suppler.MaxuPOKTPerRelay
+  //   - Suppler.MinuPOKTPerRelay
+  //   - RevDistr.PercentageToSupploer
+  //   - RevDistr.PercentageToDAO
+  //   - RevDistr.PercentageToPNF
+  //   - RevDistr.PercentageToDelegators
+}

@@ -67,6 +67,137 @@ const project: CosmosProject = {
           messages: ["WeightedVoteOption"],
         },
       ],
+      [
+        "cosmos.base.v1beta1",
+        {
+          file: "./proto/cosmos/base/v1beta1/coin.proto",
+          messages: ["Coin"],
+        },
+      ],
+      // --- Application module messages and events
+      [
+        "poktroll.application",
+        {
+          file: "./proto/poktroll/application/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+            "MsgStakeApplication",
+            "MsgUnstakeApplication",
+            "MsgDelegateToGateway",
+            "MsgUndelegateFromGateway",
+          ],
+        },
+      ],
+      // TODO_BLOCKER(@bryanchriswhite): Figure out how to support multiple files
+      //  for the same protobuf package.
+      //
+      // // --- Application module events
+      // [
+      //   "poktroll.application",
+      //   {
+      //     file: "./proto/poktroll/application/event.proto",
+      //     messages: [
+      //       "EventRedelegation"
+      //     ],
+      //   },
+      // ],
+      // --- Gateway module messages
+      [
+        "poktroll.gateway",
+        {
+          file: "./proto/poktroll/gateway/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+            "MsgStakeGateway",
+            "MsgUnstakeGateway",
+          ],
+        },
+      ],
+      // --- Proof module messages
+      [
+        "poktroll.proof",
+        {
+          file: "./proto/poktroll/proof/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+            "MsgUpdateParam",
+            "MsgCreateClaim",
+            "MsgSubmitProof",
+          ],
+        },
+      ],
+      // --- Session module types
+      [
+        "poktroll.session",
+        {
+          file: "./proto/poktroll/session/session.proto",
+          messages: [
+            "SessionHeader",
+          ],
+        },
+      ],
+      // TODO_BLOCKER(@bryanchriswhite): Figure out how to support multiple files
+      //  for the same protobuf package.
+      //
+      // // --- Shared module messages
+      // [
+      //   "poktroll.shared",
+      //   {
+      //     file: "./proto/poktroll/shared/tx.proto",
+      //     messages: [
+      //       "MsgUpdateParams",
+      //       "MsgUpdateParam",
+      //     ],
+      //   },
+      // ],
+      // --- Shared module types
+      [
+        "poktroll.shared",
+        {
+          file: "./proto/poktroll/shared/service.proto",
+          messages: [
+            "Service",
+          ],
+        },
+      ],
+      // --- Supplier module messages
+      [
+        "poktroll.supplier",
+        {
+          file: "./proto/poktroll/supplier/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+            "MsgStakeSupplier",
+            "MsgUnstakeSupplier",
+          ],
+        },
+      ],
+      // TODO_BLOCKER(@bryanchriswhite): Figure out how to support multiple files
+      //  for the same protobuf package.
+      //
+      // // --- Tokenomics module messages
+      // [
+      //   "poktroll.tokenomics",
+      //   {
+      //     file: "./proto/poktroll/tokenomics/tx.proto",
+      //     messages: [
+      //       "MsgUpdateParams",
+      //       "MsgUpdateParam",
+      //     ],
+      //   },
+      // ],
+      // --- Tokenomics module events
+      [
+        "poktroll.tokenomics",
+        {
+          file: "./proto/poktroll/tokenomics/event.proto",
+          messages: [
+            "EventClaimSettled",
+            "EventClaimExpired",
+            "EventRelayMiningDifficultyUpdated",
+          ],
+        },
+      ],
     ]),
   },
   dataSources: [
