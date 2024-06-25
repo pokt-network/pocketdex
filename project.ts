@@ -207,22 +207,47 @@ const project: CosmosProject = {
       mapping: {
         file: "./dist/index.js",
         handlers: [
+          // --- Primitives
           {
-            handler: "handleEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "transfer",
-              messageFilter: {
-                type: "/cosmos.bank.v1beta1.MsgSend",
-              },
-            },
+            handler: "handleBlock",
+            kind: CosmosHandlerKind.Block,
+          },
+          {
+            handler: "handleTransaction",
+            kind: CosmosHandlerKind.Transaction,
           },
           {
             handler: "handleMessage",
             kind: CosmosHandlerKind.Message,
+          },
+          {
+            handler: "handleEvent",
+            kind: CosmosHandlerKind.Event,
+          },
+          // --- Bank
+          {
+            handler: "handleNativeTransfer",
+            kind: CosmosHandlerKind.Event,
             filter: {
-              type: "/cosmos.bank.v1beta1.MsgSend",
-            },
+              type: "transfer",
+              messageFilter: {
+                type: "/cosmos.bank.v1beta1.MsgSend"
+              }
+            }
+          },
+          {
+            handler: "handleNativeBalanceDecrement",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "coin_spent",
+            }
+          },
+          {
+            handler: "handleNativeBalanceIncrement",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "coin_received",
+            }
           },
         ],
       },
