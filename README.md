@@ -6,6 +6,10 @@ Pocketdex is an indexer for the Shannon implementation of the pocket network pro
 It is built using the [SubQuery](https://subquery.network) SDK, which wraps [postgraphile](https://www.graphile.org/postgraphile/) to provide a robust GraphQL API to the indexed data. 
 To learn more about SubQuery, [see their docs](https://academy.subquery.network).
 
+# Docs
+
+See the [docs](./docs/introduction.md) directory.
+
 # Developing
 
 ## Getting Started
