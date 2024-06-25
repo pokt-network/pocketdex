@@ -4,13 +4,15 @@
   "description": "Pocketdex is an indexer for the Shannon implementation of the pocket network protocol.",
   "main": "dist/index.js",
   "scripts": {
-    "build": "subql codegen && subql build",
+    "build": "subql codegen &&  sed -i 's/\\[key: bigint\\]/\\[key: number\\]/g' ./src/types/proto-interfaces/poktroll/application/application.ts && subql build",
     "codegen": "subql codegen",
     "start:docker": "docker-compose pull && docker-compose up --remove-orphans",
+    "stop:docker": "docker-compose down",
     "dev": "subql codegen && subql build && docker-compose pull && docker-compose up --remove-orphans",
     "prepack": "rm -rf dist && npm run build",
     "test": "subql build && subql-node-cosmos test",
-    "build:develop": "NODE_ENV=develop subql codegen && NODE_ENV=develop subql build"
+    "build:develop": "NODE_ENV=develop subql codegen &&  sed -i 's/\\[key: bigint\\]/\\[key: number\\]/g' ./src/types/proto-interfaces/poktroll/application/application.ts && NODE_ENV=develop subql build",
+    "db:clean": "docker volume rm pocketdex_postgres_data"
   },
   "homepage": "https://github.com/subquery/cosmos-subql-starter",
   "repository": "github:subquery/cosmos-subql-starter",
