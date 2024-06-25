@@ -2,31 +2,111 @@
 # Add the `@index` or `@index(unique: true)` annotation after any non-key field
 # https://academy.subquery.network/build/graphql.html#indexing-by-non-primary-key-field
 
-# type Block @entity {
-#   id: ID! # The block hash
-#   height: BigInt!
-# }
+enum TxStatus {
+  Success
+  Error
+}
 
-# type Transaction @entity {
-#   id: ID!
-#   blockHeight: BigInt!
-#   timestamp: String!
-# }
-
-type TransferEvent @entity {
+type EventAttribute @entity {
   id: ID!
-  blockHeight: BigInt!
-  txHash: String!
-  recipient: String!
-  sender: String!
-  amount: String!
+  key: String!
+  value: String!
+  event: Event!
+}
+
+type Block @entity {
+  id: ID! # The block header hash
+  chainId: String! @index
+  height: BigInt! @index
+  timestamp: Date!
+  transactions: [Transaction] @derivedFrom(field: "block")
+  messages: [Message] @derivedFrom(field: "block")
+  events: [Event] @derivedFrom(field: "block")
+}
+
+type Transaction @entity {
+  id: ID!
+  block: Block!
+  gasUsed: BigInt!
+  gasWanted: BigInt!
+  fees: [Coin]!
+  memo: String
+  status: TxStatus!
+  log: String
+  #  timeline: BigInt! @index
+  timeoutHeight: BigInt @index
+  # NB: only the first signer!
+  signerAddress: String @index
+  messages: [Message] @derivedFrom(field: "transaction")
 }
 
 type Message @entity {
   id: ID!
-  blockHeight: BigInt!
-  txHash: String!
-  from: String!
-  to: String!
+  #  typeUrl: String! @index
+  typeUrl: String @index
+  json: String
+  #  timeline: BigInt! @index
+  transaction: Transaction!
+  block: Block!
+}
+
+type Event @entity {
+  id: ID!
+  type: String! @index
+  attributes: [EventAttribute]! @derivedFrom(field: "event")
+  transaction: Transaction
+  block: Block!
+}
+
+type Coin @jsonField {
+  denom: String!
   amount: String!
+}
+
+type NativeTransfer @entity {
+  id: ID!
+  toAddress: String! @index
+  fromAddress: String! @index
+  amounts: [Coin]!
+  denom: String! @index
+  #  timeline: BigInt! @index
+  message: Message!
+  transaction: Transaction!
+  block: Block!
+}
+
+type Account @entity {
+  # id is the address
+  id: ID!
+  chainId: String! @index
+  nativeBalanceChanges: [NativeBalanceChange]! @derivedFrom(field: "account")
+  #  cw20BalanceChanges: [Cw20BalanceChange]! @derivedFrom(field: "account")
+  genesisBalances: [GenesisBalance] @derivedFrom(field: "account")
+}
+
+type GenesisBalance @entity {
+  id: ID!
+  amount: BigInt!
+  denom: String! @index
+  account: Account!
+}
+
+type NativeBalanceChange @entity {
+  id: ID!
+  balanceOffset: BigInt!
+  denom: String! @index
+  account: Account!
+  #  timeline: BigInt! @index
+  event: Event!
+  transaction: Transaction
+  block: Block!
+}
+
+type UnprocessedEntity @entity {
+  id: ID!
+  error: String!
+  event: Event
+  message: Message
+  transaction: Transaction
+  block: Block
 }
