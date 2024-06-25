@@ -17,9 +17,9 @@ dotenv.config({ path: dotenvPath });
 const project: CosmosProject = {
   specVersion: "1.0.0",
   version: "0.0.1",
-  name: "Fetchhub-starter",
+  name: "pocketdex",
   description:
-    "This project can be use as a starting point for developing your Cosmos Fetchhub based SubQuery project",
+    "Pocketdex is an indexer for the Shannon implementation of the pocket network protocol.",
   runner: {
     node: {
       name: "@subql/node-cosmos",
@@ -72,7 +72,7 @@ const project: CosmosProject = {
   dataSources: [
     {
       kind: CosmosDatasourceKind.Runtime,
-      startBlock: 5300201,
+      startBlock: 1,
       mapping: {
         file: "./dist/index.js",
         handlers: [
