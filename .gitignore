@@ -12,6 +12,9 @@ dist/
 yarn.lock
 package-lock.json
 
+vendor/.yarn/cache
+install-state.gz
+
 # Compiled Java class files
 *.class
 
