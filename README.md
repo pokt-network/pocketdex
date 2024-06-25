@@ -23,10 +23,7 @@ git submodule update --init --recursive
 ### 2. Install dependencies
 
 ```shell
-yarn
-
-# install submodule dependencies
-(cd ./subql && yarn)
+yarn install
 ```
 
 ### 3. Generate types
@@ -34,24 +31,36 @@ yarn
 Types will need to be regenerated any time the graphql.schema is changed.
 
 ```shell
-yarn codegen
+yarn run codegen
 ```
 
 ### 4. Build
 
 The project will need to be rebuilt any time any TypeScript source files are changed, including when types are regenerated.
 
-```shell
-yarn build
+_NB: Also runs `codegen`._
 
-# build submodule
-(cd ./subql && yarn build)
+```shell
+# Builds for poktroll testnet.
+yarn run build
+
+# OR
+# Builds for poktroll localnet.
+yarn run build:develop
 ```
 
 ### 5. Run locally
 
+Build & start:
 ```shell
-yarn start:docker
+yarn run docker:build
+yarn run docker:start
+```
+
+Stop & clean up (delete postgres data):
+```shell
+yarn run docker:stop
+yarn run docker:clean
 ```
 
 ## End-to-end Testing
