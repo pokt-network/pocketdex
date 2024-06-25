@@ -17,6 +17,24 @@ services:
       timeout: 5s
       retries: 5
 
+# Note: The proxy service is only necessary if you are running a Shannon
+# localnet and are unable to use the docker network in bridge mode.
+# To use the proxy service you must run the following command on the host
+# to establish a reverse proxy such that docker services in the composition
+# will be able to port forward to the localnet services exposed on the host:
+# ssh -o StrictHostKeyChecking=no -N -R 26657:localhost:26657 proxyuser@localhost -p 2222
+  proxy:
+    build:
+      context: .
+      dockerfile: ./docker/proxy.dockerfile
+    environment:
+      - USER_NAME=proxyuser
+      - USER_PASSWORD=proxypass
+    ports:
+      - "2222:22"
+    volumes:
+      - ~/.ssh/id_rsa.pub:/home/proxyuser/.ssh/authorized_keys
+
   subquery-node:
     image: subquerynetwork/subql-node-cosmos:latest
     depends_on:
