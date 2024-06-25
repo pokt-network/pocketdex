@@ -1,3 +1,6 @@
 [submodule "subql-cosmos"]
 	path = subql-cosmos
 	url = https://github.com/subquery/subql-cosmos
+[submodule "cosmjs"]
+	path = cosmjs
+	url = https://github.com/cosmos/cosmjs
