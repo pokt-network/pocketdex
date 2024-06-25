@@ -1,5 +1,3 @@
-version: "3"
-
 services:
   postgres:
     build:
@@ -36,7 +34,9 @@ services:
       - ~/.ssh/id_rsa.pub:/home/proxyuser/.ssh/authorized_keys
 
   subquery-node:
-    image: subquerynetwork/subql-node-cosmos:latest
+    build:
+      context: .
+      dockerfile: ./docker/node.dockerfile
     depends_on:
       "postgres":
         condition: service_healthy
