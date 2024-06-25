@@ -8,7 +8,7 @@ services:
     ports:
       - 5432:5432
     volumes:
-      - .data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     environment:
       POSTGRES_PASSWORD: postgres
     healthcheck:
@@ -64,3 +64,7 @@ services:
       - --name=app
       - --playground
       - --indexer=http://subquery-node:3000
+
+volumes:
+  postgres_data:
+    driver: local
