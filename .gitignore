@@ -9,7 +9,6 @@ node_modules/
 dist/
 
 # lock files
-yarn.lock
 package-lock.json
 
 vendor/.yarn/cache
