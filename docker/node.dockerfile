@@ -23,7 +23,7 @@ FROM node:22-alpine as runner
 
 # Add system dependencies
 RUN apk update
-RUN apk add git postgresql14-client tini
+RUN apk add git postgresql14-client tini curl
 
 # add extra tools that are required
 ADD https://github.com/mikefarah/yq/releases/download/v4.26.1/yq_linux_amd64 /usr/local/bin/yq
