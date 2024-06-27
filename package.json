@@ -18,6 +18,7 @@
     "docker:start": "docker-compose pull && docker-compose up --remove-orphans",
     "docker:stop": "docker-compose down",
     "docker:clean": "yarn docker:stop && docker volume rm pocketdex_postgres_data",
+    "docker:tunnel": "echo 'if public key auth fails the password is `proxypass`.' && ssh -o StrictHostKeyChecking=no -N -R 26657:localhost:26657 proxyuser@localhost -p 2222",
     "dev": "subql codegen && subql build && docker-compose pull && docker-compose up --remove-orphans",
     "prepack": "rm -rf dist && npm run build",
     "test": "subql build && subql-node-cosmos test",
