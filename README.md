@@ -58,7 +58,7 @@ yarn run docker:start
 
 # If indexing poktroll localnet, after starting the docker container, run the
 # following to expose the poktroll validator to the subquery-node:
-ssh -o StrictHostKeyChecking=no -N -R 26657:localhost:26657 proxyuser@localhost -p 2222
+yarn docker:tunnel
 ```
 
 Stop & clean up (delete postgres data):
