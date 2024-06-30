@@ -28,42 +28,40 @@ yarn install
 
 ### 3. Generate types
 
-Types will need to be regenerated any time the graphql.schema is changed.
+Types will need to be regenerated any time the `graphql.schema` is changed.
 
 ```shell
 yarn run codegen
 ```
 
-### 4. Build
+### 4. Run
 
-The project will need to be rebuilt any time any TypeScript source files are changed, including when types are regenerated.
-
-_NB: Also runs `codegen`._
-
+Create a copy of `.env.sample` as `.env` which is required on the following commands.
+You can modify `.env` as you wish. IMPORTANT: if you change WATCH value, you need to rebuild the image.
 ```shell
-# Builds for poktroll testnet.
-yarn run build
-
-# OR
-# Builds for poktroll localnet.
-yarn run build:develop
+cp .env.sample .env
 ```
-
-### 5. Run locally
 
 Build & start:
 ```shell
-yarn run docker:build
-yarn run docker:start
-
-# If indexing poktroll localnet, after starting the docker container, run the
-# following to expose the poktroll validator to the subquery-node:
+# Run this only if indexing poktroll localnet. This will allows subquery-node to connect with the poktroll validator
+# leave this open in a separated terminal
 yarn docker:tunnel
+
+# Then build docker and start
+yarn run docker:build
+# By default subquery-node has WATCH=true and NODE_ENV=develop 
+# which mean that any change to code/schema/dotenv files will reload it and will be using .env.develop file
+yarn run docker:start
 ```
 
-Stop & clean up (delete postgres data):
+Stop (without deleted data)
 ```shell
 yarn run docker:stop
+```
+
+Or Stop & clean up (delete postgres data):
+```shell
 yarn run docker:clean
 ```
 
@@ -125,7 +123,7 @@ yarn db:dump:schema -- -t blocks -t messages
 ##### When `pg_dump` is insufficient
 
 In some cases, `pg_dump` may not export a relevant DB object; for example, enums.
-In these cases it is necessary to manually extract the relevant data from the DB and incorporate it into the initial_schema.sql file.
+In these cases, it is necessary to manually extract the relevant data from the DB and incorporate it into the initial_schema.sql file.
 
 In the case of **enums**, the following queries expose the relevant records, the results from which can be re-written as a COPY or INSERT statements into the respective tables from which they came:
 

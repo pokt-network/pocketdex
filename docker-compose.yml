@@ -3,21 +3,41 @@ services:
     build:
       context: .
       dockerfile: ./docker/pg-Dockerfile
+      args:
+        POSTGRES_VERSION: ${POSTGRES_VERSION}
     ports:
       - 5432:5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_USER}
+      POSTGRES_USER: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-# Note: The proxy service is only necessary if you are running a Shannon
+  pgadmin:
+    image: dpage/pgadmin4:${PGADMIN_VERSION}
+    container_name: pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_LISTEN_PORT: 5050
+    volumes:
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - ${PGADMIN_LISTEN_PORT}:5050
+
+# Note: The proxy service is only necessary if you're running a Shannon
 # localnet and are unable to use the docker network in bridge mode.
-# To use the proxy service you must run the following command on the host
+# To use the proxy service, you must run the following command on the host
 # to establish a reverse proxy such that docker services in the composition
 # will be able to port forward to the localnet services exposed on the host:
 # ssh -o StrictHostKeyChecking=no -N -R 26657:localhost:26657 proxyuser@localhost -p 2222
@@ -26,6 +46,8 @@ services:
       context: .
       dockerfile: ./docker/proxy.dockerfile
     environment:
+      # This values doesn't deserve the time and setup needed to use with .env.docker file
+      # they are referenced on package.json script which doesn't load .env.docker file
       - USER_NAME=proxyuser
       - USER_PASSWORD=proxypass
     ports:
@@ -37,24 +59,46 @@ services:
     build:
       context: .
       dockerfile: ./docker/node.dockerfile
+      args:
+        NODE_ENV: ${NODE_ENV:-production}
+        # anything that is not "true" will avoid start nodemon
+        # changing this value requires rebuilding the image
+        WATCH: ${WATCH:-false}
+        ENDPOINT: ${ENDPOINT}
+        CHAIN_ID: ${CHAIN_ID:-poktroll}
     depends_on:
       "postgres":
         condition: service_healthy
     restart: unless-stopped
     environment:
-      DB_USER: postgres
-      DB_PASS: postgres
-      DB_DATABASE: postgres
+      # database connection
+      DB_USER: ${POSTGRES_USER}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_DATABASE: ${POSTGRES_DB}
       DB_HOST: postgres
       DB_PORT: 5432
+      # node configuration
+      NODE_ENV: ${NODE_ENV:-production}
+      # changing this value requires rebuilding the image
+      WATCH: ${WATCH:-false}
+      WORKERS: ${WORKERS:-1}
+      BATCH_SIZE: ${BATCH_SIZE:-30}
+      DB_SCHEMA: ${DB_SCHEMA:-poktroll}
+      ### this below only avoids you need to rebuild because are injected on project.yaml with the entrypoint
+      ### if you're using WATCH=true they will be overridden by the rebuild process
+      START_BLOCK: ${START_BLOCK:-1}
+      ENDPOINT: ${ENDPOINT:-http://proxy:26657}
+      CHAIN_ID: ${CHAIN_ID:-poktroll}
+      # this will manage which dotenv file will be used on every reload
     volumes:
-      - ./:/app
+      # Replaced ./:/app with individual tracked files to avoid the generated code go outside the container
+      - ./schema.graphql:/home/app/schema.graphql
+      - ./project.ts:/home/app/project.ts
+      - ./proto:/home/app/proto
+      - ./src:/home/app/src
+      - ignore_types:/home/app/src/types
     command:
       - ${SUB_COMMAND:-} # set SUB_COMMAND env variable to "test" to run tests
-      - -f=/app
-      - --db-schema=app
-      - --workers=4
-      - --batch-size=30
       - --unfinalized-blocks=true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
@@ -63,9 +107,9 @@ services:
       retries: 10
 
   graphql-engine:
-    image: subquerynetwork/subql-query:latest
+    image: subquerynetwork/subql-query:${SUBQUERY_GRAPHQL_ENGINE_VERSION}
     ports:
-      - 3000:3000
+      - ${SUBQUERY_GRAPHQL_ENGINE_PORT}:3000
     depends_on:
       "postgres":
         condition: service_healthy
@@ -73,16 +117,20 @@ services:
         condition: service_healthy
     restart: always
     environment:
-      DB_USER: postgres
-      DB_PASS: postgres
-      DB_DATABASE: postgres
+      DB_USER: ${POSTGRES_USER}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_DATABASE: ${POSTGRES_DB}
       DB_HOST: postgres
       DB_PORT: 5432
     command:
-      - --name=app
+      - --name=${DB_SCHEMA:-poktroll}
       - --playground
       - --indexer=http://subquery-node:3000
 
 volumes:
+  ignore_dist:
+    driver: local
+  ignore_types:
+    driver: local
   postgres_data:
     driver: local

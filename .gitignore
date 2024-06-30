@@ -28,7 +28,7 @@ install-state.gz
 
 # Generated files
 target/
-dist/
+dist
 src/types
 project.yaml
 
@@ -58,8 +58,8 @@ Thumbs.db
 *.wmv
 
 .data
-dist
 
 # ENV local files
-.env.local
-.env.develop.local
+.env
+.env*
+!.env.sample

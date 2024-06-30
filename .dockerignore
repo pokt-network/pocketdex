@@ -1,0 +1,25 @@
+# git
+.github
+.gitignore
+.gitmodules
+.git
+
+# root and vendor modules
+node_modules
+*/**/node_modules
+
+# generated code
+dist
+src/types
+project.yaml
+
+# dotenv files
+.env*
+
+# not needed
+docs
+.run
+*.md
+*/**/.md
+*/**/.png
+*/**/.jpg
