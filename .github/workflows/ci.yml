@@ -1,0 +1,83 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  pr:
+    name: pr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'yarn'
+          cache-dependency-path: 'yarn.lock'
+
+      # check if we have any issue on dependencies
+      - name: Install dependencies
+        run: yarn
+
+      # prepare any env variable to use on the next steps execution
+      - name: Evaluate conditions
+        id: condition_step
+        run: |
+          echo "SHOULD_PUSH=false" >> $GITHUB_ENV
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == 'refs/heads/main' ]]; then
+            echo "SHOULD_PUSH=true" >> $GITHUB_ENV
+          fi
+
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          DOCKER_METADATA_PR_HEAD_SHA: "true"
+        with:
+          images: |
+            ghcr.io/pokt-network/pocketdex
+          tags: |
+            type=schedule
+            type=ref,event=tag
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+            type=sha,format=long
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        if: env.SHOULD_PUSH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        id: docker_build
+        with:
+          # This ensures the image is push to the registry only when the PR is to the main branch and also is merged.
+          push: ${{ env.SHOULD_PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          file: docker/node.dockerfile
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: echo ${{ steps.docker_build.outputs.digest }}
+
+#      - name: Install subql-node-cosmos
+#        run: yarn dlx @subql/node-cosmos
+#
+#      - name: Run tests with Subquery Node
+#        run: subql-node-cosmos test -f ${{ github.workspace }}
