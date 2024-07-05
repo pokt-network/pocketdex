@@ -2,12 +2,9 @@
 
 set -e
 
-echo "@watch=$WATCH"
-
 prepare_builder_layer() {
-  if ! [ "$WATCH" = "true" ]
-  then
-    # if not watch; then call build, otherwise that will be achieve before nodemon start
+  if ! [ "$NODE_ENV" = "development" ]; then
+    # if not development; call build, otherwise that will be achieve before nodemon start
     yarn run build
   else
     # create empty folder to prevent docker copy --from builder .. fail
@@ -17,9 +14,8 @@ prepare_builder_layer() {
 }
 
 prepare_runner_layer() {
-  if [ "$WATCH" = "true" ]
-  then
-    # install dependencies
+  if ! [ "$NODE_ENV" = "production" ]; then
+    # install dev dependencies if not production
     yarn install
   else
     yarn install --prod

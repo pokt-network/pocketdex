@@ -60,12 +60,11 @@ services:
       context: .
       dockerfile: ./docker/node.dockerfile
       args:
+        # NOTICE: if you change .env some of the following values, please rebuild it to avoid unexpected behavior
+        # building with NODE_ENV=development turns on hot-reload of the code
         NODE_ENV: ${NODE_ENV:-production}
-        # anything that is not "true" will avoid start nodemon
-        # changing this value requires rebuilding the image
-        WATCH: ${WATCH:-false}
-        ENDPOINT: ${ENDPOINT}
         CHAIN_ID: ${CHAIN_ID:-poktroll}
+        ENDPOINT: ${ENDPOINT}
     depends_on:
       "postgres":
         condition: service_healthy
@@ -77,19 +76,14 @@ services:
       DB_DATABASE: ${POSTGRES_DB}
       DB_HOST: postgres
       DB_PORT: 5432
-      # node configuration
+      # running with NODE_ENV=development turns on hot-reload of the code
       NODE_ENV: ${NODE_ENV:-production}
-      # changing this value requires rebuilding the image
-      WATCH: ${WATCH:-false}
       WORKERS: ${WORKERS:-1}
       BATCH_SIZE: ${BATCH_SIZE:-30}
       DB_SCHEMA: ${DB_SCHEMA:-poktroll}
-      ### this below only avoids you need to rebuild because are injected on project.yaml with the entrypoint
-      ### if you're using WATCH=true they will be overridden by the rebuild process
       START_BLOCK: ${START_BLOCK:-1}
       ENDPOINT: ${ENDPOINT:-http://proxy:26657}
       CHAIN_ID: ${CHAIN_ID:-poktroll}
-      # this will manage which dotenv file will be used on every reload
     volumes:
       # Replaced ./:/app with individual tracked files to avoid the generated code go outside the container
       - ./schema.graphql:/home/app/schema.graphql

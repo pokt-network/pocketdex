@@ -1,14 +1,13 @@
 FROM node:22-slim AS builder
 
+ARG CI=false
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
-ARG WATCH=false
 
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
-ENV WATCH=$WATCH
 
 RUN apt-get update && apt-get install -y tree
 RUN npm i -g typescript
@@ -27,17 +26,23 @@ WORKDIR /app
 RUN yarn install
 
 ## Build forked vendor packages
+### NOTE: break-down vendor steps to be able to debug what is going wrong on CI
 RUN yarn run vendor:clean
-RUN yarn run vendor:setup
+RUN if [ "$CI" = "true" ]; then yarn run vendor:clean-cache; else echo "Not in CI"; fi
+RUN yarn vendor:cosmjs:install
+RUN yarn vendor:cosmjs:build
+RUN yarn vendor:subql:install
+RUN yarn install
+RUN yarn vendor:subql:build
 
 # TODO_MAINNET(@jorgecuesta): Do a better use of copy to prevent copy everything which trigger a full build everytime.
 # Copy files
 COPY . /app
 
 # Run codegen and Build pocketdex
-RUN chmod +x scripts/prepare-docker-layers.sh && WATCH=$WATCH ./scripts/prepare-docker-layers.sh "builder"
+RUN chmod +x scripts/prepare-docker-layers.sh && NODE_ENV=$NODE_ENV ./scripts/prepare-docker-layers.sh "builder"
 
-FROM node:22-alpine as runner
+FROM node:22-alpine AS runner
 
 # add group "app" and user "app"
 RUN addgroup -g 1001 app && adduser -D -h /home/app -u 1001 -G app app
@@ -46,12 +51,12 @@ RUN addgroup -g 1001 app && adduser -D -h /home/app -u 1001 -G app app
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
-ARG WATCH=false
+ARG CI=false
 
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
-ENV WATCH=$WATCH
+ENV CI=$CI
 
 # Add system dependencies
 RUN apk update
@@ -88,7 +93,7 @@ RUN chown app:app /home/app/entrypoint.sh && chmod +x /home/app/entrypoint.sh
 RUN find /home/app/scripts -type f -name "*.sh" -exec chmod +x {} \;
 
 # install production only or dev depending if WATCH is true
-RUN WATCH=$WATCH ./scripts/prepare-docker-layers.sh "runner"
+RUN NODE_ENV=$NODE_ENV ./scripts/prepare-docker-layers.sh "runner"
 
 RUN mkdir -p /home/app/src/types && chown -R app:app /home/app/src/types
 

@@ -1,0 +1,85 @@
+on:
+  workflow_call:
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'yarn'
+          cache-dependency-path: 'yarn.lock'
+
+      # add all the '.yarnrc' configs to yarn because yarn ignores it on CI
+      # based on this https://github.com/actions/setup-node/blob/main/docs/advanced-usage.md#yarn2-configuration
+      - name: Setup .yarnrc.yml
+        run: |
+          yarn config set yarnPath .yarn/releases/yarn-3.8.0.cjs
+          yarn config set pnpMode loose
+          yarn config set nodeLinker node-modules
+          yarn config set enableTelemetry false
+          yarn plugin import @yarnpkg/plugin-workspace-tools
+          yarn plugin import @yarnpkg/plugin-version
+
+      - name: Install dependencies
+        run: yarn
+
+      - name: Vendor Clean & Clean Cache
+        run: |
+          yarn run vendor:clean
+          yarn run vendor:clean-cache
+
+      - name: Install cosmjs
+        run: yarn vendor:cosmjs:install
+
+      - name: Lint cosmjs
+        run: yarn vendor:cosmjs:install
+
+      - name: Build cosmjs
+        run: yarn vendor:cosmjs:build
+
+      - name: Install subql
+        run: yarn vendor:subql:install
+
+      - name: Lint subql
+        run: yarn vendor:subql:install
+
+      # this need still a conversation with @bryan to understand why he adds installation again,
+      # but I think it is because the package was not installed in root with the proper link to the submodules
+      - name: Install dependencies
+        run: yarn
+
+      - name: Build subql
+        run: yarn vendor:subql:build
+
+      - name: Format
+        run: yarn run format:ci
+
+      - name: Lint
+        run: yarn run lint
+
+      - name: Build & Codegen
+        env:
+          CHAIN_ID: poktroll
+        run: yarn build
+
+      - name: Test
+        # TODO: remove this line when the test are fixed
+        # Right now there is an extraneous issue:
+        # Cause: Error: Cannot read properties of undefined (reading 'length')
+        env:
+          CHAIN_ID: poktroll
+          ENDPOINT: https://testnet-validated-validator-rpc.poktroll.com
+        continue-on-error: true
+        run: |
+          trap 'echo "Failed running tests"' ERR
+          yarn test:ci

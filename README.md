@@ -65,9 +65,9 @@ yarn run codegen
 
 Create a copy of `.env.sample` as `.env` which is required on the following commands.
 
-You can modify `.env` as you wish.
+You can modify `.env` as you wish. 
 
-**IMPORTANT: if you change WATCH value, you need to rebuild the image.**
+**IMPORTANT: if you change `NODE_ENV`, `CHAIN_ID` or `ENDPOINT` values, you need to rebuild the image.**
 
 ```shell
 cp .env.sample .env

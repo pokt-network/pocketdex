@@ -1,0 +1,8 @@
+/dist/**
+/docs/**
+/scripts/**
+/vendor/**
+/src/types/**
+**/node_modules/**
+*.proto
+.eslintrc.js
