@@ -45,6 +45,8 @@ services:
     build:
       context: .
       dockerfile: ./docker/proxy.dockerfile
+    image: pocket-network/pocketdex-proxy:latest
+    pull_policy: build
     environment:
       # This values doesn't deserve the time and setup needed to use with .env.docker file
       # they are referenced on package.json script which doesn't load .env.docker file
@@ -62,9 +64,11 @@ services:
       args:
         # NOTICE: if you change .env some of the following values, please rebuild it to avoid unexpected behavior
         # building with NODE_ENV=development turns on hot-reload of the code
-        NODE_ENV: ${NODE_ENV:-production}
+        NODE_ENV: ${ENV:-production}
         CHAIN_ID: ${CHAIN_ID:-poktroll}
         ENDPOINT: ${ENDPOINT}
+    image: pocket-network/pocketdex:${ENV}
+    pull_policy: build
     depends_on:
       "postgres":
         condition: service_healthy
@@ -77,7 +81,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       # running with NODE_ENV=development turns on hot-reload of the code
-      NODE_ENV: ${NODE_ENV:-production}
+      NODE_ENV: ${ENV:-production}
       WORKERS: ${WORKERS:-1}
       BATCH_SIZE: ${BATCH_SIZE:-30}
       DB_SCHEMA: ${DB_SCHEMA:-poktroll}

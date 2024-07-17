@@ -24,7 +24,7 @@ if [ "$NODE_ENV" = "test" ]
 then
   # this prevent all the not needed steps on the entrypoint when we want to run test inside container
   info_log "Running Tests only"
-  params=$(getParams)
+  params=$(get_params)
   cmd="$cmd node /home/app/vendor/subql-cosmos/packages/node/bin/run $params $@"
 else
   # Add btree_gist extension to support historical mode - after the db reset from `graphile-migrate reset --erase`
@@ -62,7 +62,7 @@ EOF
     info_log "NODE_ENV is $NODE_ENV. Running the application without nodemon..."
     # move the dist folder to the mounted folder in run time
     update_project
-    params=$(getParams)
+    params=$(get_params)
     # run the main node
     cmd="$cmd node /home/app/vendor/subql-cosmos/packages/node/bin/run $params $@"
   fi

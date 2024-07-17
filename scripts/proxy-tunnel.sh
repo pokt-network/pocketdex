@@ -6,6 +6,8 @@ set -e
 
 . scripts/shared.sh
 
+dot_env_file=(get_env_file_name "$1")
+
 service_name=proxy
 
 wait_for_service() {
@@ -14,7 +16,7 @@ wait_for_service() {
     retry=0
 
     while [ $retry -lt $max_retries ]; do
-        status=$(docker compose ps -q $service)
+        status=$(docker compose --env-file "$dot_env_file" ps -q $service)
 
         if [ ! -z "$status" ]; then
             info_log "Service '$service' is up"
@@ -37,7 +39,7 @@ if ! nc -z localhost 26657 2>/dev/null; then
 fi
 
 info_log "Starting '$service_name' service"
-docker compose up -d proxy
+docker compose --env-file "$dot_env_file" up -d proxy
 
 info_log "Checking if '$service_name' service is ready"
 wait_for_service $service_name

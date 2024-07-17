@@ -62,8 +62,6 @@ ENV CI=$CI
 RUN apk update
 RUN apk add git postgresql14-client tini curl jq
 
-# TODO_MAINNET(@jorgecuesta): Add user and group instead of work with root to follow best practices.
-
 # add extra tools that are required
 ADD https://github.com/mikefarah/yq/releases/download/v4.26.1/yq_linux_amd64 /usr/local/bin/yq
 RUN chmod +x /usr/local/bin/yq
@@ -92,7 +90,7 @@ COPY ./scripts/node-entrypoint.sh /home/app/entrypoint.sh
 RUN chown app:app /home/app/entrypoint.sh && chmod +x /home/app/entrypoint.sh
 RUN find /home/app/scripts -type f -name "*.sh" -exec chmod +x {} \;
 
-# install production only or dev depending if WATCH is true
+# install production or development dependencies
 RUN NODE_ENV=$NODE_ENV ./scripts/prepare-docker-layers.sh "runner"
 
 RUN mkdir -p /home/app/src/types && chown -R app:app /home/app/src/types

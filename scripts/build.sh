@@ -14,8 +14,11 @@ yarn exec subql codegen # this is same of yarn exec subql codegen
 info_log "Applying proto-interfaces replace from 'key: bigint' to 'key: number' due to typescript issues."
 find ./src/types/proto-interfaces/poktroll -type f -name '*.ts' -exec sed -i 's/\[key: bigint\]/\[key: number\]/g' {} \;
 
-info_log "Running Linting"
-yarn run lint
+if ! [ "$1" == "no-lint" ]
+then
+  info_log "Running Linting"
+  yarn run lint
+fi
 
 info_log "Running 'subql' build"
 yarn exec subql build

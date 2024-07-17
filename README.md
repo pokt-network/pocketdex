@@ -63,15 +63,21 @@ yarn run codegen
 
 ### 4. Run
 
-Create a copy of `.env.sample` as `.env` which is required on the following commands.
-
-You can modify `.env` as you wish. 
-
-**IMPORTANT: if you change `NODE_ENV`, `CHAIN_ID` or `ENDPOINT` values, you need to rebuild the image.**
+Create the base dotenv files that you can modify as you wish for the most common environments (development, test and production)
 
 ```shell
-cp .env.sample .env
+yarn run docker:prepare
 ```
+
+**IMPORTANT: if you change `CHAIN_ID` or `ENDPOINT` values, you need to rebuild the environment image.**
+
+For this README we will be running all the commands in `development` but you can also run them in `test` or `production`.
+Following this structure, you can run every docker command `docker:<cmd>:<env>`,
+use the short version of the environment:
+
+1. development -> dev
+2. test -> test
+3. production -> prod
 
 Build & start:
 
@@ -80,26 +86,25 @@ Build & start:
 # This will allows subquery-node to connect with the poktroll validator
 
 # Leave this open in a separated terminal
-yarn docker:tunnel
+yarn docker:tunnel:dev
 
 # Then build docker and start
-yarn run docker:build
-
-# By default subquery-node has WATCH=true and NODE_ENV=develop
+yarn run docker:build:dev
+# By default subquery-node has WATCH=true and NODE_ENV=develop 
 # which mean that any change to code/schema/dotenv files will reload it and will be using .env.develop file
-yarn run docker:start
+yarn run docker:start:dev
 ```
 
 Stop (without deleted data)
 
 ```shell
-yarn run docker:stop
+yarn run docker:stop:dev
 ```
 
 Or Stop & clean up (delete postgres data):
 
 ```shell
-yarn run docker:clean
+yarn run docker:clean:dev
 ```
 
 #### 4.1 Errors running & building

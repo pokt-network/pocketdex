@@ -36,7 +36,7 @@ update_project() {
   fi
 }
 
-getParams() {
+get_params() {
     local params=""
 
     if [[ -n "$WORKERS" ]]; then
@@ -49,4 +49,15 @@ getParams() {
         params="${params} --db-schema=$DB_SCHEMA"
     fi
     echo "$params"
+}
+
+get_env_file_name(){
+  if [ -z "$1" ]
+  then
+    # default to development
+    file=".env.development"
+  else
+    file=".env.$1"
+  fi
+  echo "$file"
 }
