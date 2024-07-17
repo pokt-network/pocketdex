@@ -29,7 +29,6 @@ module.exports = {
     'eslint:recommended',
     'plugin:@typescript-eslint/recommended',
     'plugin:@typescript-eslint/recommended-requiring-type-checking',
-    // 'plugin:jest/recommended',
   ],
   rules: {
     // rules turned off in upstream project (also required when recommended-requiring-type-checking is extended)
@@ -62,11 +61,7 @@ module.exports = {
       },
     ],
     '@typescript-eslint/no-namespace': ['error', {allowDeclarations: true}],
-    // "@typescript-eslint/member-ordering": "error",
-    // "@typescript-eslint/naming-convention": "error",
-    // "@typescript-eslint/no-param-reassign": "error",
     '@typescript-eslint/promise-function-async': ['error', {checkArrowFunctions: false}],
-    // "arrow-body-style": "error",
     complexity: ['error', 20],
     curly: ['error', 'multi-line'],
     'default-case': 'error',
@@ -89,7 +84,6 @@ module.exports = {
     ],
     'no-console': 'off',
     'no-duplicate-imports': 'error',
-    // "no-magic-numbers": "error",
     'no-return-await': 'error',
     'no-undef-init': 'error',
     'prefer-template': 'error',

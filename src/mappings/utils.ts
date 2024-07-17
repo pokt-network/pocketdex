@@ -29,7 +29,7 @@ export function getTimeline(entity: CosmosMessage|CosmosEvent): bigint {
   const K2 = 100, K1 = K2 * 1000;
   const txIndex = entity.tx.idx;
   const blockHeight = entity.block.block.header.height;
-  // check if the entity is Event or Message and set msgIndex appropriately
+  // check if the entity is an Event or a Message and set msgIndex appropriately
   const msgIndex = (<CosmosEvent>entity).msg?.idx === undefined ?
     (<CosmosMessage>entity).idx : (<CosmosEvent>entity).msg.idx;
   const timeline = (K1 * blockHeight) + (K2 * txIndex) + msgIndex;

@@ -16,7 +16,7 @@ find ./src/types/proto-interfaces/poktroll -type f -name '*.ts' -exec sed -i 's/
 
 if ! [ "$1" == "no-lint" ]
 then
-  info_log "Running Linting"
+  info_log "Running Linter"
   yarn run lint
 fi
 
