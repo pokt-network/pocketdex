@@ -6,7 +6,6 @@
   "scripts": {
     "preinstall": "npx only-allow yarn",
     "postinstall": "yarn run env:prepare",
-
     "codegen": "yarn exec subql codegen",
     "build": "./scripts/build.sh",
     "watch:build": "./scripts/build.sh no-lint",
@@ -16,17 +15,16 @@
     "format:ci": "yarn exec pretty-quick --verbose --check --pattern 'src/*.{js,ts,jsx,tsx}' --branch origin/main",
     "test": "yarn run build && subql-node-cosmos test",
     "test:ci": "env node vendor/subql-cosmos/packages/node/bin/run test",
-
     "vendor:setup": "./scripts/vendor.sh setup",
     "vendor:clean-cache": "./scripts/vendor.sh clean-cache",
     "vendor:install": "./scripts/vendor.sh install",
     "vendor:build": "./scripts/vendor.sh build",
     "vendor:lint": "./scripts/vendor.sh lint",
     "vendor:clean": "./scripts/vendor.sh clean",
-
     "env:prepare": "./scripts/prepare-dotenv.sh",
     "docker:compose": "./scripts/docker-compose.sh",
-
+    "poktroll:proxy:start": "./scripts/proxy-tunnel.sh start",
+    "poktroll:proxy:stop": "./scripts/proxy-tunnel.sh stop",
     "docker:check-env:production": "env sh ./scripts/dotenv-check.sh production",
     "docker:build:production": "yarn run docker:compose production build",
     "docker:build:no-cache:production": "yarn run docker:compose production build --no-cache",
@@ -34,8 +32,6 @@
     "docker:ps:production": "yarn run docker:compose production ps",
     "docker:stop:production": "yarn run docker:compose production stop",
     "docker:clean:production": "yarn run docker:compose production down -v",
-    "docker:tunnel:production": "yarn run docker:check-env:production && ./scripts/proxy-tunnel.sh production",
-
     "docker:check-env:development": "env sh ./scripts/dotenv-check.sh development",
     "docker:build:development": "yarn run docker:compose development build",
     "docker:build:no-cache:development": "yarn run docker:compose development build --no-cache",
@@ -43,8 +39,6 @@
     "docker:ps:development": "yarn run docker:compose development ps",
     "docker:stop:development": "yarn run docker:compose development stop",
     "docker:clean:development": "yarn run docker:compose development down -v",
-    "docker:tunnel:development": "yarn run docker:check-env:development && ./scripts/proxy-tunnel.sh development",
-
     "docker:check-env:test": "env sh ./scripts/dotenv-check.sh test",
     "docker:build:test": "yarn run docker:compose test build",
     "docker:build:no-cache:test": "yarn run docker:compose test build --no-cache",

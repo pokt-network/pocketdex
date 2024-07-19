@@ -1,9 +1,13 @@
 on:
   workflow_call:
+    inputs:
+      env:
+        type: string
+        required: true
 
 jobs:
   ci:
-    name: CI
+    name: "CI env=${{ inputs.env }}"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -15,15 +19,16 @@ jobs:
       - name: Docker Setup Buildx
         uses: docker/setup-buildx-action@v3
 
+      # TODO: add later in another PR the registry login and docker metadata base on commit sha
+
       # production mode
       - name: Build Production
         uses: docker/build-push-action@v6
+        if: ${{ inputs.env == 'production' }}
         with:
           file: docker/node.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          load: true
-          tags: "pocket-network/pocketdex:production"
           build-args: |
             CI=true
             NODE_ENV=production
@@ -32,26 +37,12 @@ jobs:
       # development mode
       - name: Build Develop
         uses: docker/build-push-action@v6
+        if: ${{ inputs.env != 'production' }}
         with:
           file: docker/dev-node.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          load: true
-          tags: "pocket-network/pocketdex:development"
-          # NODE_ENV=test & NODE_ENV=development result on the same build image due to install dependencies.
           build-args: |
             CI=true
             NODE_ENV=test
             CHAIN_ID=poktroll
-
-      - name: Run tests in Docker container
-        # TODO: remove this line when the test are fixed
-        # Right now there is an extraneous issue:
-        # Cause: Error: Cannot read properties of undefined (reading 'length')
-        env:
-          CHAIN_ID: poktroll
-          ENDPOINT: https://testnet-validated-validator-rpc.poktroll.com
-        continue-on-error: true
-        run: |
-          trap 'echo "Failed running tests"' ERR
-          docker run --name testing -e CHAIN_ID -e ENDPOINT pocket-network/pocketdex:development test

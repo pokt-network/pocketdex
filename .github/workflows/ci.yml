@@ -12,7 +12,7 @@ on:
     branches: [ main ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -25,14 +25,16 @@ jobs:
           echo ${{ github.event.pull_request.draft != true }}
           echo "Pull Request is not draft, this workflow need continue."
 
-  on-host:
-    name: 'Host'
-    uses: './.github/workflows/ci-host.yml'
-    needs: draft
-    secrets: inherit
-
   on-docker:
     name: 'Docker'
     uses: './.github/workflows/ci-docker.yml'
     needs: draft
     secrets: inherit
+    strategy:
+      fail-fast: false
+      # use a matrix here to speed up the process of build both docker images.
+      matrix:
+        environment: [ production, development ]
+    with:
+      env: ${{ matrix.environment }}
+

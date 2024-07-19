@@ -77,15 +77,21 @@ yarn run env:prepare
 For this README we will be running all the commands in `development` but you can also run them in `test` or `production`.
 Following this structure, you can run every docker command `docker:<cmd>:<production|development|test>`,
 
-Build & start:
-
+**Localnet ONLY:**
 ```shell
 # Run this ONLY IF indexing poktroll localnet.
 # This will allows subquery-node to connect with the poktroll validator
 
-# Leave this open in a separated terminal
-yarn docker:tunnel:dev
+# Leave this open in a separated terminal. Interrupting the terminal will stop the container.
+yarn poktroll:proxy:start
 
+# To stop and remove the proxy
+yarn poktroll:proxy:stop
+```
+
+Build & start:
+
+```shell
 # Then build docker and start
 yarn run docker:build:development
 # This will turn on the process under a WATCHER so any change to the project.ts schema.graphql or src will trigger 

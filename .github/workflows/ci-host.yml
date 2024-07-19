@@ -1,6 +1,9 @@
 on:
   workflow_call:
 
+# NOTE: this reusable workflow should be fine but is not used right now, remains here more as a demonstration
+# of the required steps to format, lint, codegen and build on host instead of docker.
+
 jobs:
   ci:
     name: CI

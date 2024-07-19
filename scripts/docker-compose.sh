@@ -12,6 +12,17 @@ then
     exit 1
 fi
 
+# no mater the environment we need to ensure the external network for the proxy is up
+NETWORK_NAME="localnet_proxy"
+
+# Check if the network exists
+if [ "$(docker network ls | grep $NETWORK_NAME)" ]; then
+    info_log "Network $NETWORK_NAME exists."
+else
+    info_log "Network $NETWORK_NAME does not exist, creating..."
+    docker network create $NETWORK_NAME
+fi
+
 # The first argument is your replacement string.
 env=$1
 

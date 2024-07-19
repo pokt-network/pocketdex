@@ -18,6 +18,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - pocketdex
 
   pgadmin:
     image: dpage/pgadmin4:${PGADMIN_VERSION}
@@ -34,28 +36,8 @@ services:
         condition: service_healthy
     ports:
       - ${PGADMIN_LISTEN_PORT}:5050
-
-# Note: The proxy service is only necessary if you're running a Shannon
-# localnet and are unable to use the docker network in bridge mode.
-# To use the proxy service, you must run the following command on the host
-# to establish a reverse proxy such that docker services in the composition
-# will be able to port forward to the localnet services exposed on the host:
-# ssh -o StrictHostKeyChecking=no -N -R 26657:localhost:26657 proxyuser@localhost -p 2222
-  proxy:
-    build:
-      context: .
-      dockerfile: ./docker/proxy.dockerfile
-    image: pocket-network/pocketdex-proxy:latest
-    pull_policy: build
-    environment:
-      # This values doesn't deserve the time and setup needed to use with .env.docker file
-      # they are referenced on package.json script which doesn't load .env.docker file
-      - USER_NAME=proxyuser
-      - USER_PASSWORD=proxypass
-    ports:
-      - "2222:22"
-    volumes:
-      - ~/.ssh/id_rsa.pub:/home/proxyuser/.ssh/authorized_keys
+    networks:
+      - pocketdex
 
   subquery-node:
     build:
@@ -92,13 +74,15 @@ services:
       - ./src:/app/src
       - ignore_types:/app/src/types
     command:
-      - ${SUB_COMMAND:-} # set SUB_COMMAND env variable to "test" to run tests
       - --unfinalized-blocks=true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
       interval: 3s
       timeout: 5s
-      retries: 10
+      retries: 103
+    networks:
+      - localnet_proxy
+      - pocketdex
 
   graphql-engine:
     image: subquerynetwork/subql-query:${SUBQUERY_GRAPHQL_ENGINE_VERSION}
@@ -120,6 +104,8 @@ services:
       - --name=${DB_SCHEMA}
       - --playground
       - --indexer=http://subquery-node:3000
+    networks:
+      - pocketdex
 
 volumes:
   ignore_dist:
@@ -128,3 +114,10 @@ volumes:
     driver: local
   postgres_data:
     driver: local
+
+networks:
+  pocketdex:
+  localnet_proxy:
+    external: true
+    attachable: true
+
