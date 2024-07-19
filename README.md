@@ -111,6 +111,31 @@ yarn cache clean
 
 And pick up from the `yarn run docker:build` step above
 
+#### 4.2 Using a pre-built image
+
+If you are unable to build locally, a pre-built image is available on Docker Hub: [bryanchriswhite/pocketdex-subquery-node:latest](https://hub.docker.com/r/bryanchriswhite/pocketdex-subquery-node).
+
+To use this image, pull it down:
+
+```shell
+docker pull bryanchriswhite/pocketdex-subquery-node:latest
+```
+
+Then, re-tag the image to match what docker compose is expecting (assumes the repo root dir is `pocketdex`):
+
+```shell
+docker tag bryanchriswhite/pocketdex-subquery-node:latest pocketdex-subquery-node:latest
+```
+
+**Alternatively**, you may update the `docker-compose.yml` file, just remember not to commit this change:
+
+```yaml
+services:
+  subquery-node:
+    image: bryanchriswhite/pocketdex-subquery-node:latest
+    ...
+```
+
 ## DB Migrations
 
 This repository uses [graphile-migrate](https://github.com/graphile/migrate) CLI to manage database migrations.
