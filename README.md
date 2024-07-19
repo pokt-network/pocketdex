@@ -63,21 +63,19 @@ yarn run codegen
 
 ### 4. Run
 
-Create the base dotenv files that you can modify as you wish for the most common environments (development, test and production)
+Dotenv files will be automatically created after the `yarn install` so feel free to modify before move on.
+You will see three dotenv files, each for the corresponding script and environment:
+* `.env.production`
+* `.env.development`
+* `.env.test`
 
+Alternatively, you can manually create them running:
 ```shell
-yarn run docker:prepare
+yarn run env:prepare
 ```
 
-**IMPORTANT: if you change `CHAIN_ID` or `ENDPOINT` values, you need to rebuild the environment image.**
-
 For this README we will be running all the commands in `development` but you can also run them in `test` or `production`.
-Following this structure, you can run every docker command `docker:<cmd>:<env>`,
-use the short version of the environment:
-
-1. development -> dev
-2. test -> test
-3. production -> prod
+Following this structure, you can run every docker command `docker:<cmd>:<production|development|test>`,
 
 Build & start:
 
@@ -89,22 +87,22 @@ Build & start:
 yarn docker:tunnel:dev
 
 # Then build docker and start
-yarn run docker:build:dev
-# By default subquery-node has WATCH=true and NODE_ENV=develop 
-# which mean that any change to code/schema/dotenv files will reload it and will be using .env.develop file
-yarn run docker:start:dev
+yarn run docker:build:development
+# This will turn on the process under a WATCHER so any change to the project.ts schema.graphql or src will trigger 
+# the needed builds again.
+yarn run docker:start:development
 ```
 
 Stop (without deleted data)
 
 ```shell
-yarn run docker:stop:dev
+yarn run docker:stop:development
 ```
 
 Or Stop & clean up (delete postgres data):
 
 ```shell
-yarn run docker:clean:dev
+yarn run docker:clean:development
 ```
 
 #### 4.1 Errors running & building

@@ -60,41 +60,37 @@ services:
   subquery-node:
     build:
       context: .
-      dockerfile: ./docker/node.dockerfile
+      dockerfile: ./docker/dev-node.dockerfile
       args:
-        # NOTICE: if you change .env some of the following values, please rebuild it to avoid unexpected behavior
-        # building with NODE_ENV=development turns on hot-reload of the code
-        NODE_ENV: ${ENV:-production}
-        CHAIN_ID: ${CHAIN_ID:-poktroll}
+        NODE_ENV: ${ENV}
+        CHAIN_ID: ${CHAIN_ID}
         ENDPOINT: ${ENDPOINT}
-    image: pocket-network/pocketdex:${ENV}
+    image: pocket-network/pocketdex:development
     pull_policy: build
     depends_on:
       "postgres":
         condition: service_healthy
     restart: unless-stopped
     environment:
-      # database connection
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_USER: ${POSTGRES_USER}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_DATABASE: ${POSTGRES_DB}
-      DB_HOST: postgres
-      DB_PORT: 5432
-      # running with NODE_ENV=development turns on hot-reload of the code
-      NODE_ENV: ${ENV:-production}
-      WORKERS: ${WORKERS:-1}
-      BATCH_SIZE: ${BATCH_SIZE:-30}
-      DB_SCHEMA: ${DB_SCHEMA:-poktroll}
-      START_BLOCK: ${START_BLOCK:-1}
-      ENDPOINT: ${ENDPOINT:-http://proxy:26657}
-      CHAIN_ID: ${CHAIN_ID:-poktroll}
+      NODE_ENV: ${ENV}
+      WORKERS: ${WORKERS}
+      BATCH_SIZE: ${BATCH_SIZE}
+      DB_SCHEMA: ${DB_SCHEMA}
+      START_BLOCK: ${START_BLOCK}
+      ENDPOINT: ${ENDPOINT}
+      CHAIN_ID: ${CHAIN_ID}
     volumes:
       # Replaced ./:/app with individual tracked files to avoid the generated code go outside the container
-      - ./schema.graphql:/home/app/schema.graphql
-      - ./project.ts:/home/app/project.ts
-      - ./proto:/home/app/proto
-      - ./src:/home/app/src
-      - ignore_types:/home/app/src/types
+      - ./schema.graphql:/app/schema.graphql
+      - ./project.ts:/app/project.ts
+      - ./proto:/app/proto
+      - ./src:/app/src
+      - ignore_types:/app/src/types
     command:
       - ${SUB_COMMAND:-} # set SUB_COMMAND env variable to "test" to run tests
       - --unfinalized-blocks=true
@@ -115,13 +111,13 @@ services:
         condition: service_healthy
     restart: always
     environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_USER: ${POSTGRES_USER}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_DATABASE: ${POSTGRES_DB}
-      DB_HOST: postgres
-      DB_PORT: 5432
     command:
-      - --name=${DB_SCHEMA:-poktroll}
+      - --name=${DB_SCHEMA}
       - --playground
       - --indexer=http://subquery-node:3000
 

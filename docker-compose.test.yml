@@ -2,18 +2,15 @@ services:
   subquery-node:
     build:
       context: .
-      dockerfile: ./docker/node.dockerfile
+      dockerfile: ./docker/dev-node.dockerfile
       args:
-        # NOTICE: if you change .env some of the following values, please rebuild it to avoid unexpected behavior
-        # building with NODE_ENV=development turns on hot-reload of the code
         NODE_ENV: ${ENV:-test}
         CHAIN_ID: ${CHAIN_ID:-poktroll}
         ENDPOINT: ${ENDPOINT}
-    image: pocket-network/pocketdex:${ENV}
+    image: pocket-network/pocketdex:development
     pull_policy: build
     restart: unless-stopped
     environment:
-      # running with NODE_ENV=development turns on hot-reload of the code
       NODE_ENV: ${ENV:-test}
       DB_SCHEMA: ${DB_SCHEMA:-poktroll}
       ENDPOINT: ${ENDPOINT:-https://testnet-validated-validator-rpc.poktroll.com}
@@ -26,8 +23,7 @@ services:
       - ./src:/home/app/src
       - ignore_types:/home/app/src/types
     command:
-      - ${SUB_COMMAND:-} # set SUB_COMMAND env variable to "test" to run tests
-      - --unfinalized-blocks=true
+      - test
 
 volumes:
   ignore_types:

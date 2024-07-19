@@ -5,12 +5,12 @@ set -e
 
 # ensure that ignore_types mounted path got assigned to app user, otherwise get EACCES: permission denied
 # this is only need on WATCH=true because is regenerated after any change detected.
-chown -R app:app /home/app/proto
-chown -R app:app /home/app/src
-chown -R app:app /home/app/dist
-chown app:app /home/app/project.yaml
-chown app:app /home/app/project.ts
-chown app:app /home/app/schema.graphql
+#chown -R app:app /home/app/proto
+#chown -R app:app /home/app/src
+#chown -R app:app /home/app/dist
+#chown app:app /home/app/project.yaml
+#chown app:app /home/app/project.ts
+#chown app:app /home/app/schema.graphql
 
 # prepare the env variables needed for subql node in a previous step to then based on WATCH env
 # attach the rest of the command
@@ -25,7 +25,8 @@ then
   # this prevent all the not needed steps on the entrypoint when we want to run test inside container
   info_log "Running Tests only"
   params=$(get_params)
-  cmd="$cmd node /home/app/vendor/subql-cosmos/packages/node/bin/run $params $@"
+  scripts/build.sh no-lint
+  cmd="$cmd node ./vendor/subql-cosmos/packages/node/bin/run $params $@"
 else
   # Add btree_gist extension to support historical mode - after the db reset from `graphile-migrate reset --erase`
   export PGPASSWORD=$DB_PASS
@@ -51,11 +52,12 @@ EOF
     info_log "NODE_ENV is set to 'development'. Installing nodemon and Running with it..."
 
     exec="./scripts/watch-exec.sh $@"
-    if ! jq --arg value "$exec" '. + {"exec": $value }' nodemon.json > temp.json; then
+    if ! jq --arg value "$exec" '. + {"exec": $value }' /app/nodemon.json > /tmp/temp.json; then
         error_log "Unable to inject exec command to nodemon.json" >&2
         exit 1
     fi
-    mv temp.json nodemon.json
+
+    mv /tmp/temp.json /app/nodemon.json
 
     cmd="$cmd yarn exec nodemon --config nodemon.json"
   else
@@ -64,8 +66,9 @@ EOF
     update_project
     params=$(get_params)
     # run the main node
-    cmd="$cmd node /home/app/vendor/subql-cosmos/packages/node/bin/run $params $@"
+    cmd="$cmd node ./vendor/subql-cosmos/packages/node/bin/run $params $@"
   fi
 fi
 
-exec su - app -s /bin/sh -c "$cmd"
+#exec su - -u $UID -s /bin/sh -c "$cmd"
+eval $cmd

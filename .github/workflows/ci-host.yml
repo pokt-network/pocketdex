@@ -15,7 +15,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 21
           cache: 'yarn'
           cache-dependency-path: 'yarn.lock'
 
@@ -35,42 +35,21 @@ jobs:
 
       - name: Vendor Clean & Clean Cache
         run: |
-          yarn run vendor:clean
-          yarn run vendor:clean-cache
+          ./scripts/vendor.sh clean
+          ./scripts/vendor.sh clean-cache
 
-      - name: Install cosmjs
-        run: yarn vendor:cosmjs:install
-
-      - name: Lint cosmjs
-        run: yarn vendor:cosmjs:install
-
-      - name: Build cosmjs
-        run: yarn vendor:cosmjs:build
-
-      - name: Install subql
-        run: yarn vendor:subql:install
-
-      - name: Lint subql
-        run: yarn vendor:subql:install
-
-      # this need still a conversation with @bryan to understand why he adds installation again,
-      # but I think it is because the package was not installed in root with the proper link to the submodules
-      - name: Install dependencies
-        run: yarn
-
-      - name: Build subql
-        run: yarn vendor:subql:build
+      - name: Vendor Setup
+        run: |
+          ./scripts/vendor.sh setup
 
       - name: Format
         run: yarn run format:ci
 
-      - name: Lint
-        run: yarn run lint
-
       - name: Build & Codegen
         env:
           CHAIN_ID: poktroll
-        run: yarn build
+        run: |
+          yarn run build
 
       - name: Test
         # TODO: remove this line when the test are fixed

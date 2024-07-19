@@ -27,23 +27,21 @@ jobs:
           build-args: |
             CI=true
             NODE_ENV=production
-            ENDPOINT=http://proxy:26657
             CHAIN_ID=poktroll
 
-      # develop mode
+      # development mode
       - name: Build Develop
         uses: docker/build-push-action@v6
         with:
-          file: docker/node.dockerfile
+          file: docker/dev-node.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
-          tags: "pocket-network/pocketdex:test"
+          tags: "pocket-network/pocketdex:development"
           # NODE_ENV=test & NODE_ENV=development result on the same build image due to install dependencies.
           build-args: |
             CI=true
             NODE_ENV=test
-            ENDPOINT=http://proxy:26657
             CHAIN_ID=poktroll
 
       - name: Run tests in Docker container
@@ -56,4 +54,4 @@ jobs:
         continue-on-error: true
         run: |
           trap 'echo "Failed running tests"' ERR
-          docker run --name testing -e CHAIN_ID -e ENDPOINT pocket-network/pocketdex:test test
+          docker run --name testing -e CHAIN_ID -e ENDPOINT pocket-network/pocketdex:development test
