@@ -7,7 +7,7 @@ on:
 
 jobs:
   ci:
-    name: "CI env=${{ inputs.env }}"
+    name: "CI"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
