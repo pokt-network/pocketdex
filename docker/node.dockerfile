@@ -1,4 +1,4 @@
-FROM node:21-slim AS builder
+FROM node:22.5-slim AS builder
 
 ARG CI=false
 ARG NODE_ENV=production
@@ -40,7 +40,7 @@ COPY proto /app/proto
 # Run codegen and Build pocketdex
 RUN yarn run build
 
-FROM node:21-alpine AS runner
+FROM node:22.5-alpine AS runner
 
 # add group "app" and user "app"
 RUN addgroup -g 1001 app && adduser -D -h /home/app -u 1001 -G app app

@@ -100,9 +100,9 @@ start() {
 
   ssh -o StrictHostKeyChecking=no -N -R 26657:localhost:26657 proxyuser@localhost -p 2222
   if [ $? -ne 0 ]; then
-    # this will not hurt anyone and prevent that if you use the docker compose down option the next time
-    # your try to connect the target is a different one and will give you an error where instruct the user
-    # to run the following command
+    # This set of commands has no downsides or side effects.
+    # It is an extra cleanup check to ensure that subsequent commands after running docker-compose down
+    # will not result in an error.
     warning_log "Cleaning previous host and retrying..."
     ssh-keygen -f "$HOME/.ssh/known_hosts" -R "[localhost]:2222" > /dev/null 2>&1
     ssh -o StrictHostKeyChecking=no -N -R 26657:localhost:26657 proxyuser@localhost -p 2222

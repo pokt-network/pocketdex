@@ -1,4 +1,4 @@
-FROM node:21-slim
+FROM node:22.5-slim
 
 ARG CI=false
 ARG NODE_ENV=development

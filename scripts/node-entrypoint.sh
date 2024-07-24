@@ -3,15 +3,6 @@ set -e
 
 . scripts/shared.sh
 
-# ensure that ignore_types mounted path got assigned to app user, otherwise get EACCES: permission denied
-# this is only need on WATCH=true because is regenerated after any change detected.
-#chown -R app:app /home/app/proto
-#chown -R app:app /home/app/src
-#chown -R app:app /home/app/dist
-#chown app:app /home/app/project.yaml
-#chown app:app /home/app/project.ts
-#chown app:app /home/app/schema.graphql
-
 # prepare the env variables needed for subql node in a previous step to then based on WATCH env
 # attach the rest of the command
 # NOTE: this is needed because we exec the command with su - app which start a new session where the available
@@ -70,5 +61,4 @@ EOF
   fi
 fi
 
-#exec su - -u $UID -s /bin/sh -c "$cmd"
 eval $cmd
