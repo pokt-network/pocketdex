@@ -11,6 +11,11 @@ dist/
 # lock files
 package-lock.json
 
+# project yarn files
+.yarn/cache
+.yarn/install-state.gz
+
+# vendor yarn files
 vendor/.yarn/cache
 install-state.gz
 

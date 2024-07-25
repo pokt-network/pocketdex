@@ -1,17 +1,19 @@
-FROM node:22-slim AS builder
+FROM node:22.5-slim AS builder
 
+ARG CI=false
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
-ARG WATCH=false
 
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
-ENV WATCH=$WATCH
 
-RUN apt-get update && apt-get install -y tree
-RUN npm i -g typescript
+# Typescript is added here because is wrongly used on some of the workspaces, just by the name
+# without the use of npm exec, yarn exec or any other to ensure they are looking into the node_modules
+RUN apt-get update && apt-get install -y tree && npm i -g typescript
+
+WORKDIR /app
 
 # Copy the minimum required to run install and vendor:setup
 # preventing this step need to be re-build everytime due to change on dev files
@@ -19,25 +21,26 @@ RUN npm i -g typescript
 # by docker and fully rebuild
 COPY package.json yarn.lock .yarnrc.yml /app/
 COPY vendor /app/vendor
+COPY scripts /app/scripts
 COPY .yarn /app/.yarn
-
-WORKDIR /app
 
 # Install dev dependencies
 RUN yarn install
 
 ## Build forked vendor packages
-RUN yarn run vendor:clean
-RUN yarn run vendor:setup
+RUN ./scripts/vendor.sh clean
+RUN if [ "$CI" = "true" ]; then ./scripts/vendor.sh clean-cache; else echo "Not in CI"; fi
+RUN ./scripts/vendor.sh setup
 
-# TODO_MAINNET(@jorgecuesta): Do a better use of copy to prevent copy everything which trigger a full build everytime.
 # Copy files
-COPY . /app
+COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /app/
+COPY src /app/src
+COPY proto /app/proto
 
 # Run codegen and Build pocketdex
-RUN chmod +x scripts/prepare-docker-layers.sh && WATCH=$WATCH ./scripts/prepare-docker-layers.sh "builder"
+RUN yarn run build
 
-FROM node:22-alpine as runner
+FROM node:22.5-alpine AS runner
 
 # add group "app" and user "app"
 RUN addgroup -g 1001 app && adduser -D -h /home/app -u 1001 -G app app
@@ -46,54 +49,47 @@ RUN addgroup -g 1001 app && adduser -D -h /home/app -u 1001 -G app app
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
-ARG WATCH=false
+ARG CI=false
 
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
-ENV WATCH=$WATCH
+ENV CI=$CI
 
 # Add system dependencies
 RUN apk update
-RUN apk add git postgresql14-client tini curl jq
-
-# TODO_MAINNET(@jorgecuesta): Add user and group instead of work with root to follow best practices.
-
-# add extra tools that are required
-ADD https://github.com/mikefarah/yq/releases/download/v4.26.1/yq_linux_amd64 /usr/local/bin/yq
-RUN chmod +x /usr/local/bin/yq
+RUN apk add git postgresql14-client tini curl jq yq
 
 # Switch to user "app"
 WORKDIR /home/app
 
-# add the dependencies
-COPY ./package.json yarn.lock /home/app/
+# Copy same files from context to allow docker start building both layers in parallel
+COPY package.json yarn.lock .yarnrc.yml /home/app/
+COPY .yarn /home/app/.yarn
+COPY scripts /home/app/scripts
 
-# include build artefacts in final image
+# Install dependencies for production
+# Starting from yarn 2.0, the --production flag is indeed deprecated.
+# Yarn 2 introduced improvements to allow more precise installations.
+RUN yarn workspaces focus --production
+
+# Add the dependencies
+COPY --from=builder /app/project.ts /app/schema.graphql /app/tsconfig.json /home/app/
+
+# Include build artefacts in final image
 COPY --from=builder /app/dist /home/app/dist
 COPY --from=builder /app/vendor /home/app/vendor
 COPY --from=builder /app/project.yaml /home/app/
-
-# copy files from source not from builder
-# NOTE: Docker documentation recommends the use of COPY for copying files and directories into an image because it's more transparent than ADD
-COPY ./proto /home/app/proto
-COPY ./scripts/shared.sh ./scripts/build.sh ./scripts/prepare-docker-layers.sh ./scripts/watch-exec.sh /home/app/scripts/
-COPY ./project.ts schema.graphql nodemon.json tsconfig.json /home/app/
-COPY ./scripts/node-entrypoint.sh /home/app/entrypoint.sh
+COPY --from=builder /app/proto /home/app/proto
+COPY --from=builder /app/scripts /home/app/scripts
 
 # TODO_MAINNET(@bryanchriswhite): Add the .gmrc once migrations are available.
 #COPY ./.gmrc /app/.gmrc
 
-RUN chown app:app /home/app/entrypoint.sh && chmod +x /home/app/entrypoint.sh
+# Allow execution for every shell script at scripts folder
 RUN find /home/app/scripts -type f -name "*.sh" -exec chmod +x {} \;
 
-# install production only or dev depending if WATCH is true
-RUN WATCH=$WATCH ./scripts/prepare-docker-layers.sh "runner"
+# Set user as app
+USER app
 
-RUN mkdir -p /home/app/src/types && chown -R app:app /home/app/src/types
-
-# this will be change inside of entrypoint.sh to been able to chown -R app:app the types mounted volume
-# so the commands are finally running with app user
-USER root
-
-ENTRYPOINT ["/sbin/tini", "--", "/home/app/entrypoint.sh"]
+ENTRYPOINT ["/sbin/tini", "--", "/home/app/scripts/node-entrypoint.sh"]

@@ -22,6 +22,7 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
   - [4. Run](#4-run)
     - [4.1 Errors running \& building](#41-errors-running--building)
     - [4.2 Using a pre-built image](#42-using-a-pre-built-image)
+    - [4.3 Available scripts breakdown](#43-available-scripts-breakdown)
 - [DB Migrations](#db-migrations)
   - [Install dependencies](#install-dependencies)
   - [Running Migrations](#running-migrations)
@@ -63,43 +64,54 @@ yarn run codegen
 
 ### 4. Run
 
-Create a copy of `.env.sample` as `.env` which is required on the following commands.
+Dotenv files will be automatically created after the `yarn install` thanks to the `postinstall` script.
+After that, feel free to modify them as you wish.
 
-You can modify `.env` as you wish.
+You will see three dotenv files, each for the corresponding script and environment:
+* `.env.production`
+* `.env.development`
+* `.env.test`
 
-**IMPORTANT: if you change WATCH value, you need to rebuild the image.**
-
+Alternatively, you can manually create them running:
 ```shell
-cp .env.sample .env
+yarn run env:prepare
+```
+
+For this README we will be running all the commands in `development` but you can also run them in `test` or `production`.
+Following this structure, you can run every docker command `docker:<cmd>:<production|development|test>`,
+
+#### Localnet ONLY:
+```shell
+# Run this ONLY IF indexing poktroll localnet.
+# This will allows subquery-node to connect with the poktroll validator
+
+# Leave this open in a separated terminal. Interrupting the terminal will stop the container.
+yarn poktroll:proxy:start
+
+# To stop and remove the proxy
+yarn poktroll:proxy:stop
 ```
 
 Build & start:
 
 ```shell
-# Run this ONLY IF indexing poktroll localnet.
-# This will allows subquery-node to connect with the poktroll validator
-
-# Leave this open in a separated terminal
-yarn docker:tunnel
-
 # Then build docker and start
-yarn run docker:build
-
-# By default subquery-node has WATCH=true and NODE_ENV=develop
-# which mean that any change to code/schema/dotenv files will reload it and will be using .env.develop file
-yarn run docker:start
+yarn run docker:build:development
+# This will turn on the process under a WATCHER so any change to the project.ts schema.graphql or src will trigger 
+# the needed builds again.
+yarn run docker:start:development
 ```
 
 Stop (without deleted data)
 
 ```shell
-yarn run docker:stop
+yarn run docker:stop:development
 ```
 
 Or Stop & clean up (delete postgres data):
 
 ```shell
-yarn run docker:clean
+yarn run docker:clean:development
 ```
 
 #### 4.1 Errors running & building
@@ -128,7 +140,7 @@ Then, re-tag the image to match what docker compose is expecting (assumes the re
 docker tag bryanchriswhite/pocketdex-subquery-node:latest pocketdex-subquery-node:latest
 ```
 
-**Alternatively**, you may update the `docker-compose.yml` file, just remember not to commit this change:
+**Alternatively**, you may update the `docker-compose.<env>.yml` file, just remember not to commit this change:
 
 ```yaml
 services:
@@ -136,6 +148,34 @@ services:
     image: bryanchriswhite/pocketdex-subquery-node:latest
     ...
 ```
+
+#### 4.3 Available Scripts breakdown
+
+* `preinstall` - Enforces the use of Yarn as the package manager.
+* `postinstall` - Executes the `env:prepare` script after the installation process.
+* `env:prepare` - Runs the `prepare-dotenv.sh` script. It prepares .env files for `development`, `test` and `production` environments using `.env.sample`.
+* `codegen` - Executes the SubQL Codegen.
+* `build` - Triggers a custom build script written in shell due to its complexity.
+* `watch:build` - Acts similar to the build script, but it also disables the linter for real-time coding with nodemon.
+* `lint` - Executes the source code linter.
+* `lint:fix` - Executes the linter with automatic fixing of solvable issues.
+* `format` - Applies Prettier to the code according to the rules defined in `.prettierrc`.
+* `format:ci` - Checks the code formatting with Prettier without modifying it.
+* `vendor:setup` - Runs the `vendor.sh` shell script to prepare, run, and build vendor packages.
+* `vendor:clean-cache` - Removes the `.yarn/cache` files from vendor packages that can potentially lead to errors.
+* `vendor:install` - Executes the `vendor.sh` shell script to install dependencies for each vendor package.
+* `vendor:build` - Executes the `vendor.sh` script to build each vendor package.
+* `vendor:lint` - Executes the `vendor.sh` script to lint each vendor package.
+* `vendor:clean` - Executes the `vendor.sh` script to recursively remove `node_modules` for each vendor package.
+* `docker:compose` - Runs the `docker-compose.sh` script, which forms the base for all other `docker:<action>:<environment>` scripts.
+* `poktroll:proxy:start` and `poktroll:proxy:stop` - Executes `proxy-tunnel.sh` starting and stopping the proxy tunnel to poktroll localnet validator, respectively.
+* `docker:check-env:<environment>` - Ensures the required `.env.<environment>` exists by running `dotenv-check.sh`.
+* `docker:build:<environment>` - Builds docker images for the specified environment.
+* `docker:build:no-cache:<environment>` - Builds docker images for the specified environment without using Docker's cache.
+* `docker:start:<environment>` - Starts all services for the specified environment.
+* `docker:ps:<environment>` - Shows the status of services for the specified environment.
+* `docker:stop:<environment>` - Stops all active services for the specified environment without removing them.
+* `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment. 
 
 ## DB Migrations
 

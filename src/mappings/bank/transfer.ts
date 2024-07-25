@@ -1,7 +1,7 @@
 import {CosmosEvent, CosmosMessage} from "@subql/types-cosmos";
-import {NativeTransferMsg} from "../types";
-import {attemptHandling, getTimeline, messageId, unprocessedEventHandler} from "../utils";
 import {NativeTransfer} from "../../types";
+import {NativeTransferMsg} from "../types";
+import {attemptHandling, messageId, unprocessedEventHandler} from "../utils";
 
 export async function handleNativeTransfer(event: CosmosEvent): Promise<void> {
   await attemptHandling(event, _handleNativeTransfer, unprocessedEventHandler);

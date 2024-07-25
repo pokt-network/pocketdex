@@ -1,17 +1,15 @@
 import {CosmosEvent} from "@subql/types-cosmos";
+import {parseCoins} from "../../cosmjs/utils";
 import {NativeBalanceChange, Transaction} from "../../types";
 import {
   attemptHandling,
   checkBalancesAccount,
-  getTimeline,
   messageId,
   unprocessedEventHandler
 } from "../utils";
-import {parseCoins} from "../../cosmjs/utils";
 
-export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent) {
+export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent): Promise<void> {
   await checkBalancesAccount(address, event.block.block.header.chainId);
-  // const timeline = getTimeline(event);
 
   let eventId
   if (event.tx) {

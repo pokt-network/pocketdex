@@ -1,16 +1,15 @@
+import {createHash} from "crypto";
+import {toBech32} from "@cosmjs/encoding";
 import {CosmosBlock, CosmosEvent, CosmosMessage, CosmosTransaction} from "@subql/types-cosmos";
-import {Block, Coin, Event, EventAttribute, Message, Transaction, TxStatus} from "../types";
+import {Block, Event, EventAttribute, Message, Transaction, TxStatus} from "../types";
 import {
   attemptHandling,
-  getTimeline,
   messageId,
   primitivesFromMsg,
   primitivesFromTx,
   trackUnprocessed,
   unprocessedEventHandler
 } from "./utils";
-import {createHash} from "crypto";
-import {toBech32} from "@cosmjs/encoding";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
   await attemptHandling(block, _handleBlock, _handleBlockError);
@@ -31,7 +30,7 @@ export async function handleEvent(event: CosmosEvent): Promise<void> {
 async function _handleBlock(block: CosmosBlock): Promise<void> {
   logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
 
-  const {id, header: {chainId, height, time}} = block.block;
+  const {header: {chainId, height, time}, id} = block.block;
   const timestamp = new Date(time.getTime());
   const blockEntity = Block.create({
     id,

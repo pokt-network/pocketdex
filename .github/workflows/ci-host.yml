@@ -1,0 +1,67 @@
+on:
+  workflow_call:
+
+# NOTE: this reusable workflow should be fine but is not used right now, remains here more as a demonstration
+# of the required steps to format, lint, codegen and build on host instead of docker.
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 21
+          cache: 'yarn'
+          cache-dependency-path: 'yarn.lock'
+
+      # add all the '.yarnrc' configs to yarn because yarn ignores it on CI
+      # based on this https://github.com/actions/setup-node/blob/main/docs/advanced-usage.md#yarn2-configuration
+      - name: Setup .yarnrc.yml
+        run: |
+          yarn config set yarnPath .yarn/releases/yarn-3.8.0.cjs
+          yarn config set pnpMode loose
+          yarn config set nodeLinker node-modules
+          yarn config set enableTelemetry false
+          yarn plugin import @yarnpkg/plugin-workspace-tools
+          yarn plugin import @yarnpkg/plugin-version
+
+      - name: Install dependencies
+        run: yarn
+
+      - name: Vendor Clean & Clean Cache
+        run: |
+          ./scripts/vendor.sh clean
+          ./scripts/vendor.sh clean-cache
+
+      - name: Vendor Setup
+        run: |
+          ./scripts/vendor.sh setup
+
+      - name: Format
+        run: yarn run format:ci
+
+      - name: Build & Codegen
+        env:
+          CHAIN_ID: poktroll
+        run: |
+          yarn run build
+
+      - name: Test
+        # TODO: remove this line when the test are fixed
+        # Right now there is an extraneous issue:
+        # Cause: Error: Cannot read properties of undefined (reading 'length')
+        env:
+          CHAIN_ID: poktroll
+          ENDPOINT: https://testnet-validated-validator-rpc.poktroll.com
+        continue-on-error: true
+        run: |
+          trap 'echo "Failed running tests"' ERR
+          yarn test:ci

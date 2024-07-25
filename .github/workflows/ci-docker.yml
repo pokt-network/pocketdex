@@ -1,0 +1,48 @@
+on:
+  workflow_call:
+    inputs:
+      env:
+        type: string
+        required: true
+
+jobs:
+  ci:
+    name: "CI"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          lfs: true
+
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # TODO: add later in another PR the registry login and docker metadata base on commit sha
+
+      # production mode
+      - name: Build Production
+        uses: docker/build-push-action@v6
+        if: ${{ inputs.env == 'production' }}
+        with:
+          file: docker/node.dockerfile
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            CI=true
+            NODE_ENV=production
+            CHAIN_ID=poktroll
+
+      # development mode
+      - name: Build Develop
+        uses: docker/build-push-action@v6
+        if: ${{ inputs.env != 'production' }}
+        with:
+          file: docker/dev-node.dockerfile
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            CI=true
+            NODE_ENV=test
+            CHAIN_ID=poktroll

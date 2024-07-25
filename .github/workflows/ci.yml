@@ -1,0 +1,40 @@
+name: CI
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - closed
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  draft:
+    name: 'Check Draft State'
+    if: ${{ github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo ${{ github.event.pull_request.draft != true }}
+          echo "Pull Request is not draft, this workflow need continue."
+
+  on-docker:
+    name: 'Docker'
+    uses: './.github/workflows/ci-docker.yml'
+    needs: draft
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      # use a matrix here to speed up the process of build both docker images.
+      matrix:
+        environment: [ production, development ]
+    with:
+      env: ${{ matrix.environment }}
+

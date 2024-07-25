@@ -10,10 +10,10 @@ import path from 'path';
 const mode = process.env.NODE_ENV || 'production';
 
 // Load the appropriate .env file
-const dotenvPath = path.resolve(__dirname, `.env${mode !== 'production' ? `.${mode}` : ''}`);
+const dotenvPath = path.resolve(__dirname, `.env.${mode}`);
 dotenv.config({ path: dotenvPath });
 
-// Can expand the Datasource processor types via the genreic param
+// Can expand the Datasource processor types via the generic param
 const project: CosmosProject = {
   specVersion: "1.0.0",
   version: "0.0.1",
@@ -76,7 +76,7 @@ const project: CosmosProject = {
       ],
       // --- Application module messages and events
       [
-        "poktroll.application",
+        "poktroll.application_messages",
         {
           file: "./proto/poktroll/application/tx.proto",
           messages: [
@@ -86,21 +86,17 @@ const project: CosmosProject = {
             "MsgDelegateToGateway",
             "MsgUndelegateFromGateway",
           ],
+        }
+      ],
+      [
+        "poktroll.application_events",
+        {
+          file: "./proto/poktroll/application/event.proto",
+          messages: [
+            "EventRedelegation"
+          ],
         },
       ],
-      // TODO_BLOCKER(@bryanchriswhite): Figure out how to support multiple files
-      //  for the same protobuf package.
-      //
-      // // --- Application module events
-      // [
-      //   "poktroll.application",
-      //   {
-      //     file: "./proto/poktroll/application/event.proto",
-      //     messages: [
-      //       "EventRedelegation"
-      //     ],
-      //   },
-      // ],
       // --- Gateway module messages
       [
         "poktroll.gateway",
@@ -136,23 +132,20 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // TODO_BLOCKER(@bryanchriswhite): Figure out how to support multiple files
-      //  for the same protobuf package.
-      //
       // // --- Shared module messages
-      // [
-      //   "poktroll.shared",
-      //   {
-      //     file: "./proto/poktroll/shared/tx.proto",
-      //     messages: [
-      //       "MsgUpdateParams",
-      //       "MsgUpdateParam",
-      //     ],
-      //   },
-      // ],
+      [
+        "poktroll.shared_messages",
+        {
+          file: "./proto/poktroll/shared/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+            "MsgUpdateParam",
+          ],
+        },
+      ],
       // --- Shared module types
       [
-        "poktroll.shared",
+        "poktroll.shared_types",
         {
           file: "./proto/poktroll/shared/service.proto",
           messages: [
@@ -172,23 +165,20 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // TODO_BLOCKER(@bryanchriswhite): Figure out how to support multiple files
-      //  for the same protobuf package.
-      //
-      // // --- Tokenomics module messages
-      // [
-      //   "poktroll.tokenomics",
-      //   {
-      //     file: "./proto/poktroll/tokenomics/tx.proto",
-      //     messages: [
-      //       "MsgUpdateParams",
-      //       "MsgUpdateParam",
-      //     ],
-      //   },
-      // ],
+      // --- Tokenomics module messages
+      [
+        "poktroll.tokenomics_messages",
+        {
+          file: "./proto/poktroll/tokenomics/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+            "MsgUpdateParam",
+          ],
+        },
+      ],
       // --- Tokenomics module events
       [
-        "poktroll.tokenomics",
+        "poktroll.tokenomics_events",
         {
           file: "./proto/poktroll/tokenomics/event.proto",
           messages: [

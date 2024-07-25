@@ -1,0 +1,111 @@
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: ./docker/pg-Dockerfile
+      args:
+        POSTGRES_VERSION: ${POSTGRES_VERSION}
+    ports:
+      - 5432:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_USER}
+      POSTGRES_USER: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pocketdex
+
+  pgadmin:
+    image: dpage/pgadmin4:${PGADMIN_VERSION}
+    container_name: pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_LISTEN_PORT: 5050
+    volumes:
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - ${PGADMIN_LISTEN_PORT}:5050
+    networks:
+      - pocketdex
+
+  subquery-node:
+    build:
+      context: .
+      dockerfile: ./docker/node.dockerfile
+      args:
+        NODE_ENV: ${ENV}
+        CHAIN_ID: ${CHAIN_ID}
+        ENDPOINT: ${ENDPOINT}
+    image: pocket-network/pocketdex:production
+    pull_policy: build
+    depends_on:
+      "postgres":
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      DB_USER: ${POSTGRES_USER}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_DATABASE: ${POSTGRES_DB}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      NODE_ENV: ${ENV}
+      WORKERS: ${WORKERS}
+      BATCH_SIZE: ${BATCH_SIZE}
+      DB_SCHEMA: ${DB_SCHEMA}
+      START_BLOCK: ${START_BLOCK}
+      ENDPOINT: ${ENDPOINT}
+      CHAIN_ID: ${CHAIN_ID}
+    command:
+      - --unfinalized-blocks=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+    networks:
+      - localnet_proxy
+      - pocketdex
+
+  graphql-engine:
+    image: subquerynetwork/subql-query:${SUBQUERY_GRAPHQL_ENGINE_VERSION}
+    ports:
+      - ${SUBQUERY_GRAPHQL_ENGINE_PORT}:3000
+    depends_on:
+      "postgres":
+        condition: service_healthy
+      "subquery-node":
+        condition: service_healthy
+    restart: always
+    environment:
+      DB_USER: ${POSTGRES_USER}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_DATABASE: ${POSTGRES_DB}
+      DB_HOST: postgres
+      DB_PORT: 5432
+    command:
+      - --name=${DB_SCHEMA}
+      - --playground
+      - --indexer=http://subquery-node:3000
+    networks:
+      - pocketdex
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  pocketdex:
+  localnet_proxy:
+    external: true
+    attachable: true
