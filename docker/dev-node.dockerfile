@@ -12,7 +12,10 @@ ENV CI=$CI
 
 # typescript is added here because is wrongly used on some of the workspaces, just by the name
 # without the use of npm exec, yarn exec or any other to ensure they are looking into the node_modules
-RUN apt-get update && apt-get install -y tree git postgresql-client tini curl jq yq && npm i -g typescript
+RUN apt-get update && apt-get install -y libusb-1.0-0.dev tree git build-essential pkg-config postgresql-client tini curl jq yq && npm i -g typescript
+
+# Install node-gyp globally
+RUN npm install -g node-gyp
 
 WORKDIR /app
 
