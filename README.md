@@ -16,6 +16,7 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
 
 - [Docs](#docs)
 - [Getting Started](#getting-started)
+  - [tl;dr If this is not your first time](#tldr-if-this-is-not-your-first-time)
   - [1. Ensure submodules are updated](#1-ensure-submodules-are-updated)
   - [2. Install dependencies](#2-install-dependencies)
   - [3. Generate types](#3-generate-types)
@@ -43,13 +44,25 @@ See the [docs](./docs/introduction.md) directory.
 
 ## Getting Started
 
-*tl;dr If this is not your first time*
+### tl;dr If this is not your first time
+
+Run the following:
 
 ```bash
 yarn install
 yarn run codegen
+docker context use default
 yarn run docker:build:development
 ```
+
+Debugging to get a clean build:
+
+```bash
+yarn cache clean
+yarn vendor:clean
+docker builder prune --all
+```
+
 
 ### 1. Ensure submodules are updated
 
