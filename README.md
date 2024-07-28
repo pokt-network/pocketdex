@@ -14,7 +14,8 @@ API to the indexed data.
 
 To learn more about SubQuery, [see their docs](https://academy.subquery.network).
 
-- [Docs](#docs)
+- [Usage \& Query Docs](#usage--query-docs)
+  - [Explore via postgres](#explore-via-postgres)
 - [Getting Started](#getting-started)
   - [tl;dr local development (if not your first time)](#tldr-local-development-if-not-your-first-time)
   - [1. Ensure submodules are updated](#1-ensure-submodules-are-updated)
@@ -38,9 +39,20 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
 - [End-to-end Testing](#end-to-end-testing)
 - [Tracing](#tracing)
 
-## Docs
+## Usage & Query Docs
 
-See the [docs](./docs/introduction.md) directory.
+See the [introduction docs](./docs/introduction.md) directory for details
+on how to use indexed data after you're fully set up.
+
+### Explore via postgres
+
+Connect to the postgres container, update the schema and explore!
+
+```bash
+docker exec -it pocketdex_development-postgres-1 psql -U postgres -d postgres
+SET search_path TO app;
+\dt
+```
 
 ## Getting Started
 
