@@ -20,9 +20,10 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
   - [2. Install dependencies](#2-install-dependencies)
   - [3. Generate types](#3-generate-types)
   - [4. Run](#4-run)
+    - [Localnet ONLY](#localnet-only)
     - [4.1 Errors running \& building](#41-errors-running--building)
     - [4.2 Using a pre-built image](#42-using-a-pre-built-image)
-    - [4.3 Available scripts breakdown](#43-available-scripts-breakdown)
+    - [4.3 Available Scripts breakdown](#43-available-scripts-breakdown)
 - [DB Migrations](#db-migrations)
   - [Install dependencies](#install-dependencies)
   - [Running Migrations](#running-migrations)
@@ -41,6 +42,14 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
 See the [docs](./docs/introduction.md) directory.
 
 ## Getting Started
+
+*tl;dr If this is not your first time*
+
+```bash
+yarn install
+yarn run codegen
+yarn run docker:build:development
+```
 
 ### 1. Ensure submodules are updated
 
@@ -68,11 +77,13 @@ Dotenv files will be automatically created after the `yarn install` thanks to th
 After that, feel free to modify them as you wish.
 
 You will see three dotenv files, each for the corresponding script and environment:
+
 * `.env.production`
 * `.env.development`
 * `.env.test`
 
 Alternatively, you can manually create them running:
+
 ```shell
 yarn run env:prepare
 ```
@@ -80,7 +91,8 @@ yarn run env:prepare
 For this README we will be running all the commands in `development` but you can also run them in `test` or `production`.
 Following this structure, you can run every docker command `docker:<cmd>:<production|development|test>`,
 
-#### Localnet ONLY:
+#### Localnet ONLY
+
 ```shell
 # Run this ONLY IF indexing poktroll localnet.
 # This will allows subquery-node to connect with the poktroll validator
@@ -97,7 +109,7 @@ Build & start:
 ```shell
 # Then build docker and start
 yarn run docker:build:development
-# This will turn on the process under a WATCHER so any change to the project.ts schema.graphql or src will trigger 
+# This will turn on the process under a WATCHER so any change to the project.ts schema.graphql or src will trigger
 # the needed builds again.
 yarn run docker:start:development
 ```
@@ -175,7 +187,7 @@ services:
 * `docker:start:<environment>` - Starts all services for the specified environment.
 * `docker:ps:<environment>` - Shows the status of services for the specified environment.
 * `docker:stop:<environment>` - Stops all active services for the specified environment without removing them.
-* `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment. 
+* `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment.
 
 ## DB Migrations
 
