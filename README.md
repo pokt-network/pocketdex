@@ -16,13 +16,13 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
 
 - [Docs](#docs)
 - [Getting Started](#getting-started)
-  - [tl;dr If this is not your first time](#tldr-if-this-is-not-your-first-time)
+  - [tl;dr local development (if not your first time)](#tldr-local-development-if-not-your-first-time)
   - [1. Ensure submodules are updated](#1-ensure-submodules-are-updated)
   - [2. Install dependencies](#2-install-dependencies)
   - [3. Generate types](#3-generate-types)
   - [4. Run](#4-run)
     - [Localnet ONLY](#localnet-only)
-    - [4.1 Errors running \& building](#41-errors-running--building)
+    - [4.1 Debugging, errors running \& building](#41-debugging-errors-running--building)
     - [4.2 Using a pre-built image](#42-using-a-pre-built-image)
     - [4.3 Available Scripts breakdown](#43-available-scripts-breakdown)
 - [DB Migrations](#db-migrations)
@@ -44,25 +44,18 @@ See the [docs](./docs/introduction.md) directory.
 
 ## Getting Started
 
-### tl;dr If this is not your first time
+### tl;dr local development (if not your first time)
 
 Run the following:
 
 ```bash
 yarn install
 yarn run codegen
-docker context use default
+docker context use default # Optional
 yarn run docker:build:development
+yarn poktroll:proxy:start
+yarn run docker:start:development
 ```
-
-Debugging to get a clean build:
-
-```bash
-yarn cache clean
-yarn vendor:clean
-docker builder prune --all
-```
-
 
 ### 1. Ensure submodules are updated
 
@@ -139,15 +132,18 @@ Or Stop & clean up (delete postgres data):
 yarn run docker:clean:development
 ```
 
-#### 4.1 Errors running & building
+#### 4.1 Debugging, errors running & building
 
-If you're hitting errors with the above command, try cleaning your cache:
+If you're hitting errors with the above command, do a nuclear clean of all potential issues:
 
 ```bash
 yarn cache clean
+yarn vendor:clean
+docker builder prune --all
+docker context use default
 ```
 
-And pick up from the `yarn run docker:build` step above
+Now pick up from the `yarn run docker:build` step above.
 
 #### 4.2 Using a pre-built image
 
