@@ -11,7 +11,11 @@ ENV CHAIN_ID=$CHAIN_ID
 
 # Typescript is added here because is wrongly used on some of the workspaces, just by the name
 # without the use of npm exec, yarn exec or any other to ensure they are looking into the node_modules
-RUN apt-get update && apt-get install -y tree && npm i -g typescript
+RUN apt-get update && apt-get install -y tree \
+    # The following was necessary to install in order to add support for building
+    # the docker container on an M1 chip (i.e. ARM64)
+    make build-essential pkg-config python3 libusb-1.0-0-dev libudev-dev \
+    && npm i -g typescript
 
 WORKDIR /app
 
