@@ -29,6 +29,8 @@ jobs:
           file: docker/node.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Added platforms to ensure this image will work on Linux and OSx with Mx processors
+          platforms: linux/amd64,linux/arm64
           build-args: |
             CI=true
             NODE_ENV=production
@@ -42,6 +44,8 @@ jobs:
           file: docker/dev-node.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Added platforms to ensure this image will work on Linux and OSx with Mx processors
+          platforms: linux/amd64,linux/arm64
           build-args: |
             CI=true
             NODE_ENV=test

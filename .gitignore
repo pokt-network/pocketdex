@@ -70,3 +70,7 @@ Thumbs.db
 !.env.sample
 
 .yarn/cache
+
+# Visual Studio
+.vscode
+

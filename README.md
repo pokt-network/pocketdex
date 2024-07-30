@@ -14,15 +14,18 @@ API to the indexed data.
 
 To learn more about SubQuery, [see their docs](https://academy.subquery.network).
 
-- [Docs](#docs)
+- [Usage \& Query Docs](#usage--query-docs)
+  - [Explore via postgres](#explore-via-postgres)
 - [Getting Started](#getting-started)
+  - [tl;dr local development (if not your first time)](#tldr-local-development-if-not-your-first-time)
   - [1. Ensure submodules are updated](#1-ensure-submodules-are-updated)
   - [2. Install dependencies](#2-install-dependencies)
   - [3. Generate types](#3-generate-types)
   - [4. Run](#4-run)
-    - [4.1 Errors running \& building](#41-errors-running--building)
+    - [Localnet ONLY](#localnet-only)
+    - [4.1 Debugging, errors running \& building](#41-debugging-errors-running--building)
     - [4.2 Using a pre-built image](#42-using-a-pre-built-image)
-    - [4.3 Available scripts breakdown](#43-available-scripts-breakdown)
+    - [4.3 Available Scripts breakdown](#43-available-scripts-breakdown)
 - [DB Migrations](#db-migrations)
   - [Install dependencies](#install-dependencies)
   - [Running Migrations](#running-migrations)
@@ -36,11 +39,35 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
 - [End-to-end Testing](#end-to-end-testing)
 - [Tracing](#tracing)
 
-## Docs
+## Usage & Query Docs
 
-See the [docs](./docs/introduction.md) directory.
+See the [introduction docs](./docs/introduction.md) directory for details
+on how to use indexed data after you're fully set up.
+
+### Explore via postgres
+
+Connect to the postgres container, update the schema and explore!
+
+```bash
+docker exec -it pocketdex_development-postgres-1 psql -U postgres -d postgres
+SET search_path TO app;
+\dt
+```
 
 ## Getting Started
+
+### tl;dr local development (if not your first time)
+
+Run the following:
+
+```bash
+yarn install
+yarn run codegen
+docker context use default # Optional
+yarn run docker:build:development
+yarn poktroll:proxy:start
+yarn run docker:start:development
+```
 
 ### 1. Ensure submodules are updated
 
@@ -68,11 +95,13 @@ Dotenv files will be automatically created after the `yarn install` thanks to th
 After that, feel free to modify them as you wish.
 
 You will see three dotenv files, each for the corresponding script and environment:
+
 * `.env.production`
 * `.env.development`
 * `.env.test`
 
 Alternatively, you can manually create them running:
+
 ```shell
 yarn run env:prepare
 ```
@@ -80,7 +109,8 @@ yarn run env:prepare
 For this README we will be running all the commands in `development` but you can also run them in `test` or `production`.
 Following this structure, you can run every docker command `docker:<cmd>:<production|development|test>`,
 
-#### Localnet ONLY:
+#### Localnet ONLY
+
 ```shell
 # Run this ONLY IF indexing poktroll localnet.
 # This will allows subquery-node to connect with the poktroll validator
@@ -97,7 +127,7 @@ Build & start:
 ```shell
 # Then build docker and start
 yarn run docker:build:development
-# This will turn on the process under a WATCHER so any change to the project.ts schema.graphql or src will trigger 
+# This will turn on the process under a WATCHER so any change to the project.ts schema.graphql or src will trigger
 # the needed builds again.
 yarn run docker:start:development
 ```
@@ -114,15 +144,18 @@ Or Stop & clean up (delete postgres data):
 yarn run docker:clean:development
 ```
 
-#### 4.1 Errors running & building
+#### 4.1 Debugging, errors running & building
 
-If you're hitting errors with the above command, try cleaning your cache:
+If you're hitting errors with the above command, do a nuclear clean of all potential issues:
 
 ```bash
 yarn cache clean
+yarn vendor:clean
+docker builder prune --all
+docker context use default
 ```
 
-And pick up from the `yarn run docker:build` step above
+Now pick up from the `yarn run docker:build` step above.
 
 #### 4.2 Using a pre-built image
 
@@ -175,7 +208,7 @@ services:
 * `docker:start:<environment>` - Starts all services for the specified environment.
 * `docker:ps:<environment>` - Shows the status of services for the specified environment.
 * `docker:stop:<environment>` - Stops all active services for the specified environment without removing them.
-* `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment. 
+* `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment.
 
 ## DB Migrations
 
