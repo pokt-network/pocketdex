@@ -18,10 +18,9 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
   - [Explore via postgres](#explore-via-postgres)
 - [Getting Started](#getting-started)
   - [tl;dr local development (if not your first time)](#tldr-local-development-if-not-your-first-time)
-  - [1. Ensure submodules are updated](#1-ensure-submodules-are-updated)
-  - [2. Install dependencies](#2-install-dependencies)
-  - [3. Generate types](#3-generate-types)
-  - [4. Run](#4-run)
+  - [1. Install dependencies](#1-install-dependencies)
+  - [2. Generate types](#2-generate-types)
+  - [3. Run](#3-run)
     - [Localnet ONLY](#localnet-only)
     - [4.1 Debugging, errors running \& building](#41-debugging-errors-running--building)
     - [4.2 Using a pre-built image](#42-using-a-pre-built-image)
@@ -69,19 +68,13 @@ yarn poktroll:proxy:start
 yarn run docker:start:development
 ```
 
-### 1. Ensure submodules are updated
-
-```shell
-git submodule update --init --recursive
-```
-
-### 2. Install dependencies
+### 1. Install dependencies
 
 ```shell
 yarn install
 ```
 
-### 3. Generate types
+### 2. Generate types
 
 Types will need to be regenerated any time the `graphql.schema` is changed.
 
@@ -89,7 +82,7 @@ Types will need to be regenerated any time the `graphql.schema` is changed.
 yarn run codegen
 ```
 
-### 4. Run
+### 3. Run
 
 Dotenv files will be automatically created after the `yarn install` thanks to the `postinstall` script.
 After that, feel free to modify them as you wish.
