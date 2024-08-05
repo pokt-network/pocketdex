@@ -27,7 +27,7 @@ update_project() {
 
   if [ ! -z "${CHAIN_ID}" ]; then
       info_log "[Config Update] Chain ID: ${CHAIN_ID}"
-      yq -i '.network.chainId = env(CHAIN_ID)' project.yaml
+      yq -i '.network.chainId = strenv(CHAIN_ID)' project.yaml
   fi
 
   if [ ! -z "${ENDPOINT}" ]; then

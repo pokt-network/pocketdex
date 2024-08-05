@@ -15,12 +15,6 @@
     "format:ci": "yarn exec pretty-quick --verbose --check --pattern 'src/*.{js,ts,jsx,tsx}' --branch origin/main",
     "test": "yarn run build && subql-node-cosmos test",
     "test:ci": "env node vendor/subql-cosmos/packages/node/bin/run test",
-    "vendor:setup": "./scripts/vendor.sh setup",
-    "vendor:clean-cache": "./scripts/vendor.sh clean-cache",
-    "vendor:install": "./scripts/vendor.sh install",
-    "vendor:build": "./scripts/vendor.sh build",
-    "vendor:lint": "./scripts/vendor.sh lint",
-    "vendor:clean": "./scripts/vendor.sh clean",
     "env:prepare": "./scripts/prepare-dotenv.sh",
     "docker:compose": "./scripts/docker-compose.sh",
     "poktroll:proxy:start": "./scripts/proxy-tunnel.sh start",
@@ -62,9 +56,8 @@
   "license": "MIT",
   "devDependencies": {
     "@cosmjs/stargate": "^0.28.9",
-    "@subql/cli": "latest",
-    "@subql/node-cosmos": "latest",
-    "@subql/testing": "latest",
+    "@subql/cli": "5.1.1",
+    "@subql/testing": "2.2.1",
     "@typescript-eslint/eslint-plugin": "^5.10.2",
     "@typescript-eslint/parser": "^5.10.2",
     "dotenv": "latest",
@@ -81,8 +74,9 @@
     "typescript": "^5.2.2"
   },
   "dependencies": {
-    "@subql/types-cosmos": "latest",
-    "@types/node": "^17.0.21",
+    "@subql/node-cosmos": "4.0.1",
+    "@subql/types-cosmos": "3.5.0",
+    "@types/node": "^22.0.0",
     "pino": "^7.8.0",
     "ts-proto": "^1.112.1",
     "tslib": "^2.3.1"

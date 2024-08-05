@@ -1,24 +1,23 @@
 {
-  "verbose": true,
+  "verbose": false,
   "watch": [
     "src/*",
     "proto/*",
     "project.ts",
     "schema.graphql",
-    "vendor/*",
-    ".env",
-    ".env.develop"
+    ".env.development"
   ],
   "ignore": [
-    "src/types/",
+    "src/types/**/*",
     "project.yaml",
     "dist/*",
     "docs/*",
     "docker/*",
     "node_modules/**/*",
-    "*/node_modules/**/*"
+    "*/node_modules/**/*",
+    ".yarn/**/*"
   ],
   "ext": "ts,proto,graphql",
-  "legacyWatch": false,
+  "legacyWatch": true,
   "delay": 2000
 }

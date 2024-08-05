@@ -14,4 +14,4 @@ update_project
 env NODE_ENV=$NODE_ENV yarn run watch:build
 
 info_log "executing subql-node"
-node ./vendor/subql-cosmos/packages/node/bin/run $params "$@"
+node ./node_modules/@subql/node-cosmos/bin/run $params "$@"

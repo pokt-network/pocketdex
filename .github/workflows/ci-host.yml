@@ -36,15 +36,6 @@ jobs:
       - name: Install dependencies
         run: yarn
 
-      - name: Vendor Clean & Clean Cache
-        run: |
-          ./scripts/vendor.sh clean
-          ./scripts/vendor.sh clean-cache
-
-      - name: Vendor Setup
-        run: |
-          ./scripts/vendor.sh setup
-
       - name: Format
         run: yarn run format:ci
 
