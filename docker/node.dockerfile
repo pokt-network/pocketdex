@@ -54,6 +54,9 @@ ENV CHAIN_ID=$CHAIN_ID
 # Add system dependencies
 RUN apk update
 RUN apk add git postgresql14-client tini curl jq
+# The following was necessary to install in order to add support for building
+# the docker container on an M1 chip (i.e. ARM64)
+RUN apk add g++ make py3-pip
 # add specific version of yq because depending on the operative system it could get another implementation or version
 # than produce error on shell scripts later.
 RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq &&\
@@ -68,9 +71,14 @@ COPY .yarn /home/app/.yarn
 COPY scripts /home/app/scripts
 
 # Install dependencies for production
-# Starting from yarn 2.0, the --production flag is indeed deprecated.
-# Yarn 2 introduced improvements to allow more precise installations.
-RUN yarn workspaces focus --production
+# NOTE: in case a yarn install fail, please add --inline-build to produce a more verbose installation logs, that could
+# help you debugging what is going wrong.
+RUN yarn install \
+    # Starting from yarn 2.0, the --production flag is indeed deprecated.
+    # Yarn 2 introduced improvements to allow more precise installations.
+    # The install now is needed because there are some dependencies that need to be build and that is achieve on install \
+    # the with this command the dependencies are reduced to only leave production one.
+    && yarn workspaces focus --production
 
 # Add the dependencies
 COPY --from=builder /app/project.ts /app/schema.graphql /app/tsconfig.json /home/app/

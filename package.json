@@ -6,6 +6,7 @@
   "scripts": {
     "preinstall": "npx only-allow yarn",
     "postinstall": "yarn run env:prepare",
+    "precommit": "./scripts/before-commit.sh",
     "codegen": "yarn exec subql codegen",
     "build": "./scripts/build.sh",
     "watch:build": "./scripts/build.sh no-lint",
