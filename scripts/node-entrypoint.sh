@@ -17,7 +17,7 @@ then
   info_log "Running Tests only"
   params=$(get_params)
   scripts/build.sh no-lint
-  cmd="$cmd node ./vendor/subql-cosmos/packages/node/bin/run $params $@"
+  cmd="$cmd node ./node_modules/@subql/node-cosmos/bin/run $params $@"
 else
   # Add btree_gist extension to support historical mode - after the db reset from `graphile-migrate reset --erase`
   export PGPASSWORD=$DB_PASS
@@ -40,7 +40,7 @@ EOF
   if [ "$NODE_ENV" = "development" ]
   then
     # call the first command if WATCH is true
-    info_log "NODE_ENV is set to 'development'. Installing nodemon and Running with it..."
+    info_log "NODE_ENV is set to 'development'. Running with Hot-Reload..."
 
     exec="./scripts/watch-exec.sh $@"
     if ! jq --arg value "$exec" '. + {"exec": $value }' /app/nodemon.json > /tmp/temp.json; then
@@ -57,7 +57,7 @@ EOF
     update_project
     params=$(get_params)
     # run the main node
-    cmd="$cmd node ./vendor/subql-cosmos/packages/node/bin/run $params $@"
+    cmd="$cmd node ./node_modules/@subql/node-cosmos/bin/run $params $@"
   fi
 fi
 

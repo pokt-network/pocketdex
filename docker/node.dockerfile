@@ -1,6 +1,5 @@
 FROM node:22.5-slim AS builder
 
-ARG CI=false
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
@@ -24,17 +23,11 @@ WORKDIR /app
 # but if for X reason you update a vendor package this step CACHE will be dropped
 # by docker and fully rebuild
 COPY package.json yarn.lock .yarnrc.yml /app/
-COPY vendor /app/vendor
 COPY scripts /app/scripts
 COPY .yarn /app/.yarn
 
 # Install dev dependencies
 RUN yarn install
-
-## Build forked vendor packages
-RUN ./scripts/vendor.sh clean
-RUN if [ "$CI" = "true" ]; then ./scripts/vendor.sh clean-cache; else echo "Not in CI"; fi
-RUN ./scripts/vendor.sh setup
 
 # Copy files
 COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /app/
@@ -53,16 +46,21 @@ RUN addgroup -g 1001 app && adduser -D -h /home/app -u 1001 -G app app
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
-ARG CI=false
 
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
-ENV CI=$CI
 
 # Add system dependencies
 RUN apk update
-RUN apk add git postgresql14-client tini curl jq yq
+RUN apk add git postgresql14-client tini curl jq
+# The following was necessary to install in order to add support for building
+# the docker container on an M1 chip (i.e. ARM64)
+RUN apk add g++ make py3-pip
+# add specific version of yq because depending on the operative system it could get another implementation or version
+# than produce error on shell scripts later.
+RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq &&\
+        chmod +x /usr/bin/yq
 
 # Switch to user "app"
 WORKDIR /home/app
@@ -73,27 +71,30 @@ COPY .yarn /home/app/.yarn
 COPY scripts /home/app/scripts
 
 # Install dependencies for production
-# Starting from yarn 2.0, the --production flag is indeed deprecated.
-# Yarn 2 introduced improvements to allow more precise installations.
-RUN yarn workspaces focus --production
+# NOTE: in case a yarn install fail, please add --inline-build to produce a more verbose installation logs, that could
+# help you debugging what is going wrong.
+RUN yarn install \
+    # Starting from yarn 2.0, the --production flag is indeed deprecated.
+    # Yarn 2 introduced improvements to allow more precise installations.
+    # The install now is needed because there are some dependencies that need to be build and that is achieve on install \
+    # the with this command the dependencies are reduced to only leave production one.
+    && yarn workspaces focus --production
 
 # Add the dependencies
 COPY --from=builder /app/project.ts /app/schema.graphql /app/tsconfig.json /home/app/
 
 # Include build artefacts in final image
 COPY --from=builder /app/dist /home/app/dist
-COPY --from=builder /app/vendor /home/app/vendor
 COPY --from=builder /app/project.yaml /home/app/
 COPY --from=builder /app/proto /home/app/proto
 COPY --from=builder /app/scripts /home/app/scripts
-
-# TODO_MAINNET(@bryanchriswhite): Add the .gmrc once migrations are available.
-#COPY ./.gmrc /app/.gmrc
 
 # Allow execution for every shell script at scripts folder
 RUN find /home/app/scripts -type f -name "*.sh" -exec chmod +x {} \;
 
 # Set user as app
 USER app
+# Required after this version https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
+ENV TZ=utc
 
 ENTRYPOINT ["/sbin/tini", "--", "/home/app/scripts/node-entrypoint.sh"]

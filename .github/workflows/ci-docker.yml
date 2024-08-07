@@ -32,12 +32,11 @@ jobs:
           # Added platforms to ensure this image will work on Linux and OSx with Mx processors
           platforms: linux/amd64,linux/arm64
           build-args: |
-            CI=true
             NODE_ENV=production
             CHAIN_ID=poktroll
 
       # development mode
-      - name: Build Develop
+      - name: Build Development
         uses: docker/build-push-action@v6
         if: ${{ inputs.env != 'production' }}
         with:
@@ -47,6 +46,5 @@ jobs:
           # Added platforms to ensure this image will work on Linux and OSx with Mx processors
           platforms: linux/amd64,linux/arm64
           build-args: |
-            CI=true
-            NODE_ENV=test
+            NODE_ENV=development
             CHAIN_ID=poktroll

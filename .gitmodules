@@ -1,6 +1,0 @@
-[submodule "subql-cosmos"]
-	path = vendor/subql-cosmos
-	url = https://github.com/subquery/subql-cosmos
-[submodule "vendor/cosmjs"]
-	path = vendor/cosmjs
-	url = https://github.com/cosmos/cosmjs
