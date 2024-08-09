@@ -45,7 +45,7 @@ on how to use indexed data after you're fully set up.
 
 ### Explore via postgres
 
-Connect to the postgres container, update the schema and explore!
+Connect to the postgres container, update the schema, and explore!
 
 ```bash
 docker exec -it pocketdex_development-postgres-1 psql -U postgres -d postgres
