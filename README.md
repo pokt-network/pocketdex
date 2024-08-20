@@ -16,6 +16,7 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
 
 - [Usage \& Query Docs](#usage--query-docs)
   - [Explore via postgres](#explore-via-postgres)
+  - [Explore via GraphQL](#explore-via-graphql)
 - [Getting Started](#getting-started)
   - [tl;dr local development (if not your first time)](#tldr-local-development-if-not-your-first-time)
   - [1. Install dependencies](#1-install-dependencies)
@@ -40,6 +41,94 @@ docker exec -it pocketdex_development-postgres-1 psql -U postgres -d postgres
 SET search_path TO app;
 \dt
 ```
+
+### Explore via GraphQL
+
+The [poktscan](poktscan.com) team put together a playground to explore the testnet data.
+
+You can access at [shannon-testnet.poktscan.com](https://shannon-testnet.poktscan.com/) and use
+the sample query below to get started.
+
+<details>
+  <summary>Click to expand sample query</summary>
+
+  ```graphql
+    query  {
+        distinct_poktroll_event_types: events (distinct: TYPE, filter: {type: {includes: "poktroll"}}){
+        totalCount
+        nodes {
+          type
+        }
+      }
+
+      distinct_poktroll_message_types: messages (distinct: TYPE_URL, filter:{typeUrl: {includes: "poktroll"}}) {
+        totalCount
+        nodes {
+          typeUrl
+          # transactionId
+        }
+      }
+
+      unprocessedEntities (distinct: ERROR) {
+        totalCount
+        nodes {
+          eventId
+          messageId
+          transactionId
+          error
+        }
+      }
+
+      indexer_metadata: _metadata {
+        targetHeight
+        lastProcessedHeight
+      }
+
+
+      # tx_events: events(filter: {type: {equalTo: "tx"}}) {
+      #   nodes {
+      #     attributes {
+      #       nodes {
+      #         key
+      #         value
+      #       }
+      #     }
+      #   }
+      # }
+
+      # begin_block_events: events (filter: {attributes: {some: {key: {equalTo: "mode"}, value: {equalTo: "BeginBlock"}}}}) {
+      #   nodes {
+      #     attributes {
+      #       nodes {
+      #         key
+      #         value
+      #       }
+      #     }
+      #   }
+      # }
+
+      # events (distinct: TYPE) {
+      #   nodes {
+      #     type
+      #   }
+      # }
+
+      # claims: messages(filter: {typeUrl: {equalTo: "/poktroll.proof.MsgCreateClaim"}}) {
+      #   nodes {
+      #     typeUrl
+      #     json
+      #   }
+      # }
+
+      # eventAttributes(distinct: KEY) {
+      #   nodes {
+      #     key
+      #   }
+      # }
+  }
+  ```
+
+</details>
 
 ## Getting Started
 
