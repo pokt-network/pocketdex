@@ -1,0 +1,91 @@
+# Query component
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: pocketdex
+    component: query
+  name: pocketdex-query
+spec:
+  progressDeadlineSeconds: 15 # Adjust deployment progress deadline if needed
+  replicas: 1 # Scale as needed
+  revisionHistoryLimit: 10 # Number of old ReplicaSets to retain
+  selector:
+    matchLabels:
+      app: pocketdex
+      component: query
+  strategy:
+    type: Recreate # Restart strategy type
+  template:
+    metadata:
+      labels:
+        app: pocketdex
+        component: query
+    spec:
+      initContainers:
+        # This init container allows us to inject the --name and --indexer values from ConfigMap without hardcoding them
+        - name: init-args
+          image: subquerynetwork/subql-query:latest
+          command: [ '/bin/sh', '-c', 'echo "--name=${DB_SCHEMA} --playground --indexer=${INDEXER_URL}" > /mnt/config/args.txt' ]
+          env:
+            - name: DB_SCHEMA
+              valueFrom:
+                configMapKeyRef:
+                  key: db_schema
+                  name: shannon-testnet
+            - name: INDEXER_URL
+              valueFrom:
+                configMapKeyRef:
+                  key: indexer_endpoint
+                  name: shannon-testnet
+          volumeMounts:
+            - name: config-volume
+              mountPath: /mnt/config
+      containers:
+        - name: pocketdex-query
+          command: [ "/bin/sh", "-c" ]
+          # Inject the arguments into the CMD
+          args: [ 'exec /sbin/tini -- /bin/run $(cat /mnt/config/args.txt) -f /app' ]
+          image: subquerynetwork/subql-query:latest
+          imagePullPolicy: IfNotPresent # Image pull policy
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  key: user
+                  name: db-credentials
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  key: password
+                  name: db-credentials
+            - name: DB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  key: database
+                  name: db-credentials
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  key: host
+                  name: db-credentials
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  key: port
+                  name: db-credentials
+          volumeMounts:
+            - name: config-volume
+              mountPath: /mnt/config
+          resources:
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      volumes:
+        - name: config-volume
+          emptyDir: { }
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 20 # Time before the termination signal is sent to the container
