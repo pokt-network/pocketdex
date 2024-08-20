@@ -89,3 +89,22 @@ spec:
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 20 # Time before the termination signal is sent to the container
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: pocketdex
+    component: query
+  name: pocketdex-query
+spec:
+  ports:
+    - name: query
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+  selector:
+    app: pocketdex
+    component: query
+  sessionAffinity: None
+  type: ClusterIP

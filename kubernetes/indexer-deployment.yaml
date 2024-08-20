@@ -75,7 +75,7 @@ spec:
                   key: port
                   name: db-credentials
           # TODO: Replace with the actual Pocket Network Docker image of PocketDex once it is released.
-          image: pocket-network/pocketdex:production # Docker image
+          image: poktscan/pocketdex:latest # Docker image
           imagePullPolicy: IfNotPresent # Image pull policy
           resources:
             limits:
@@ -86,3 +86,22 @@ spec:
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       terminationGracePeriodSeconds: 20 # Time before the termination signal is sent to the container
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: pocketdex
+    component: indexer
+  name: pocketdex-indexer
+spec:
+  ports:
+    - name: indexer
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+  selector:
+    app: pocketdex
+    component: indexer
+  sessionAffinity: None
+  type: ClusterIP

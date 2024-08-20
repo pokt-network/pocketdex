@@ -47,22 +47,16 @@ kubectl apply -f kubernetes/configmap.yaml
 
 #### 4. Deploy Indexer and Query Components:
 
-Create the indexer deployment:
+Create the indexer deployment and service:
 
 ```shell
 kubectl apply -f kubernetes/indexer-deployment.yaml
 ```
 
-Create the query deployment:
+Create the query deployment and service:
 
 ```shell
 kubectl apply -f kubernetes/query-deployment.yaml
-```
-
-#### 5. Create Services for Indexer and Query Components:
-
-```shell
-kubectl apply -f kubernetes/service.yaml
 ```
 
 ### Explore Locally:
