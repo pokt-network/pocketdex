@@ -74,6 +74,7 @@ spec:
                 secretKeyRef:
                   key: port
                   name: db-credentials
+          # TODO: Replace with the actual Pocket Network Docker image of PocketDex once it is released.
           image: pocket-network/pocketdex:production # Docker image
           imagePullPolicy: IfNotPresent # Image pull policy
           resources:
