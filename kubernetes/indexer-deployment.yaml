@@ -1,0 +1,107 @@
+### Indexer component
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: pocketdex
+    component: indexer
+  name: pocketdex-indexer
+spec:
+  progressDeadlineSeconds: 15 # Adjust deployment progress deadline if needed
+  replicas: 1 # Number of pod replicas
+  revisionHistoryLimit: 10 # Number of old ReplicaSets to retain
+  selector:
+    matchLabels:
+      app: pocketdex
+      component: indexer
+  strategy:
+    type: Recreate # Restart strategy type
+  template:
+    metadata:
+      labels:
+        app: pocketdex
+        component: indexer
+    spec:
+      containers:
+        - name: pocketdex-indexer
+          args: [ "--unfinalized-blocks=true" ] # Arguments for the container
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: WORKERS
+              value: "8"
+            - name: BATCH_SIZE
+              value: "50"
+            - name: DB_SCHEMA
+              valueFrom:
+                configMapKeyRef:
+                  key: db_schema
+                  name: shannon-testnet
+            - name: START_BLOCK
+              value: "1"
+            - name: ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  key: endpoint
+                  name: shannon-testnet
+            - name: CHAIN_ID
+              valueFrom:
+                configMapKeyRef:
+                  key: chain_id
+                  name: shannon-testnet
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  key: user
+                  name: db-credentials
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  key: password
+                  name: db-credentials
+            - name: DB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  key: database
+                  name: db-credentials
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  key: host
+                  name: db-credentials
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  key: port
+                  name: db-credentials
+          # TODO: Replace with the actual Pocket Network Docker image of PocketDex once it is released.
+          image: poktscan/pocketdex:latest # Docker image
+          imagePullPolicy: IfNotPresent # Image pull policy
+          resources:
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 20 # Time before the termination signal is sent to the container
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: pocketdex
+    component: indexer
+  name: pocketdex-indexer
+spec:
+  ports:
+    - name: indexer
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+  selector:
+    app: pocketdex
+    component: indexer
+  sessionAffinity: None
+  type: ClusterIP

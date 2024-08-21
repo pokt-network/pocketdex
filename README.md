@@ -23,9 +23,10 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
   - [2. Generate types](#2-generate-types)
   - [3. Run](#3-run)
     - [Localnet ONLY](#localnet-only)
-    - [4.1 Debugging, errors running \& building](#41-debugging-errors-running--building)
-    - [4.2 Using a pre-built image](#42-using-a-pre-built-image)
-    - [4.3 Available Scripts breakdown](#43-available-scripts-breakdown)
+    - [3.1 Debugging, errors running \& building](#31-debugging-errors-running--building)
+    - [3.2 Using a pre-built image](#32-using-a-pre-built-image)
+    - [3.3 Available Scripts breakdown](#33-available-scripts-breakdown)
+    - [3.4 Using k8s](#34-using-k8s)
 
 ## Usage & Query Docs
 
@@ -214,7 +215,7 @@ Or Stop & clean up (delete postgres data):
 yarn run docker:clean:development
 ```
 
-#### 4.1 Debugging, errors running & building
+#### 3.1 Debugging, errors running & building
 
 If you're hitting errors with the above command, do a nuclear clean of all potential issues:
 
@@ -226,7 +227,7 @@ docker context use default
 
 Now pick up from the `yarn run docker:build` step above.
 
-#### 4.2 Using a pre-built image
+#### 3.2 Using a pre-built image
 
 If you are unable to build locally, a pre-built image is available on Docker Hub: [bryanchriswhite/pocketdex-subquery-node:latest](https://hub.docker.com/r/bryanchriswhite/pocketdex-subquery-node).
 
@@ -251,7 +252,7 @@ services:
     ...
 ```
 
-#### 4.3 Available Scripts breakdown
+#### 3.3 Available Scripts breakdown
 
 * `preinstall` - Enforces the use of Yarn as the package manager.
 * `postinstall` - Executes the `env:prepare` script after the installation process.
@@ -278,3 +279,7 @@ services:
 * `docker:ps:<environment>` - Shows the status of services for the specified environment.
 * `docker:stop:<environment>` - Stops all active services for the specified environment without removing them.
 * `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment.
+
+#### 3.4 Using k8s
+
+See the instructions in [docs/kubernetes.md](./docs/kubernetes.md) for deploying using Kubernetes.
