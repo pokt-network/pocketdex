@@ -23,7 +23,7 @@ export interface DistDelegatorClaimMsg {
   validatorAddress: string;
 }
 
-export interface LegacyBridgeSwapMsg extends ExecuteContractMsg{
+export interface LegacyBridgeSwapMsg extends ExecuteContractMsg {
   msg: {
     swap: {
       destination: string,

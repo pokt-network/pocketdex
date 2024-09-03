@@ -1,7 +1,15 @@
-import {CosmosEvent, CosmosMessage} from "@subql/types-cosmos";
+import {
+  CosmosEvent,
+  CosmosMessage,
+} from "@subql/types-cosmos";
 import {NativeTransfer} from "../../types";
 import {NativeTransferMsg} from "../types";
-import {attemptHandling, messageId, unprocessedEventHandler, stringify} from "../utils";
+import {
+  attemptHandling,
+  messageId,
+  stringify,
+  unprocessedEventHandler,
+} from "../utils";
 
 export async function handleNativeTransfer(event: CosmosEvent): Promise<void> {
   await attemptHandling(event, _handleNativeTransfer, unprocessedEventHandler);
@@ -34,7 +42,7 @@ async function _handleNativeTransfer(event: CosmosEvent): Promise<void> {
     // timeline,
     messageId: id,
     transactionId: msg.tx.hash,
-    blockId: msg.block.block.id
+    blockId: msg.block.block.id,
   });
 
   await transferEntity.save();

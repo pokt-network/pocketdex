@@ -1,1 +1,1 @@
-const PREFIX = "poktroll"
+export const PREFIX = "poktroll";

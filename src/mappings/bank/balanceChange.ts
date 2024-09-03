@@ -1,24 +1,27 @@
 import {CosmosEvent} from "@subql/types-cosmos";
 import {parseCoins} from "../../cosmjs/utils";
-import {NativeBalanceChange, Transaction} from "../../types";
+import {
+  NativeBalanceChange,
+  Transaction,
+} from "../../types";
 import {
   attemptHandling,
   checkBalancesAccount,
   messageId,
   stringify,
   unprocessedEventHandler,
-} from '../utils'
+} from "../utils";
 
 export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent): Promise<void> {
   await checkBalancesAccount(address, event.block.block.header.chainId);
 
-  let eventId
+  let eventId;
   if (event.tx) {
     eventId = `${messageId(event)}-${event.idx}`;
   } else {
     eventId = `${event.block.blockId}-${event.idx}`;
   }
-  
+
   const nativeBalanceChangeEntity = NativeBalanceChange.create({
     id,
     balanceOffset: amount.valueOf(),
@@ -32,6 +35,7 @@ export async function saveNativeBalanceEvent(id: string, address: string, amount
   await nativeBalanceChangeEntity.save();
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function saveNativeFeesEvent(event: CosmosEvent) {
   const transaction = await Transaction.get(event.tx.hash);
   if (!transaction) {
