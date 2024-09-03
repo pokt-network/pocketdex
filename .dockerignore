@@ -14,7 +14,10 @@ src/types
 project.yaml
 
 # dotenv files
-.env*
+.env.sample
+.env.development
+.env.production
+.env.test
 
 # not needed
 docs
