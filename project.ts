@@ -74,9 +74,9 @@ const project: CosmosProject = {
           messages: ["Coin"],
         },
       ],
-      // --- Application module messages and events
+      // --- Application
       [
-        "poktroll.application_messages",
+        "poktroll.application_tx",
         {
           file: "./proto/poktroll/application/tx.proto",
           messages: [
@@ -97,9 +97,28 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // --- Gateway module messages
       [
-        "poktroll.gateway",
+        "poktroll.application_types",
+        {
+          file: "./proto/poktroll/application/types.proto",
+          messages: [
+            "Application",
+            "UndelegatingGatewayList",
+          ],
+        }
+      ],
+      [
+        "poktroll.application_params",
+        {
+          file: "./proto/poktroll/application/params.proto",
+          messages: [
+            "Params",
+          ],
+        }
+      ],
+      // --- Gateway
+      [
+        "poktroll.gateway_tx",
         {
           file: "./proto/poktroll/gateway/tx.proto",
           messages: [
@@ -109,9 +128,36 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // --- Proof module messages
       [
-        "poktroll.proof",
+        "poktroll.gateway_events",
+        {
+          file: "./proto/poktroll/gateway/event.proto",
+          messages: [
+            "EventGatewayUnstaked",
+          ],
+        },
+      ],
+      [
+        "poktroll.gateway_types",
+        {
+          file: "./proto/poktroll/gateway/types.proto",
+          messages: [
+            "Gateway",
+          ],
+        },
+      ],
+      [
+        "poktroll.gateway_params",
+        {
+          file: "./proto/poktroll/gateway/params.proto",
+          messages: [
+            "Params",
+          ],
+        },
+      ],
+      // --- Proof
+      [
+        "poktroll.proof_tx",
         {
           file: "./proto/poktroll/proof/tx.proto",
           messages: [
@@ -122,19 +168,106 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // --- Session module types
       [
-        "poktroll.session",
+        "poktroll.proof_events",
         {
-          file: "./proto/poktroll/session/session.proto",
+          file: "./proto/poktroll/proof/event.proto",
           messages: [
-            "SessionHeader",
+            "EventClaimCreated",
+            "EventClaimUpdated",
+            "EventProofSubmitted",
+            "EventProofUpdated",
           ],
         },
       ],
-      // // --- Shared module messages
       [
-        "poktroll.shared_messages",
+        "poktroll.proof_types",
+        {
+          file: "./proto/poktroll/proof/types.proto",
+          messages: [
+            "Proof",
+            "Claim",
+            "ProofRequirementReason",
+            "ClaimProofStage",
+          ],
+        },
+      ],
+      [
+        "poktroll.proof_params",
+        {
+          file: "./proto/poktroll/proof/params.proto",
+          messages: [
+            "Params",
+          ],
+        },
+      ],
+      // --- Service
+      [
+        "poktroll.service_tx",
+        {
+          file: "./proto/poktroll/service/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+            "MsgAddService",
+          ],
+        },
+      ],
+      [
+        // TODO: We need this here?
+        //  more does not hurt at this point, but we may want to clean it up in the future if not needed
+        "poktroll.service_relay",
+        {
+          file: "./proto/poktroll/service/relay.proto",
+          messages: [
+            "Relay",
+            "RelayRequestMetadata",
+            "RelayRequest",
+            "RelayResponse",
+            "RelayResponseMetadata",
+          ],
+        },
+      ],
+      [
+        "poktroll.service_params",
+        {
+          file: "./proto/poktroll/service/params.proto",
+          messages: [
+            "Params",
+          ],
+        },
+      ],
+      // --- Session
+      [
+        "poktroll.session_tx",
+        {
+          file: "./proto/poktroll/session/tx.proto",
+          messages: [
+            "MsgUpdateParams",
+          ],
+        },
+      ],
+      [
+        "poktroll.session_types",
+        {
+          file: "./proto/poktroll/session/types.proto",
+          messages: [
+            "SessionHeader",
+            "Session",
+          ],
+        },
+      ],
+      [
+        "poktroll.session_params",
+        {
+          file: "./proto/poktroll/session/params.proto",
+          messages: [
+            "Params",
+          ],
+        },
+      ],
+      // --- Shared
+      [
+        "poktroll.shared_tx",
         {
           file: "./proto/poktroll/shared/tx.proto",
           messages: [
@@ -143,19 +276,41 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // --- Shared module types
       [
-        "poktroll.shared_types",
+        "poktroll.shared_supplier",
+        {
+          file: "./proto/poktroll/shared/supplier.proto",
+          messages: [
+            "Supplier",
+          ],
+        },
+      ],
+      [
+        "poktroll.shared_service",
         {
           file: "./proto/poktroll/shared/service.proto",
           messages: [
             "Service",
+            "ApplicationServiceConfig",
+            "SupplierServiceConfig",
+            "SupplierEndpoint",
+            "ServiceRevenueShare",
+            "ConfigOption",
           ],
         },
       ],
-      // --- Supplier module messages
       [
-        "poktroll.supplier",
+        "poktroll.shared_params",
+        {
+          file: "./proto/poktroll/shared/params.proto",
+          messages: [
+            "Params",
+          ],
+        },
+      ],
+      // --- Supplier
+      [
+        "poktroll.supplier_tx",
         {
           file: "./proto/poktroll/supplier/tx.proto",
           messages: [
@@ -165,9 +320,18 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // --- Tokenomics module messages
       [
-        "poktroll.tokenomics_messages",
+        "poktroll.supplier_params",
+        {
+          file: "./proto/poktroll/supplier/params.proto",
+          messages: [
+            "Params",
+          ],
+        },
+      ],
+      // --- Tokenomics
+      [
+        "poktroll.tokenomics_tx",
         {
           file: "./proto/poktroll/tokenomics/tx.proto",
           messages: [
@@ -176,15 +340,33 @@ const project: CosmosProject = {
           ],
         },
       ],
-      // --- Tokenomics module events
       [
         "poktroll.tokenomics_events",
         {
           file: "./proto/poktroll/tokenomics/event.proto",
           messages: [
-            "EventClaimSettled",
             "EventClaimExpired",
+            "EventClaimSettled",
             "EventRelayMiningDifficultyUpdated",
+            "EventApplicationOverserviced",
+          ],
+        },
+      ],
+      [
+        "poktroll.tokenomics_params",
+        {
+          file: "./proto/poktroll/tokenomics/params.proto",
+          messages: [
+            "Params",
+          ],
+        },
+      ],
+      [
+        "poktroll.tokenomics_relay_mining_difficulty",
+        {
+          file: "./proto/poktroll/tokenomics/relay_mining_difficulty.proto",
+          messages: [
+            "RelayMiningDifficulty",
           ],
         },
       ],
