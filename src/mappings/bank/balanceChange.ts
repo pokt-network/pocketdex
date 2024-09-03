@@ -5,8 +5,9 @@ import {
   attemptHandling,
   checkBalancesAccount,
   messageId,
-  unprocessedEventHandler
-} from "../utils";
+  stringify,
+  unprocessedEventHandler,
+} from '../utils'
 
 export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent): Promise<void> {
   await checkBalancesAccount(address, event.block.block.header.chainId);
@@ -61,8 +62,8 @@ export async function handleNativeBalanceIncrement(event: CosmosEvent): Promise<
 
 async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> {
   // logger.info(`[handleNativeBalanceDecrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.event): ${JSON.stringify(event.event, null, 2)}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.log): ${JSON.stringify(event.log, null, 2)}`);
+  logger.debug(`[handleNativeBalanceDecrement] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleNativeBalanceDecrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
   // sample event.event.attributes:
   // [
@@ -77,7 +78,7 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
       continue;
     }
     const spender = e.value;
-    const amountStr = event.event.attributes[parseInt(i) + 1].value;
+    const amountStr = event.event.attributes[parseInt(i) + 1].value as string;
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
@@ -107,8 +108,8 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
 
 async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> {
   // logger.info(`[handleNativeBalanceIncrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.event): ${JSON.stringify(event.event, null, 2)}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.log): ${JSON.stringify(event.log, null, 2)}`);
+  logger.debug(`[handleNativeBalanceIncrement] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleNativeBalanceIncrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
   // sample event.event.attributes:
   // [
@@ -123,7 +124,7 @@ async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> 
       continue;
     }
     const receiver = e.value;
-    const amountStr = event.event.attributes[parseInt(i) + 1].value;
+    const amountStr = event.event.attributes[parseInt(i) + 1].value as string;
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
