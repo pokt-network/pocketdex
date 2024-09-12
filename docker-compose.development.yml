@@ -74,7 +74,7 @@ services:
       - ./src:/app/src
       - ignore_types:/app/src/types
     command:
-      - --unfinalized-blocks=true
+      - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
       interval: 3s
@@ -101,9 +101,10 @@ services:
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_DATABASE: ${POSTGRES_DB}
     command:
+      - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
       - --name=${DB_SCHEMA}
-      - --playground
       - --indexer=http://subquery-node:3000
+      - --playground
     networks:
       - pocketdex
 

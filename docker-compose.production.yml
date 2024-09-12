@@ -67,7 +67,7 @@ services:
       ENDPOINT: ${ENDPOINT}
       CHAIN_ID: ${CHAIN_ID}
     command:
-      - --unfinalized-blocks=true
+      - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
       interval: 3s
@@ -94,9 +94,10 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
     command:
+      - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
       - --name=${DB_SCHEMA}
-      - --playground
       - --indexer=http://subquery-node:3000
+      - --playground
     networks:
       - pocketdex
 

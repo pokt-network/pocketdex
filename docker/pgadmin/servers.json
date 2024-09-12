@@ -1,8 +1,8 @@
 {
-  "DefaultServers": {
+  "Servers": {
     "1": {
-      "Name": "admin@local.dev",
-      "Group": "Localnet",
+      "Name": "pocketdex",
+      "Group": "Servers",
       "Host": "postgres",
       "Port": 5432,
       "MaintenanceDB": "postgres",
