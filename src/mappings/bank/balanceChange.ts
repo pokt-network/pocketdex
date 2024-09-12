@@ -1,23 +1,27 @@
-import {CosmosEvent} from "@subql/types-cosmos";
-import {parseCoins} from "../../cosmjs/utils";
-import {NativeBalanceChange, Transaction} from "../../types";
+import { CosmosEvent } from "@subql/types-cosmos";
+import { parseCoins } from "../../cosmjs/utils";
+import {
+  NativeBalanceChange,
+  Transaction,
+} from "../../types";
 import {
   attemptHandling,
   checkBalancesAccount,
   messageId,
-  unprocessedEventHandler
+  stringify,
+  unprocessedEventHandler,
 } from "../utils";
 
 export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent): Promise<void> {
   await checkBalancesAccount(address, event.block.block.header.chainId);
 
-  let eventId
+  let eventId;
   if (event.tx) {
     eventId = `${messageId(event)}-${event.idx}`;
   } else {
     eventId = `${event.block.blockId}-${event.idx}`;
   }
-  
+
   const nativeBalanceChangeEntity = NativeBalanceChange.create({
     id,
     balanceOffset: amount.valueOf(),
@@ -31,6 +35,7 @@ export async function saveNativeBalanceEvent(id: string, address: string, amount
   await nativeBalanceChangeEntity.save();
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function saveNativeFeesEvent(event: CosmosEvent) {
   const transaction = await Transaction.get(event.tx.hash);
   if (!transaction) {
@@ -38,7 +43,7 @@ async function saveNativeFeesEvent(event: CosmosEvent) {
     return;
   }
 
-  const {fees, signerAddress} = transaction as Transaction;
+  const { fees, signerAddress } = transaction as Transaction;
   if (!signerAddress) {
     // TODO(@bryanchriswhite): add logging.
     return;
@@ -60,9 +65,9 @@ export async function handleNativeBalanceIncrement(event: CosmosEvent): Promise<
 }
 
 async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> {
-  // logger.info(`[handleNativeBalanceDecrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.event): ${JSON.stringify(event.event, null, 2)}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.log): ${JSON.stringify(event.log, null, 2)}`);
+  logger.info(`[handleNativeBalanceDecrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
+  logger.debug(`[handleNativeBalanceDecrement] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleNativeBalanceDecrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
   // sample event.event.attributes:
   // [
@@ -77,7 +82,7 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
       continue;
     }
     const spender = e.value;
-    const amountStr = event.event.attributes[parseInt(i) + 1].value;
+    const amountStr = event.event.attributes[parseInt(i) + 1].value as string;
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
@@ -87,7 +92,7 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
 
     const coin = parseCoins(amountStr)[0];
     const amount = BigInt(0) - BigInt(coin.amount); // save a negative amount for a "spend" event
-    spendEvents.push({spender: spender, amount: amount, denom: coin.denom});
+    spendEvents.push({ spender: spender, amount: amount, denom: coin.denom });
   }
 
 
@@ -106,9 +111,9 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
 }
 
 async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> {
-  // logger.info(`[handleNativeBalanceIncrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.event): ${JSON.stringify(event.event, null, 2)}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.log): ${JSON.stringify(event.log, null, 2)}`);
+  logger.info(`[handleNativeBalanceIncrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
+  logger.debug(`[handleNativeBalanceIncrement] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleNativeBalanceIncrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
   // sample event.event.attributes:
   // [
@@ -123,7 +128,7 @@ async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> 
       continue;
     }
     const receiver = e.value;
-    const amountStr = event.event.attributes[parseInt(i) + 1].value;
+    const amountStr = event.event.attributes[parseInt(i) + 1].value as string;
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
@@ -133,7 +138,7 @@ async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> 
 
     const coin = parseCoins(amountStr)[0];
     const amount = BigInt(coin.amount);
-    receiveEvents.push({receiver, amount, denom: coin.denom});
+    receiveEvents.push({ receiver, amount, denom: coin.denom });
   }
 
   for (const [i, receiveEvent] of Object.entries(receiveEvents)) {

@@ -1,14 +1,33 @@
-import {createHash} from "crypto";
-import {toBech32} from "@cosmjs/encoding";
-import {CosmosBlock, CosmosEvent, CosmosMessage, CosmosTransaction} from "@subql/types-cosmos";
-import {Block, Event, EventAttribute, Message, Transaction, TxStatus} from "../types";
+import { sha256 } from "@cosmjs/crypto";
+import { toBech32 } from "@cosmjs/encoding";
+import {
+  CosmosBlock,
+  CosmosEvent,
+  CosmosMessage,
+  CosmosTransaction,
+} from "@subql/types-cosmos";
+import {
+  isEmpty,
+  isNil,
+  isString,
+} from "lodash";
+import {
+  Block,
+  Event,
+  EventAttribute,
+  Message,
+  Transaction,
+  TxStatus,
+} from "../types";
+import { PREFIX } from "./constants";
 import {
   attemptHandling,
   messageId,
   primitivesFromMsg,
   primitivesFromTx,
+  stringify,
   trackUnprocessed,
-  unprocessedEventHandler
+  unprocessedEventHandler,
 } from "./utils";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
@@ -30,54 +49,39 @@ export async function handleEvent(event: CosmosEvent): Promise<void> {
 async function _handleBlock(block: CosmosBlock): Promise<void> {
   logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
 
-  const {header: {chainId, height, time}, id} = block.block;
+  const { header: { chainId, height, time }, id } = block.block;
   const timestamp = new Date(time.getTime());
   const blockEntity = Block.create({
     id,
     chainId,
     height: BigInt(height),
-    timestamp
+    timestamp,
   });
 
   await blockEntity.save();
 }
 
 async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
-  logger.info(`[handleTransaction] (block ${tx.block.block.header.height}): indexing transaction ${tx.idx + 1} / ${tx.block.txs.length}`);
-  // logger.debug(`[handleTransaction] (tx.decodedTx): ${JSON.stringify(tx.decodedTx, null, 2)}`);
-  logger.debug(`[handleTransaction] (tx.tx.log): ${tx.tx.log}`);
-
-  let status = TxStatus.Error;
-  if (tx.tx.log) {
-    try {
-      JSON.parse(tx.tx.log);
-      status = TxStatus.Success;
-    } catch {
-      // NB: assume tx failed
-    }
-  }
-
+  let status = tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;
 
   // const timeline = BigInt((tx.block.block.header.height * 100000) + tx.idx);
-  const pubKey: Uint8Array | undefined = tx.decodedTx.authInfo.signerInfos[0]?.publicKey?.value;
+
   let signerAddress;
-  if (typeof (pubKey) !== "undefined") {
-    // TODO: check key type and handle respectively
-    // NB: ripemd160(sha256(pubKey)) only works for secp256k1 keys
-    const ripemd160 = createHash("ripemd160");
-    const sha256 = createHash("sha256");
-    // TODO: understand why!!!
-    // NB: pubKey has 2 "extra" bytes at the beginning as compared to the
-    // base64-decoded representation/ of the same key when imported to
-    // fetchd (`fetchd keys add --recover`) and shown (`fetchd keys show`).
-    sha256.update(pubKey.slice(2));
-    ripemd160.update(sha256.digest());
-    // TODO: move prefix to config value or constant
-    signerAddress = toBech32("fetch", ripemd160.digest());
+  if (isEmpty(tx.decodedTx.authInfo.signerInfos) || isNil(tx.decodedTx.authInfo.signerInfos[0]?.publicKey)) {
+    status = TxStatus.Error;
+    logger.error(`[handleTransaction] (block ${tx.block.block.header.height}): hash=${tx.hash} missing signerInfos public key`);
+  } else {
+    // Apply sha256 to the public key to get the address bytes
+    const addressBytes = sha256(tx.decodedTx.authInfo.signerInfos[0]?.publicKey?.value).slice(0, 20);
+    // Encode the raw address to Bech32
+    signerAddress = toBech32(PREFIX, addressBytes);
   }
 
-  const feeAmount = typeof(tx.decodedTx.authInfo.fee) !== "undefined" ?
-       tx.decodedTx.authInfo.fee.amount : [];
+  logger.info(`[handleTransaction] (block ${tx.block.block.header.height}): indexing transaction ${tx.idx + 1} / ${tx.block.txs.length} status=${status} signer=${signerAddress}`);
+  logger.debug(`[handleTransaction] (tx.decodedTx): ${stringify(tx.decodedTx, undefined, 2)}`);
+  if (!isNil(tx.tx.log)) logger.debug(`[handleTransaction] (tx.tx.log): ${tx.tx.log}`);
+
+  const feeAmount = !isNil(tx.decodedTx.authInfo.fee) ? tx.decodedTx.authInfo.fee.amount : [];
 
   const txEntity = Transaction.create({
     id: tx.hash,
@@ -86,23 +90,22 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
     gasUsed: tx.tx.gasUsed,
     gasWanted: tx.tx.gasWanted,
     memo: tx.decodedTx.body.memo,
-    timeoutHeight: BigInt(tx.decodedTx.body.timeoutHeight.toString()),
+    timeoutHeight: tx.decodedTx.body.timeoutHeight,
     fees: feeAmount,
     log: tx.tx.log || "",
     status,
     signerAddress,
   });
-
   await txEntity.save();
 }
 
 async function _handleMessage(msg: CosmosMessage): Promise<void> {
   logger.info(`[handleMessage] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
-  // logger.debug(`[handleMessage] (msg.msg): ${JSON.stringify(msg.msg, null, 2)}`);
+  logger.debug(`[handleMessage] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   // const timeline = getTimeline(msg);
-  
+
   delete msg.msg?.decodedMsg?.wasmByteCode;
-  const json = JSON.stringify(msg.msg.decodedMsg);
+  const json = stringify(msg.msg.decodedMsg);
   const msgEntity = Message.create({
     id: messageId(msg),
     typeUrl: msg.msg.typeUrl,
@@ -116,36 +119,40 @@ async function _handleMessage(msg: CosmosMessage): Promise<void> {
 }
 
 async function _handleEvent(event: CosmosEvent): Promise<void> {
-  // if (!!event.tx.hash) {
-  //   logger.info(`[handleEvent] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
-  // } else {
-  //   logger.info(`[handleEvent]: indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
-  // }
-  // logger.debug(`[handleEvent] (event.event): ${JSON.stringify(event.event, null, 2)}`);
-  // logger.debug(`[handleEvent] (event.log): ${JSON.stringify(event.log, null, 2)}`);
+  // TODO: generate an ID that will match on the event.event.type source depending on what type is.
+  if (!isEmpty(event.tx.hash)) {
+    logger.info(`[handleEvent] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
+  } else {
+    logger.info(`[handleEvent]: indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
+  }
 
-  // logger.debug("HANDLE EVENT");
-
-  // NB: sanitize attribute values (may contain non-text characters)
-  const sanitize = (value: unknown) => {
-    const json = JSON.stringify(value);
-    return json.substring(1, json.length - 1);
-  };
-  const attributes = event.event.attributes.map((attribute) => {
-    const {key, value} = attribute;
-    return {key, value: sanitize(value)};
-  });
-
-  let id
+  let id;
   if (event.tx) {
     id = `${messageId(event)}-${event.idx}`;
   } else {
-    id = `${event.block.blockId}-${event.idx}`
+    id = `${event.block.blockId}-${event.idx}`;
   }
+
+  // NB: sanitize attribute values (may contain non-text characters)
+  const sanitize = (value: unknown): string => {
+    // avoid stringify an string
+    if (isString(value)) return value;
+    // otherwise return it as a stringifies object
+    return stringify(value);
+  };
+  const attributes = event.event.attributes.map((attribute) => {
+    const { key, value } = attribute;
+    return { key, value: sanitize(value) };
+  });
+
+  logger.debug(`[handleEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleEvent] (event.log): ${stringify(event.log, undefined, 2)}`);
+  logger.debug(`[handleEvent] (event.attributes): ${stringify(attributes, undefined, 2)}`);
 
   const eventEntity = Event.create({
     id,
     type: event.event.type,
+    // sourceId: event
     // transactionId: event.tx.hash,
     blockId: event.block.block.id,
   });
@@ -153,10 +160,10 @@ async function _handleEvent(event: CosmosEvent): Promise<void> {
 
   for (const [i, attribute] of Object.entries(attributes)) {
     const attrId = `${id}-${i}`;
-    const {key, value} = attribute;
+    const { key, value } = attribute;
     await EventAttribute.create({
       id: attrId,
-      key,
+      key: key as string,
       value,
       eventId: eventEntity.id,
     }).save();
