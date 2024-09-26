@@ -1,3 +1,4 @@
+import type { Genesis } from "./types/genesis";
 import { sha256 } from "@cosmjs/crypto";
 import { toBech32 } from "@cosmjs/encoding";
 import {
@@ -18,10 +19,15 @@ import {
   Message,
   Transaction,
   TxStatus,
+  Account,
+  NativeBalanceChange,
+  GenesisBalance,
+  BalanceOfAccountByDenom,
+  GenesisFile as GenesisEntity,
 } from "../types";
 import { PREFIX } from "./constants";
 import {
-  attemptHandling,
+  attemptHandling, getBalanceOfAccountByDenomId,
   messageId,
   primitivesFromMsg,
   primitivesFromTx,
@@ -29,6 +35,83 @@ import {
   trackUnprocessed,
   unprocessedEventHandler,
 } from "./utils";
+
+export async function handleGenesis(block: CosmosBlock): Promise<void> {
+  const genesis: Genesis = require('../../genesis.json');
+
+  if (block.block.header.height !== genesis.initial_height) {
+    return
+  }
+
+  logger.info(`[handleGenesis] (block.header.height): indexing genesis block ${block.block.header.height}`);
+
+  await Promise.all(
+    [
+      store.bulkCreate('Account', genesis.app_state.auth.accounts.map(account => {
+        return {
+          id: account.address,
+          chainId: block.block.header.chainId,
+        }
+      })),
+      Event.create({
+        id: "genesis",
+        type: "genesis",
+        blockId: block.block.id,
+      }).save(),
+    ]
+  )
+
+  type EntityToSave<T> = Omit<T, 'save' |'_name'>;
+  const nativeBalances: Array<EntityToSave<NativeBalanceChange>> = [];
+  const genesisBalances: Array<EntityToSave<GenesisBalance>> = [];
+  const balancesByDenom: Array<EntityToSave<BalanceOfAccountByDenom>> = [];
+
+  for (let i = 0; i < genesis.app_state.bank.balances.length; i++) {
+    const balance = genesis.app_state.bank.balances[i];
+    const account = balance.address;
+    const coins = balance.coins;
+    for (let j = 0; j < coins.length; j++) {
+      const coin = coins[j];
+      const denom = coin.denom;
+      const amount = BigInt(coin.amount);
+
+      nativeBalances.push({
+        id: `${block.block.id}-${account}-${j + 1}`,
+        balanceOffset: amount.valueOf(),
+        denom,
+        accountId: account,
+        eventId: "genesis",
+        blockId: block.block.id,
+      });
+
+      genesisBalances.push({
+        id: `${block.block.id}-${account}-${j + 1}`,
+        amount: amount,
+        denom,
+        accountId: account,
+      });
+
+      balancesByDenom.push({
+        id: getBalanceOfAccountByDenomId(account, denom),
+        amount: amount,
+        denom,
+        accountId: account,
+        lastUpdatedBlockId: block.block.id,
+      });
+    }
+  }
+
+  await Promise.all([
+    store.bulkCreate('NativeBalanceChange', nativeBalances),
+    store.bulkCreate('GenesisBalance', genesisBalances),
+    store.bulkCreate('BalanceOfAccountByDenom', balancesByDenom)
+  ]);
+
+  await GenesisEntity.create({
+    id: block.block.header.height.toString(),
+    raw: JSON.stringify(genesis),
+  }).save();
+}
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
   await attemptHandling(block, _handleBlock, _handleBlockError);

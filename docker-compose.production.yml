@@ -66,6 +66,8 @@ services:
       START_BLOCK: ${START_BLOCK}
       ENDPOINT: ${ENDPOINT}
       CHAIN_ID: ${CHAIN_ID}
+    volumes:
+      - ${GENESIS_FILE_PATH}:/app/genesis.json
     command:
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:

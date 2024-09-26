@@ -22,6 +22,7 @@ type Block @entity {
   transactions: [Transaction] @derivedFrom(field: "block")
   messages: [Message] @derivedFrom(field: "block")
   events: [Event] @derivedFrom(field: "block")
+  balancesOfAccountByDenom: [BalanceOfAccountByDenom] @derivedFrom(field: "lastUpdatedBlock")
 }
 
 type Transaction @entity {
@@ -33,19 +34,15 @@ type Transaction @entity {
   memo: String
   status: TxStatus!
   log: String
-  #  timeline: BigInt! @index
   timeoutHeight: BigInt @index
-  # NB: only the first signer!
   signerAddress: String @index
   messages: [Message] @derivedFrom(field: "transaction")
 }
 
 type Message @entity {
   id: ID!
-  #  typeUrl: String! @index
   typeUrl: String @index
   json: String
-  #  timeline: BigInt! @index
   transaction: Transaction!
   block: Block!
 }
@@ -69,7 +66,6 @@ type NativeTransfer @entity {
   fromAddress: String! @index
   amounts: [Coin]!
   denom: String! @index
-  #  timeline: BigInt! @index
   message: Message!
   transaction: Transaction!
   block: Block!
@@ -80,8 +76,8 @@ type Account @entity {
   id: ID!
   chainId: String! @index
   nativeBalanceChanges: [NativeBalanceChange]! @derivedFrom(field: "account")
-  #  cw20BalanceChanges: [Cw20BalanceChange]! @derivedFrom(field: "account")
   genesisBalances: [GenesisBalance] @derivedFrom(field: "account")
+  balances: [BalanceOfAccountByDenom] @derivedFrom(field: "account")
 }
 
 type GenesisBalance @entity {
@@ -96,7 +92,6 @@ type NativeBalanceChange @entity {
   balanceOffset: BigInt!
   denom: String! @index
   account: Account!
-  #  timeline: BigInt! @index
   event: Event!
   transaction: Transaction
   block: Block!
@@ -109,4 +104,18 @@ type UnprocessedEntity @entity {
   message: Message
   transaction: Transaction
   block: Block
+}
+
+type BalanceOfAccountByDenom @entity {
+  id: ID!
+  account: Account! @index
+  denom: String! @index
+  amount: BigInt!
+  lastUpdatedBlock: Block!
+}
+
+type GenesisFile @entity {
+  # id is the initial height
+  id: ID!
+  raw: String!
 }

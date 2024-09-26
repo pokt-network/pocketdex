@@ -29,3 +29,5 @@ docs
 
 .yarn/cache
 */**/.yarn/cache
+
+kubernetes

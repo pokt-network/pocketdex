@@ -8,6 +8,7 @@ import {
 import { default as JSONBig } from "json-bigint";
 import {
   Account,
+  BalanceOfAccountByDenom,
   UnprocessedEntity,
 } from "../types";
 
@@ -32,6 +33,12 @@ export function stringify(value: unknown, replacer?: (this: unknown, key: string
 // that of the message which generated the event passed.
 export function messageId(msg: CosmosMessage | CosmosEvent): string {
   return `${msg.tx.hash}-${msg.idx}`;
+}
+
+// getEventId returns the id of the event passed.
+// Use this to get the id of the events across the indexing process.
+export function getEventId(event: CosmosEvent): string {
+  return `${event.tx?.hash || event.block.blockId}-${event.idx}`;
 }
 
 export async function checkBalancesAccount(address: string, chainId: string): Promise<void> {
@@ -121,4 +128,29 @@ export async function trackUnprocessed(error: Error, primitives: Primitives): Pr
     logger.error("[trackUnprocessable] (ERROR): unable to persist unprocessable entity");
     logger.error(`[trackUnprocessable] (ERROR | stack): ${error.stack}`);
   }
+}
+
+export function getBalanceOfAccountByDenomId(address: string, denom: string): string {
+  return `${address}-${denom}`;
+}
+
+export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string) {
+  let balanceOfAccountByDenom = await BalanceOfAccountByDenom.get(getBalanceOfAccountByDenomId(address, denom));
+
+  if (!balanceOfAccountByDenom) {
+    balanceOfAccountByDenom = BalanceOfAccountByDenom.create({
+      id: getBalanceOfAccountByDenomId(address, denom),
+      accountId: address,
+      denom,
+      amount: offset,
+      lastUpdatedBlockId: blockId,
+    })
+  } else {
+    balanceOfAccountByDenom.amount = balanceOfAccountByDenom.amount + offset;
+    balanceOfAccountByDenom.lastUpdatedBlockId = blockId;
+  }
+
+  await balanceOfAccountByDenom.save();
+
+  logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balanceOfAccountByDenom?.amount}`);
 }
