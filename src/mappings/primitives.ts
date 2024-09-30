@@ -1,4 +1,3 @@
-import type { Genesis } from "./types/genesis";
 import { sha256 } from "@cosmjs/crypto";
 import { toBech32 } from "@cosmjs/encoding";
 import {
@@ -19,13 +18,13 @@ import {
   Message,
   Transaction,
   TxStatus,
-  Account,
   NativeBalanceChange,
   GenesisBalance,
   BalanceOfAccountByDenom,
   GenesisFile as GenesisEntity,
 } from "../types";
 import { PREFIX } from "./constants";
+import type { Genesis } from "./types/genesis";
 import {
   attemptHandling,
   messageId,
@@ -96,7 +95,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
     return acc
   }, {} as AmountByAccountAndDenom)
 
-  for (const [id, {amount, denom, accountId}] of Object.entries(amountByAccountAndDenom)) {
+  for (const [id, {accountId, amount, denom}] of Object.entries(amountByAccountAndDenom)) {
     nativeBalances.push({
       id,
       balanceOffset: amount.valueOf(),

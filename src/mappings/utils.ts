@@ -134,7 +134,7 @@ export function getBalanceOfAccountByDenomId(address: string, denom: string): st
   return `${address}-${denom}`;
 }
 
-export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string) {
+export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
   let balanceOfAccountByDenom = await BalanceOfAccountByDenom.get(getBalanceOfAccountByDenomId(address, denom));
 
   if (!balanceOfAccountByDenom) {
