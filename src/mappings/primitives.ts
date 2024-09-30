@@ -67,41 +67,59 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   const genesisBalances: Array<EntityToSave<GenesisBalance>> = [];
   const balancesByDenom: Array<EntityToSave<BalanceOfAccountByDenom>> = [];
 
-  for (let i = 0; i < genesis.app_state.bank.balances.length; i++) {
-    const balance = genesis.app_state.bank.balances[i];
-    const account = balance.address;
-    const coins = balance.coins;
-    for (let j = 0; j < coins.length; j++) {
-      const coin = coins[j];
-      const denom = coin.denom;
-      const amount = BigInt(coin.amount);
+  type AmountByAccountAndDenom = Record<string, {
+    accountId: string,
+    amount: bigint,
+    denom: string,
+  }>
 
-      const id = getBalanceOfAccountByDenomId(account, denom)
+  // here we are grouping the amount of each denom for each account
+  const amountByAccountAndDenom: AmountByAccountAndDenom = genesis.app_state.bank.balances.reduce((acc, item) => {
+    const amountByDenom: Record<string, bigint> = item.coins.reduce((acc, item) => ({
+      ...acc,
+      [item.denom]: BigInt(acc[item.denom] || 0) +  BigInt(item.amount),
+    }), {} as Record<string, bigint>)
 
-      nativeBalances.push({
-        id: `${id}-${j + 1}`,
-        balanceOffset: amount.valueOf(),
-        denom,
-        accountId: account,
-        eventId: "genesis",
-        blockId: block.block.id,
-      });
-
-      genesisBalances.push({
-        id: `${id}-${j + 1}`,
-        amount: amount,
-        denom,
-        accountId: account,
-      });
-
-      balancesByDenom.push({
-        id,
-        amount: amount,
-        denom,
-        accountId: account,
-        lastUpdatedBlockId: block.block.id,
-      });
+    for (const [denom, amount] of Object.entries(amountByDenom)) {
+      const id = getBalanceOfAccountByDenomId(item.address, denom)
+      if (acc[id]) {
+        acc[id].amount += amount
+      } else {
+        acc[id] = {
+          amount,
+          denom,
+          accountId: item.address,
+        }
+      }
     }
+
+    return acc
+  }, {} as AmountByAccountAndDenom)
+
+  for (const [id, {amount, denom, accountId}] of Object.entries(amountByAccountAndDenom)) {
+    nativeBalances.push({
+      id,
+      balanceOffset: amount.valueOf(),
+      denom,
+      accountId: accountId,
+      eventId: "genesis",
+      blockId: block.block.id,
+    });
+
+    genesisBalances.push({
+      id,
+      amount: amount,
+      denom,
+      accountId: accountId,
+    });
+
+    balancesByDenom.push({
+      id,
+      amount: amount,
+      denom,
+      accountId: accountId,
+      lastUpdatedBlockId: block.block.id,
+    });
   }
 
   await Promise.all([
