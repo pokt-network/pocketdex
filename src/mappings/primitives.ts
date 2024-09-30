@@ -27,13 +27,14 @@ import {
 } from "../types";
 import { PREFIX } from "./constants";
 import {
-  attemptHandling, getBalanceOfAccountByDenomId,
+  attemptHandling,
   messageId,
   primitivesFromMsg,
   primitivesFromTx,
   stringify,
   trackUnprocessed,
   unprocessedEventHandler,
+  getBalanceOfAccountByDenomId,
 } from "./utils";
 
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
@@ -75,8 +76,10 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
       const denom = coin.denom;
       const amount = BigInt(coin.amount);
 
+      const id = getBalanceOfAccountByDenomId(account, denom)
+
       nativeBalances.push({
-        id: `${block.block.id}-${account}-${j + 1}`,
+        id: `${id}-${j + 1}`,
         balanceOffset: amount.valueOf(),
         denom,
         accountId: account,
@@ -85,14 +88,14 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
       });
 
       genesisBalances.push({
-        id: `${block.block.id}-${account}-${j + 1}`,
+        id: `${id}-${j + 1}`,
         amount: amount,
         denom,
         accountId: account,
       });
 
       balancesByDenom.push({
-        id: getBalanceOfAccountByDenomId(account, denom),
+        id,
         amount: amount,
         denom,
         accountId: account,
@@ -102,8 +105,8 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   }
 
   await Promise.all([
-    store.bulkCreate('NativeBalanceChange', nativeBalances),
     store.bulkCreate('GenesisBalance', genesisBalances),
+    store.bulkCreate('NativeBalanceChange', nativeBalances),
     store.bulkCreate('BalanceOfAccountByDenom', balancesByDenom)
   ]);
 
