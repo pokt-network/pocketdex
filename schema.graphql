@@ -22,7 +22,7 @@ type Block @entity {
   transactions: [Transaction] @derivedFrom(field: "block")
   messages: [Message] @derivedFrom(field: "block")
   events: [Event] @derivedFrom(field: "block")
-  balancesOfAccountByDenom: [BalanceOfAccountByDenom] @derivedFrom(field: "lastUpdatedBlock")
+  balancesOfAccountByDenom: [Balance] @derivedFrom(field: "lastUpdatedBlock")
 }
 
 type Transaction @entity {
@@ -35,13 +35,14 @@ type Transaction @entity {
   status: TxStatus!
   log: String
   timeoutHeight: BigInt @index
+  # NB: only the first signer!
   signerAddress: String @index
   messages: [Message] @derivedFrom(field: "transaction")
 }
 
 type Message @entity {
   id: ID!
-  typeUrl: String @index
+  typeUrl: String! @index
   json: String
   transaction: Transaction!
   block: Block!
@@ -77,7 +78,7 @@ type Account @entity {
   chainId: String! @index
   nativeBalanceChanges: [NativeBalanceChange]! @derivedFrom(field: "account")
   genesisBalances: [GenesisBalance] @derivedFrom(field: "account")
-  balances: [BalanceOfAccountByDenom] @derivedFrom(field: "account")
+  balances: [Balance] @derivedFrom(field: "account")
 }
 
 type GenesisBalance @entity {
@@ -106,7 +107,7 @@ type UnprocessedEntity @entity {
   block: Block
 }
 
-type BalanceOfAccountByDenom @entity {
+type Balance @entity {
   id: ID!
   account: Account! @index
   denom: String! @index

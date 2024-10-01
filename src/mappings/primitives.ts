@@ -20,7 +20,7 @@ import {
   TxStatus,
   NativeBalanceChange,
   GenesisBalance,
-  BalanceOfAccountByDenom,
+  Balance,
   GenesisFile as GenesisEntity,
 } from "../types";
 import { PREFIX } from "./constants";
@@ -33,7 +33,7 @@ import {
   stringify,
   trackUnprocessed,
   unprocessedEventHandler,
-  getBalanceOfAccountByDenomId,
+  getBalanceId,
 } from "./utils";
 
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
@@ -63,9 +63,9 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   )
 
   type EntityToSave<T> = Omit<T, 'save' |'_name'>;
-  const nativeBalances: Array<EntityToSave<NativeBalanceChange>> = [];
+  const nativeBalanceChanges: Array<EntityToSave<NativeBalanceChange>> = [];
   const genesisBalances: Array<EntityToSave<GenesisBalance>> = [];
-  const balancesByDenom: Array<EntityToSave<BalanceOfAccountByDenom>> = [];
+  const balances: Array<EntityToSave<Balance>> = [];
 
   type AmountByAccountAndDenom = Record<string, {
     accountId: string,
@@ -74,21 +74,21 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   }>
 
   // here we are grouping the amount of each denom for each account
-  const amountByAccountAndDenom: AmountByAccountAndDenom = genesis.app_state.bank.balances.reduce((acc, item) => {
-    const amountByDenom: Record<string, bigint> = item.coins.reduce((acc, item) => ({
+  const amountByAccountAndDenom: AmountByAccountAndDenom = genesis.app_state.bank.balances.reduce((acc, balance) => {
+    const amountByDenom: Record<string, bigint> = balance.coins.reduce((acc, coin) => ({
       ...acc,
-      [item.denom]: BigInt(acc[item.denom] || 0) +  BigInt(item.amount),
+      [coin.denom]: BigInt(acc[coin.denom] || 0) +  BigInt(coin.amount),
     }), {} as Record<string, bigint>)
 
     for (const [denom, amount] of Object.entries(amountByDenom)) {
-      const id = getBalanceOfAccountByDenomId(item.address, denom)
+      const id = getBalanceId(balance.address, denom)
       if (acc[id]) {
         acc[id].amount += amount
       } else {
         acc[id] = {
           amount,
           denom,
-          accountId: item.address,
+          accountId: balance.address,
         }
       }
     }
@@ -97,7 +97,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   }, {} as AmountByAccountAndDenom)
 
   for (const [id, {accountId, amount, denom}] of Object.entries(amountByAccountAndDenom)) {
-    nativeBalances.push({
+    nativeBalanceChanges.push({
       id,
       balanceOffset: amount.valueOf(),
       denom,
@@ -113,7 +113,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
       accountId: accountId,
     });
 
-    balancesByDenom.push({
+    balances.push({
       id,
       amount: amount,
       denom,
@@ -124,8 +124,8 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
 
   await Promise.all([
     store.bulkCreate('GenesisBalance', genesisBalances),
-    store.bulkCreate('NativeBalanceChange', nativeBalances),
-    store.bulkCreate('BalanceOfAccountByDenom', balancesByDenom)
+    store.bulkCreate('NativeBalanceChange', nativeBalanceChanges),
+    store.bulkCreate('Balance', balances)
   ]);
 
   await GenesisEntity.create({

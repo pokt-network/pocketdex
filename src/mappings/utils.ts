@@ -8,7 +8,7 @@ import {
 import { default as JSONBig } from "json-bigint";
 import {
   Account,
-  BalanceOfAccountByDenom,
+  Balance,
   UnprocessedEntity,
 } from "../types";
 
@@ -130,27 +130,27 @@ export async function trackUnprocessed(error: Error, primitives: Primitives): Pr
   }
 }
 
-export function getBalanceOfAccountByDenomId(address: string, denom: string): string {
+export function getBalanceId(address: string, denom: string): string {
   return `${address}-${denom}`;
 }
 
 export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
-  let balanceOfAccountByDenom = await BalanceOfAccountByDenom.get(getBalanceOfAccountByDenomId(address, denom));
+  let balance = await Balance.get(getBalanceId(address, denom));
 
-  if (!balanceOfAccountByDenom) {
-    balanceOfAccountByDenom = BalanceOfAccountByDenom.create({
-      id: getBalanceOfAccountByDenomId(address, denom),
+  if (!balance) {
+    balance = Balance.create({
+      id: getBalanceId(address, denom),
       accountId: address,
       denom,
       amount: offset,
       lastUpdatedBlockId: blockId,
     })
   } else {
-    balanceOfAccountByDenom.amount = balanceOfAccountByDenom.amount + offset;
-    balanceOfAccountByDenom.lastUpdatedBlockId = blockId;
+    balance.amount = balance.amount + offset;
+    balance.lastUpdatedBlockId = blockId;
   }
 
-  await balanceOfAccountByDenom.save();
+  await balance.save();
 
-  logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balanceOfAccountByDenom?.amount}`);
+  logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balance?.amount}`);
 }
