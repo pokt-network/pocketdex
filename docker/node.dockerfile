@@ -1,5 +1,6 @@
 FROM node:22.5-slim AS builder
 
+ARG GENESIS_FILENAME=testnet.json
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
@@ -33,6 +34,7 @@ RUN yarn install
 COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /app/
 COPY src /app/src
 COPY proto /app/proto
+COPY genesis/${GENESIS_FILENAME} /app/genesis.json
 
 # Run codegen and Build pocketdex
 RUN yarn run build
