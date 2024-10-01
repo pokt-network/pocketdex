@@ -39,6 +39,7 @@ import {
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   const genesis: Genesis = require('../../genesis.json');
 
+  // IMPORTANT: Return early if this is not the genesis initial height as this is called on for block indexed!
   if (block.block.header.height !== genesis.initial_height) {
     return
   }
