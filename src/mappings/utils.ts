@@ -130,6 +130,8 @@ export async function trackUnprocessed(error: Error, primitives: Primitives): Pr
   }
 }
 
+// getBalanceId returns the id of the Balance entity using the address and denom passed.
+// Use this to get the id of the Balance entities across the indexing process.
 export function getBalanceId(address: string, denom: string): string {
   return `${address}-${denom}`;
 }
