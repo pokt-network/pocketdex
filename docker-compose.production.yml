@@ -44,6 +44,7 @@ services:
       context: .
       dockerfile: ./docker/node.dockerfile
       args:
+        GENESIS_FILENAME: ${GENESIS_FILENAME:-testnet.json}
         NODE_ENV: ${ENV}
         CHAIN_ID: ${CHAIN_ID}
         ENDPOINT: ${ENDPOINT}
@@ -66,6 +67,8 @@ services:
       START_BLOCK: ${START_BLOCK}
       ENDPOINT: ${ENDPOINT}
       CHAIN_ID: ${CHAIN_ID}
+    volumes:
+      - ./genesis/${GENESIS_FILENAME:-testnet.json}:/app/genesis.json
     command:
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:

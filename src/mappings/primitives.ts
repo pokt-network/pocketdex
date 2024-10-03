@@ -18,8 +18,13 @@ import {
   Message,
   Transaction,
   TxStatus,
+  NativeBalanceChange,
+  GenesisBalance,
+  Balance,
+  GenesisFile as GenesisEntity,
 } from "../types";
 import { PREFIX } from "./constants";
+import type { Genesis } from "./types/genesis";
 import {
   attemptHandling,
   messageId,
@@ -28,7 +33,106 @@ import {
   stringify,
   trackUnprocessed,
   unprocessedEventHandler,
+  getBalanceId,
 } from "./utils";
+
+export async function handleGenesis(block: CosmosBlock): Promise<void> {
+  const genesis: Genesis = require('../../genesis.json');
+
+  // IMPORTANT: Return early if this is not the genesis initial height as this is called for block indexed!
+  if (block.block.header.height !== genesis.initial_height) {
+    return
+  }
+
+  logger.info(`[handleGenesis] (block.header.height): indexing genesis block ${block.block.header.height}`);
+
+  await Promise.all(
+    [
+      store.bulkCreate('Account', genesis.app_state.auth.accounts.map(account => {
+        return {
+          id: account.address,
+          chainId: block.block.header.chainId,
+        }
+      })),
+      Event.create({
+        id: "genesis",
+        type: "genesis",
+        blockId: block.block.id,
+      }).save(),
+    ]
+  )
+
+  type EntityToSave<T> = Omit<T, 'save' |'_name'>;
+  const nativeBalanceChanges: Array<EntityToSave<NativeBalanceChange>> = [];
+  const genesisBalances: Array<EntityToSave<GenesisBalance>> = [];
+  const balances: Array<EntityToSave<Balance>> = [];
+
+  type AmountByAccountAndDenom = Record<string, {
+    accountId: string,
+    amount: bigint,
+    denom: string,
+  }>
+
+  // here we are grouping the amount of each denom for each account
+  const amountByAccountAndDenom: AmountByAccountAndDenom = genesis.app_state.bank.balances.reduce((acc, balance) => {
+    const amountByDenom: Record<string, bigint> = balance.coins.reduce((acc, coin) => ({
+      ...acc,
+      [coin.denom]: BigInt(acc[coin.denom] || 0) +  BigInt(coin.amount),
+    }), {} as Record<string, bigint>)
+
+    for (const [denom, amount] of Object.entries(amountByDenom)) {
+      const id = getBalanceId(balance.address, denom)
+      if (acc[id]) {
+        acc[id].amount += amount
+      } else {
+        acc[id] = {
+          amount,
+          denom,
+          accountId: balance.address,
+        }
+      }
+    }
+
+    return acc
+  }, {} as AmountByAccountAndDenom)
+
+  for (const [id, {accountId, amount, denom}] of Object.entries(amountByAccountAndDenom)) {
+    nativeBalanceChanges.push({
+      id,
+      balanceOffset: amount.valueOf(),
+      denom,
+      accountId: accountId,
+      eventId: "genesis",
+      blockId: block.block.id,
+    });
+
+    genesisBalances.push({
+      id,
+      amount: amount,
+      denom,
+      accountId: accountId,
+    });
+
+    balances.push({
+      id,
+      amount: amount,
+      denom,
+      accountId: accountId,
+      lastUpdatedBlockId: block.block.id,
+    });
+  }
+
+  await Promise.all([
+    store.bulkCreate('GenesisBalance', genesisBalances),
+    store.bulkCreate('NativeBalanceChange', nativeBalanceChanges),
+    store.bulkCreate('Balance', balances)
+  ]);
+
+  await GenesisEntity.create({
+    id: block.block.header.height.toString(),
+    raw: JSON.stringify(genesis),
+  }).save();
+}
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
   await attemptHandling(block, _handleBlock, _handleBlockError);

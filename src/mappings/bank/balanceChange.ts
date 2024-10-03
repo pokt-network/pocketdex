@@ -7,32 +7,30 @@ import {
 import {
   attemptHandling,
   checkBalancesAccount,
+  getEventId,
   messageId,
   stringify,
   unprocessedEventHandler,
+  updateAccountBalance,
 } from "../utils";
 
 export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent): Promise<void> {
   await checkBalancesAccount(address, event.block.block.header.chainId);
 
-  let eventId;
-  if (event.tx) {
-    eventId = `${messageId(event)}-${event.idx}`;
-  } else {
-    eventId = `${event.block.blockId}-${event.idx}`;
-  }
+  const eventId = getEventId(event);
 
   const nativeBalanceChangeEntity = NativeBalanceChange.create({
     id,
     balanceOffset: amount.valueOf(),
     denom,
     accountId: address,
-    // timeline,
     eventId: eventId,
     blockId: event.block.block.id,
-    // transactionId: event.tx.hash,
+    transactionId: event.tx.hash || undefined,
   });
+
   await nativeBalanceChangeEntity.save();
+  await updateAccountBalance(address, denom, amount.valueOf(), event.block.block.id);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

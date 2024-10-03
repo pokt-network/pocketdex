@@ -379,6 +379,11 @@ const project: CosmosProject = {
       mapping: {
         file: "./dist/index.js",
         handlers: [
+          // handleGenesis is called before handleBlock, and it's reading the genesis file from ./src/mappings/genesis.json
+          {
+            handler: "handleGenesis",
+            kind: CosmosHandlerKind.Block,
+          },
           // --- Primitives
           {
             handler: "handleBlock",

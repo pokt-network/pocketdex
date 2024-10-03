@@ -68,6 +68,7 @@ services:
       CHAIN_ID: ${CHAIN_ID}
     volumes:
       # Replaced ./:/app with individual tracked files to avoid the generated code go outside the container
+      - ./genesis/${GENESIS_FILENAME:-testnet.json}:/app/genesis.json
       - ./schema.graphql:/app/schema.graphql
       - ./project.ts:/app/project.ts
       - ./proto:/app/proto
