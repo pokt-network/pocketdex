@@ -347,7 +347,6 @@ const project: CosmosProject = {
           messages: [
             "EventClaimExpired",
             "EventClaimSettled",
-            "EventRelayMiningDifficultyUpdated",
             "EventApplicationOverserviced",
           ],
         },
@@ -364,7 +363,7 @@ const project: CosmosProject = {
       [
         "poktroll.tokenomics_relay_mining_difficulty",
         {
-          file: "./proto/poktroll/tokenomics/relay_mining_difficulty.proto",
+          file: "./proto/poktroll/service/relay_mining_difficulty.proto",
           messages: [
             "RelayMiningDifficulty",
           ],
