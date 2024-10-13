@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: pocketdex
+    app.kubernetes.io/managed-by: helm
+  ports:
+    - name: http
+      protocol: TCP
+      port: 5432
+      targetPort: 5432
+  type: ClusterIP

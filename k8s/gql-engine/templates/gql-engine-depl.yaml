@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gql-engine-deployment
+  labels:
+    app.kubernetes.io/name: gql-engine
+    app.kubernetes.io/part-of: pocketdex
+    app.kubernetes.io/managed-by: helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gql-engine
+      app.kubernetes.io/part-of: pocketdex
+      app.kubernetes.io/managed-by: helm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gql-engine
+        app.kubernetes.io/part-of: pocketdex
+        app.kubernetes.io/managed-by: helm
+    spec:
+      containers:
+        - name: gql-engine
+          image: gql-engine
+          ports:
+            - containerPort: 3000

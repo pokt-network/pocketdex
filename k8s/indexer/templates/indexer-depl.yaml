@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indexer-deployment
+  labels:
+    app.kubernetes.io/name: indexer
+    app.kubernetes.io/part-of: pocketdex
+    app.kubernetes.io/managed-by: helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: indexer
+      app.kubernetes.io/part-of: pocketdex
+      app.kubernetes.io/managed-by: helm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: indexer
+        app.kubernetes.io/part-of: pocketdex
+        app.kubernetes.io/managed-by: helm
+    spec:
+      containers:
+        - name: indexer
+          image: indexer
