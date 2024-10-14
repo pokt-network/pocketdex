@@ -23,3 +23,10 @@ spec:
       containers:
         - name: indexer
           image: indexer
+          env:
+            {{- if .Values.env }}
+              {{- range $key, $value := .Values.env }}
+                - name: {{ $key | quote }}
+                  value: {{ $value | quote }}
+              {{- end }}
+            {{- end }}

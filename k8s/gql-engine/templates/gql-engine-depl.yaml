@@ -22,6 +22,7 @@ spec:
     spec:
       containers:
         - name: gql-engine
-          image: gql-engine
+          ## TODO_IN_THIS_COMMIT: replace latest with SUBQUERY_GRAPHQL_ENGINE_VERSION value.
+          image: subquerynetwork/subql-query:latest
           ports:
             - containerPort: 3000
