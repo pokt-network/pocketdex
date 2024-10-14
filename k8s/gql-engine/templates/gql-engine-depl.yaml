@@ -24,5 +24,17 @@ spec:
         - name: gql-engine
           ## TODO_IN_THIS_COMMIT: replace latest with SUBQUERY_GRAPHQL_ENGINE_VERSION value.
           image: subquerynetwork/subql-query:latest
+          command:
+            -
+            - --name={{ .Values.env.DB_SCHEMA }}
+            - --indexer=http://indexer-service:3000
+            - --playground
           ports:
             - containerPort: 3000
+          env:
+            {{- if .Values.env }}
+              {{- range $key, $value := .Values.env }}
+              - name: {{ $key | quote }}
+                value: {{ $value | quote }}
+              {{- end }}
+              {{- end }}
