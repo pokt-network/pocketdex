@@ -20,11 +20,9 @@ k8s_resource(workload="postgres-deployment",
 
 k8s_resource(workload="indexer-deployment",
              new_name="Indexer",
-             #resource_deps=["Postgres"]
-             )
+             resource_deps=["Postgres"])
 
 k8s_resource(workload="gql-engine-deployment",
              new_name="GraphQL API",
              port_forwards=["3000:3000"],
-             #resource_deps=["Postgres"]
-             )
+             resource_deps=["Postgres", "Indexer"])
