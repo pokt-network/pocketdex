@@ -20,9 +20,12 @@ spec:
         app.kubernetes.io/part-of: pocketdex
         app.kubernetes.io/managed-by: helm
     spec:
+      initContainers:
+        - name: wait-for-service
+          image: busybox
+          command: [ 'sh', '-c', 'until nc -z indexer-service 3000; do echo waiting for indexer; sleep 2; done;' ]
       containers:
         - name: gql-engine
-          ## TODO_IN_THIS_COMMIT: replace latest with SUBQUERY_GRAPHQL_ENGINE_VERSION value.
           image: subquerynetwork/subql-query:latest
           command:
             - /sbin/tini

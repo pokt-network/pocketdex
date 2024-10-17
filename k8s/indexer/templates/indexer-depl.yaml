@@ -23,6 +23,16 @@ spec:
       containers:
         - name: indexer
           image: indexer
+          readinessProbe:
+            initialDelaySeconds: 30
+            httpGet:
+              port: 3000
+              path: "/ready"
+          livenessProbe:
+            initialDelaySeconds: 60
+            httpGet:
+              port: 3000
+              path: "/health"
           env:
             {{- if .Values.env }}
               {{- range $key, $value := .Values.env }}

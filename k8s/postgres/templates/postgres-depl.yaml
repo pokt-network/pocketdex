@@ -25,3 +25,20 @@ spec:
           image: postgres-custom
           ports:
             - containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready
+                - -U
+                - postgres
+          livenessProbe:
+            initialDelaySeconds: 30
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready
+                - -U
+                - postgres
