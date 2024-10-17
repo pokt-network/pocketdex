@@ -34,7 +34,7 @@ spec:
             - -f
             - /app
             - --name={{ .Values.env.DB_SCHEMA }}
-            - --indexer={{ .Values.env.ENDPOINT }}
+            - --indexer={{ .Values.indexer_endpoint }}
             - --port={{ .Values.port }}
             {{- if .Values.enable_graphiql_playground }}
             - --playground
