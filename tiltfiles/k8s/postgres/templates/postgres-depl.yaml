@@ -25,6 +25,13 @@ spec:
           image: postgres-custom
           ports:
             - containerPort: 5432
+          env:
+            {{- if .Values.env }}
+              {{- range $key, $value := .Values.env }}
+                - name: {{ $key | quote }}
+                  value: {{ $value | quote }}
+              {{- end }}
+            {{- end }}
           readinessProbe:
             exec:
               command:
@@ -32,7 +39,7 @@ spec:
                 - -c
                 - pg_isready
                 - -U
-                - postgres
+                - {{ .Values.env.POSTGRES_USER }}
           livenessProbe:
             initialDelaySeconds: 30
             exec:
@@ -41,4 +48,4 @@ spec:
                 - -c
                 - pg_isready
                 - -U
-                - postgres
+                - {{ .Values.env.POSTGRES_USER }}

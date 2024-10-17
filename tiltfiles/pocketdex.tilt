@@ -11,11 +11,11 @@ def pocketdex(pocketdex_root, *,
                  dockerfile="{}/docker/dev-node.dockerfile".format(pocketdex_root),
                  build_args={"GENESIS_FILENAME": genesis_file_name})
 
-    k8s_yaml(helm("{}/k8s/postgres".format(pocketdex_root), values=postgres_values_path))
+    k8s_yaml(helm("{}/tiltfiles/k8s/postgres".format(pocketdex_root), values=postgres_values_path))
 
-    k8s_yaml(helm("{}/k8s/indexer".format(pocketdex_root), values=indexer_values_path))
+    k8s_yaml(helm("{}/tiltfiles/k8s/indexer".format(pocketdex_root), values=indexer_values_path))
 
-    k8s_yaml(helm("{}/k8s/gql-engine".format(pocketdex_root), values=gql_engine_values_path))
+    k8s_yaml(helm("{}/tiltfiles/k8s/gql-engine".format(pocketdex_root), values=gql_engine_values_path))
 
     k8s_resource(workload="postgres-deployment",
                  new_name="Postgres",

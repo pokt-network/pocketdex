@@ -26,12 +26,12 @@ spec:
           readinessProbe:
             initialDelaySeconds: 30
             httpGet:
-              port: 3000
+              port: {{ .Values.port }}
               path: "/ready"
           livenessProbe:
             initialDelaySeconds: 60
             httpGet:
-              port: 3000
+              port: {{ .Values.port }}
               path: "/health"
           env:
             {{- if .Values.env }}

@@ -21,7 +21,7 @@ spec:
         app.kubernetes.io/managed-by: helm
     spec:
       initContainers:
-        - name: wait-for-service
+        - name: wait-for-indexer
           image: busybox
           command: [ 'sh', '-c', 'until nc -z indexer-service 3000; do echo waiting for indexer; sleep 2; done;' ]
       containers:
@@ -34,10 +34,13 @@ spec:
             - -f
             - /app
             - --name={{ .Values.env.DB_SCHEMA }}
-            - --indexer=http://indexer-service:3000
+            - --indexer={{ .Values.env.ENDPOINT }}
+            - --port={{ .Values.port }}
+            {{- if .Values.enable_graphiql_playground }}
             - --playground
+            {{- end }}
           ports:
-            - containerPort: 3000
+            - containerPort: {{ .Values.port }}
           env:
             {{- if .Values.env }}
               {{- range $key, $value := .Values.env }}

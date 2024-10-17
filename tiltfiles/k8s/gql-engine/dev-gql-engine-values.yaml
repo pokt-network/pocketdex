@@ -1,9 +1,10 @@
+enable_graphiql_playground: true
+indexer_endpoint: "http://indexer-service:3000"
+port: 3000
 env:
   NODE_ENV: development
   # Testnet
   ENDPOINT: "https://testnet-validated-validator-rpc.poktroll.com"
-  # LocalNet
-  # ENDPOINT: "http://validator-poktroll-validator.default.svc.cluster.local:26657"
   CHAIN_ID: "poktroll"
   # db schema name
 #  DB_SCHEMA: "localnet"
