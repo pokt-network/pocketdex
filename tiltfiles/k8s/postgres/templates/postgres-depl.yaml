@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-deployment
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: pocketdex
+    app.kubernetes.io/managed-by: helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/part-of: pocketdex
+      app.kubernetes.io/managed-by: helm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: pocketdex
+        app.kubernetes.io/managed-by: helm
+    spec:
+      containers:
+        - name: postgres
+          image: postgres-custom
+          ports:
+            - containerPort: 5432
+          env:
+            {{- if .Values.env }}
+              {{- range $key, $value := .Values.env }}
+                - name: {{ $key | quote }}
+                  value: {{ $value | quote }}
+              {{- end }}
+            {{- end }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready
+                - -U
+                - {{ .Values.env.POSTGRES_USER }}
+          livenessProbe:
+            initialDelaySeconds: 30
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready
+                - -U
+                - {{ .Values.env.POSTGRES_USER }}
