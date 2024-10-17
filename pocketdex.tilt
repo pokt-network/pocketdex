@@ -1,0 +1,34 @@
+def pocketdex(pocketdex_root, *,
+              # TODO_CONSIDERATION(@bryanchriswhite): Make this a path instead of a filename.
+              genesis_file_name,
+              postgres_values_path,
+              indexer_values_path,
+              gql_engine_values_path):
+
+    docker_build("postgres-custom", pocketdex_root, dockerfile="{}/docker/pg-Dockerfile".format(pocketdex_root))
+
+    docker_build("indexer", pocketdex_root,
+                 dockerfile="{}/docker/dev-node.dockerfile".format(pocketdex_root),
+                 build_args={"GENESIS_FILENAME": genesis_file_name})
+
+    k8s_yaml(helm("{}/k8s/postgres".format(pocketdex_root), values=postgres_values_path))
+
+    k8s_yaml(helm("{}/k8s/indexer".format(pocketdex_root), values=indexer_values_path))
+
+    k8s_yaml(helm("{}/k8s/gql-engine".format(pocketdex_root), values=gql_engine_values_path))
+
+    k8s_resource(workload="postgres-deployment",
+                 new_name="Postgres",
+                 port_forwards=["5432:5432"],
+                 labels=["Pocketdex"])
+
+    k8s_resource(workload="indexer-deployment",
+                 new_name="Indexer",
+                 resource_deps=["Postgres"],
+                 labels=["Pocketdex"])
+
+    k8s_resource(workload="gql-engine-deployment",
+                 new_name="GraphQL API",
+                 port_forwards=["3000:3000"],
+                 resource_deps=["Postgres", "Indexer"],
+                 labels=["Pocketdex"])

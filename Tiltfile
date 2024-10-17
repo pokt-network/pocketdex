@@ -1,39 +1,7 @@
-def pocketdex(*, postgres_values_path,
-                 indexer_values_path,
-                 gql_engine_values_path):
-
-    docker_build("postgres-custom", ".", dockerfile="docker/pg-Dockerfile")
-
-    docker_build("indexer", ".",
-                 dockerfile="docker/dev-node.dockerfile",
-                 build_args={"GENESIS_FILENAME": "localnet.json"},
-                 #live_update=[
-                 #   sync("harmonic/bin", "/usr/local/bin"),
-                 #])
-                 )
-
-    k8s_yaml(helm("k8s/postgres", values=postgres_values_path))
-
-    k8s_yaml(helm("k8s/indexer", values="k8s/indexer/dev-indexer-values.yaml"))
-
-    k8s_yaml(helm("k8s/gql-engine", values="k8s/gql-engine/dev-gql-engine-values.yaml"))
-
-    k8s_resource(workload="postgres-deployment",
-                 new_name="Postgres",
-                 port_forwards=["5432:5432"],
-                 labels=["Pocketdex"])
-
-    k8s_resource(workload="indexer-deployment",
-                 new_name="Indexer",
-                 resource_deps=["Postgres"],
-                 labels=["Pocketdex"])
-
-    k8s_resource(workload="gql-engine-deployment",
-                 new_name="GraphQL API",
-                 port_forwards=["3000:3000"],
-                 resource_deps=["Postgres", "Indexer"],
-                 labels=["Pocketdex"])
-
-pocketdex(postgres_values_path="k8s/postgres/values.yaml",
-          indexer_values_path="k8s/indexer/values.yaml",
-          gql_engine_values_path="k8s/gql-engine/values.yaml")
+load("./pocketdex.tilt", "pocketdex")
+pocketdex("./",
+          # TODO(@bryanchriswhite): load genesis file name from env var or config file.
+          genesis_file_name="testnet.json",
+          postgres_values_path="k8s/postgres/values.yaml",
+          indexer_values_path="k8s/indexer/dev-testnet-indexer-values.yaml",
+          gql_engine_values_path="k8s/gql-engine/dev-gql-engine-values.yaml")
