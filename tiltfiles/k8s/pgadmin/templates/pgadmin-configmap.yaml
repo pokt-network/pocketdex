@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgadmin
+data:
+  servers.json: |
+    {
+      "Servers": {
+        "1": {
+          "Name": "pocketdex",
+          "Group": "Servers",
+          "Host": "{{ .Values.env.DB_HOST }}",
+          "Port": "{{ .Values.env.DB_PORT }}",
+          "MaintenanceDB": "{{ .Values.env.DB_DATABASE }}",
+          "Username": "{{ .Values.env.DB_USER }}",
+          "SSLMode": "prefer"
+        }
+      }
+    }
