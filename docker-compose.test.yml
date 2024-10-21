@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: ./docker/dev-node.dockerfile
       args:
+        GENESIS_FILENAME: ${GENESIS_FILENAME:-testnet.json}
         NODE_ENV: ${ENV:-test}
         CHAIN_ID: ${CHAIN_ID:-poktroll}
         ENDPOINT: ${ENDPOINT}
