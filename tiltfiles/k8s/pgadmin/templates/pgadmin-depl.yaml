@@ -27,11 +27,11 @@ spec:
             - name: servers-volume
               mountPath: /pgadmin4/servers.json
               subPath: servers.json
-          # livenessProbe:
-          #   initialDelaySeconds: 10
-          #   httpGet:
-          #     port: {{ .Values.env.PGADMIN_LISTEN_PORT }}
-          #     path: "/"
+          livenessProbe:
+            initialDelaySeconds: 60
+            httpGet:
+              port: {{ .Values.env.PGADMIN_LISTEN_PORT }}
+              path: "/"
           env:
             {{- if .Values.env }}
               {{- range $key, $value := .Values.env }}
