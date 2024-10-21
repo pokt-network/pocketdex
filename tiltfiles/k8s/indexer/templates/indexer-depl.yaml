@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/part-of: pocketdex
         app.kubernetes.io/managed-by: helm
     spec:
+      hostNetwork: {{ .Values.hostNetwork }}
       containers:
         - name: indexer
           image: indexer
