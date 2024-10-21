@@ -6,7 +6,10 @@ def pocketdex(pocketdex_root, *,
               indexer_values_path,
               gql_engine_values_path):
 
-    docker_build("postgres-custom", pocketdex_root, dockerfile="{}/docker/pg-Dockerfile".format(pocketdex_root))
+    docker_build("postgres-custom",
+                 pocketdex_root,
+                 dockerfile="{}/docker/pg-Dockerfile".format(pocketdex_root),
+                 build_args={"POSTGRES_VERSION": "16-alpine"})
 
     docker_build("indexer", pocketdex_root,
                  dockerfile="{}/docker/dev-node.dockerfile".format(pocketdex_root),
