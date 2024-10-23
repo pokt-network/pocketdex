@@ -177,7 +177,7 @@ tilt down
 
 #### Running against localnet
 
-NOTE: 🚨 The [poktroll](https://github.com/pokt-network/poktroll) localnet includes pocketdex in its tilt environment. 🚨
+_NOTE: 🚨 The [poktroll](https://github.com/pokt-network/poktroll) localnet includes pocketdex in its tilt environment. 🚨_
 
 If you need to run pocketdex against poktroll localnet, but can't use the poktroll repo's tilt environment for whatever reason, update (_but don't commit_) the `indexer_values_path` in the `Tiltfile`:
 
