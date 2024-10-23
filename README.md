@@ -39,6 +39,9 @@ Connect to the postgres container, update the schema, and explore!
 
 ```bash
 docker exec -it pocketdex_development-postgres-1 psql -U postgres -d postgres
+SET SCHEMA "testnet";
+# OR, if indexing localnet:
+# SET SCHEMA "localnet";
 SET search_path TO app;
 \dt
 ```
