@@ -160,7 +160,36 @@ Types will need to be regenerated any time the `graphql.schema` is changed.
 yarn run codegen
 ```
 
-### 3. Run
+### 3a. Run via [Tilt](https://tilt.dev/)
+
+```bash
+# Start tilt
+tilt up
+
+# Delete tilt resources
+tilt down
+```
+
+#### Running against localnet
+
+NOTE: 🚨 The [poktroll](https://github.com/pokt-network/poktroll) localnet includes pocketdex in its tilt environment. 🚨
+
+If you need to run pocketdex against poktroll localnet, but can't use the poktroll repo's tilt environment for whatever reason, update (_but don't commit_) the `indexer_values_path` in the `Tiltfile`:
+
+```diff
+  load("./tiltfiles/pocketdex.tilt", "pocketdex")
+  pocketdex("./",
+            genesis_file_name="testnet.json",
+            postgres_values_path="./tiltfiles/k8s/postgres/postgres-values.yaml",
+            pgadmin_values_path="./tiltfiles/k8s/pgadmin/pgadmin-values.yaml",
+-           indexer_values_path="./tiltfiles/k8s/indexer/dev-testnet-indexer-values.yaml",
++           indexer_values_path="./tiltfiles/k8s/indexer/dev-localnet-indexer-values.yaml",
+            gql_engine_values_path="./tiltfiles/k8s/gql-engine/dev-gql-engine-values.yaml")
+```
+
+Tilt will automatically apply the change on save.
+
+### 3b. Run via docker-compose
 
 Dotenv files will be automatically created after the `yarn install` thanks to the `postinstall` script.
 After that, feel free to modify them as you wish.
@@ -215,7 +244,7 @@ Or Stop & clean up (delete postgres data):
 yarn run docker:clean:development
 ```
 
-#### 3.1 Debugging, errors running & building
+#### 3b.1 Debugging, errors running & building
 
 If you're hitting errors with the above command, do a nuclear clean of all potential issues:
 
@@ -227,7 +256,7 @@ docker context use default
 
 Now pick up from the `yarn run docker:build` step above.
 
-#### 3.2 Using a pre-built image
+#### 3b.2 Using a pre-built image
 
 If you are unable to build locally, a pre-built image is available on Docker Hub: [bryanchriswhite/pocketdex-subquery-node:latest](https://hub.docker.com/r/bryanchriswhite/pocketdex-subquery-node).
 
@@ -252,7 +281,7 @@ services:
     ...
 ```
 
-#### 3.3 Available Scripts breakdown
+#### 3b.3 Available Scripts breakdown
 
 * `preinstall` - Enforces the use of Yarn as the package manager.
 * `postinstall` - Executes the `env:prepare` script after the installation process.
@@ -280,6 +309,6 @@ services:
 * `docker:stop:<environment>` - Stops all active services for the specified environment without removing them.
 * `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment.
 
-#### 3.4 Using k8s
+### 3c. Using k8s
 
 See the instructions in [docs/kubernetes.md](./docs/kubernetes.md) for deploying using Kubernetes.
