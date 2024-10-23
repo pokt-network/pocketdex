@@ -165,6 +165,8 @@ yarn run codegen
 
 ### 3a. Run via [Tilt](https://tilt.dev/)
 
+![Tilt](docs/assets/tilt_screenshot.png)
+
 ```bash
 # Start tilt
 tilt up
