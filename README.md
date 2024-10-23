@@ -21,12 +21,13 @@ To learn more about SubQuery, [see their docs](https://academy.subquery.network)
   - [tl;dr local development (if not your first time)](#tldr-local-development-if-not-your-first-time)
   - [1. Install dependencies](#1-install-dependencies)
   - [2. Generate types](#2-generate-types)
-  - [3. Run](#3-run)
+  - [3a. Run via Tilt](#3a-run-via-tilt)
+  - [3b. Run via docker-compose](#3b-run-via-docker-compose) 
     - [Localnet ONLY](#localnet-only)
-    - [3.1 Debugging, errors running \& building](#31-debugging-errors-running--building)
-    - [3.2 Using a pre-built image](#32-using-a-pre-built-image)
-    - [3.3 Available Scripts breakdown](#33-available-scripts-breakdown)
-    - [3.4 Using k8s](#34-using-k8s)
+    - [3b.1 Debugging, errors running \& building](#31-debugging-errors-running--building)
+    - [3b.2 Using a pre-built image](#32-using-a-pre-built-image)
+    - [3b.3 Available Scripts breakdown](#33-available-scripts-breakdown)
+  - [3c. Using k8s](#3c-using-k8s)
 
 ## Usage & Query Docs
 
