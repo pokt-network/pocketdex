@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indexer-deployment
+  labels:
+    app.kubernetes.io/name: indexer
+    app.kubernetes.io/part-of: pocketdex
+    app.kubernetes.io/managed-by: helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: indexer
+      app.kubernetes.io/part-of: pocketdex
+      app.kubernetes.io/managed-by: helm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: indexer
+        app.kubernetes.io/part-of: pocketdex
+        app.kubernetes.io/managed-by: helm
+    spec:
+      hostNetwork: {{ .Values.hostNetwork }}
+      containers:
+        - name: indexer
+          image: indexer
+          readinessProbe:
+            initialDelaySeconds: 30
+            httpGet:
+              port: {{ .Values.port }}
+              path: "/ready"
+          livenessProbe:
+            initialDelaySeconds: 60
+            httpGet:
+              port: {{ .Values.port }}
+              path: "/health"
+          env:
+            {{- if .Values.env }}
+              {{- range $key, $value := .Values.env }}
+                - name: {{ $key | quote }}
+                  value: {{ $value | quote }}
+              {{- end }}
+            {{- end }}

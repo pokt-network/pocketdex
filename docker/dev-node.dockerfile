@@ -4,6 +4,7 @@ ARG CI=false
 ARG NODE_ENV=development
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
+ARG GENESIS_FILENAME
 
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
@@ -33,6 +34,7 @@ WORKDIR /app
 COPY package.json yarn.lock .yarnrc.yml /app/
 COPY scripts /app/scripts
 COPY .yarn /app/.yarn
+COPY ./genesis/${GENESIS_FILENAME} /app/genesis.json
 
 # Install dev dependencies
 RUN yarn install
