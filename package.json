@@ -74,7 +74,7 @@
     "typescript": "^5.2.2"
   },
   "dependencies": {
-    "@subql/node-cosmos": "^4.1.1",
+    "@subql/node-cosmos": "^4.1.4",
     "@subql/types-cosmos": "^3.5.2",
     "@types/json-bigint": "^1.0.4",
     "@types/node": "^22.0.0",
