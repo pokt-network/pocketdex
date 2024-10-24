@@ -14,8 +14,6 @@ if ! command -v ignite >/dev/null 2>&1; then
   exit 1
 fi
 
-
-
 default_branch="main"
 branch=${1:-$default_branch}
 
@@ -39,6 +37,7 @@ git clone https://github.com/pokt-network/poktroll.git
   rm -rf ${DIR}/../src/client
   mkdir -p ${DIR}/../src/client
 
+  # Here we are copying the files from poktroll.application because every directory copied has the types directory with the same files inside.
   cp -TR poktroll/ts-client/poktroll.application/types ${DIR}/../src/client
   rm -f ${DIR}/../src/client/route-name.eta
 
