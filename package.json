@@ -20,6 +20,7 @@
     "docker:compose": "./scripts/docker-compose.sh",
     "poktroll:proxy:start": "./scripts/proxy-tunnel.sh start",
     "poktroll:proxy:stop": "./scripts/proxy-tunnel.sh stop",
+    "poktroll:update-proto-files": "scripts/copy-poktroll-files.sh",
     "docker:check-env:production": "env sh ./scripts/dotenv-check.sh production",
     "docker:build:production": "yarn run docker:compose production build",
     "docker:build:no-cache:production": "yarn run docker:compose production build --no-cache",
@@ -74,6 +75,7 @@
     "typescript": "^5.2.2"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.2.0",
     "@subql/node-cosmos": "^4.1.1",
     "@subql/types-cosmos": "^3.5.2",
     "@types/json-bigint": "^1.0.4",
