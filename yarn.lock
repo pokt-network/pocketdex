@@ -2278,6 +2278,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@bufbuild/protobuf@npm:^2.2.0":
+  version: 2.2.0
+  resolution: "@bufbuild/protobuf@npm:2.2.0"
+  checksum: 26bb64e1e18c1426770c2ffa28f88fbbdb7e319dea9ad021ebb3ef6ea931ecbb9488024a80a495f06c331952bcb5c0567afc5df6f8aa9e62a5e1a193a325cf51
+  languageName: node
+  linkType: hard
+
 "@bundlr-network/client@npm:^0.8.9":
   version: 0.8.9
   resolution: "@bundlr-network/client@npm:0.8.9"
@@ -13450,6 +13457,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "pocketdex@workspace:."
   dependencies:
+    "@bufbuild/protobuf": ^2.2.0
     "@cosmjs/stargate": ^0.28.9
     "@subql/cli": 5.1.1
     "@subql/node-cosmos": ^4.1.1
