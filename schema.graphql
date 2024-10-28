@@ -7,6 +7,21 @@ enum TxStatus {
   Error
 }
 
+enum StakeStatus {
+  # Bonded
+  Staked
+  # Unbonding
+  Unstaking
+  # Not bonded/unbonded
+  Unstaked
+}
+
+enum ApplicationUnbondingReason {
+  ELECTIVE
+  BELOW_MIN_STAKE
+  TRANSFERRED
+}
+
 type EventAttribute @entity {
   id: ID!
   key: String!
@@ -23,6 +38,8 @@ type Block @entity {
   messages: [Message] @derivedFrom(field: "block")
   events: [Event] @derivedFrom(field: "block")
   balancesOfAccountByDenom: [Balance] @derivedFrom(field: "lastUpdatedBlock")
+  # PARAMS
+  appParams: [AppParam] @derivedFrom(field: "block")
 }
 
 type Transaction @entity {
@@ -79,6 +96,7 @@ type Account @entity {
   nativeBalanceChanges: [NativeBalanceChange]! @derivedFrom(field: "account")
   genesisBalances: [GenesisBalance] @derivedFrom(field: "account")
   balances: [Balance] @derivedFrom(field: "account")
+  services: [Service] @derivedFrom(field: "owner")
 }
 
 type GenesisBalance @entity {
@@ -107,6 +125,149 @@ type UnprocessedEntity @entity {
   block: Block
 }
 
+type Service @entity {
+  id: ID!
+  name: String!
+  computeUnitsPerRelay: Int!
+  owner: Account!
+  addServiceMsgs: [AddServiceMsg] @derivedFrom(field: "service")
+}
+
+type AppMsgStake @entity {
+  id: ID!
+  stake: Coin!
+  transaction: Transaction!
+  block: Block!
+  application: Application! @index
+}
+
+type AppMsgStakeService @entity {
+  id: ID!
+  appStakeMsg: AppMsgStake!
+  service: Service!
+}
+
+type AppMsgUnstake @entity {
+  id: ID!
+  application: Application! @index
+  transaction: Transaction!
+  block: Block!
+}
+
+type MsgDelegateToGateway @entity {
+  id: ID!
+  application: Application! @index
+  gateway: Gateway! @index
+  transaction: Transaction!
+  block: Block!
+}
+
+type MsgUndelegateToGateway @entity {
+  id: ID!
+  application: Application! @index
+  gateway: Gateway! @index
+  transaction: Transaction!
+  block: Block!
+}
+
+type MsgTransferApplication @entity {
+  id: ID!
+  sourceApplication: Application! @index
+  destinationApplication: Application! @index
+  transaction: Transaction!
+  block: Block!
+}
+
+type Application @entity {
+  # id is the address
+  id: ID!
+  account: Account!
+  stake: Coin!
+  status: StakeStatus!
+  unbondingStartBlock: Block
+  unbondingHeight: BigInt
+  unbondingReason: ApplicationUnbondingReason
+  unbondedAtBlock: Block
+  stakeMsgs: [AppMsgStake] @derivedFrom(field: "application")
+  unstakeMsgs: [AppMsgUnstake] @derivedFrom(field: "application")
+  delegateMsgs: [MsgDelegateToGateway] @derivedFrom(field: "application")
+  undelegateMsgs: [MsgUndelegateToGateway] @derivedFrom(field: "application")
+  sourceTransferMsgs: [MsgTransferApplication] @derivedFrom(field: "sourceApplication")
+  destinationTransferMsgs: [MsgTransferApplication] @derivedFrom(field: "destinationApplication")
+  sourceTransferBeginEvents: [TransferApplicationBeginEvent] @derivedFrom(field: "source")
+  destinationTransferBeginEvents: [TransferApplicationBeginEvent] @derivedFrom(field: "destination")
+  sourceTransferEndEvents: [TransferApplicationEndEvent] @derivedFrom(field: "source")
+  destinationTransferEndEvents: [TransferApplicationEndEvent] @derivedFrom(field: "destination")
+  sourceTransferErrorEvents: [TransferApplicationErrorEvent] @derivedFrom(field: "source")
+  destinationTransferErrorEvents: [TransferApplicationErrorEvent] @derivedFrom(field: "destination")
+  unbondingBeginEvents: [EventApplicationUnbondingBegin] @derivedFrom(field: "application")
+  unbondingEndEvents: [EventApplicationUnbondingEnd] @derivedFrom(field: "application")
+  transferredFromAt: Block
+  transferFrom: Application
+  transferTo: Application
+  transferToEndedAt: Block
+  # Account because we don't know if the destination is an application
+  transferringTo: Account
+  transferEndsAtHeight: BigInt
+}
+
+type ApplicationDelegatedToGateway @entity {
+  id: ID!
+  gateway: Gateway!
+  application: Application!
+}
+
+type ApplicationService @entity {
+  id: ID!
+  application: Application!
+  service: Service!
+}
+
+type TransferApplicationBeginEvent @entity {
+  id: ID!
+  source: Application!
+  destination: Application!
+  transaction: Transaction!
+  block: Block!
+}
+
+type TransferApplicationEndEvent @entity {
+  id: ID!
+  source: Application!
+  destination: Application!
+  transaction: Transaction
+  block: Block!
+}
+
+type TransferApplicationErrorEvent @entity {
+  id: ID!
+  source: Application!
+  destination: Account!
+  error: String!
+  transaction: Transaction
+  block: Block!
+}
+
+type EventApplicationUnbondingBegin @entity {
+  id: ID!
+  application: Application!
+  reason: ApplicationUnbondingReason!
+  sessionEndHeight: BigInt!
+  unbondingEndHeight: BigInt!
+  transaction: Transaction
+  block: Block!
+}
+
+type EventApplicationUnbondingEnd @entity {
+  id: ID!
+  application: Application!
+  reason: ApplicationUnbondingReason!
+  sessionEndHeight: BigInt!
+  unbondingEndHeight: BigInt!
+  transaction: Transaction
+  block: Block!
+}
+
 type Balance @entity {
   id: ID!
   account: Account! @index
@@ -119,4 +280,260 @@ type GenesisFile @entity {
   # id is the initial height
   id: ID!
   raw: String!
+}
+
+type SupplierMsgStake @entity {
+  id: ID!
+  signer: Account!
+  supplier: Supplier!
+  owner: Account!
+  stake: Coin!
+  block: Block!
+  transaction: Transaction!
+}
+
+type SupplierMsgStakeService @entity {
+  id: ID!
+  supplierStakeMsg: SupplierMsgStake!
+  service: Service!
+  revShare: [SupplierRevShare]!
+  endpoints: [SupplierEndpoint]!
+}
+
+type SupplierMsgUnstake @entity {
+  id: ID!
+  signer: Account!
+  supplier: Supplier!
+  block: Block!
+  transaction: Transaction!
+}
+
+type Supplier @entity {
+  id: ID!
+  operatorAccount: Account!
+  owner: Account!
+  stake: Coin!
+  stakeMsgs: [SupplierMsgStake] @derivedFrom(field: "supplier")
+  unstakeMsgs: [SupplierMsgUnstake] @derivedFrom(field: "supplier")
+  unbondingBeginEvents: [SupplierUnbondingBeginEvent] @derivedFrom(field: "supplier")
+  unbondingEndEvents: [SupplierUnbondingEndEvent] @derivedFrom(field: "supplier")
+  status: StakeStatus!
+  # Block where MsgUnstakeSupplier was received
+  unbondingStartBlock: Block
+  # Height of the block where the supplier is going to be unstaked/unbonded.
+  # This is received with the EventSupplierUnbondingBegin event.
+  unbondingHeight: BigInt
+  # Block where the supplier was unstaked/unbonded.
+  # This is received with the EventSupplierUnbondingEnd event.
+  unbondedAtBlock: Block
+
+}
+
+type ConfigOption @jsonField {
+  key: Int!
+  value: String!
+}
+
+type SupplierEndpoint @jsonField {
+  url: String!
+  rpcType: Int!
+  configs: [ConfigOption]!
+}
+
+type SupplierRevShare @jsonField {
+  address: String!
+  revSharePercentage: Float!
+}
+
+type SupplierService @entity {
+  id: ID!
+  supplier: Supplier!
+  service: Service!
+  revShare: [SupplierRevShare]!
+  endpoints: [SupplierEndpoint]!
+}
+
+type SupplierUnbondingBeginEvent @entity {
+  id: ID!
+  supplier: Supplier!
+  block: Block!
+  transaction: Transaction!
+}
+
+type SupplierUnbondingEndEvent @entity {
+  id: ID!
+  supplier: Supplier!
+  block: Block!
+}
+
+type AddServiceMsg @entity {
+  id: ID!
+  service: Service!
+  name: String!
+  computeUnitsPerRelay: Int!
+  owner: Account!
+}
+
+type Gateway @entity {
+  id: ID!
+  account: Account!
+  stake: Coin!
+  status: StakeStatus!
+  unbondingStartBlock: Block
+  unbondedAtBlock: Block
+  stakeMsgs: [GatewayStakeMsg] @derivedFrom(field: "gateway")
+  unstakeMsgs: [GatewayUnstakeMsg] @derivedFrom(field: "gateway")
+  unstakedEvents: [GatewayUnstakedEvent] @derivedFrom(field: "gateway")
+}
+
+type GatewayStakeMsg @entity {
+  id: ID!
+  gateway: Gateway!
+  stake: Coin!
+  transaction: Transaction!
+  block: Block!
+}
+
+type GatewayUnstakeMsg @entity {
+  id: ID!
+  gateway: Gateway!
+  transaction: Transaction!
+  block: Block!
+}
+
+type GatewayUnstakedEvent @entity {
+  id: ID!
+  gateway: Gateway!
+  transaction: Transaction!
+  block: Block!
+}
+
+# PARAMS
+
+type AppParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type AuthParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type BankParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type DistributionParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type GatewayParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type GovParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type MintParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type ProofParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type ServiceParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type SessionParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type SharedParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type SlashingParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type StakingParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type SupplierParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type TokenomicsParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type ConsensusParam @entity {
+  id: ID!
+  key: String! @index
+  value: String!
+  block: Block!
+}
+
+type AuthzExec @entity {
+  id: ID!
+  grantee: String! @index
+  subMessages: [AuthzExecMessage]! @derivedFrom(field: "authzExec")
+  message: Message!
+  transaction: Transaction!
+  block: Block!
+}
+
+# NB: AuthzExec --|{ Message join table
+type AuthzExecMessage @entity {
+  id: ID!
+  authzExec: AuthzExec!
+  message: Message!
 }

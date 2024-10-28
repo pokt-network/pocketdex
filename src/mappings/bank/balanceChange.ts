@@ -26,7 +26,7 @@ export async function saveNativeBalanceEvent(id: string, address: string, amount
     accountId: address,
     eventId: eventId,
     blockId: event.block.block.id,
-    transactionId: event.tx.hash || undefined,
+    transactionId: event.tx?.hash || undefined,
   });
 
   await nativeBalanceChangeEntity.save();

@@ -1,4 +1,4 @@
-import {Coin} from "@cosmjs/amino";
+import type {Coin} from "@cosmjs/amino";
 
 /**
  * Takes a coins list like "819966000ucosm,700000000ustake" and parses it.
