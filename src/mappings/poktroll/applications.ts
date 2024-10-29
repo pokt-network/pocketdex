@@ -154,7 +154,7 @@ async function _handleAppMsgStake(
     })
   }
 
-  const currentAppServices = await ApplicationService.getByApplicationId(address)
+  const currentAppServices = await ApplicationService.getByApplicationId(address, {})
 
   const servicesToRemove: Array<string> = []
 
@@ -279,17 +279,10 @@ async function _handleTransferApplicationMsg(
 async function _handleTransferApplicationBeginEvent(
   event: CosmosEvent
 ) {
-  logger.info(`[handleTransferApplicationBeginEvent] (event.msg): ${stringify(event.msg, undefined, 2)}`);
+  logger.debug(`[handleTransferApplicationBeginEvent] (event.msg): ${stringify(event.msg, undefined, 2)}`);
   const msg: CosmosMessage<EventTransferBegin> = event.msg
 
-  //TODO(@Alann27): is not this event coming in event.event?
-  const transferBeginEvent = event.tx.tx.events.find(item => item.type === "poktroll.application.EventTransferBegin")
-
-  if (!transferBeginEvent) {
-    throw new Error(`[handleTransferApplicationBeginEvent] transferBeginEvent not found`);
-  }
-
-  const transferEndHeight = transferBeginEvent.attributes.find(attribute => attribute.key === "transfer_end_height")?.value
+  const transferEndHeight = event.event.attributes.find(attribute => attribute.key === "transfer_end_height")?.value as string
 
   if (!transferEndHeight) {
     throw new Error(`[handleTransferApplicationBeginEvent] transferEndHeight not found`);
@@ -318,7 +311,7 @@ async function _handleTransferApplicationBeginEvent(
 async function _handleTransferApplicationEndEvent(
   event: CosmosEvent
 ) {
-  logger.info(`[handleTransferApplicationEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleTransferApplicationEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   let sourceAddress = event.event.attributes.find(attribute => attribute.key === "source_address")?.value as unknown as string
 
@@ -375,8 +368,8 @@ async function _handleTransferApplicationEndEvent(
     gatewayId: gateway,
   }))
 
-  const sourceApplicationServices = await ApplicationService.getByApplicationId(sourceAddress) || []
-  const sourceApplicationGateways = await ApplicationDelegatedToGateway.getByApplicationId(sourceAddress) || []
+  const sourceApplicationServices = await ApplicationService.getByApplicationId(sourceAddress, {}) || []
+  const sourceApplicationGateways = await ApplicationDelegatedToGateway.getByApplicationId(sourceAddress, {}) || []
   const newApplicationServices: Array<ApplicationServiceProps> = service_configs?.map(service => ({
     id: getStakeServiceId(destinationApp.address, service.service_id),
     serviceId: service.service_id,
@@ -403,7 +396,7 @@ async function _handleTransferApplicationEndEvent(
 async function _handleTransferApplicationErrorEvent(
   event: CosmosEvent
 ) {
-  logger.info(`[handleTransferApplicationErrorEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleTransferApplicationErrorEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   let sourceAddress = '', destinationAddress = '', error = ''
 
@@ -458,7 +451,7 @@ async function _handleTransferApplicationErrorEvent(
 async function _handleApplicationUnbondingBeginEvent(
   event: CosmosEvent
 ) {
-  logger.info(`[handleApplicationUnbondingBeginEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleApplicationUnbondingBeginEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   const msg: CosmosMessage<MsgUnstakeApplication> = event.msg;
 
@@ -522,7 +515,7 @@ async function _handleApplicationUnbondingBeginEvent(
 async function _handleApplicationUnbondingEndEvent(
   event: CosmosEvent
 ) {
-  logger.info(`[handleApplicationUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  logger.debug(`[handleApplicationUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   let unbondingEndHeight: bigint, sessionEndHeight: bigint, reason: ApplicationUnbondingReason, applicationSdk: ApplicationSDKType
 
@@ -579,7 +572,7 @@ async function _handleApplicationUnbondingEndEvent(
   application.status = StakeStatus.Unstaked
   application.unbondingReason = reason
 
-  const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address) || []).map(item => item.id)
+  const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address, {}) || []).map(item => item.id)
 
   await Promise.all([
     EventApplicationUnbondingEnd.create({

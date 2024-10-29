@@ -154,7 +154,7 @@ async function _handleGenesisServices(genesis: Genesis): Promise<void> {
   const services: Array<ServiceProps> = genesis.app_state.service.serviceList.map(service => ({
     id: service.id,
     name: service.name,
-    computeUnitsPerRelay: service.compute_units_per_relay,
+    computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
     ownerId: service.owner_address,
   }))
 

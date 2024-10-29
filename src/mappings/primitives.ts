@@ -78,7 +78,7 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
     signerAddress = toBech32(PREFIX, addressBytes);
   }
 
-  logger.info(`[handleTransaction] (block ${tx.block.block.header.height}): indexing transaction ${tx.idx + 1} / ${tx.block.txs.length} status=${status} signer=${signerAddress}`);
+  logger.debug(`[handleTransaction] (block ${tx.block.block.header.height}): indexing transaction ${tx.idx + 1} / ${tx.block.txs.length} status=${status} signer=${signerAddress}`);
   logger.debug(`[handleTransaction] (tx.decodedTx): ${stringify(tx.decodedTx, undefined, 2)}`);
   if (!isNil(tx.tx.log)) logger.debug(`[handleTransaction] (tx.tx.log): ${tx.tx.log}`);
 
@@ -101,7 +101,7 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
 }
 
 async function _handleMessage(msg: CosmosMessage): Promise<void> {
-  logger.info(`[handleMessage] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
+  logger.debug(`[handleMessage] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
   logger.debug(`[handleMessage] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   // const timeline = getTimeline(msg);
 
@@ -122,9 +122,9 @@ async function _handleMessage(msg: CosmosMessage): Promise<void> {
 async function _handleEvent(event: CosmosEvent): Promise<void> {
   // TODO: generate an ID that will match on the event.event.type source depending on what type is.
   if (!isEmpty(event.tx?.hash)) {
-    logger.info(`[handleEvent] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
+    logger.debug(`[handleEvent] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
   } else {
-    logger.info(`[handleEvent]: indexing event ${event.idx + 1}${event.tx ? ` / ${event.tx.tx.events.length}` : ''}`);
+    logger.debug(`[handleEvent]: indexing event ${event.idx + 1}${event.tx ? ` / ${event.tx.tx.events.length}` : ''}`);
   }
 
   let id;

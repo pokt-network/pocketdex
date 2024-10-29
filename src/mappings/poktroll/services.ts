@@ -12,26 +12,25 @@ export async function handleMsgAddService(
 async function _handleMsgAddService(
   msg: CosmosMessage<MsgAddService>
 ) {
-  logger.debug(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  logger.info(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
-  // TODO(@Alann27): the owner can change the ownerAddress inside the service field?
-  const {ownerAddress, service: {computeUnitsPerRelay, id, name, ownerAddress: owner}} = msg.msg.decodedMsg
+  const {ownerAddress, service: {computeUnitsPerRelay, id, name}} = msg.msg.decodedMsg
+
+  const units = BigInt(computeUnitsPerRelay.toString())
 
   await Promise.all([
     Service.create({
       id,
-      // TODO(@Alann27): change this to bigInt?
-      computeUnitsPerRelay: Number(computeUnitsPerRelay.toString()),
+      computeUnitsPerRelay: units,
       name,
-      // TODO(@Alann27): see which one is correct
-      ownerId: ownerAddress || owner,
+      ownerId: ownerAddress,
     }).save(),
     AddServiceMsg.create({
       id: messageId(msg),
       name,
-      ownerId: ownerAddress || owner,
+      ownerId: ownerAddress,
       serviceId: id,
-      computeUnitsPerRelay: Number(computeUnitsPerRelay.toString()),
+      computeUnitsPerRelay: units,
     }).save()
   ])
 }

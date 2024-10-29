@@ -63,7 +63,7 @@ export async function handleNativeBalanceIncrement(event: CosmosEvent): Promise<
 }
 
 async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> {
-  logger.info(`[handleNativeBalanceDecrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
+  logger.debug(`[handleNativeBalanceDecrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
   logger.debug(`[handleNativeBalanceDecrement] (event.event): ${stringify(event.event, undefined, 2)}`);
   logger.debug(`[handleNativeBalanceDecrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
@@ -84,7 +84,7 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
-      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg.msg.typeUrl}`);
+      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
       return;
     }
 
@@ -109,7 +109,7 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
 }
 
 async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> {
-  logger.info(`[handleNativeBalanceIncrement] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
+  logger.debug(`[handleNativeBalanceIncrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
   logger.debug(`[handleNativeBalanceIncrement] (event.event): ${stringify(event.event, undefined, 2)}`);
   logger.debug(`[handleNativeBalanceIncrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
@@ -130,7 +130,7 @@ async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> 
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
-      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg.msg.typeUrl}`);
+      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
       return;
     }
 

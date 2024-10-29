@@ -128,7 +128,7 @@ type UnprocessedEntity @entity {
 type Service @entity {
   id: ID!
   name: String!
-  computeUnitsPerRelay: Int!
+  computeUnitsPerRelay: BigInt!
   owner: Account!
   addServiceMsgs: [AddServiceMsg] @derivedFrom(field: "service")
 }
@@ -370,7 +370,7 @@ type AddServiceMsg @entity {
   id: ID!
   service: Service!
   name: String!
-  computeUnitsPerRelay: Int!
+  computeUnitsPerRelay: BigInt!
   owner: Account!
 }
 

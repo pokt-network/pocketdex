@@ -119,7 +119,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     })
   }
 
-  const currentSupplierServices = await SupplierService.getBySupplierId(operatorAddress)
+  const currentSupplierServices = await SupplierService.getBySupplierId(operatorAddress, {})
 
   const servicesToRemove: Array<string> = []
 
@@ -237,7 +237,7 @@ async function _handleSupplierUnbondingEndEvent(
   supplier.unbondedAtBlockId = event.block.block.id
   supplier.status = StakeStatus.Unstaked
 
-  const supplierServices = (await SupplierService.getBySupplierId(supplierAddress) || []).map(item => item.id)
+  const supplierServices = (await SupplierService.getBySupplierId(supplierAddress, {}) || []).map(item => item.id)
 
   await Promise.all([
     SupplierUnbondingEndEvent.create({
