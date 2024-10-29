@@ -130,49 +130,37 @@ async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void>
   }
 }
 
+const paramMapping: Record<string, string> = {
+  '/poktroll.application.MsgUpdateParams': 'AppParam',
+  '/poktroll.application.MsgUpdateParam': 'AppParam',
+  '/cosmos.auth.v1beta1.MsgUpdateParams': 'AuthParam',
+  '/cosmos.bank.v1beta1.MsgUpdateParams': 'BankParam',
+  '/cosmos.distribution.v1beta1.MsgUpdateParams': 'DistributionParam',
+  '/poktroll.gateway.MsgUpdateParams': 'GatewayParam',
+  '/poktroll.gateway.MsgUpdateParam': 'GatewayParam',
+  '/cosmos.gov.v1.MsgUpdateParams': 'GovParam',
+  '/cosmos.mint.v1beta1.MsgUpdateParams': 'MintParam',
+  '/poktroll.proof.MsgUpdateParams': 'ProofParam',
+  '/poktroll.proof.MsgUpdateParam': 'ProofParam',
+  '/poktroll.service.MsgUpdateParams': 'ServiceParam',
+  '/poktroll.service.MsgUpdateParam': 'ServiceParam',
+  '/poktroll.session.MsgUpdateParams': 'SessionParam',
+  '/poktroll.shared.MsgUpdateParams': 'SharedParam',
+  '/poktroll.shared.MsgUpdateParam': 'SharedParam',
+  '/cosmos.slashing.v1beta1.MsgUpdateParams': 'SlashingParam',
+  '/cosmos.staking.v1beta1.MsgUpdateParams': 'StakingParam',
+  '/poktroll.supplier.MsgUpdateParams': 'SupplierParam',
+  '/poktroll.supplier.MsgUpdateParam': 'SupplierParam',
+  '/poktroll.tokenomics.MsgUpdateParams': 'TokenomicsParam',
+  '/poktroll.tokenomics.MsgUpdateParam': 'TokenomicsParam',
+  '/cosmos.consensus.v1.MsgUpdateParams': 'ConsensusParam',
+};
+
 function getEntityParamName(typeUrl: string): string {
-  switch (typeUrl) {
-    case '/poktroll.application.MsgUpdateParams':
-    case '/poktroll.application.MsgUpdateParam':
-      return 'AppParam';
-    case '/cosmos.auth.v1beta1.MsgUpdateParams':
-      return 'AuthParam';
-    case '/cosmos.bank.v1beta1.MsgUpdateParams':
-      return 'BankParam';
-    case '/cosmos.distribution.v1beta1.MsgUpdateParams':
-      return 'DistributionParam';
-    case '/poktroll.gateway.MsgUpdateParams':
-    case '/poktroll.gateway.MsgUpdateParam':
-      return 'GatewayParam';
-    case '/cosmos.gov.v1.MsgUpdateParams':
-      return 'GovParam';
-    case '/cosmos.mint.v1beta1.MsgUpdateParams':
-      return 'MintParam';
-    case '/poktroll.proof.MsgUpdateParams':
-    case '/poktroll.proof.MsgUpdateParam':
-      return 'ProofParam';
-    case '/poktroll.service.MsgUpdateParams':
-    case '/poktroll.service.MsgUpdateParam':
-      return 'ServiceParam';
-    case '/poktroll.session.MsgUpdateParams':
-      return 'SessionParam';
-    case '/poktroll.shared.MsgUpdateParams':
-    case '/poktroll.shared.MsgUpdateParam':
-      return 'SharedParam';
-    case '/cosmos.slashing.v1beta1.MsgUpdateParams':
-      return 'SlashingParam';
-    case '/cosmos.staking.v1beta1.MsgUpdateParams':
-      return 'StakingParam';
-    case '/poktroll.supplier.MsgUpdateParams':
-    case '/poktroll.supplier.MsgUpdateParam':
-      return 'SupplierParam';
-    case '/poktroll.tokenomics.MsgUpdateParams':
-    case '/poktroll.tokenomics.MsgUpdateParam':
-      return 'TokenomicsParam';
-    case '/cosmos.consensus.v1.MsgUpdateParams':
-      return 'ConsensusParam';
-    default:
-      throw new Error(`Unknown typeUrl: ${typeUrl}`);
+  if (typeUrl in paramMapping) {
+    return paramMapping[typeUrl];
+  } else {
+    throw new Error(`Unknown typeUrl: ${typeUrl}`);
   }
 }
 
