@@ -201,7 +201,7 @@ async function _handleDelegateToGatewayMsg(
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
       applicationId: msg.msg.decodedMsg.appAddress,
     }).save(),
-    MsgDelegateToGatewayEntity.create({
+    DelegateToGatewayMsg.create({
       id: msgId,
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
@@ -282,7 +282,7 @@ async function _handleTransferApplicationMsg(
 
   await Promise.all([
     application.save(),
-    MsgTransferApplicationEntity.create({
+    TransferApplicationMsg.create({
       id: msgId,
       sourceApplicationId: msg.msg.decodedMsg.sourceAddress,
       destinationApplicationId: msg.msg.decodedMsg.destinationAddress,

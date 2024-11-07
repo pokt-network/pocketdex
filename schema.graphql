@@ -223,7 +223,7 @@ type MsgUnstakeApplication @entity {
   message: Message!
 }
 
-type MsgDelegateToGateway @entity {
+type DelegateToGatewayMsg @entity {
   id: ID!
   application: Application! @index
   gateway: Gateway! @index
@@ -241,7 +241,7 @@ type MsgUndelegateFromGateway @entity {
   message: Message!
 }
 
-type MsgTransferApplication @entity {
+type TransferApplicationMsg @entity {
   id: ID!
   sourceApplication: Application! @index
   destinationApplication: Application! @index
@@ -334,7 +334,7 @@ type EventTransferError @entity {
   event: Event!
 }
 
-type EventApplicationUnbondingBegin @entity {
+type ApplicationUnbondingBeginEvent @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   application: Application!
@@ -346,7 +346,7 @@ type EventApplicationUnbondingBegin @entity {
   event: Event!
 }
 
-type EventApplicationUnbondingEnd @entity {
+type ApplicationUnbondingEndEvent @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   application: Application!
