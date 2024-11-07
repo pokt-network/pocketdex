@@ -1,27 +1,24 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
+import { applicationUnbondingReasonFromJSON } from "../../client/poktroll/application/event";
 import {
   Application,
   ApplicationDelegatedToGateway,
   ApplicationService,
-  ApplicationUnbondingReason,
-  AppMsgStake,
-  AppMsgUnstake,
-  EventApplicationUnbondingBegin,
-  EventApplicationUnbondingEnd,
-  MsgDelegateToGateway as MsgDelegateToGatewayEntity,
-  MsgTransferApplication as MsgTransferApplicationEntity,
-  MsgUndelegateToGateway as MsgUndelegateToGatewayEntity,
-  StakeStatus,
+  AppStakeMsg,
+  AppUnstakeMsg,
+  ApplicationUnbondingBeginEvent,
+  ApplicationUnbondingEndEvent,
+  DelegateToGatewayMsg,
+  TransferApplicationMsg,
+  UndelegateToGatewayMsg,
   TransferApplicationBeginEvent,
   TransferApplicationEndEvent,
   TransferApplicationErrorEvent,
 } from "../../types";
 import { ApplicationDelegatedToGatewayProps } from "../../types/models/ApplicationDelegatedToGateway";
 import { ApplicationServiceProps } from "../../types/models/ApplicationService";
-import { AppMsgStakeServiceProps } from "../../types/models/AppMsgStakeService";
+import { AppStakeMsgServiceProps } from "../../types/models/AppStakeMsgService";
 import {
-  ApplicationUnbondingReason as ApplicationUnbondingReasonSDK,
-  applicationUnbondingReasonFromJSON,
   EventTransferBegin,
 } from "../../types/proto-interfaces/poktroll/application/event";
 import {
@@ -32,6 +29,7 @@ import {
   MsgUnstakeApplication,
 } from "../../types/proto-interfaces/poktroll/application/tx";
 import { ApplicationSDKType } from "../../types/proto-interfaces/poktroll/application/types";
+import { StakeStatus } from "../constants";
 import {
   attemptHandling,
   getAppDelegatedToGatewayId,
@@ -117,7 +115,7 @@ async function _handleAppMsgStake(
     denom: stake?.denom || '',
   }
 
-  const appMsgStake =  AppMsgStake.create({
+  const appMsgStake =  AppStakeMsg.create({
     id: msgId,
     stake: stakeCoin,
     transactionId: msg.tx.hash,
@@ -130,12 +128,12 @@ async function _handleAppMsgStake(
     accountId: address,
     stake: stakeCoin,
     status: StakeStatus.Staked,
-    unbondingStartBlockId: undefined,
-    unbondedAtBlockId: undefined,
+    unstakingStartBlockId: undefined,
+    unstakedAtBlockId: undefined,
   })
 
   const servicesId: Array<string> = []
-  const appMsgStakeServices: Array<AppMsgStakeServiceProps> = []
+  const appMsgStakeServices: Array<AppStakeMsgServiceProps> = []
   const newApplicationServices: Array<ApplicationServiceProps> = []
 
   for (const {serviceId} of msg.msg.decodedMsg.services) {
@@ -194,7 +192,7 @@ async function _handleDelegateToGatewayMsg(
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
       applicationId: msg.msg.decodedMsg.appAddress,
     }).save(),
-    MsgDelegateToGatewayEntity.create({
+    DelegateToGatewayMsg.create({
       id: messageId(msg),
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
@@ -216,7 +214,7 @@ async function _handleUndelegateFromGatewayMsg(
         msg.msg.decodedMsg.gatewayAddress
       )
     ),
-    MsgUndelegateToGatewayEntity.create({
+    UndelegateToGatewayMsg.create({
       id: messageId(msg),
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
@@ -238,11 +236,11 @@ async function _handleUnstakeApplicationMsg(
   }
 
   application.status = StakeStatus.Unstaking
-  application.unbondingStartBlockId = msg.block.block.id
+  application.unstakingStartBlockId = msg.block.block.id
 
   await Promise.all([
     application.save(),
-    AppMsgUnstake.create({
+    AppUnstakeMsg.create({
       id: messageId(msg),
       applicationId: msg.msg.decodedMsg.address,
       transactionId: msg.tx.hash,
@@ -266,7 +264,7 @@ async function _handleTransferApplicationMsg(
 
   await Promise.all([
     application.save(),
-    MsgTransferApplicationEntity.create({
+    TransferApplicationMsg.create({
       id: messageId(msg),
       sourceApplicationId: msg.msg.decodedMsg.sourceAddress,
       destinationApplicationId: msg.msg.decodedMsg.destinationAddress,
@@ -332,8 +330,8 @@ async function _handleTransferApplicationEndEvent(
   sourceApplication.transferEndsAtHeight = undefined
   sourceApplication.transferToEndedAtId = event.block.block.id
   sourceApplication.status = StakeStatus.Unstaked
-  sourceApplication.unbondingReason = ApplicationUnbondingReason.TRANSFERRED
-  sourceApplication.unbondedAtBlockId = event.block.block.id
+  sourceApplication.unstakingReason = 2
+  sourceApplication.unstakedAtBlockId = event.block.block.id
 
   const destinationAppStringified = event.event.attributes.find(attribute => attribute.key === "destination_application")?.value as string
 
@@ -358,8 +356,8 @@ async function _handleTransferApplicationEndEvent(
     status: StakeStatus.Staked,
     transferFromId: sourceAddress,
     transferredFromAtId: event.block.block.id,
-    unbondedAtBlockId: sourceApplication.unbondedAtBlockId,
-    unbondingStartBlockId: sourceApplication.unbondingStartBlockId
+    unstakedAtBlockId: sourceApplication.unstakedAtBlockId,
+    unstakingStartBlockId: sourceApplication.unstakingStartBlockId
   })
 
   const appDelegatedToGateways: Array<ApplicationDelegatedToGatewayProps> = delegatee_gateway_addresses.map(gateway => ({
@@ -455,11 +453,11 @@ async function _handleApplicationUnbondingBeginEvent(
 
   const msg: CosmosMessage<MsgUnstakeApplication> = event.msg;
 
-  let unbondingEndHeight: bigint, sessionEndHeight: bigint, reason: ApplicationUnbondingReason
+  let unstakingEndHeight = BigInt(0), sessionEndHeight: bigint, reason: number
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
-      unbondingEndHeight = BigInt((attribute.value as unknown as string).replaceAll('"', ""))
+      unstakingEndHeight = BigInt((attribute.value as unknown as string).replaceAll('"', ""))
     }
 
     if (attribute.key === "session_end_height") {
@@ -467,13 +465,13 @@ async function _handleApplicationUnbondingBeginEvent(
     }
 
     if (attribute.key === "reason") {
-      reason = applicationUnbondingReasonFromJSON(attribute.value as unknown as string) === ApplicationUnbondingReasonSDK.ELECTIVE ? ApplicationUnbondingReason.ELECTIVE : ApplicationUnbondingReason.BELOW_MIN_STAKE
+      reason = applicationUnbondingReasonFromJSON((attribute.value as unknown as string).replaceAll('"', ""))
     }
   }
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  if (!unbondingEndHeight) {
+  if (unstakingEndHeight === BigInt(0)) {
     throw new Error(`[handleApplicationUnbondingBeginEvent] unbondingEndHeight not found in event`);
   }
 
@@ -495,17 +493,17 @@ async function _handleApplicationUnbondingBeginEvent(
     throw new Error(`[handleApplicationUnbondingBeginEvent] application not found for operator address ${msg.msg.decodedMsg.address}`)
   }
 
-  application.unbondingHeight = unbondingEndHeight
-  application.unbondingReason = reason
+  application.unstakingHeight = unstakingEndHeight
+  application.unstakingReason = reason
 
   await Promise.all([
     application.save(),
-    EventApplicationUnbondingBegin.create({
+    ApplicationUnbondingBeginEvent.create({
       id: getEventId(event),
       applicationId: msg.msg.decodedMsg.address,
       blockId: event.block.block.id,
       transactionId: event.tx?.hash,
-      unbondingEndHeight,
+      unstakingEndHeight,
       sessionEndHeight,
       reason,
     }).save(),
@@ -517,12 +515,12 @@ async function _handleApplicationUnbondingEndEvent(
 ) {
   logger.debug(`[handleApplicationUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
-  let unbondingEndHeight: bigint, sessionEndHeight: bigint, reason: ApplicationUnbondingReason, applicationSdk: ApplicationSDKType
+  let unstakingEndHeight: bigint, sessionEndHeight: bigint, reason: number, applicationSdk: ApplicationSDKType
 
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
-      unbondingEndHeight = BigInt((attribute.value as unknown as string).replaceAll('"', ""))
+      unstakingEndHeight = BigInt((attribute.value as unknown as string).replaceAll('"', ""))
     }
 
     if (attribute.key === "session_end_height") {
@@ -530,7 +528,7 @@ async function _handleApplicationUnbondingEndEvent(
     }
 
     if (attribute.key === "reason") {
-      reason = applicationUnbondingReasonFromJSON((attribute.value as unknown as string).replaceAll('"', "")) === ApplicationUnbondingReasonSDK.ELECTIVE ? ApplicationUnbondingReason.ELECTIVE : ApplicationUnbondingReason.BELOW_MIN_STAKE
+      reason = applicationUnbondingReasonFromJSON((attribute.value as unknown as string).replaceAll('"', ""))
     }
 
     if (attribute.key === "application") {
@@ -540,7 +538,7 @@ async function _handleApplicationUnbondingEndEvent(
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  if (!unbondingEndHeight) {
+  if (!unstakingEndHeight) {
     throw new Error(`[handleApplicationUnbondingEndEvent] unbondingEndHeight not found in event`);
   }
 
@@ -568,18 +566,18 @@ async function _handleApplicationUnbondingEndEvent(
     throw new Error(`[handleApplicationUnbondingEndEvent] application not found for address ${applicationSdk.address}`)
   }
 
-  application.unbondedAtBlockId = event.block.block.id
+  application.unstakedAtBlockId = event.block.block.id
   application.status = StakeStatus.Unstaked
-  application.unbondingReason = reason
+  application.unstakingReason = reason
 
   const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address, {}) || []).map(item => item.id)
 
   await Promise.all([
-    EventApplicationUnbondingEnd.create({
+    ApplicationUnbondingEndEvent.create({
       id: getEventId(event),
       blockId: event.block.block.id,
       sessionEndHeight,
-      unbondingEndHeight,
+      unstakingEndHeight,
       reason,
       applicationId: applicationSdk.address,
       transactionId: event.tx?.hash

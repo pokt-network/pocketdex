@@ -2,29 +2,28 @@ import { CosmosBlock } from "@subql/types-cosmos";
 import {
   Event,
   GenesisFile as GenesisEntity,
-  StakeStatus,
-  TxStatus,
 } from "../types";
-import { AccountProps } from "../types/models/Account";
-import { ApplicationProps } from "../types/models/Application";
-import { ApplicationDelegatedToGatewayProps } from "../types/models/ApplicationDelegatedToGateway";
-import { ApplicationServiceProps } from "../types/models/ApplicationService";
-import { AppMsgStakeProps } from "../types/models/AppMsgStake";
-import { AppMsgStakeServiceProps } from "../types/models/AppMsgStakeService";
-import { AppParamProps } from "../types/models/AppParam";
-import { BalanceProps } from "../types/models/Balance";
-import { GatewayProps } from "../types/models/Gateway";
-import { GatewayStakeMsgProps } from "../types/models/GatewayStakeMsg";
-import { GenesisBalanceProps } from "../types/models/GenesisBalance";
-import { MsgDelegateToGatewayProps } from "../types/models/MsgDelegateToGateway";
-import { NativeBalanceChangeProps } from "../types/models/NativeBalanceChange";
-import { ServiceProps } from "../types/models/Service";
-import { SupplierProps } from "../types/models/Supplier";
-import { SupplierMsgStakeProps } from "../types/models/SupplierMsgStake";
-import { SupplierMsgStakeServiceProps } from "../types/models/SupplierMsgStakeService";
-import { SupplierServiceProps } from "../types/models/SupplierService";
-import { TransactionProps } from "../types/models/Transaction";
+import type { AccountProps } from "../types/models/Account";
+import type { ApplicationProps } from "../types/models/Application";
+import type { ApplicationDelegatedToGatewayProps } from "../types/models/ApplicationDelegatedToGateway";
+import type { ApplicationServiceProps } from "../types/models/ApplicationService";
+import type { AppParamProps } from "../types/models/AppParam";
+import type { AppStakeMsgProps } from "../types/models/AppStakeMsg";
+import type { AppStakeMsgServiceProps } from "../types/models/AppStakeMsgService";
+import type { BalanceProps } from "../types/models/Balance";
+import { DelegateToGatewayMsgProps } from "../types/models/DelegateToGatewayMsg";
+import type { GatewayProps } from "../types/models/Gateway";
+import type { GatewayStakeMsgProps } from "../types/models/GatewayStakeMsg";
+import type { GenesisBalanceProps } from "../types/models/GenesisBalance";
+import type { NativeBalanceChangeProps } from "../types/models/NativeBalanceChange";
+import type { ServiceProps } from "../types/models/Service";
+import type { SupplierProps } from "../types/models/Supplier";
+import type { SupplierServiceProps } from "../types/models/SupplierService";
+import type { SupplierStakeMsgProps } from "../types/models/SupplierStakeMsg";
+import type { SupplierStakeMsgServiceProps } from "../types/models/SupplierStakeMsgService";
+import type { TransactionProps } from "../types/models/Transaction";
 import { configOptionsFromJSON, rPCTypeFromJSON } from "../types/proto-interfaces/poktroll/shared/service";
+import { StakeStatus, TxStatus } from "./constants";
 import type { Genesis } from "./types/genesis";
 import {
   getAppDelegatedToGatewayId,
@@ -163,9 +162,9 @@ async function _handleGenesisServices(genesis: Genesis): Promise<void> {
 
 async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Promise<void> {
   const suppliers: Array<SupplierProps> = []
-  const supplierMsgStakes: Array<SupplierMsgStakeProps> = []
+  const supplierMsgStakes: Array<SupplierStakeMsgProps> = []
   const supplierServices: Array<SupplierServiceProps> = []
-  const servicesAndSupplierMsgStakes: Array<SupplierMsgStakeServiceProps> = []
+  const servicesAndSupplierMsgStakes: Array<SupplierStakeMsgServiceProps> = []
   const transactions: Array<TransactionProps> = []
 
   for (let i = 0; i < genesis.app_state.supplier.supplierList.length; i++) {
@@ -199,7 +198,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
     suppliers.push({
       id: supplier.operator_address,
-      operatorAccountId: supplier.operator_address,
+      operatorId: supplier.operator_address,
       ownerId: supplier.owner_address,
       stake: stakeCoin,
       status: StakeStatus.Staked
@@ -240,19 +239,19 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
   await Promise.all([
     store.bulkCreate('Supplier', suppliers),
-    store.bulkCreate('SupplierMsgStake', supplierMsgStakes),
+    store.bulkCreate('SupplierStakeMsg', supplierMsgStakes),
     store.bulkCreate('SupplierService', supplierServices),
-    store.bulkCreate('SupplierMsgStakeService', servicesAndSupplierMsgStakes),
+    store.bulkCreate('SupplierStakeMsgService', servicesAndSupplierMsgStakes),
     store.bulkCreate('Transaction', transactions)
   ])
 }
 
 async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock): Promise<void> {
   const applications: Array<ApplicationProps> = []
-  const appMsgStakes: Array<AppMsgStakeProps> = []
+  const appMsgStakes: Array<AppStakeMsgProps> = []
   const appServices: Array<ApplicationServiceProps> = []
-  const servicesAndAppMsgStakes: Array<AppMsgStakeServiceProps> = []
-  const msgDelegateToGateways: Array<MsgDelegateToGatewayProps> = []
+  const servicesAndAppMsgStakes: Array<AppStakeMsgServiceProps> = []
+  const msgDelegateToGateways: Array<DelegateToGatewayMsgProps> = []
   const transactions: Array<TransactionProps> = []
   const appsDelegatedToGateways: Array<ApplicationDelegatedToGatewayProps> = []
 
@@ -324,16 +323,16 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
   }
 
   const promises: Array<Promise<void>> =[
-    store.bulkCreate('AppMsgStake', appMsgStakes),
+    store.bulkCreate('AppStakeMsg', appMsgStakes),
     store.bulkCreate('Application', applications),
     store.bulkCreate('Transaction', transactions),
     store.bulkCreate('ApplicationService', appServices),
-    store.bulkCreate('AppMsgStakeService', servicesAndAppMsgStakes),
+    store.bulkCreate('AppStakeMsgService', servicesAndAppMsgStakes),
     store.bulkCreate('ApplicationDelegatedToGateway', appsDelegatedToGateways)
   ]
 
   if (msgDelegateToGateways.length > 0) {
-    promises.push(store.bulkCreate('MsgDelegateToGateway', msgDelegateToGateways))
+    promises.push(store.bulkCreate('DelegateToGatewayMsg', msgDelegateToGateways))
   }
 
   await Promise.all(promises)

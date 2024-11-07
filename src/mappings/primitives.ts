@@ -17,9 +17,8 @@ import {
   EventAttribute,
   Message,
   Transaction,
-  TxStatus,
 } from "../types";
-import { PREFIX } from "./constants";
+import { PREFIX, TxStatus } from "./constants";
 import {
   attemptHandling,
   messageId,

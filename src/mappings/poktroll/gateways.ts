@@ -1,6 +1,7 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
-import { Gateway, GatewayStakeMsg, GatewayUnstakedEvent, GatewayUnstakeMsg, StakeStatus } from "../../types";
+import { Gateway, GatewayStakeMsg, GatewayUnstakedEvent, GatewayUnstakeMsg } from "../../types";
 import { MsgStakeGateway, MsgUnstakeGateway } from "../../types/proto-interfaces/poktroll/gateway/tx";
+import { StakeStatus } from "../constants";
 import {
   attemptHandling,
   getEventId,
@@ -41,8 +42,8 @@ async function _handleGatewayMsgStake(
     stake,
     accountId: msg.msg.decodedMsg.address,
     status: StakeStatus.Staked,
-    unbondingStartBlockId: undefined,
-    unbondedAtBlockId: undefined
+    unstakingStartBlockId: undefined,
+    unstakedAtBlockId: undefined
   })
 
   await Promise.all([
@@ -68,7 +69,7 @@ async function _handleGatewayMsgUnstake(
   }
 
   gateway.status = StakeStatus.Unstaking
-  gateway.unbondingStartBlockId = msg.block.block.id
+  gateway.unstakingStartBlockId = msg.block.block.id
 
   await Promise.all([
     gateway.save(),
@@ -105,7 +106,7 @@ async function _handleGatewayUnstakeEvent(
     throw new Error(`[handleGatewayMsgUnstake] gateway not found with address: ${gatewayAddress}`);
   }
 
-  gateway.unbondedAtBlockId = event.block.block.id
+  gateway.unstakedAtBlockId = event.block.block.id
   gateway.status = StakeStatus.Unstaked
 
   await Promise.all([

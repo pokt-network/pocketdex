@@ -1,16 +1,16 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import {
-  StakeStatus,
   Supplier,
-  SupplierMsgStake,
-  SupplierMsgUnstake,
+  SupplierStakeMsg,
+  SupplierUnstakeMsg,
   SupplierService,
   SupplierUnbondingBeginEvent,
   SupplierUnbondingEndEvent,
 } from "../../types";
-import { SupplierMsgStakeServiceProps } from "../../types/models/SupplierMsgStakeService";
 import { SupplierServiceProps } from "../../types/models/SupplierService";
+import { SupplierStakeMsgServiceProps } from "../../types/models/SupplierStakeMsgService";
 import { MsgStakeSupplier, MsgUnstakeSupplier } from "../../types/proto-interfaces/poktroll/supplier/tx";
+import { StakeStatus } from "../constants";
 import {
   attemptHandling,
   getEventId,
@@ -61,7 +61,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     denom: msg.msg.decodedMsg.stake.denom,
   }
 
-  const supplierMsgStake = SupplierMsgStake.create({
+  const supplierMsgStake = SupplierStakeMsg.create({
     id: msgId,
     signerId: msg.msg.decodedMsg.signer,
     supplierId: msg.msg.decodedMsg.operatorAddress,
@@ -73,17 +73,17 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
 
   const supplier = Supplier.create({
     id: msg.msg.decodedMsg.operatorAddress,
-    operatorAccountId: msg.msg.decodedMsg.operatorAddress,
+    operatorId: msg.msg.decodedMsg.operatorAddress,
     ownerId: msg.msg.decodedMsg.ownerAddress,
     stake: stakeCoin,
     status: StakeStatus.Staked,
-    unbondingHeight: undefined,
-    unbondedAtBlockId: undefined,
-    unbondingStartBlockId: undefined,
+    unstakingHeight: undefined,
+    unstakedAtBlockId: undefined,
+    unstakingStartBlockId: undefined,
   })
 
   const servicesId: Array<string> = []
-  const supplierMsgStakeServices: Array<SupplierMsgStakeServiceProps> = []
+  const supplierMsgStakeServices: Array<SupplierStakeMsgServiceProps> = []
   const newSupplierServices: Array<SupplierServiceProps> = []
 
   const operatorAddress = msg.msg.decodedMsg.operatorAddress
@@ -155,7 +155,7 @@ async function _handleUnstakeSupplierMsg(
     throw new Error(`[handleUnstakeSupplierMsg] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`)
   }
 
-  const msgUnstakeSupplier = SupplierMsgUnstake.create({
+  const msgUnstakeSupplier = SupplierUnstakeMsg.create({
     id: messageId(msg),
     signerId: msg.msg.decodedMsg.signer,
     supplierId: msg.msg.decodedMsg.operatorAddress,
@@ -164,7 +164,7 @@ async function _handleUnstakeSupplierMsg(
   })
 
   supplier.status = StakeStatus.Unstaking
-  supplier.unbondingStartBlockId = msg.block.block.id
+  supplier.unstakingStartBlockId = msg.block.block.id
 
   await Promise.all([
     supplier.save(),
@@ -198,7 +198,7 @@ async function _handleSupplierUnbondingBeginEvent(
     throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`)
   }
 
-  supplier.unbondingHeight = BigInt((unbondingHeight as unknown as string).replaceAll('"', ""))
+  supplier.unstakingHeight = BigInt((unbondingHeight as unknown as string).replaceAll('"', ""))
 
   await Promise.all([
     supplier.save(),
@@ -234,7 +234,7 @@ async function _handleSupplierUnbondingEndEvent(
     throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`)
   }
 
-  supplier.unbondedAtBlockId = event.block.block.id
+  supplier.unstakedAtBlockId = event.block.block.id
   supplier.status = StakeStatus.Unstaked
 
   const supplierServices = (await SupplierService.getBySupplierId(supplierAddress, {}) || []).map(item => item.id)
