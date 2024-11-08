@@ -81,6 +81,8 @@ type Block @entity {
   proposerAddress: String!
   metadata: BlockMetadata!
   size: Int!
+  txAmount: Int!
+  stakedSuppliers: Int!
   # relations
   transactions: [Transaction] @derivedFrom(field: "block")
   messages: [Message] @derivedFrom(field: "block")
@@ -116,6 +118,8 @@ type Transaction @entity {
   # 0 = Success, 1 = Error
   status: Int!
   log: String
+  code: Int!
+  codespace: String
   timeoutHeight: BigInt @index
   # NB: only the first signer!
   signerAddress: String @index
@@ -145,8 +149,8 @@ type Coin @jsonField {
 
 type NativeTransfer @entity {
   id: ID!
-  toAddress: String! @index
-  fromAddress: String! @index
+  to: Account! @index
+  from: Account! @index
   amounts: [Coin]!
   denom: String! @index
   message: Message!
@@ -291,6 +295,7 @@ type Application @entity {
   # Account because the destination application is created on transfer end
   transferringTo: Account
   transferEndHeight: BigInt
+  relays: [Relay] @derivedFrom(field: "application")
 }
 
 type ApplicationGateway @entity {
@@ -426,6 +431,7 @@ type Supplier @entity {
   # This is received with the EventSupplierUnbondingEnd event.
   unstakingEndBlock: Block
   serviceConfigs: [SupplierServiceConfig] @derivedFrom(field: "supplier")
+  relays: [Relay] @derivedFrom(field: "supplier")
 }
 
 type ConfigOption @jsonField {
@@ -653,6 +659,183 @@ type AuthzMsgExec @entity {
   id: ID!
   authzExec: AuthzExec!
   message: Message!
+}
+
+type MsgCreateClaim @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  transaction: Transaction!
+  block: Block!
+}
+
+type MsgSubmitProof @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  proof: String
+  transaction: Transaction!
+  block: Block!
+}
+
+type EventClaimCreated @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimed: Coin
+  transaction: Transaction
+  block: Block!
+}
+
+type EventClaimUpdated @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimed: Coin
+  transaction: Transaction
+  block: Block!
+  relay: Relay
+}
+
+enum ClaimExpirationReason {
+  EXPIRATION_REASON_UNSPECIFIED
+  PROOF_MISSING
+  PROOF_INVALID
+}
+
+type EventClaimExpired @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  expirationReason: ClaimExpirationReason
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimed: Coin
+  transaction: Transaction
+  block: Block!
+}
+
+enum ProofRequirementReason {
+  NOT_REQUIRED
+  PROBABILISTIC
+  THRESHOLD
+}
+
+
+type EventClaimSettled @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  proofRequirement: ProofRequirementReason
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimed: Coin
+  transaction: Transaction
+  block: Block!
+}
+
+type Relay @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  closestMerkleProof: String
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimed: Coin
+  msgCreateClaim: MsgCreateClaim
+  eventClaimCreated: EventClaimCreated
+  eventsClaimUpdated: [EventClaimUpdated] @derivedFrom(field: "relay")
+  eventClaimExpired: EventClaimExpired
+  eventClaimSettled: EventClaimSettled
+  eventProofSubmitted: EventProofSubmitted
+  msgSubmitProof: MsgSubmitProof
+  eventsProofUpdated: [EventProofUpdated] @derivedFrom(field: "relay")
+  # 0 = PENDING, 1 = SUCCESSFUL, 2 = FAILED
+  status: Int!
+  failedCodeSpace: String
+  requiredProof: Boolean
+  # this must be a value of the enums ClaimErrors or ProofErrors. We are using Int because we can't define enums with numbers.
+  failedCode: Int
+}
+
+type EventProofSubmitted @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  closestMerkleProof: String
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimed: Coin
+  transaction: Transaction
+  block: Block!
+}
+
+type EventProofUpdated @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  rootHash: String
+  closestMerkleProof: String
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimed: Coin
+  transaction: Transaction
+  block: Block!
+  relay: Relay
 }
 
 type Supply @entity {

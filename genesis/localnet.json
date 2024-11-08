@@ -1,7 +1,7 @@
 {
   "app_name": "poktrolld",
-  "app_version": "0.0.9-49290e3d",
-  "genesis_time": "2024-10-07T15:34:55.513335691Z",
+  "app_version": "0.0.9-06636795",
+  "genesis_time": "2024-10-30T14:44:47.056910596Z",
   "chain_id": "poktroll",
   "initial_height": 1,
   "app_hash": null,
@@ -23,7 +23,7 @@
             }
           ],
           "stake": {
-            "amount": "1000068",
+            "amount": "100000068",
             "denom": "upokt"
           }
         },
@@ -42,7 +42,7 @@
             }
           ],
           "stake": {
-            "amount": "1000068",
+            "amount": "100000068",
             "denom": "upokt"
           }
         }
@@ -51,7 +51,7 @@
       "params": {
         "max_delegated_gateways": "7",
         "min_stake": {
-          "amount": "1000000",
+          "amount": "100000000",
           "denom": "upokt"
         }
       }
@@ -180,7 +180,7 @@
       ]
     },
     "authz": {
-      "authorization": [{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.service.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.session.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.gateway.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.application.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.supplier.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.proof.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.tokenomics.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.shared.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.service.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.session.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.gateway.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.application.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.supplier.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.proof.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.tokenomics.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.shared.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.gateway.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.application.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.upgrade.v1beta1.MsgSoftwareUpgrade"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.upgrade.v1beta1.MsgCancelUpgrade"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.auth.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.bank.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.distribution.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.mint.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.staking.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.slashing.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.gov.v1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.gov.v1.MsgCancelProposal"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.consensus.v1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"}]
+      "authorization": [{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.service.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.session.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.gateway.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.application.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.supplier.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.proof.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.tokenomics.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.shared.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.service.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.session.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.gateway.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.application.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.supplier.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.proof.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.tokenomics.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.shared.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.gateway.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.application.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/poktroll.supplier.MsgUpdateParam"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.upgrade.v1beta1.MsgSoftwareUpgrade"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.upgrade.v1beta1.MsgCancelUpgrade"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.auth.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.bank.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.distribution.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.mint.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.staking.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.slashing.v1beta1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.gov.v1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.gov.v1.MsgCancelProposal"},"expiration":"2500-01-01T00:00:00Z"},{"granter":"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t","grantee":"pokt1eeeksh2tvkh7wzmfrljnhw4wrhs55lcuvmekkw","authorization":{"@type":"/cosmos.authz.v1beta1.GenericAuthorization","msg":"/cosmos.consensus.v1.MsgUpdateParams"},"expiration":"2500-01-01T00:00:00Z"}]
     },
     "bank": {
       "params": {
@@ -456,7 +456,7 @@
                 "validator_address": "poktvaloper18kk3aqe2pjz7x7993qp2pjt95ghurra9c5ef0t",
                 "pubkey": {
                   "@type": "/cosmos.crypto.ed25519.PubKey",
-                  "key": "RpLYTCdsb89BmHpfOFMt07TmTwZME3O9GGlhgigC+Eo="
+                  "key": "tDyl89O4qlynjt/oGAlLniplbOFpZUtCuvqBZ3x3qOw="
                 },
                 "value": {
                   "denom": "upokt",
@@ -464,7 +464,7 @@
                 }
               }
             ],
-            "memo": "54c2e75f5689792684f79461acd83466cf889945@192.168.1.7:26656",
+            "memo": "5e0d633782ab6178d05de424c5a1ef44a50ee281@192.168.1.2:26656",
             "timeout_height": "0",
             "extension_options": [],
             "non_critical_extension_options": []
@@ -493,7 +493,7 @@
             "tip": null
           },
           "signatures": [
-            "7trDQdS9K6aLhG3BUfhJFUGwsq6AG//Dqn1pL0fQSQRudWzi/6PtsFQ2z9xfs122Jt08Qijj31in+r3fH3fYkw=="
+            "8UKjLXaBmEatazLosAcp+YwH88lac95YeLJL1DH8oEI32bcPK4M1YvG+FDhRoXlH//uufkvLeBZLf5lJ4XVgcw=="
           ]
         }
       ]
@@ -576,8 +576,7 @@
         "proof_submission_fee": {
           "amount": "1000000",
           "denom": "upokt"
-        },
-        "relay_difficulty_target_hash": "//////////////////////////////////////////8="
+        }
       },
       "proof_list": []
     },
@@ -589,6 +588,7 @@
           "denom": "upokt"
         }
       },
+      "relayMiningDifficultyList": [],
       "serviceList": [
         {
           "compute_units_per_relay": 1,
@@ -656,7 +656,12 @@
       "validators": []
     },
     "supplier": {
-      "params": {},
+      "params": {
+        "min_stake": {
+          "amount": "1000000",
+          "denom": "upokt"
+        }
+      },
       "supplierList": [
         {
           "operator_address": "pokt19a3t4yunp0dlpfjrp7qwnzwlrzd5fzs2gjaaaj",
@@ -719,8 +724,7 @@
       ]
     },
     "tokenomics": {
-      "params": {},
-      "relayMiningDifficultyList": []
+      "params": {}
     },
     "upgrade": {},
     "vesting": {}

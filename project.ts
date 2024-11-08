@@ -405,10 +405,6 @@ const project: CosmosProject = {
           },
           // --- Primitives
           {
-            handler: "handleBlock",
-            kind: CosmosHandlerKind.Block,
-          },
-          {
             handler: "handleTransaction",
             kind: CosmosHandlerKind.Transaction,
           },
@@ -583,6 +579,67 @@ const project: CosmosProject = {
               type: "/cosmos.authz.v1beta1.MsgExec",
             }
           },
+          {
+            handler: "handleBlock",
+            kind: CosmosHandlerKind.Block,
+          },
+          // --- Relays
+          {
+            handler: "handleEventClaimSettled",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "poktroll.tokenomics.EventClaimSettled",
+            }
+          },
+          {
+            handler: "handleEventClaimExpired",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "poktroll.tokenomics.EventClaimExpired",
+            }
+          },
+          {
+            handler: "handleMsgCreateClaim",
+            kind: CosmosHandlerKind.Message,
+            filter: {
+              type: "/poktroll.proof.MsgCreateClaim",
+            }
+          },
+          {
+            handler: "handleEventClaimUpdated",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "poktroll.proof.EventClaimUpdated",
+            }
+          },
+          {
+            handler: "handleEventProofUpdated",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "poktroll.proof.EventProofUpdated",
+            }
+          },
+          {
+            handler: "handleMsgSubmitProof",
+            kind: CosmosHandlerKind.Message,
+            filter: {
+              type: "/poktroll.proof.MsgSubmitProof",
+            }
+          },
+          {
+            handler: "handleEventClaimCreated",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "poktroll.proof.EventClaimCreated",
+            }
+          },
+          {
+            handler: "handleEventProofSubmitted",
+            kind: CosmosHandlerKind.Event,
+            filter: {
+              type: "poktroll.proof.EventProofSubmitted",
+            }
+          }
         ],
       },
     },

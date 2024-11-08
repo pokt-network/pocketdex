@@ -20,7 +20,7 @@ export async function handleMsgAddService(
 async function _handleMsgAddService(
   msg: CosmosMessage<MsgAddService>,
 ) {
-  logger.info(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  logger.debug(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const { ownerAddress, service: { computeUnitsPerRelay, id, name } } = msg.msg.decodedMsg;
 

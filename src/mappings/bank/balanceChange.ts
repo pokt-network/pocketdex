@@ -116,7 +116,7 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
-      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
+      // logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
       return;
     }
 
@@ -162,7 +162,7 @@ async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> 
 
     // NB: some events contain empty string amounts
     if (amountStr === "") {
-      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
+      // logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
       return;
     }
 
