@@ -158,7 +158,7 @@ type DelegateToGatewayMsg @entity {
   block: Block!
 }
 
-type UndelegateToGatewayMsg @entity {
+type UndelegateFromGatewayMsg @entity {
   id: ID!
   application: Application! @index
   gateway: Gateway! @index
@@ -193,7 +193,7 @@ type Application @entity {
   stakeMsgs: [AppStakeMsg] @derivedFrom(field: "application")
   unstakeMsgs: [AppUnstakeMsg] @derivedFrom(field: "application")
   delegateMsgs: [DelegateToGatewayMsg] @derivedFrom(field: "application")
-  undelegateMsgs: [UndelegateToGatewayMsg] @derivedFrom(field: "application")
+  undelegateMsgs: [UndelegateFromGatewayMsg] @derivedFrom(field: "application")
   sourceTransferMsgs: [TransferApplicationMsg] @derivedFrom(field: "sourceApplication")
   destinationTransferMsgs: [TransferApplicationMsg] @derivedFrom(field: "destinationApplication")
   sourceTransferBeginEvents: [TransferApplicationBeginEvent] @derivedFrom(field: "source")
@@ -239,7 +239,6 @@ type TransferApplicationEndEvent @entity {
   id: ID!
   source: Application!
   destination: Application!
-  transaction: Transaction
   block: Block!
 }
 
@@ -249,7 +248,6 @@ type TransferApplicationErrorEvent @entity {
   source: Application!
   destination: Account!
   error: String!
-  transaction: Transaction
   block: Block!
 }
 
@@ -261,7 +259,6 @@ type ApplicationUnbondingBeginEvent @entity {
   reason: Int!
   sessionEndHeight: BigInt!
   unstakingEndHeight: BigInt!
-  transaction: Transaction
   block: Block!
 }
 
@@ -273,7 +270,6 @@ type ApplicationUnbondingEndEvent @entity {
   reason: Int!
   sessionEndHeight: BigInt!
   unstakingEndHeight: BigInt!
-  transaction: Transaction
   block: Block!
 }
 
@@ -318,6 +314,7 @@ type SupplierUnstakeMsg @entity {
 }
 
 type Supplier @entity {
+  # The ID is the operator address
   id: ID!
   operator: Account!
   owner: Account!
@@ -383,9 +380,12 @@ type AddServiceMsg @entity {
   name: String!
   computeUnitsPerRelay: BigInt!
   owner: Account!
+  block: Block!
+  transaction: Transaction!
 }
 
 type Gateway @entity {
+  # id is the address of the gateway
   id: ID!
   account: Account!
   stake: Coin!
@@ -414,6 +414,7 @@ type GatewayUnstakeMsg @entity {
 }
 
 type GatewayUnstakedEvent @entity {
+  # The ID of the event result of getEventId(event)
   id: ID!
   gateway: Gateway!
   transaction: Transaction!

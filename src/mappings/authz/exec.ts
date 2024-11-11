@@ -1,63 +1,14 @@
 import util from "util";
-import { BinaryReader } from "@bufbuild/protobuf/wire";
 import {CosmosMessage} from "@subql/types-cosmos";
-import { MsgUpdateParams as MsgUpdateAuthParams } from "cosmjs-types/cosmos/auth/v1beta1/tx";
-import { MsgUpdateParams as MsgUpdateBankParams } from "cosmjs-types/cosmos/bank/v1beta1/tx";
-import { MsgUpdateParams as MsgUpdateConsensusParams } from "cosmjs-types/cosmos/consensus/v1/tx";
-import { MsgUpdateParams as MsgUpdateDistributionParams } from "cosmjs-types/cosmos/distribution/v1beta1/tx";
-import { MsgUpdateParams as MsgUpdateGovParams } from "cosmjs-types/cosmos/gov/v1/tx";
-import { MsgUpdateParams as MsgUpdateMintParams } from "cosmjs-types/cosmos/mint/v1beta1/tx";
-import { MsgUpdateParams as MsgUpdateSlashingParams } from "cosmjs-types/cosmos/slashing/v1beta1/tx";
-import { MsgUpdateParams as MsgUpdateStakingParams } from "cosmjs-types/cosmos/staking/v1beta1/tx";
-import { MsgUpdateParam as MsgUpdateApplicationParam,MsgUpdateParams as MsgUpdateApplicationParams } from "../../client/poktroll/application/tx";
-import { MsgUpdateParam as MsgUpdateGatewayParam, MsgUpdateParams as MsgUpdateGatewayParams } from "../../client/poktroll/gateway/tx";
-import {
-  MsgUpdateParam as MsgUpdateProofParam,
-  MsgUpdateParams as MsgUpdateProofParams,
-} from "../../client/poktroll/proof/tx";
-import { MsgUpdateParam as MsgUpdateServiceParam,MsgUpdateParams as MsgUpdateServiceParams } from "../../client/poktroll/service/tx";
-import { MsgUpdateParams as MsgUpdateSessionParams } from "../../client/poktroll/session/tx";
-import { MsgUpdateParam as MsgUpdateSharedParam, MsgUpdateParams as MsgUpdateSharedParams } from "../../client/poktroll/shared/tx";
-import { MsgUpdateParam as MsgUpdateSupplierParam,MsgUpdateParams as MsgUpdateSupplierParams } from "../../client/poktroll/supplier/tx";
-import { MsgUpdateParam as MsgUpdateTokenomicsParam, MsgUpdateParams as MsgUpdateTokenomicsParams } from "../../client/poktroll/tokenomics/tx";
 import allModuleTypes from "../../cosmjs/proto";
 import { AuthzExec, AuthzExecMessage, Message } from "../../types";
-import { AppParamProps } from "../../types/models/AppParam";
-import { AuthzExecMsg, EncodedMsg } from "../types";
-import { attemptHandling, getParamId, messageId, stringify, unprocessedEventHandler } from "../utils";
+import { _handleUpdateParam } from "../poktroll/params";
+import { AuthzExecMsg } from "../types";
+import { attemptHandling, messageId, stringify, unprocessedEventHandler } from "../utils";
 
 // This is required for the binary reader to work. It expects TextEncoder and TextDecoder to be set in globalThis.
 globalThis.TextEncoder = util.TextEncoder;
 globalThis.TextDecoder = util.TextDecoder;
-
-const msgUpdateParamsMap: Record<string, {
-  decode(bytes: BinaryReader | Uint8Array | any): unknown
-  toJSON(obj: unknown): unknown
-}> = {
-  '/poktroll.application.MsgUpdateParam': MsgUpdateApplicationParam,
-  '/poktroll.application.MsgUpdateParams': MsgUpdateApplicationParams,
-  '/poktroll.service.MsgUpdateParam': MsgUpdateServiceParam,
-  '/poktroll.service.MsgUpdateParams': MsgUpdateServiceParams,
-  '/poktroll.supplier.MsgUpdateParam': MsgUpdateSupplierParam,
-  '/poktroll.supplier.MsgUpdateParams': MsgUpdateSupplierParams,
-  '/poktroll.gateway.MsgUpdateParam': MsgUpdateGatewayParam,
-  '/poktroll.gateway.MsgUpdateParams': MsgUpdateGatewayParams,
-  '/poktroll.proof.MsgUpdateParam': MsgUpdateProofParam,
-  '/poktroll.proof.MsgUpdateParams': MsgUpdateProofParams,
-  '/poktroll.shared.MsgUpdateParam': MsgUpdateSharedParam,
-  '/poktroll.shared.MsgUpdateParams': MsgUpdateSharedParams,
-  '/poktroll.tokenomics.MsgUpdateParam': MsgUpdateTokenomicsParam,
-  '/poktroll.tokenomics.MsgUpdateParams': MsgUpdateTokenomicsParams,
-  '/poktroll.session.MsgUpdateParams': MsgUpdateSessionParams,
-  "/cosmos.auth.v1beta1.MsgUpdateParams": MsgUpdateAuthParams,
-  "/cosmos.bank.v1beta1.MsgUpdateParams": MsgUpdateBankParams,
-  "/cosmos.distribution.v1beta1.MsgUpdateParams": MsgUpdateDistributionParams,
-  "/cosmos.mint.v1beta1.MsgUpdateParams": MsgUpdateMintParams,
-  "/cosmos.slashing.v1beta1.MsgUpdateParams": MsgUpdateSlashingParams,
-  "/cosmos.staking.v1beta1.MsgUpdateParams": MsgUpdateStakingParams,
-  "/cosmos.consensus.v1.MsgUpdateParams": MsgUpdateConsensusParams,
-  "/cosmos.gov.v1.MsgUpdateParams": MsgUpdateGovParams,
-}
 
 export async function handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void> {
   await attemptHandling(msg, _handleAuthzExec, unprocessedEventHandler);
@@ -65,7 +16,7 @@ export async function handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise
 
 async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void> {
   logger.info(`[handleAuthzExec] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
-  logger.info(`[handleAuthzExec] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  logger.debug(`[handleAuthzExec] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const authzExecId = messageId(msg);
   const typeUrl = msg.msg.typeUrl;
@@ -90,23 +41,25 @@ async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void>
   }).save();
 
   for (const [i, encodedMsg] of msgs.entries()) {
-    let decodedMsg: unknown;
+    //_handleUpdateParam will return the decoded message if it is a param update
+    // otherwise it will return undefined.
+    //_handleUpdateParam will decode and save the message using its specific entity
+    let decodedMsg: unknown = await _handleUpdateParam(encodedMsg, msg.block.block.id)
 
-    if (encodedMsg.typeUrl in msgUpdateParamsMap) {
-      decodedMsg = await _handleUpdateParam(encodedMsg, msg.block.block.id)
-    } else {
+    if (!decodedMsg) {
       for (const [typeUrl, msgType] of allModuleTypes) {
 
         if (typeUrl === encodedMsg.typeUrl) {
           const bytes = new Uint8Array(Object.values(encodedMsg.value));
 
           decodedMsg = msgType.decode(bytes);
+          break
         }
       }
     }
 
     if (decodedMsg) {
-      logger.info(`[handleAuthzExec] msgType: ${typeUrl}, decodedMsg: ${stringify(decodedMsg, undefined, 2)}`);
+      logger.debug(`[handleAuthzExec] msgType: ${typeUrl}, decodedMsg: ${stringify(decodedMsg, undefined, 2)}`);
       const subMsgId = `${authzExecId}-${i}`;
 
       // Create primitive message entity for sub-message
@@ -130,99 +83,3 @@ async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void>
   }
 }
 
-const paramMapping: Record<string, string> = {
-  '/poktroll.application.MsgUpdateParams': 'AppParam',
-  '/poktroll.application.MsgUpdateParam': 'AppParam',
-  '/cosmos.auth.v1beta1.MsgUpdateParams': 'AuthParam',
-  '/cosmos.bank.v1beta1.MsgUpdateParams': 'BankParam',
-  '/cosmos.distribution.v1beta1.MsgUpdateParams': 'DistributionParam',
-  '/poktroll.gateway.MsgUpdateParams': 'GatewayParam',
-  '/poktroll.gateway.MsgUpdateParam': 'GatewayParam',
-  '/cosmos.gov.v1.MsgUpdateParams': 'GovParam',
-  '/cosmos.mint.v1beta1.MsgUpdateParams': 'MintParam',
-  '/poktroll.proof.MsgUpdateParams': 'ProofParam',
-  '/poktroll.proof.MsgUpdateParam': 'ProofParam',
-  '/poktroll.service.MsgUpdateParams': 'ServiceParam',
-  '/poktroll.service.MsgUpdateParam': 'ServiceParam',
-  '/poktroll.session.MsgUpdateParams': 'SessionParam',
-  '/poktroll.shared.MsgUpdateParams': 'SharedParam',
-  '/poktroll.shared.MsgUpdateParam': 'SharedParam',
-  '/cosmos.slashing.v1beta1.MsgUpdateParams': 'SlashingParam',
-  '/cosmos.staking.v1beta1.MsgUpdateParams': 'StakingParam',
-  '/poktroll.supplier.MsgUpdateParams': 'SupplierParam',
-  '/poktroll.supplier.MsgUpdateParam': 'SupplierParam',
-  '/poktroll.tokenomics.MsgUpdateParams': 'TokenomicsParam',
-  '/poktroll.tokenomics.MsgUpdateParam': 'TokenomicsParam',
-  '/cosmos.consensus.v1.MsgUpdateParams': 'ConsensusParam',
-};
-
-function getEntityParamName(typeUrl: string): string {
-  if (typeUrl in paramMapping) {
-    return paramMapping[typeUrl];
-  } else {
-    throw new Error(`Unknown typeUrl: ${typeUrl}`);
-  }
-}
-
-function camelToSnake(str: string): string {
-  return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-}
-
-async function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: string): Promise<unknown> {
-  const entityName = getEntityParamName(encodedMsg.typeUrl);
-  const entities: Array<AppParamProps> = []
-
-  const parseEncodedMsg = msgUpdateParamsMap[encodedMsg.typeUrl]
-  const uintArray = new Uint8Array(Object.values(encodedMsg.value))
-  let decodedMsg: unknown
-
-  logger.info(`[handleUpdateParam] MsgAppUpdateParams: ${MsgUpdateApplicationParams}, MsgGovUpdateParams: ${MsgUpdateGovParams}`)
-
-  if (encodedMsg.typeUrl.startsWith('/poktroll')) {
-    decodedMsg = parseEncodedMsg.decode(
-      new BinaryReader(
-        uintArray,
-        (bytes) => {
-          return Buffer.from(bytes).toString("utf-8");
-        })
-    );
-  } else {
-    decodedMsg = parseEncodedMsg.decode(
-      uintArray
-    );
-  }
-
-  const decodedJsonMsg = parseEncodedMsg.toJSON(decodedMsg) as any;
-
-  logger.info(`[handleUpdateParam] decodedMsg: ${stringify(decodedMsg, undefined, 2)}, decodedJsonMsg: ${stringify(decodedJsonMsg, undefined, 2)}`)
-
-  if (encodedMsg.typeUrl.endsWith("MsgUpdateParams")) {
-    for (const [key, value] of Object.entries(decodedJsonMsg.params)) {
-      // we need to convert the key to snake case. Or shall we do save it in camel case?
-      const snakeKey = camelToSnake(key);
-      entities.push({
-        id: getParamId(snakeKey, blockId),
-        key: snakeKey,
-        value: typeof value === 'object' ? stringify(value) : (value || "").toString(),
-        blockId
-      })
-    }
-  } else {
-    for (const key of Object.keys(decodedJsonMsg)) {
-      const value = decodedJsonMsg[key];
-      if (key.startsWith('as')) {
-        const snakeKey = camelToSnake(decodedJsonMsg.name);
-        entities.push({
-          id: getParamId(snakeKey, blockId),
-          key: snakeKey,
-          value: typeof value === 'object' ? stringify(value) : (value || "").toString(),
-          blockId,
-        })
-      }
-    }
-  }
-
-  await store.bulkCreate(entityName, entities)
-
-  return decodedMsg
-}

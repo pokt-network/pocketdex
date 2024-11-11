@@ -10,7 +10,7 @@ import {
   ApplicationUnbondingEndEvent,
   DelegateToGatewayMsg,
   TransferApplicationMsg,
-  UndelegateToGatewayMsg,
+  UndelegateFromGatewayMsg,
   TransferApplicationBeginEvent,
   TransferApplicationEndEvent,
   TransferApplicationErrorEvent,
@@ -214,7 +214,7 @@ async function _handleUndelegateFromGatewayMsg(
         msg.msg.decodedMsg.gatewayAddress
       )
     ),
-    UndelegateToGatewayMsg.create({
+    UndelegateFromGatewayMsg.create({
       id: messageId(msg),
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
@@ -381,7 +381,6 @@ async function _handleTransferApplicationEndEvent(
       id: getEventId(event),
       sourceId: sourceAddress,
       destinationId: destinationApp.address,
-      transactionId: event.tx?.hash,
       blockId: event.block.block.id
     }).save(),
     store.bulkCreate('ApplicationService', newApplicationServices),
@@ -440,7 +439,6 @@ async function _handleTransferApplicationErrorEvent(
       sourceId: sourceAddress,
       destinationId: destinationAddress,
       error: error,
-      transactionId: event.tx?.hash,
       blockId: event.block.block.id
     }).save(),
   ])
@@ -502,7 +500,6 @@ async function _handleApplicationUnbondingBeginEvent(
       id: getEventId(event),
       applicationId: msg.msg.decodedMsg.address,
       blockId: event.block.block.id,
-      transactionId: event.tx?.hash,
       unstakingEndHeight,
       sessionEndHeight,
       reason,
@@ -580,7 +577,6 @@ async function _handleApplicationUnbondingEndEvent(
       unstakingEndHeight,
       reason,
       applicationId: applicationSdk.address,
-      transactionId: event.tx?.hash
     }).save(),
     application.save(),
     store.bulkRemove('ApplicationService', applicationServices),

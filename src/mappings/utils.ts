@@ -156,7 +156,7 @@ export function getAppDelegatedToGatewayId(appAddress: string, gatewayAddress: s
 }
 
 // Returns a string that satisfies the format of a transaction hash.
-export function getGenesisFakeTxHash(entity: 'app' | 'supplier' | 'gateway', index: number): string {
+export function getGenesisFakeTxHash(entity: 'app' | 'supplier' | 'gateway' | 'service', index: number): string {
   const num = index + 1;
   let entityId: string
 
@@ -165,11 +165,14 @@ export function getGenesisFakeTxHash(entity: 'app' | 'supplier' | 'gateway', ind
       entityId = 'A';
       break
     case 'supplier':
-      entityId = 'S';
+      entityId = 'B';
       break
     case "gateway":
-      entityId = 'G';
+      entityId = 'C';
       break
+    case 'service':
+      entityId = 'D';
+      break;
     default: {
       throw new Error('Not implemented');
     }

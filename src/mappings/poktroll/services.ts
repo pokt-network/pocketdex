@@ -31,6 +31,8 @@ async function _handleMsgAddService(
       ownerId: ownerAddress,
       serviceId: id,
       computeUnitsPerRelay: units,
+      blockId: msg.block.block.id,
+      transactionId: msg.tx.hash,
     }).save()
   ])
 }

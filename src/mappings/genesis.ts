@@ -4,6 +4,7 @@ import {
   GenesisFile as GenesisEntity,
 } from "../types";
 import type { AccountProps } from "../types/models/Account";
+import { AddServiceMsgProps } from "../types/models/AddServiceMsg";
 import type { ApplicationProps } from "../types/models/Application";
 import type { ApplicationDelegatedToGatewayProps } from "../types/models/ApplicationDelegatedToGateway";
 import type { ApplicationServiceProps } from "../types/models/ApplicationService";
@@ -48,7 +49,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   // save records
   await Promise.all([
     _handleGenesisEvent(block),
-    _handleGenesisServices(genesis),
+    _handleGenesisServices(genesis, block),
     _handleGenesisBalances(genesis, block),
     _handleGenesisGateways(genesis, block),
     _handleGenesisSuppliers(genesis, block),
@@ -148,16 +149,32 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
   ])
 }
 
-async function _handleGenesisServices(genesis: Genesis): Promise<void> {
-  // services records
-  const services: Array<ServiceProps> = genesis.app_state.service.serviceList.map(service => ({
-    id: service.id,
-    name: service.name,
-    computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
-    ownerId: service.owner_address,
-  }))
+async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Promise<void> {
+  const services: Array<ServiceProps> = [], addServiceMsgs: Array<AddServiceMsgProps> = []
 
-  await store.bulkCreate('Service', services)
+  for (const service of genesis.app_state.service.serviceList) {
+    services.push({
+      id: service.id,
+      name: service.name,
+      computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
+      ownerId: service.owner_address,
+    })
+
+    addServiceMsgs.push({
+      id: `genesis-${service.id}`,
+      serviceId: service.id,
+      name: service.name,
+      computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
+      ownerId: service.owner_address,
+      blockId: block.block.id,
+      transactionId: getGenesisFakeTxHash('service', 0),
+    })
+  }
+
+  await Promise.all([
+    store.bulkCreate('Service', services),
+    store.bulkCreate('AddServiceMsg', addServiceMsgs),
+  ])
 }
 
 async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Promise<void> {
