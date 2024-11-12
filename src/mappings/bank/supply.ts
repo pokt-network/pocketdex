@@ -7,7 +7,7 @@ import {
   BlockSupply,
   Supply,
 } from "../../types";
-import { stringify } from "../utils";
+import { stringify } from "../utils/json";
 
 export const getSupplyId = function(denom: string, height: number): string {
   return `${denom}@${height}`;
@@ -26,7 +26,7 @@ export async function queryTotalSupply(): Promise<Coin[]> {
   let paginationKey: Uint8Array | undefined;
 
   try {
-    // Here we force the use of a private property, breaking typescript limitation, due to the need of call a total supply
+    // Here we force the use of a private property, breaking TypeScript limitation, due to the need of call a total supply
     // rpc query of cosmosjs that is not exposed on the implemented client by SubQuery team.
     // To avoid this, we need to move to implement our own rpc client and also use `unsafe` parameter which I prefer to avoid.
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment

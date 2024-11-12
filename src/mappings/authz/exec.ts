@@ -1,10 +1,19 @@
 import util from "util";
-import {CosmosMessage} from "@subql/types-cosmos";
+import { CosmosMessage } from "@subql/types-cosmos";
 import allModuleTypes from "../../cosmjs/proto";
-import { AuthzExec, AuthzMsgExec, Message } from "../../types";
+import {
+  AuthzExec,
+  AuthzMsgExec,
+  Message,
+} from "../../types";
 import { _handleUpdateParam } from "../poktroll/params";
 import { AuthzExecMsg } from "../types";
-import { attemptHandling, messageId, stringify, unprocessedEventHandler } from "../utils";
+import {
+  attemptHandling,
+  unprocessedEventHandler,
+} from "../utils/handlers";
+import { messageId } from "../utils/ids";
+import { stringify } from "../utils/json";
 
 // This is required for the binary reader to work. It expects TextEncoder and TextDecoder to be set in globalThis.
 globalThis.TextEncoder = util.TextEncoder;
@@ -44,7 +53,7 @@ async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void>
     //_handleUpdateParam will return the decoded message if it is a param update
     // otherwise it will return undefined.
     //_handleUpdateParam will decode and save the message using its specific entity
-    let decodedMsg: unknown = await _handleUpdateParam(encodedMsg, msg.block.block.id)
+    let decodedMsg: unknown = await _handleUpdateParam(encodedMsg, msg.block.block.id);
 
     if (!decodedMsg) {
       for (const [typeUrl, msgType] of allModuleTypes) {
@@ -53,7 +62,7 @@ async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void>
           const bytes = new Uint8Array(Object.values(encodedMsg.value));
 
           decodedMsg = msgType.decode(bytes);
-          break
+          break;
         }
       }
     }

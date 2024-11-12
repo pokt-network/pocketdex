@@ -1,26 +1,36 @@
-import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import {
-  Supplier,
+  CosmosEvent,
+  CosmosMessage,
+} from "@subql/types-cosmos";
+import {
+  EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
+  EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity,
   MsgStakeSupplier as MsgStakeSupplierEntity,
   MsgUnstakeSupplier as MsgUnstakeSupplierEntity,
+  Supplier,
+  SupplierEndpoint,
+  SupplierRevShare,
   SupplierServiceConfig,
-  EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
-  EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity, SupplierEndpoint, SupplierRevShare,
 } from "../../types";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
 import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
-import { MsgStakeSupplier, MsgUnstakeSupplier } from "../../types/proto-interfaces/poktroll/supplier/tx";
+import {
+  MsgStakeSupplier,
+  MsgUnstakeSupplier,
+} from "../../types/proto-interfaces/poktroll/supplier/tx";
 import { StakeStatus } from "../constants";
 import {
   attemptHandling,
+  unprocessedEventHandler,
+  unprocessedMsgHandler,
+} from "../utils/handlers";
+import {
   getEventId,
   getMsgStakeServiceId,
   getStakeServiceId,
   messageId,
-  stringify,
-  unprocessedEventHandler,
-  unprocessedMsgHandler,
-} from "../utils";
+} from "../utils/ids";
+import { stringify } from "../utils/json";
 
 export async function handleSupplierStakeMsg(
   msg: CosmosMessage<MsgStakeSupplier>,
@@ -53,7 +63,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     return logger.error(`[handleSupplierStakeMsg] stake not provided in msg`);
   }
 
-  const msgId = messageId(msg)
+  const msgId = messageId(msg);
 
   const supplierMsgStake = MsgStakeSupplierEntity.create({
     id: msgId,
@@ -65,7 +75,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     blockId: msg.block.block.id,
     transactionId: msg.tx.hash,
     messageId: msgId,
-  })
+  });
 
   const supplier = Supplier.create({
     id: msg.msg.decodedMsg.operatorAddress,
@@ -74,55 +84,55 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
     stakeDenom: msg.msg.decodedMsg.stake.denom,
     stakeStatus: StakeStatus.Staked,
-  })
+  });
 
-  const servicesId: Array<string> = []
+  const servicesId: Array<string> = [];
   // used to create the services that came in the stake message
-  const supplierMsgStakeServices: Array<MsgStakeSupplierServiceProps> = []
+  const supplierMsgStakeServices: Array<MsgStakeSupplierServiceProps> = [];
   // used to have the services that are currently configured for the supplier
-  const newSupplierServices: Array<SupplierServiceConfigProps> = []
+  const newSupplierServices: Array<SupplierServiceConfigProps> = [];
 
-  const operatorAddress = msg.msg.decodedMsg.operatorAddress
+  const operatorAddress = msg.msg.decodedMsg.operatorAddress;
 
-  for (const {endpoints, revShare, serviceId} of msg.msg.decodedMsg.services) {
-    servicesId.push(serviceId)
+  for (const { endpoints, revShare, serviceId } of msg.msg.decodedMsg.services) {
+    servicesId.push(serviceId);
 
     const endpointsArr: Array<SupplierEndpoint> = endpoints.map((endpoint) => ({
       url: endpoint.url,
       rpcType: endpoint.rpcType,
       configs: endpoint.configs,
-    }))
+    }));
 
     const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,
       revSharePercentage: revShare.revSharePercentage,
-    }))
+    }));
 
     supplierMsgStakeServices.push({
       id: getMsgStakeServiceId(msgId, serviceId),
       serviceId,
       stakeMsgId: msgId,
       endpoints: endpointsArr,
-      revShare: revShareArr
-    })
+      revShare: revShareArr,
+    });
 
     newSupplierServices.push({
       id: getStakeServiceId(operatorAddress, serviceId),
       serviceId,
       supplierId: operatorAddress,
       endpoints: endpointsArr,
-      revShare: revShareArr
-    })
+      revShare: revShareArr,
+    });
   }
 
-  const currentSupplierServices = await SupplierServiceConfig.getBySupplierId(operatorAddress, {})
+  const currentSupplierServices = await SupplierServiceConfig.getBySupplierId(operatorAddress, {});
 
-  const servicesToRemove: Array<string> = []
+  const servicesToRemove: Array<string> = [];
 
   if (currentSupplierServices && currentSupplierServices.length > 0) {
     for (const service of currentSupplierServices) {
       if (!servicesId.includes(service.serviceId)) {
-        servicesToRemove.push(service.id)
+        servicesToRemove.push(service.id);
       }
     }
   }
@@ -130,28 +140,28 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
   const promises: Array<Promise<void>> = [
     supplierMsgStake.save(),
     supplier.save(),
-    store.bulkCreate('MsgStakeSupplierService', supplierMsgStakeServices),
-    store.bulkCreate('SupplierServiceConfig', newSupplierServices),
-  ]
+    store.bulkCreate("MsgStakeSupplierService", supplierMsgStakeServices),
+    store.bulkCreate("SupplierServiceConfig", newSupplierServices),
+  ];
 
   if (servicesToRemove.length > 0) {
-    promises.push(store.bulkRemove('SupplierServiceConfig', servicesToRemove))
+    promises.push(store.bulkRemove("SupplierServiceConfig", servicesToRemove));
   }
 
-  await Promise.all(promises)
+  await Promise.all(promises);
 }
 
 async function _handleUnstakeSupplierMsg(
   msg: CosmosMessage<MsgUnstakeSupplier>,
 ) {
   logger.info(`[handleUnstakeSupplierMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-  const supplier = await Supplier.get(msg.msg.decodedMsg.operatorAddress)
+  const supplier = await Supplier.get(msg.msg.decodedMsg.operatorAddress);
 
   if (!supplier) {
-    throw new Error(`[handleUnstakeSupplierMsg] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`)
+    throw new Error(`[handleUnstakeSupplierMsg] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`);
   }
 
-  const msgId = messageId(msg)
+  const msgId = messageId(msg);
 
   const msgUnstakeSupplier = MsgUnstakeSupplierEntity.create({
     id: msgId,
@@ -160,32 +170,32 @@ async function _handleUnstakeSupplierMsg(
     blockId: msg.block.block.id,
     transactionId: msg.tx.hash,
     messageId: msgId,
-  })
+  });
 
-  supplier.stakeStatus = StakeStatus.Unstaking
-  supplier.unstakingBeginBlockId = msg.block.block.id
+  supplier.stakeStatus = StakeStatus.Unstaking;
+  supplier.unstakingBeginBlockId = msg.block.block.id;
 
   await Promise.all([
     supplier.save(),
-    msgUnstakeSupplier.save()
-  ])
+    msgUnstakeSupplier.save(),
+  ]);
 }
 
 async function _handleSupplierUnbondingBeginEvent(
-  event: CosmosEvent
+  event: CosmosEvent,
 ) {
   logger.info(`[handleSupplierUnbondingBeginEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   const msg: CosmosMessage<MsgUnstakeSupplier> = event.msg;
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  const unbondingBeginEvent = event.tx.tx.events.find(item => item.type === "poktroll.supplier.EventSupplierUnbondingBegin")
+  const unbondingBeginEvent = event.tx.tx.events.find(item => item.type === "poktroll.supplier.EventSupplierUnbondingBegin");
 
   if (!unbondingBeginEvent) {
     throw new Error(`[handleSupplierUnbondingEndEvent] unbondingBeginEvent not found`);
   }
 
-  const unbondingHeight = unbondingBeginEvent.attributes.find(attribute => attribute.key === "unbonding_height")?.value
+  const unbondingHeight = unbondingBeginEvent.attributes.find(attribute => attribute.key === "unbonding_height")?.value;
 
   if (!unbondingHeight) {
     throw new Error(`[handleSupplierUnbondingEndEvent] unbondingHeight not found`);
@@ -194,12 +204,12 @@ async function _handleSupplierUnbondingBeginEvent(
   const supplier = await Supplier.get(msg.msg.decodedMsg.operatorAddress);
 
   if (!supplier) {
-    throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`)
+    throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`);
   }
 
-  supplier.unstakingEndHeight = BigInt((unbondingHeight as unknown as string).replaceAll('"', ""))
+  supplier.unstakingEndHeight = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
 
-  const eventId = getEventId(event)
+  const eventId = getEventId(event);
 
   await Promise.all([
     supplier.save(),
@@ -210,21 +220,21 @@ async function _handleSupplierUnbondingBeginEvent(
       transactionId: event.tx.hash,
       eventId,
     }).save(),
-  ])
+  ]);
 }
 
 async function _handleSupplierUnbondingEndEvent(
-  event: CosmosEvent
+  event: CosmosEvent,
 ) {
   logger.info(`[handleSupplierUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
-  const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string
+  const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string;
 
   if (!supplierStringified) {
     throw new Error(`[handleSupplierUnbondingEndEvent] supplier not provided in event`);
   }
 
-  const supplierAddress = JSON.parse(supplierStringified).operator_address
+  const supplierAddress = JSON.parse(supplierStringified).operator_address;
 
   if (!supplierAddress) {
     throw new Error(`[handleSupplierUnbondingEndEvent] operator_address not provided in supplier event`);
@@ -233,15 +243,15 @@ async function _handleSupplierUnbondingEndEvent(
   const supplier = await Supplier.get(supplierAddress);
 
   if (!supplier) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`)
+    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`);
   }
 
-  supplier.unstakingEndBlockId = event.block.block.id
-  supplier.stakeStatus = StakeStatus.Unstaked
+  supplier.unstakingEndBlockId = event.block.block.id;
+  supplier.stakeStatus = StakeStatus.Unstaked;
 
-  const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, {}) || []).map(item => item.id)
+  const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, {}) || []).map(item => item.id);
 
-  const eventId = getEventId(event)
+  const eventId = getEventId(event);
 
   await Promise.all([
     EventSupplierUnbondingEndEntity.create({
@@ -251,6 +261,6 @@ async function _handleSupplierUnbondingEndEvent(
       eventId,
     }).save(),
     supplier.save(),
-    store.bulkRemove('SupplierServiceConfig', supplierServices),
-  ])
+    store.bulkRemove("SupplierServiceConfig", supplierServices),
+  ]);
 }

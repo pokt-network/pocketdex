@@ -1,27 +1,35 @@
-import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import {
+  CosmosEvent,
+  CosmosMessage,
+} from "@subql/types-cosmos";
+import {
+  EventGatewayUnstaked as EventGatewayUnstakedEntity,
   Gateway,
   MsgStakeGateway as MsgStakeGatewayEntity,
   MsgUnstakeGateway as MsgUnstakeGatewayEntity,
-  EventGatewayUnstaked as EventGatewayUnstakedEntity,
 } from "../../types";
-import { MsgStakeGateway, MsgUnstakeGateway } from "../../types/proto-interfaces/poktroll/gateway/tx";
+import {
+  MsgStakeGateway,
+  MsgUnstakeGateway,
+} from "../../types/proto-interfaces/poktroll/gateway/tx";
 import { StakeStatus } from "../constants";
 import {
   attemptHandling,
-  getEventId,
-  messageId,
-  stringify,
   unprocessedEventHandler,
   unprocessedMsgHandler,
-} from "../utils";
+} from "../utils/handlers";
+import {
+  getEventId,
+  messageId,
+} from "../utils/ids";
+import { stringify } from "../utils/json";
 
 export async function handleGatewayMsgStake(msg: CosmosMessage<MsgStakeGateway>): Promise<void> {
-  await attemptHandling(msg, _handleGatewayMsgStake, unprocessedMsgHandler)
+  await attemptHandling(msg, _handleGatewayMsgStake, unprocessedMsgHandler);
 }
 
 export async function handleGatewayMsgUnstake(msg: CosmosMessage<MsgUnstakeGateway>): Promise<void> {
-  await attemptHandling(msg, _handleGatewayMsgUnstake, unprocessedMsgHandler)
+  await attemptHandling(msg, _handleGatewayMsgUnstake, unprocessedMsgHandler);
 }
 
 export async function handleGatewayUnstakeEvent(event: CosmosEvent): Promise<void> {
@@ -29,18 +37,18 @@ export async function handleGatewayUnstakeEvent(event: CosmosEvent): Promise<voi
 }
 
 async function _handleGatewayMsgStake(
-  msg: CosmosMessage<MsgStakeGateway>
+  msg: CosmosMessage<MsgStakeGateway>,
 ) {
   logger.info(`[handleGatewayMsgStake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   if (!msg.msg.decodedMsg.stake) {
-    throw new Error(`[handleGatewayMsgStake] stake not provided in msg`)
+    throw new Error(`[handleGatewayMsgStake] stake not provided in msg`);
   }
 
   const stake = {
     amount: msg.msg.decodedMsg.stake.amount,
     denom: msg.msg.decodedMsg.stake.denom,
-  }
+  };
 
   const gateway = Gateway.create({
     id: msg.msg.decodedMsg.address,
@@ -48,9 +56,9 @@ async function _handleGatewayMsgStake(
     stakeDenom: stake.denom,
     accountId: msg.msg.decodedMsg.address,
     stakeStatus: StakeStatus.Staked,
-  })
+  });
 
-  const msgId = messageId(msg)
+  const msgId = messageId(msg);
 
   await Promise.all([
     MsgStakeGatewayEntity.create({
@@ -60,26 +68,26 @@ async function _handleGatewayMsgStake(
       stakeDenom: stake.denom,
       blockId: msg.block.block.id,
       transactionId: msg.tx.hash,
-      messageId: msgId
+      messageId: msgId,
     }).save(),
-    gateway.save()
-  ])
+    gateway.save(),
+  ]);
 }
 
 async function _handleGatewayMsgUnstake(
-  msg: CosmosMessage<MsgUnstakeGateway>
+  msg: CosmosMessage<MsgUnstakeGateway>,
 ) {
   logger.info(`[handleGatewayMsgUnstake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-  const gateway = await Gateway.get(msg.msg.decodedMsg.address)
+  const gateway = await Gateway.get(msg.msg.decodedMsg.address);
 
   if (!gateway) {
     throw new Error(`[handleGatewayMsgUnstake] gateway not found with address: ${msg.msg.decodedMsg.address}`);
   }
 
-  gateway.stakeStatus = StakeStatus.Unstaking
-  gateway.unstakingBeginBlockId = msg.block.block.id
+  gateway.stakeStatus = StakeStatus.Unstaking;
+  gateway.unstakingBeginBlockId = msg.block.block.id;
 
-  const msgId = messageId(msg)
+  const msgId = messageId(msg);
 
   await Promise.all([
     gateway.save(),
@@ -88,39 +96,39 @@ async function _handleGatewayMsgUnstake(
       transactionId: msg.tx.hash,
       blockId: msg.block.block.id,
       gatewayId: msg.msg.decodedMsg.address,
-      messageId: msgId
-    }).save()
-  ])
+      messageId: msgId,
+    }).save(),
+  ]);
 }
 
 
 async function _handleGatewayUnstakeEvent(
-  event: CosmosEvent
+  event: CosmosEvent,
 ) {
   logger.info(`[handleGatewayUnstakeEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
-  const gatewayStringified = event.event.attributes.find(attribute => attribute.key === "gateway")?.value as unknown as string
+  const gatewayStringified = event.event.attributes.find(attribute => attribute.key === "gateway")?.value as unknown as string;
 
   if (!gatewayStringified) {
     throw new Error(`[handleGatewayUnstakeEvent] gateway not provided in event`);
   }
 
-  const gatewayAddress = JSON.parse(gatewayStringified).address
+  const gatewayAddress = JSON.parse(gatewayStringified).address;
 
   if (!gatewayAddress) {
     throw new Error(`[handleGatewayUnstakeEvent] address not provided in gateway event`);
   }
 
-  const gateway = await Gateway.get(gatewayAddress)
+  const gateway = await Gateway.get(gatewayAddress);
 
   if (!gateway) {
     throw new Error(`[handleGatewayMsgUnstake] gateway not found with address: ${gatewayAddress}`);
   }
 
-  gateway.unstakingEndBlockId = event.block.block.id
-  gateway.stakeStatus = StakeStatus.Unstaked
+  gateway.unstakingEndBlockId = event.block.block.id;
+  gateway.stakeStatus = StakeStatus.Unstaked;
 
-  const eventId = getEventId(event)
+  const eventId = getEventId(event);
 
   await Promise.all([
     EventGatewayUnstakedEntity.create({
@@ -128,8 +136,8 @@ async function _handleGatewayUnstakeEvent(
       gatewayId: gatewayAddress,
       blockId: event.block.block.id,
       transactionId: event.tx.hash,
-      eventId
+      eventId,
     }).save(),
-    gateway.save()
-  ])
+    gateway.save(),
+  ]);
 }

@@ -1,18 +1,50 @@
 import { CosmosEvent } from "@subql/types-cosmos";
 import { parseCoins } from "../../cosmjs/utils";
 import {
+  Account,
+  Balance,
   NativeBalanceChange,
   Transaction,
 } from "../../types";
 import {
   attemptHandling,
-  checkBalancesAccount,
+  unprocessedEventHandler,
+} from "../utils/handlers";
+import {
+  getBalanceId,
   getEventId,
   messageId,
-  stringify,
-  unprocessedEventHandler,
-  updateAccountBalance,
-} from "../utils";
+} from "../utils/ids";
+import { stringify } from "../utils/json";
+
+export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
+  let balance = await Balance.get(getBalanceId(address, denom));
+
+  if (!balance) {
+    balance = Balance.create({
+      id: getBalanceId(address, denom),
+      accountId: address,
+      denom,
+      amount: offset,
+      lastUpdatedBlockId: blockId,
+    });
+  } else {
+    balance.amount = balance.amount + offset;
+    balance.lastUpdatedBlockId = blockId;
+  }
+
+  await balance.save();
+
+  logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balance?.amount}`);
+}
+
+export async function checkBalancesAccount(address: string, chainId: string): Promise<void> {
+  let accountEntity = await Account.get(address);
+  if (typeof (accountEntity) === "undefined") {
+    accountEntity = Account.create({ id: address, chainId });
+    await accountEntity.save();
+  }
+}
 
 export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent): Promise<void> {
   await checkBalancesAccount(address, event.block.block.header.chainId);
