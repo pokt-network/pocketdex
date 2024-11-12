@@ -23,30 +23,42 @@ import type { ServiceProps } from "../types/models/Service";
 import type { SupplierProps } from "../types/models/Supplier";
 import { SupplierServiceConfigProps } from "../types/models/SupplierServiceConfig";
 import type { TransactionProps } from "../types/models/Transaction";
-import { configOptionsFromJSON, rPCTypeFromJSON } from "../types/proto-interfaces/poktroll/shared/service";
-import { StakeStatus, TxStatus } from "./constants";
+import {
+  configOptionsFromJSON,
+  rPCTypeFromJSON,
+} from "../types/proto-interfaces/poktroll/shared/service";
+import { getSupplyRecord } from "./bank/supply";
+import {
+  StakeStatus,
+  TxStatus,
+} from "./constants";
 import type { Genesis } from "./types/genesis";
 import {
   getAppDelegatedToGatewayId,
   getBalanceId,
   getGenesisFakeTxHash,
-  getMsgStakeServiceId, getParamId,
+  getMsgStakeServiceId,
+  getParamId,
   getStakeServiceId,
-  stringify
+  stringify,
 } from "./utils";
 
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
-  const genesis: Genesis = require('../../genesis.json');
+  // we MUST load the JSON this way due to the sandboxed environment
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const genesis: Genesis = require("../../genesis.json");
 
   // IMPORTANT: Return early if this is not the genesis initial height as this is called for block indexed!
   if (block.block.header.height !== genesis.initial_height) {
-    return
+    return;
   }
 
   logger.info(`[handleGenesis] (block.header.height): indexing genesis block ${block.block.header.height}`);
 
   // save records
   await Promise.all([
+    _handleGenesisSupplyDenom(genesis),
+    _handleGenesisSupply(genesis, block),
     _handleGenesisEvent(block),
     _handleGenesisServices(genesis, block),
     _handleGenesisBalances(genesis, block),
@@ -63,23 +75,23 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   }).save();
 }
 
-// Creates an event for the entities that requires it. Doing this we are still requiring the events in the schema.
+// Creates an event for the entities that requires it. Doing this, we are still requiring the events in the schema.
 async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
   await Event.create({
     id: "genesis",
     type: "genesis",
     blockId: block.block.id,
-  }).save()
+  }).save();
 }
 
 async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const accounts : Array<AccountProps> = []
+  const accounts: Array<AccountProps> = [];
 
   for (const account of genesis.app_state.auth.accounts) {
     accounts.push({
       id: account.address,
       chainId: block.block.header.chainId,
-    })
+    });
   }
 
   // get balances
@@ -89,8 +101,8 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
 
 
   for (const balance of genesis.app_state.bank.balances) {
-    for (const {amount, denom} of balance.coins) {
-      const id = getBalanceId(balance.address, denom)
+    for (const { amount, denom } of balance.coins) {
+      const id = getBalanceId(balance.address, denom);
 
       nativeBalanceChanges.push({
         id,
@@ -119,15 +131,15 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
   }
 
   await Promise.all([
-    store.bulkCreate('Account', accounts),
-    store.bulkCreate('GenesisBalance', genesisBalances),
-    store.bulkCreate('NativeBalanceChange', nativeBalanceChanges),
-    store.bulkCreate('Balance', balances),
-  ])
+    store.bulkCreate("Account", accounts),
+    store.bulkCreate("GenesisBalance", genesisBalances),
+    store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
+    store.bulkCreate("Balance", balances),
+  ]);
 }
 
 async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const services: Array<ServiceProps> = [], addServiceMsgs: Array<MsgAddServiceProps> = []
+  const services: Array<ServiceProps> = [], addServiceMsgs: Array<MsgAddServiceProps> = [];
 
   for (const service of genesis.app_state.service.serviceList) {
     services.push({
@@ -135,9 +147,9 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       name: service.name,
       computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
       ownerId: service.owner_address,
-    })
+    });
 
-    const msgId = `genesis-${service.id}`
+    const msgId = `genesis-${service.id}`;
 
     addServiceMsgs.push({
       id: msgId,
@@ -146,28 +158,28 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
       ownerId: service.owner_address,
       blockId: block.block.id,
-      transactionId: getGenesisFakeTxHash('service', 0),
+      transactionId: getGenesisFakeTxHash("service", 0),
       messageId: msgId,
-    })
+    });
   }
 
   await Promise.all([
-    store.bulkCreate('Service', services),
-    store.bulkCreate('MsgAddService', addServiceMsgs),
-  ])
+    store.bulkCreate("Service", services),
+    store.bulkCreate("MsgAddService", addServiceMsgs),
+  ]);
 }
 
 async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const suppliers: Array<SupplierProps> = []
-  const supplierMsgStakes: Array<MsgStakeSupplierProps> = []
-  const supplierServices: Array<SupplierServiceConfigProps> = []
-  const servicesAndSupplierMsgStakes: Array<MsgStakeSupplierServiceProps> = []
-  const transactions: Array<TransactionProps> = []
+  const suppliers: Array<SupplierProps> = [];
+  const supplierMsgStakes: Array<MsgStakeSupplierProps> = [];
+  const supplierServices: Array<SupplierServiceConfigProps> = [];
+  const servicesAndSupplierMsgStakes: Array<MsgStakeSupplierServiceProps> = [];
+  const transactions: Array<TransactionProps> = [];
 
   for (let i = 0; i < genesis.app_state.supplier.supplierList.length; i++) {
-    const supplier = genesis.app_state.supplier.supplierList[i]
-    const msgId = `genesis-${supplier.operator_address}`
-    const transactionHash = getGenesisFakeTxHash('app', i)
+    const supplier = genesis.app_state.supplier.supplierList[i];
+    const msgId = `genesis-${supplier.operator_address}`;
+    const transactionHash = getGenesisFakeTxHash("app", i);
 
     transactions.push({
       id: transactionHash,
@@ -176,7 +188,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
-    })
+    });
 
     supplierMsgStakes.push({
       id: msgId,
@@ -188,7 +200,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       signerId: supplier.owner_address,
       supplierId: supplier.operator_address,
       messageId: msgId,
-    })
+    });
 
     suppliers.push({
       id: supplier.operator_address,
@@ -196,8 +208,8 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       ownerId: supplier.owner_address,
       stakeAmount: BigInt(supplier.stake.amount),
       stakeDenom: supplier.stake.denom,
-      stakeStatus: StakeStatus.Staked
-    })
+      stakeStatus: StakeStatus.Staked,
+    });
 
     for (const service of supplier.services) {
       const endpoints = service.endpoints.map((endpoint) => ({
@@ -207,12 +219,12 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
           key: configOptionsFromJSON(config.key),
           value: config.value,
         })),
-      }))
+      }));
 
       const revShare = service.rev_share.map((revShare) => ({
         address: revShare.address,
         revSharePercentage: revShare.rev_share_percentage,
-      }))
+      }));
 
       servicesAndSupplierMsgStakes.push({
         id: getMsgStakeServiceId(msgId, service.service_id),
@@ -220,7 +232,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         serviceId: service.service_id,
         endpoints,
         revShare,
-      })
+      });
 
       supplierServices.push({
         id: getStakeServiceId(supplier.operator_address, service.service_id),
@@ -228,32 +240,32 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         serviceId: service.service_id,
         endpoints,
         revShare,
-      })
+      });
     }
   }
 
   await Promise.all([
-    store.bulkCreate('Supplier', suppliers),
-    store.bulkCreate('MsgStakeSupplier', supplierMsgStakes),
-    store.bulkCreate('SupplierServiceConfig', supplierServices),
-    store.bulkCreate('MsgStakeSupplierService', servicesAndSupplierMsgStakes),
-    store.bulkCreate('Transaction', transactions)
-  ])
+    store.bulkCreate("Supplier", suppliers),
+    store.bulkCreate("MsgStakeSupplier", supplierMsgStakes),
+    store.bulkCreate("SupplierServiceConfig", supplierServices),
+    store.bulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes),
+    store.bulkCreate("Transaction", transactions),
+  ]);
 }
 
 async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const applications: Array<ApplicationProps> = []
-  const appMsgStakes: Array<MsgStakeApplicationProps> = []
-  const appServices: Array<ApplicationServiceProps> = []
-  const servicesAndAppMsgStakes: Array<MsgStakeApplicationServiceProps> = []
-  const msgDelegateToGateways: Array<MsgDelegateToGatewayProps> = []
-  const transactions: Array<TransactionProps> = []
-  const appsDelegatedToGateways: Array<ApplicationGatewayProps> = []
+  const applications: Array<ApplicationProps> = [];
+  const appMsgStakes: Array<MsgStakeApplicationProps> = [];
+  const appServices: Array<ApplicationServiceProps> = [];
+  const servicesAndAppMsgStakes: Array<MsgStakeApplicationServiceProps> = [];
+  const msgDelegateToGateways: Array<MsgDelegateToGatewayProps> = [];
+  const transactions: Array<TransactionProps> = [];
+  const appsDelegatedToGateways: Array<ApplicationGatewayProps> = [];
 
   for (let i = 0; i < genesis.app_state.application.applicationList.length; i++) {
-    const app = genesis.app_state.application.applicationList[i]
-    const msgId = `genesis-${app.address}`
-    const transactionHash = getGenesisFakeTxHash('app', i)
+    const app = genesis.app_state.application.applicationList[i];
+    const msgId = `genesis-${app.address}`;
+    const transactionHash = getGenesisFakeTxHash("app", i);
 
     transactions.push({
       id: transactionHash,
@@ -262,11 +274,11 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
-    })
+    });
 
     if (app.delegatee_gateway_addresses.length > 0) {
       for (const gatewayAddress of app.delegatee_gateway_addresses) {
-        const msgId = `genesis-${gatewayAddress}`
+        const msgId = `genesis-${gatewayAddress}`;
         msgDelegateToGateways.push({
           id: msgId,
           applicationId: app.address,
@@ -274,13 +286,13 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
           blockId: block.block.id,
           transactionId: transactionHash,
           messageId: msgId,
-        })
+        });
 
         appsDelegatedToGateways.push({
           id: getAppDelegatedToGatewayId(app.address, gatewayAddress),
           applicationId: app.address,
           gatewayId: gatewayAddress,
-        })
+        });
       }
     }
 
@@ -292,56 +304,56 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       applicationId: app.address,
       transactionId: transactionHash,
       messageId: msgId,
-    })
+    });
 
     applications.push({
       id: app.address,
       accountId: app.address,
       stakeAmount: BigInt(app.stake.amount),
       stakeDenom: app.stake.denom,
-      stakeStatus: StakeStatus.Staked
-    })
+      stakeStatus: StakeStatus.Staked,
+    });
 
     for (const service of app.service_configs) {
       servicesAndAppMsgStakes.push({
         id: getMsgStakeServiceId(msgId, service.service_id),
         stakeMsgId: msgId,
         serviceId: service.service_id,
-      })
+      });
 
       appServices.push({
         id: getStakeServiceId(app.address, service.service_id),
         applicationId: app.address,
         serviceId: service.service_id,
-      })
+      });
     }
   }
 
-  const promises: Array<Promise<void>> =[
-    store.bulkCreate('MsgStakeApplication', appMsgStakes),
-    store.bulkCreate('Application', applications),
-    store.bulkCreate('Transaction', transactions),
-    store.bulkCreate('ApplicationService', appServices),
-    store.bulkCreate('MsgStakeApplicationService', servicesAndAppMsgStakes),
-    store.bulkCreate('ApplicationGateway', appsDelegatedToGateways)
-  ]
+  const promises: Array<Promise<void>> = [
+    store.bulkCreate("MsgStakeApplication", appMsgStakes),
+    store.bulkCreate("Application", applications),
+    store.bulkCreate("Transaction", transactions),
+    store.bulkCreate("ApplicationService", appServices),
+    store.bulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes),
+    store.bulkCreate("ApplicationGateway", appsDelegatedToGateways),
+  ];
 
   if (msgDelegateToGateways.length > 0) {
-    promises.push(store.bulkCreate('MsgDelegateToGateway', msgDelegateToGateways))
+    promises.push(store.bulkCreate("MsgDelegateToGateway", msgDelegateToGateways));
   }
 
-  await Promise.all(promises)
+  await Promise.all(promises);
 }
 
 async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const gateways: Array<GatewayProps> = []
-  const gatewayMsgStakes: Array<MsgStakeGatewayProps> = []
-  const transactions: Array<TransactionProps> = []
+  const gateways: Array<GatewayProps> = [];
+  const gatewayMsgStakes: Array<MsgStakeGatewayProps> = [];
+  const transactions: Array<TransactionProps> = [];
 
   for (let i = 0; i < genesis.app_state.gateway.gatewayList.length; i++) {
-    const gateway = genesis.app_state.gateway.gatewayList[i]
-    const msgId = `genesis-${gateway.address}`
-    const transactionHash = getGenesisFakeTxHash('gateway', i)
+    const gateway = genesis.app_state.gateway.gatewayList[i];
+    const msgId = `genesis-${gateway.address}`;
+    const transactionHash = getGenesisFakeTxHash("gateway", i);
 
     transactions.push({
       id: transactionHash,
@@ -350,7 +362,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
-    })
+    });
 
     gatewayMsgStakes.push({
       id: msgId,
@@ -360,62 +372,74 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       gatewayId: gateway.address,
       transactionId: transactionHash,
       messageId: msgId,
-    })
+    });
 
     gateways.push({
       id: gateway.address,
       accountId: gateway.address,
       stakeAmount: BigInt(gateway.stake.amount),
       stakeDenom: gateway.stake.denom,
-      stakeStatus: StakeStatus.Staked
-    })
+      stakeStatus: StakeStatus.Staked,
+    });
   }
 
   await Promise.all([
-    store.bulkCreate('Gateway', gateways),
-    store.bulkCreate('MsgStakeGateway', gatewayMsgStakes),
-    store.bulkCreate('Transaction', transactions)
-  ])
+    store.bulkCreate("Gateway", gateways),
+    store.bulkCreate("MsgStakeGateway", gatewayMsgStakes),
+    store.bulkCreate("Transaction", transactions),
+  ]);
 }
 
 async function saveParams(entityName: string, params: Record<string, unknown> | undefined, block: CosmosBlock): Promise<void> {
   const paramsEntries = Object.entries(params || {});
 
   if (!paramsEntries.length) {
-    return
+    return;
   }
 
   const paramsToSave: Array<AppParamProps> = paramsEntries.map(([key, value]) => ({
     id: getParamId(key, block.block.id),
     key,
     // just using stringify for objects because if a string is passed in, it will put it in quotes
-    value: typeof value === 'object' ? stringify(value) : (value || "").toString(),
+    value: typeof value === "object" ? stringify(value) : (value || "").toString(),
     blockId: block.block.id,
-  }))
+  }));
 
-  await store.bulkCreate(entityName, paramsToSave)
+  await store.bulkCreate(entityName, paramsToSave);
 }
 
 async function _handleGenesisParams(
   genesis: Genesis,
-  block: CosmosBlock
+  block: CosmosBlock,
 ): Promise<void> {
   await Promise.all([
-    saveParams('AppParam', genesis.app_state.application?.params, block),
-    saveParams('AuthParam', genesis.app_state.auth?.params, block),
-    saveParams('BankParam', genesis.app_state.bank?.params, block),
-    saveParams('DistributionParam', genesis.app_state.distribution?.params, block),
-    saveParams('GatewayParam', genesis.app_state.gateway?.params, block),
-    saveParams('GovParam', genesis.app_state.gov?.params, block),
-    saveParams('MintParam', genesis.app_state.mint?.params, block),
-    saveParams('ProofParam', genesis.app_state.proof?.params, block),
-    saveParams('ServiceParam', genesis.app_state.service?.params, block),
-    saveParams('SessionParam', genesis.app_state.session?.params, block),
-    saveParams('SharedParam', genesis.app_state.shared?.params, block),
-    saveParams('SlashingParam', genesis.app_state.slashing?.params, block),
-    saveParams('StakingParam', genesis.app_state.staking?.params, block),
-    saveParams('SupplierParam', genesis.app_state.supplier?.params, block),
-    saveParams('TokenomicsParam', genesis.app_state.tokenomics?.params, block),
-    saveParams('ConsensusParam', genesis.app_state.consensus?.params, block),
-  ])
+    saveParams("AppParam", genesis.app_state.application?.params, block),
+    saveParams("AuthParam", genesis.app_state.auth?.params, block),
+    saveParams("BankParam", genesis.app_state.bank?.params, block),
+    saveParams("DistributionParam", genesis.app_state.distribution?.params, block),
+    saveParams("GatewayParam", genesis.app_state.gateway?.params, block),
+    saveParams("GovParam", genesis.app_state.gov?.params, block),
+    saveParams("MintParam", genesis.app_state.mint?.params, block),
+    saveParams("ProofParam", genesis.app_state.proof?.params, block),
+    saveParams("ServiceParam", genesis.app_state.service?.params, block),
+    saveParams("SessionParam", genesis.app_state.session?.params, block),
+    saveParams("SharedParam", genesis.app_state.shared?.params, block),
+    saveParams("SlashingParam", genesis.app_state.slashing?.params, block),
+    saveParams("StakingParam", genesis.app_state.staking?.params, block),
+    saveParams("SupplierParam", genesis.app_state.supplier?.params, block),
+    saveParams("TokenomicsParam", genesis.app_state.tokenomics?.params, block),
+    saveParams("ConsensusParam", genesis.app_state.consensus?.params, block),
+  ]);
+}
+
+async function _handleGenesisSupplyDenom(genesis: Genesis): Promise<void> {
+  return store.bulkCreate("SupplyDenom", genesis.app_state.bank.supply.map(supply => {
+    return {
+      id: supply.denom,
+    };
+  }));
+}
+
+async function _handleGenesisSupply(genesis: Genesis, block: CosmosBlock): Promise<void> {
+  return store.bulkCreate("Supply", genesis.app_state.bank.supply.map(supply => getSupplyRecord(supply, block)));
 }

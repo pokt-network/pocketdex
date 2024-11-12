@@ -13,12 +13,21 @@ import {
 } from "lodash";
 import {
   Block,
+  BlockSupply,
   Event,
   EventAttribute,
   Message,
+  SupplyDenom,
   Transaction,
 } from "../types";
-import { PREFIX, TxStatus } from "./constants";
+import {
+  _handleSupply,
+  getSupplyId,
+} from "./bank/supply";
+import {
+  PREFIX,
+  TxStatus,
+} from "./constants";
 import {
   attemptHandling,
   messageId,
@@ -51,6 +60,40 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
   const { header: { chainId, height, time }, id } = block.block;
   const timestamp = new Date(time.getTime());
 
+  const supplyDenom = await SupplyDenom.getByFields([], {});
+  const supplyIdHeight = block.header.height === 1 ? block.header.height : block.header.height - 1;
+
+  const blockSupplies: BlockSupply[] = [];
+
+  if (block.header.height > 1) {
+    // on any block after genesis, we need to look up for the previous BlockSupply to copy the supply id of the
+    // right one, then the claim/proof settlement or ibc txs will update to the right supply id if a new one
+    // is created for this denom@block
+    for (const supplyDenomItem of supplyDenom) {
+      const blockSupply = await BlockSupply.get(getSupplyId(supplyDenomItem.id, supplyIdHeight));
+      if (!blockSupply) {
+        logger.warn(`[handleBlock] (block.header.height): missing block supply for ${supplyDenomItem.id} at height ${supplyIdHeight}`);
+        continue;
+      }
+      blockSupplies.push(BlockSupply.create({
+        id: getSupplyId(supplyDenomItem.id, block.header.height),
+        blockId: block.block.id,
+        supplyId: blockSupply.supplyId,
+      }));
+    }
+    // create all the entries
+    await store.bulkCreate("BlockSupply", blockSupplies);
+  } else {
+    // create a base record for each supply denomination because is the first block.
+    await store.bulkCreate("BlockSupply", supplyDenom.map((supplyDenomItem) => {
+      return {
+        id: getSupplyId(supplyDenomItem.id, block.block.header.height),
+        blockId: block.block.id,
+        supplyId: getSupplyId(supplyDenomItem.id, supplyIdHeight),
+      };
+    }));
+  }
+
   const blockEntity = Block.create({
     id,
     chainId,
@@ -59,6 +102,10 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
   });
 
   await blockEntity.save();
+
+  // We need to track the supply on every block, and this is the way we can do with the RPC, but on a future
+  // it will be replaced by handling the claim/proof settle event.
+  await _handleSupply(block);
 }
 
 async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
@@ -123,7 +170,7 @@ async function _handleEvent(event: CosmosEvent): Promise<void> {
   if (!isEmpty(event.tx?.hash)) {
     logger.debug(`[handleEvent] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
   } else {
-    logger.debug(`[handleEvent]: indexing event ${event.idx + 1}${event.tx ? ` / ${event.tx.tx.events.length}` : ''}`);
+    logger.debug(`[handleEvent]: indexing event ${event.idx + 1}${event.tx ? ` / ${event.tx.tx.events.length}` : ""}`);
   }
 
   let id;
