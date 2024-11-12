@@ -1,5 +1,5 @@
 import { CosmosMessage } from "@subql/types-cosmos";
-import { AddServiceMsg, Service } from "../../types";
+import { MsgAddService as MsgAddServiceEntity, Service } from "../../types";
 import { MsgAddService } from "../../types/proto-interfaces/poktroll/service/tx";
 import { attemptHandling, messageId, stringify, unprocessedMsgHandler } from "../utils";
 
@@ -17,6 +17,7 @@ async function _handleMsgAddService(
   const {ownerAddress, service: {computeUnitsPerRelay, id, name}} = msg.msg.decodedMsg
 
   const units = BigInt(computeUnitsPerRelay.toString())
+  const msgId = messageId(msg)
 
   await Promise.all([
     Service.create({
@@ -25,14 +26,15 @@ async function _handleMsgAddService(
       name,
       ownerId: ownerAddress,
     }).save(),
-    AddServiceMsg.create({
-      id: messageId(msg),
+    MsgAddServiceEntity.create({
+      id: msgId,
       name,
       ownerId: ownerAddress,
       serviceId: id,
       computeUnitsPerRelay: units,
       blockId: msg.block.block.id,
       transactionId: msg.tx.hash,
+      messageId: msgId
     }).save()
   ])
 }

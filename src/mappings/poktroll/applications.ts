@@ -1,23 +1,22 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import { applicationUnbondingReasonFromJSON } from "../../client/poktroll/application/event";
 import {
-  Application,
-  ApplicationDelegatedToGateway,
+  Application, ApplicationGateway,
   ApplicationService,
-  AppStakeMsg,
-  AppUnstakeMsg,
-  ApplicationUnbondingBeginEvent,
-  ApplicationUnbondingEndEvent,
-  DelegateToGatewayMsg,
-  TransferApplicationMsg,
-  UndelegateFromGatewayMsg,
-  TransferApplicationBeginEvent,
-  TransferApplicationEndEvent,
-  TransferApplicationErrorEvent,
+  MsgStakeApplication as MsgStakeApplicationEntity,
+  MsgDelegateToGateway as MsgDelegateToGatewayEntity,
+  MsgUndelegateFromGateway as MsgUndelegateFromGatewayEntity,
+  MsgUnstakeApplication as MsgUnstakeApplicationEntity,
+  MsgTransferApplication as MsgTransferApplicationEntity,
+  EventTransferBegin as EventTransferBeginEntity,
+  EventTransferEnd as EventTransferEndEntity,
+  EventTransferError as EventTransferErrorEntity,
+  EventApplicationUnbondingBegin as EventApplicationUnbondingBeginEntity,
+  EventApplicationUnbondingEnd as EventApplicationUnbondingEndEntity,
 } from "../../types";
-import { ApplicationDelegatedToGatewayProps } from "../../types/models/ApplicationDelegatedToGateway";
+import { ApplicationGatewayProps } from "../../types/models/ApplicationGateway";
 import { ApplicationServiceProps } from "../../types/models/ApplicationService";
-import { AppStakeMsgServiceProps } from "../../types/models/AppStakeMsgService";
+import { MsgStakeApplicationServiceProps } from "../../types/models/MsgStakeApplicationService";
 import {
   EventTransferBegin,
 } from "../../types/proto-interfaces/poktroll/application/event";
@@ -110,30 +109,33 @@ async function _handleAppMsgStake(
   const msgId = messageId(msg)
   const {address, stake,} = msg.msg.decodedMsg
 
-  const stakeCoin = {
-    amount: stake?.amount || '',
-    denom: stake?.denom || '',
-  }
+  const stakeAmount = BigInt(stake?.amount || '0')
+  const stakeDenom = stake?.denom || ''
 
-  const appMsgStake =  AppStakeMsg.create({
+  const appMsgStake =  MsgStakeApplicationEntity.create({
     id: msgId,
-    stake: stakeCoin,
     transactionId: msg.tx.hash,
     blockId: msg.block.block.id,
     applicationId: address,
+    messageId: msgId,
+    stakeAmount,
+    stakeDenom,
   });
 
   const application = Application.create({
     id: address,
     accountId: address,
-    stake: stakeCoin,
+    stakeAmount,
+    stakeDenom,
     status: StakeStatus.Staked,
-    unstakingStartBlockId: undefined,
-    unstakedAtBlockId: undefined,
+    unstakingBeginBlockId: undefined,
+    unstakingEndHeight: undefined,
+    unstakingReason: undefined,
+    unstakingEndBlockId: undefined,
   })
 
   const servicesId: Array<string> = []
-  const appMsgStakeServices: Array<AppStakeMsgServiceProps> = []
+  const appMsgStakeServices: Array<MsgStakeApplicationServiceProps> = []
   const newApplicationServices: Array<ApplicationServiceProps> = []
 
   for (const {serviceId} of msg.msg.decodedMsg.services) {
@@ -142,7 +144,7 @@ async function _handleAppMsgStake(
     appMsgStakeServices.push({
       id: getMsgStakeServiceId(msgId, serviceId),
       serviceId,
-      appStakeMsgId: msgId,
+      stakeMsgId: msgId,
     })
 
     newApplicationServices.push({
@@ -167,7 +169,7 @@ async function _handleAppMsgStake(
   const promises: Array<Promise<void>> = [
     appMsgStake.save(),
     application.save(),
-    store.bulkCreate('AppMsgStakeService', appMsgStakeServices),
+    store.bulkCreate('MsgStakeApplicationService', appMsgStakeServices),
     store.bulkCreate('ApplicationService', newApplicationServices),
   ]
 
@@ -183,8 +185,10 @@ async function _handleDelegateToGatewayMsg(
 ) {
   logger.debug(`[handleDelegateToGatewayMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)})`)
 
+  const msgId = messageId(msg)
+
   await Promise.all([
-    ApplicationDelegatedToGateway.create({
+    ApplicationGateway.create({
       id: getAppDelegatedToGatewayId(
         msg.msg.decodedMsg.appAddress,
         msg.msg.decodedMsg.gatewayAddress
@@ -192,12 +196,13 @@ async function _handleDelegateToGatewayMsg(
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
       applicationId: msg.msg.decodedMsg.appAddress,
     }).save(),
-    DelegateToGatewayMsg.create({
-      id: messageId(msg),
+    MsgDelegateToGatewayEntity.create({
+      id: msgId,
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
       transactionId: msg.tx.hash,
       blockId: msg.block.block.id,
+      messageId: msgId,
     }).save()
   ])
 }
@@ -207,19 +212,22 @@ async function _handleUndelegateFromGatewayMsg(
 ) {
   logger.debug(`[handleUndelegateFromGatewayMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`)
 
+  const msgId = messageId(msg)
+
   await Promise.all([
-    ApplicationDelegatedToGateway.remove(
+    ApplicationGateway.remove(
       getAppDelegatedToGatewayId(
         msg.msg.decodedMsg.appAddress,
         msg.msg.decodedMsg.gatewayAddress
       )
     ),
-    UndelegateFromGatewayMsg.create({
-      id: messageId(msg),
+    MsgUndelegateFromGatewayEntity.create({
+      id: msgId,
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
       transactionId: msg.tx.hash,
       blockId: msg.block.block.id,
+      messageId: msgId,
     }).save()
   ])
 }
@@ -236,15 +244,18 @@ async function _handleUnstakeApplicationMsg(
   }
 
   application.status = StakeStatus.Unstaking
-  application.unstakingStartBlockId = msg.block.block.id
+  application.unstakingBeginBlockId = msg.block.block.id
+
+  const msgId = messageId(msg)
 
   await Promise.all([
     application.save(),
-    AppUnstakeMsg.create({
-      id: messageId(msg),
+    MsgUnstakeApplicationEntity.create({
+      id: msgId,
       applicationId: msg.msg.decodedMsg.address,
       transactionId: msg.tx.hash,
       blockId: msg.block.block.id,
+      messageId: msgId,
     }).save()
   ])
 }
@@ -262,14 +273,17 @@ async function _handleTransferApplicationMsg(
 
   application.transferringToId = msg.msg.decodedMsg.destinationAddress
 
+  const msgId = messageId(msg)
+
   await Promise.all([
     application.save(),
-    TransferApplicationMsg.create({
-      id: messageId(msg),
+    MsgTransferApplicationEntity.create({
+      id: msgId,
       sourceApplicationId: msg.msg.decodedMsg.sourceAddress,
       destinationApplicationId: msg.msg.decodedMsg.destinationAddress,
       transactionId: msg.tx.hash,
       blockId: msg.block.block.id,
+      messageId: msgId,
     }).save(),
   ])
 }
@@ -292,16 +306,19 @@ async function _handleTransferApplicationBeginEvent(
     throw new Error(`[handleTransferApplicationBeginEvent] application not found`);
   }
 
-  application.transferEndsAtHeight = BigInt((transferEndHeight as unknown as string).replaceAll('"', ""))
+  application.transferEndHeight = BigInt((transferEndHeight as unknown as string).replaceAll('"', ""))
+
+  const eventId = getEventId(event)
 
   await Promise.all([
     application.save(),
-    TransferApplicationBeginEvent.create({
-      id: getEventId(event),
+    EventTransferBeginEntity.create({
+      id: eventId,
       sourceId: msg.msg.decodedMsg.sourceAddress,
       destinationId: msg.msg.decodedMsg.destinationAddress,
       transactionId: event.tx.hash,
-      blockId: event.block.block.id
+      blockId: event.block.block.id,
+      eventId,
     }).save()
   ])
 }
@@ -327,11 +344,11 @@ async function _handleTransferApplicationEndEvent(
   }
 
   sourceApplication.transferringToId = undefined
-  sourceApplication.transferEndsAtHeight = undefined
-  sourceApplication.transferToEndedAtId = event.block.block.id
+  sourceApplication.transferEndHeight = undefined
+  sourceApplication.transferEndBlockId = event.block.block.id
   sourceApplication.status = StakeStatus.Unstaked
   sourceApplication.unstakingReason = 2
-  sourceApplication.unstakedAtBlockId = event.block.block.id
+  sourceApplication.unstakingEndBlockId = event.block.block.id
 
   const destinationAppStringified = event.event.attributes.find(attribute => attribute.key === "destination_application")?.value as string
 
@@ -341,7 +358,7 @@ async function _handleTransferApplicationEndEvent(
 
   const destinationApp: Required<ApplicationSDKType> = JSON.parse(destinationAppStringified)
 
-  sourceApplication.transferToId = destinationApp.address
+  sourceApplication.destinationApplicationId = destinationApp.address
 
   const {delegatee_gateway_addresses, service_configs,} = destinationApp
   const stake = destinationApp.stake as Required<typeof destinationApp.stake>
@@ -349,44 +366,45 @@ async function _handleTransferApplicationEndEvent(
   const destinationApplication  = Application.create({
     id: destinationApp.address,
     accountId: destinationApp.address,
-    stake: {
-      amount: stake.amount,
-      denom: stake.denom,
-    },
+    stakeAmount: BigInt(stake.amount),
+    stakeDenom: stake.denom,
     status: StakeStatus.Staked,
-    transferFromId: sourceAddress,
+    sourceApplicationId: sourceAddress,
     transferredFromAtId: event.block.block.id,
-    unstakedAtBlockId: sourceApplication.unstakedAtBlockId,
-    unstakingStartBlockId: sourceApplication.unstakingStartBlockId
+    unstakingEndBlockId: sourceApplication.unstakingEndBlockId,
+    unstakingBeginBlockId: sourceApplication.unstakingBeginBlockId
   })
 
-  const appDelegatedToGateways: Array<ApplicationDelegatedToGatewayProps> = delegatee_gateway_addresses.map(gateway => ({
+  const appDelegatedToGateways: Array<ApplicationGatewayProps> = delegatee_gateway_addresses.map(gateway => ({
     id: getAppDelegatedToGatewayId(destinationApplication.id, gateway),
     applicationId: destinationApplication.id,
     gatewayId: gateway,
   }))
 
   const sourceApplicationServices = await ApplicationService.getByApplicationId(sourceAddress, {}) || []
-  const sourceApplicationGateways = await ApplicationDelegatedToGateway.getByApplicationId(sourceAddress, {}) || []
+  const sourceApplicationGateways = await ApplicationGateway.getByApplicationId(sourceAddress, {}) || []
   const newApplicationServices: Array<ApplicationServiceProps> = service_configs?.map(service => ({
     id: getStakeServiceId(destinationApp.address, service.service_id),
     serviceId: service.service_id,
     applicationId: destinationApp.address,
   })) || []
 
+  const eventId = getEventId(event)
+
   await Promise.all([
     sourceApplication.save(),
     destinationApplication.save(),
-    TransferApplicationEndEvent.create({
-      id: getEventId(event),
+    EventTransferEndEntity.create({
+      id: eventId,
       sourceId: sourceAddress,
       destinationId: destinationApp.address,
-      blockId: event.block.block.id
+      blockId: event.block.block.id,
+      eventId,
     }).save(),
     store.bulkCreate('ApplicationService', newApplicationServices),
-    store.bulkCreate('ApplicationDelegatedToGateway', appDelegatedToGateways),
+    store.bulkCreate('ApplicationGateway', appDelegatedToGateways),
     store.bulkRemove('ApplicationService', sourceApplicationServices.map(service => service.id)),
-    store.bulkRemove('ApplicationDelegatedToGateway', sourceApplicationGateways.map(item => item.id)),
+    store.bulkRemove('ApplicationGateway', sourceApplicationGateways.map(item => item.id)),
   ])
 }
 
@@ -430,16 +448,19 @@ async function _handleTransferApplicationErrorEvent(
   }
 
   application.transferringToId = undefined
-  application.transferEndsAtHeight = undefined
+  application.transferEndHeight = undefined
+
+  const eventId = getEventId(event)
 
   await Promise.all([
     application.save(),
-    TransferApplicationErrorEvent.create({
-      id: getEventId(event),
+    EventTransferErrorEntity.create({
+      id: eventId,
       sourceId: sourceAddress,
       destinationId: destinationAddress,
       error: error,
-      blockId: event.block.block.id
+      blockId: event.block.block.id,
+      eventId,
     }).save(),
   ])
 }
@@ -491,18 +512,21 @@ async function _handleApplicationUnbondingBeginEvent(
     throw new Error(`[handleApplicationUnbondingBeginEvent] application not found for operator address ${msg.msg.decodedMsg.address}`)
   }
 
-  application.unstakingHeight = unstakingEndHeight
+  application.unstakingEndHeight = unstakingEndHeight
   application.unstakingReason = reason
+
+  const eventId = getEventId(event)
 
   await Promise.all([
     application.save(),
-    ApplicationUnbondingBeginEvent.create({
-      id: getEventId(event),
+    EventApplicationUnbondingBeginEntity.create({
+      id: eventId,
       applicationId: msg.msg.decodedMsg.address,
       blockId: event.block.block.id,
       unstakingEndHeight,
       sessionEndHeight,
       reason,
+      eventId,
     }).save(),
   ])
 }
@@ -563,20 +587,23 @@ async function _handleApplicationUnbondingEndEvent(
     throw new Error(`[handleApplicationUnbondingEndEvent] application not found for address ${applicationSdk.address}`)
   }
 
-  application.unstakedAtBlockId = event.block.block.id
+  application.unstakingEndBlockId = event.block.block.id
   application.status = StakeStatus.Unstaked
   application.unstakingReason = reason
 
   const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address, {}) || []).map(item => item.id)
 
+  const eventId = getEventId(event)
+
   await Promise.all([
-    ApplicationUnbondingEndEvent.create({
-      id: getEventId(event),
+    EventApplicationUnbondingEndEntity.create({
+      id: eventId,
       blockId: event.block.block.id,
       sessionEndHeight,
       unstakingEndHeight,
       reason,
       applicationId: applicationSdk.address,
+      eventId,
     }).save(),
     application.save(),
     store.bulkRemove('ApplicationService', applicationServices),

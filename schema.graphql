@@ -126,94 +126,105 @@ type Service @entity {
   name: String!
   computeUnitsPerRelay: BigInt!
   owner: Account!
-  addServiceMsgs: [AddServiceMsg] @derivedFrom(field: "service")
+  addServiceMsgs: [MsgAddService] @derivedFrom(field: "service")
 }
 
-type AppStakeMsg @entity {
+type MsgStakeApplication @entity {
   id: ID!
-  stake: Coin!
+  # we are not using Coin because we want to be able to query and sum by amount
+  stakeAmount: BigInt!
+  stakeDenom: String!
   transaction: Transaction!
   block: Block!
   application: Application! @index
+  message: Message!
 }
 
-type AppStakeMsgService @entity {
+type MsgStakeApplicationService @entity {
   id: ID!
-  appStakeMsg: AppStakeMsg!
+  stakeMsg: MsgStakeApplication!
   service: Service!
 }
 
-type AppUnstakeMsg @entity {
+type MsgUnstakeApplication @entity {
   id: ID!
   application: Application! @index
   transaction: Transaction!
   block: Block!
+  message: Message!
 }
 
-type DelegateToGatewayMsg @entity {
-  id: ID!
-  application: Application! @index
-  gateway: Gateway! @index
-  transaction: Transaction!
-  block: Block!
-}
-
-type UndelegateFromGatewayMsg @entity {
+type MsgDelegateToGateway @entity {
   id: ID!
   application: Application! @index
   gateway: Gateway! @index
   transaction: Transaction!
   block: Block!
+  message: Message!
 }
 
-type TransferApplicationMsg @entity {
+type MsgUndelegateFromGateway @entity {
+  id: ID!
+  application: Application! @index
+  gateway: Gateway! @index
+  transaction: Transaction!
+  block: Block!
+  message: Message!
+}
+
+type MsgTransferApplication @entity {
   id: ID!
   sourceApplication: Application! @index
   destinationApplication: Application! @index
   transaction: Transaction!
   block: Block!
+  message: Message!
 }
 
 type Application @entity {
   # id is the address
   id: ID!
   account: Account!
-  stake: Coin!
+  # we are not using Coin because we want to be able to query and sum by amount
+  stakeAmount: BigInt!
+  stakeDenom: String!
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
   status: Int!
   # Block where the msg to unstake the application was received
-  unstakingStartBlock: Block
+  unstakingBeginBlock: Block
   # Height of the block where the application is going to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
-  unstakingHeight: BigInt
+  unstakingEndHeight: BigInt
   # Reason for the application to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
   # 0 = ELECTIVE, 1 = BELOW_MIN_STAKE, 2 = TRANSFERRED
   unstakingReason: Int
   # Block where the application was unstaked/unbonded. Received with the EventApplicationUnbondingEnd event.
-  unstakedAtBlock: Block
-  stakeMsgs: [AppStakeMsg] @derivedFrom(field: "application")
-  unstakeMsgs: [AppUnstakeMsg] @derivedFrom(field: "application")
-  delegateMsgs: [DelegateToGatewayMsg] @derivedFrom(field: "application")
-  undelegateMsgs: [UndelegateFromGatewayMsg] @derivedFrom(field: "application")
-  sourceTransferMsgs: [TransferApplicationMsg] @derivedFrom(field: "sourceApplication")
-  destinationTransferMsgs: [TransferApplicationMsg] @derivedFrom(field: "destinationApplication")
-  sourceTransferBeginEvents: [TransferApplicationBeginEvent] @derivedFrom(field: "source")
-  destinationTransferBeginEvents: [TransferApplicationBeginEvent] @derivedFrom(field: "destination")
-  sourceTransferEndEvents: [TransferApplicationEndEvent] @derivedFrom(field: "source")
-  destinationTransferEndEvents: [TransferApplicationEndEvent] @derivedFrom(field: "destination")
-  sourceTransferErrorEvents: [TransferApplicationErrorEvent] @derivedFrom(field: "source")
-  destinationTransferErrorEvents: [TransferApplicationErrorEvent] @derivedFrom(field: "destination")
-  unstakingBeginEvents: [ApplicationUnbondingBeginEvent] @derivedFrom(field: "application")
-  unstakingEndEvents: [ApplicationUnbondingEndEvent] @derivedFrom(field: "application")
+  unstakingEndBlock: Block
+  stakeMsgs: [MsgStakeApplication] @derivedFrom(field: "application")
+  unstakeMsgs: [MsgUnstakeApplication] @derivedFrom(field: "application")
+  delegateMsgs: [MsgDelegateToGateway] @derivedFrom(field: "application")
+  undelegateMsgs: [MsgUndelegateFromGateway] @derivedFrom(field: "application")
+  sourceTransferMsgs: [MsgTransferApplication] @derivedFrom(field: "sourceApplication")
+  destinationTransferMsgs: [MsgTransferApplication] @derivedFrom(field: "destinationApplication")
+  sourceTransferBeginEvents: [EventTransferBegin] @derivedFrom(field: "source")
+  destinationTransferBeginEvents: [EventTransferBegin] @derivedFrom(field: "destination")
+  sourceTransferEndEvents: [EventTransferEnd] @derivedFrom(field: "source")
+  destinationTransferEndEvents: [EventTransferEnd] @derivedFrom(field: "destination")
+  sourceTransferErrorEvents: [EventTransferError] @derivedFrom(field: "source")
+  destinationTransferErrorEvents: [EventTransferError] @derivedFrom(field: "destination")
+  unstakingBeginEvents: [EventApplicationUnbondingBegin] @derivedFrom(field: "application")
+  unstakingEndEvents: [EventApplicationUnbondingEnd] @derivedFrom(field: "application")
+  # Block where the application was transferred from the source to this application
   transferredFromAt: Block
-  transferFrom: Application
-  transferTo: Application
-  transferToEndedAt: Block
-  # Account because we don't know if the destination is an application
+  sourceApplication: Application
+  destinationApplication: Application
+  transferBeginBlock: Block
+  transferEndBlock: Block
+  # Account because the destination application is created on transfer end
   transferringTo: Account
-  transferEndsAtHeight: BigInt
+  transferEndHeight: BigInt
 }
 
-type ApplicationDelegatedToGateway @entity {
+type ApplicationGateway @entity {
   id: ID!
   gateway: Gateway!
   application: Application!
@@ -225,33 +236,36 @@ type ApplicationService @entity {
   service: Service!
 }
 
-type TransferApplicationBeginEvent @entity {
+type EventTransferBegin @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   source: Application!
   destination: Application!
   transaction: Transaction!
   block: Block!
+  event: Event!
 }
 
-type TransferApplicationEndEvent @entity {
+type EventTransferEnd @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   source: Application!
   destination: Application!
   block: Block!
+  event: Event!
 }
 
-type TransferApplicationErrorEvent @entity {
+type EventTransferError @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   source: Application!
   destination: Account!
   error: String!
   block: Block!
+  event: Event!
 }
 
-type ApplicationUnbondingBeginEvent @entity {
+type EventApplicationUnbondingBegin @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   application: Application!
@@ -260,9 +274,10 @@ type ApplicationUnbondingBeginEvent @entity {
   sessionEndHeight: BigInt!
   unstakingEndHeight: BigInt!
   block: Block!
+  event: Event!
 }
 
-type ApplicationUnbondingEndEvent @entity {
+type EventApplicationUnbondingEnd @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   application: Application!
@@ -271,6 +286,7 @@ type ApplicationUnbondingEndEvent @entity {
   sessionEndHeight: BigInt!
   unstakingEndHeight: BigInt!
   block: Block!
+  event: Event!
 }
 
 type Balance @entity {
@@ -287,30 +303,34 @@ type GenesisFile @entity {
   raw: String!
 }
 
-type SupplierStakeMsg @entity {
+type MsgStakeSupplier @entity {
   id: ID!
   signer: Account!
   supplier: Supplier!
   owner: Account!
-  stake: Coin!
+  # we are not using Coin because we want to be able to query and sum by amount
+  stakeAmount: BigInt!
+  stakeDenom: String!
   block: Block!
   transaction: Transaction!
+  message: Message!
 }
 
-type SupplierStakeMsgService @entity {
+type MsgStakeSupplierService @entity {
   id: ID!
-  supplierStakeMsg: SupplierStakeMsg!
+  stakeMsg: MsgStakeSupplier!
   service: Service!
   revShare: [SupplierRevShare]!
   endpoints: [SupplierEndpoint]!
 }
 
-type SupplierUnstakeMsg @entity {
+type MsgUnstakeSupplier @entity {
   id: ID!
   signer: Account!
   supplier: Supplier!
   block: Block!
   transaction: Transaction!
+  message: Message!
 }
 
 type Supplier @entity {
@@ -318,21 +338,24 @@ type Supplier @entity {
   id: ID!
   operator: Account!
   owner: Account!
-  stake: Coin!
-  stakeMsgs: [SupplierStakeMsg] @derivedFrom(field: "supplier")
-  unstakeMsgs: [SupplierUnstakeMsg] @derivedFrom(field: "supplier")
-  unstakingBeginEvents: [SupplierUnbondingBeginEvent] @derivedFrom(field: "supplier")
-  unstakingEndEvents: [SupplierUnbondingEndEvent] @derivedFrom(field: "supplier")
+  # we are not using Coin because we want to be able to query and sum by amount
+  stakeAmount: BigInt!
+  stakeDenom: String!
+  stakeMsgs: [MsgStakeSupplier] @derivedFrom(field: "supplier")
+  unstakeMsgs: [MsgUnstakeSupplier] @derivedFrom(field: "supplier")
+  unstakingBeginEvents: [EventSupplierUnbondingBegin] @derivedFrom(field: "supplier")
+  unstakingEndEvents: [EventSupplierUnbondingEnd] @derivedFrom(field: "supplier")
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
   status: Int!
   # Block where MsgUnstakeSupplier was received
-  unstakingStartBlock: Block
+  unstakingBeginBlock: Block
   # Height of the block where the supplier is going to be unstaked/unbonded.
   # This is received with the EventSupplierUnbondingBegin event.
-  unstakingHeight: BigInt
+  unstakingEndHeight: BigInt
   # Block where the supplier was unstaked/unbonded.
   # This is received with the EventSupplierUnbondingEnd event.
-  unstakedAtBlock: Block
+  unstakingEndBlock: Block
+  services: [SupplierServiceConfig] @derivedFrom(field: "supplier")
 }
 
 type ConfigOption @jsonField {
@@ -351,7 +374,7 @@ type SupplierRevShare @jsonField {
   revSharePercentage: Float!
 }
 
-type SupplierService @entity {
+type SupplierServiceConfig @entity {
   id: ID!
   supplier: Supplier!
   service: Service!
@@ -359,22 +382,25 @@ type SupplierService @entity {
   endpoints: [SupplierEndpoint]!
 }
 
-type SupplierUnbondingBeginEvent @entity {
+type EventSupplierUnbondingBegin @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   supplier: Supplier!
   block: Block!
   transaction: Transaction!
+  event: Event!
 }
 
-type SupplierUnbondingEndEvent @entity {
+type EventSupplierUnbondingEnd @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   supplier: Supplier!
   block: Block!
+  event: Event!
 }
 
-type AddServiceMsg @entity {
+type MsgAddService @entity {
+  # The ID of the message result of messageId(msg)
   id: ID!
   service: Service!
   name: String!
@@ -382,43 +408,51 @@ type AddServiceMsg @entity {
   owner: Account!
   block: Block!
   transaction: Transaction!
+  message: Message!
 }
 
 type Gateway @entity {
   # id is the address of the gateway
   id: ID!
   account: Account!
-  stake: Coin!
+  # we are not using Coin because we want to be able to query and sum by amount
+  stakeAmount: BigInt!
+  stakeDenom: String!
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
   status: Int!
-  unstakingStartBlock: Block
-  unstakedAtBlock: Block
-  stakeMsgs: [GatewayStakeMsg] @derivedFrom(field: "gateway")
-  unstakeMsgs: [GatewayUnstakeMsg] @derivedFrom(field: "gateway")
-  unstakedEvents: [GatewayUnstakedEvent] @derivedFrom(field: "gateway")
+  unstakingBeginBlock: Block
+  unstakingEndBlock: Block
+  stakeMsgs: [MsgStakeGateway] @derivedFrom(field: "gateway")
+  unstakeMsgs: [MsgUnstakeGateway] @derivedFrom(field: "gateway")
+  unstakedEvents: [EventGatewayUnstaked] @derivedFrom(field: "gateway")
 }
 
-type GatewayStakeMsg @entity {
+type MsgStakeGateway @entity {
   id: ID!
   gateway: Gateway!
-  stake: Coin!
+  # we are not using Coin because we want to be able to query and sum by amount
+  stakeAmount: BigInt!
+  stakeDenom: String!
   transaction: Transaction!
   block: Block!
+  message: Message!
 }
 
-type GatewayUnstakeMsg @entity {
+type MsgUnstakeGateway @entity {
   id: ID!
   gateway: Gateway!
   transaction: Transaction!
   block: Block!
+  message: Message!
 }
 
-type GatewayUnstakedEvent @entity {
+type EventGatewayUnstaked @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   gateway: Gateway!
   transaction: Transaction!
   block: Block!
+  event: Event!
 }
 
 # PARAMS

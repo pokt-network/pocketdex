@@ -4,24 +4,24 @@ import {
   GenesisFile as GenesisEntity,
 } from "../types";
 import type { AccountProps } from "../types/models/Account";
-import { AddServiceMsgProps } from "../types/models/AddServiceMsg";
 import type { ApplicationProps } from "../types/models/Application";
-import type { ApplicationDelegatedToGatewayProps } from "../types/models/ApplicationDelegatedToGateway";
+import { ApplicationGatewayProps } from "../types/models/ApplicationGateway";
 import type { ApplicationServiceProps } from "../types/models/ApplicationService";
 import type { AppParamProps } from "../types/models/AppParam";
-import type { AppStakeMsgProps } from "../types/models/AppStakeMsg";
-import type { AppStakeMsgServiceProps } from "../types/models/AppStakeMsgService";
 import type { BalanceProps } from "../types/models/Balance";
-import { DelegateToGatewayMsgProps } from "../types/models/DelegateToGatewayMsg";
 import type { GatewayProps } from "../types/models/Gateway";
-import type { GatewayStakeMsgProps } from "../types/models/GatewayStakeMsg";
 import type { GenesisBalanceProps } from "../types/models/GenesisBalance";
+import { MsgAddServiceProps } from "../types/models/MsgAddService";
+import { MsgDelegateToGatewayProps } from "../types/models/MsgDelegateToGateway";
+import { MsgStakeApplicationProps } from "../types/models/MsgStakeApplication";
+import { MsgStakeApplicationServiceProps } from "../types/models/MsgStakeApplicationService";
+import { MsgStakeGatewayProps } from "../types/models/MsgStakeGateway";
+import { MsgStakeSupplierProps } from "../types/models/MsgStakeSupplier";
+import { MsgStakeSupplierServiceProps } from "../types/models/MsgStakeSupplierService";
 import type { NativeBalanceChangeProps } from "../types/models/NativeBalanceChange";
 import type { ServiceProps } from "../types/models/Service";
 import type { SupplierProps } from "../types/models/Supplier";
-import type { SupplierServiceProps } from "../types/models/SupplierService";
-import type { SupplierStakeMsgProps } from "../types/models/SupplierStakeMsg";
-import type { SupplierStakeMsgServiceProps } from "../types/models/SupplierStakeMsgService";
+import { SupplierServiceConfigProps } from "../types/models/SupplierServiceConfig";
 import type { TransactionProps } from "../types/models/Transaction";
 import { configOptionsFromJSON, rPCTypeFromJSON } from "../types/proto-interfaces/poktroll/shared/service";
 import { StakeStatus, TxStatus } from "./constants";
@@ -32,9 +32,8 @@ import {
   getGenesisFakeTxHash,
   getMsgStakeServiceId, getParamId,
   getStakeServiceId,
+  stringify
 } from "./utils";
-// eslint-disable-next-line no-duplicate-imports
-import { stringify } from "./utils";
 
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   const genesis: Genesis = require('../../genesis.json');
@@ -150,7 +149,7 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
 }
 
 async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const services: Array<ServiceProps> = [], addServiceMsgs: Array<AddServiceMsgProps> = []
+  const services: Array<ServiceProps> = [], addServiceMsgs: Array<MsgAddServiceProps> = []
 
   for (const service of genesis.app_state.service.serviceList) {
     services.push({
@@ -160,28 +159,31 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       ownerId: service.owner_address,
     })
 
+    const msgId = `genesis-${service.id}`
+
     addServiceMsgs.push({
-      id: `genesis-${service.id}`,
+      id: msgId,
       serviceId: service.id,
       name: service.name,
       computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
       ownerId: service.owner_address,
       blockId: block.block.id,
       transactionId: getGenesisFakeTxHash('service', 0),
+      messageId: msgId,
     })
   }
 
   await Promise.all([
     store.bulkCreate('Service', services),
-    store.bulkCreate('AddServiceMsg', addServiceMsgs),
+    store.bulkCreate('MsgAddService', addServiceMsgs),
   ])
 }
 
 async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Promise<void> {
   const suppliers: Array<SupplierProps> = []
-  const supplierMsgStakes: Array<SupplierStakeMsgProps> = []
-  const supplierServices: Array<SupplierServiceProps> = []
-  const servicesAndSupplierMsgStakes: Array<SupplierStakeMsgServiceProps> = []
+  const supplierMsgStakes: Array<MsgStakeSupplierProps> = []
+  const supplierServices: Array<SupplierServiceConfigProps> = []
+  const servicesAndSupplierMsgStakes: Array<MsgStakeSupplierServiceProps> = []
   const transactions: Array<TransactionProps> = []
 
   for (let i = 0; i < genesis.app_state.supplier.supplierList.length; i++) {
@@ -198,26 +200,24 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       status: TxStatus.Success,
     })
 
-    const stakeCoin = {
-      amount: supplier.stake.amount,
-      denom: supplier.stake.denom,
-    }
-
     supplierMsgStakes.push({
       id: msgId,
-      stake: stakeCoin,
       blockId: block.block.id,
+      stakeAmount: BigInt(supplier.stake.amount),
+      stakeDenom: supplier.stake.denom,
       transactionId: transactionHash,
       ownerId: supplier.owner_address,
       signerId: supplier.owner_address,
-      supplierId: supplier.operator_address
+      supplierId: supplier.operator_address,
+      messageId: msgId,
     })
 
     suppliers.push({
       id: supplier.operator_address,
       operatorId: supplier.operator_address,
       ownerId: supplier.owner_address,
-      stake: stakeCoin,
+      stakeAmount: BigInt(supplier.stake.amount),
+      stakeDenom: supplier.stake.denom,
       status: StakeStatus.Staked
     })
 
@@ -238,7 +238,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
       servicesAndSupplierMsgStakes.push({
         id: getMsgStakeServiceId(msgId, service.service_id),
-        supplierStakeMsgId: msgId,
+        stakeMsgId: msgId,
         serviceId: service.service_id,
         endpoints,
         revShare,
@@ -256,21 +256,21 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
   await Promise.all([
     store.bulkCreate('Supplier', suppliers),
-    store.bulkCreate('SupplierStakeMsg', supplierMsgStakes),
-    store.bulkCreate('SupplierService', supplierServices),
-    store.bulkCreate('SupplierStakeMsgService', servicesAndSupplierMsgStakes),
+    store.bulkCreate('MsgStakeSupplier', supplierMsgStakes),
+    store.bulkCreate('SupplierServiceConfig', supplierServices),
+    store.bulkCreate('MsgStakeSupplierService', servicesAndSupplierMsgStakes),
     store.bulkCreate('Transaction', transactions)
   ])
 }
 
 async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock): Promise<void> {
   const applications: Array<ApplicationProps> = []
-  const appMsgStakes: Array<AppStakeMsgProps> = []
+  const appMsgStakes: Array<MsgStakeApplicationProps> = []
   const appServices: Array<ApplicationServiceProps> = []
-  const servicesAndAppMsgStakes: Array<AppStakeMsgServiceProps> = []
-  const msgDelegateToGateways: Array<DelegateToGatewayMsgProps> = []
+  const servicesAndAppMsgStakes: Array<MsgStakeApplicationServiceProps> = []
+  const msgDelegateToGateways: Array<MsgDelegateToGatewayProps> = []
   const transactions: Array<TransactionProps> = []
-  const appsDelegatedToGateways: Array<ApplicationDelegatedToGatewayProps> = []
+  const appsDelegatedToGateways: Array<ApplicationGatewayProps> = []
 
   for (let i = 0; i < genesis.app_state.application.applicationList.length; i++) {
     const app = genesis.app_state.application.applicationList[i]
@@ -288,12 +288,14 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
 
     if (app.delegatee_gateway_addresses.length > 0) {
       for (const gatewayAddress of app.delegatee_gateway_addresses) {
+        const msgId = `genesis-${gatewayAddress}`
         msgDelegateToGateways.push({
-          id: `${msgId}-${gatewayAddress}`,
+          id: msgId,
           applicationId: app.address,
           gatewayId: gatewayAddress,
           blockId: block.block.id,
-          transactionId: transactionHash
+          transactionId: transactionHash,
+          messageId: msgId,
         })
 
         appsDelegatedToGateways.push({
@@ -304,30 +306,28 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       }
     }
 
-    const stakeCoin = {
-      amount: app.stake.amount,
-      denom: app.stake.denom,
-    }
-
     appMsgStakes.push({
       id: msgId,
-      stake: stakeCoin,
+      stakeAmount: BigInt(app.stake.amount),
+      stakeDenom: app.stake.denom,
       blockId: block.block.id,
       applicationId: app.address,
-      transactionId: transactionHash
+      transactionId: transactionHash,
+      messageId: msgId,
     })
 
     applications.push({
       id: app.address,
       accountId: app.address,
-      stake: stakeCoin,
+      stakeAmount: BigInt(app.stake.amount),
+      stakeDenom: app.stake.denom,
       status: StakeStatus.Staked
     })
 
     for (const service of app.service_configs) {
       servicesAndAppMsgStakes.push({
         id: getMsgStakeServiceId(msgId, service.service_id),
-        appStakeMsgId: msgId,
+        stakeMsgId: msgId,
         serviceId: service.service_id,
       })
 
@@ -340,16 +340,16 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
   }
 
   const promises: Array<Promise<void>> =[
-    store.bulkCreate('AppStakeMsg', appMsgStakes),
+    store.bulkCreate('MsgStakeApplication', appMsgStakes),
     store.bulkCreate('Application', applications),
     store.bulkCreate('Transaction', transactions),
     store.bulkCreate('ApplicationService', appServices),
-    store.bulkCreate('AppStakeMsgService', servicesAndAppMsgStakes),
-    store.bulkCreate('ApplicationDelegatedToGateway', appsDelegatedToGateways)
+    store.bulkCreate('MsgStakeApplicationService', servicesAndAppMsgStakes),
+    store.bulkCreate('ApplicationGateway', appsDelegatedToGateways)
   ]
 
   if (msgDelegateToGateways.length > 0) {
-    promises.push(store.bulkCreate('DelegateToGatewayMsg', msgDelegateToGateways))
+    promises.push(store.bulkCreate('MsgDelegateToGateway', msgDelegateToGateways))
   }
 
   await Promise.all(promises)
@@ -357,7 +357,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
 
 async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Promise<void> {
   const gateways: Array<GatewayProps> = []
-  const gatewayMsgStakes: Array<GatewayStakeMsgProps> = []
+  const gatewayMsgStakes: Array<MsgStakeGatewayProps> = []
   const transactions: Array<TransactionProps> = []
 
   for (let i = 0; i < genesis.app_state.gateway.gatewayList.length; i++) {
@@ -374,30 +374,28 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       status: TxStatus.Success,
     })
 
-    const stakeCoin = {
-      amount: gateway.stake.amount,
-      denom: gateway.stake.denom,
-    }
-
     gatewayMsgStakes.push({
       id: msgId,
-      stake: stakeCoin,
+      stakeAmount: BigInt(gateway.stake.amount),
+      stakeDenom: gateway.stake.denom,
       blockId: block.block.id,
       gatewayId: gateway.address,
-      transactionId: transactionHash
+      transactionId: transactionHash,
+      messageId: msgId,
     })
 
     gateways.push({
       id: gateway.address,
       accountId: gateway.address,
-      stake: stakeCoin,
+      stakeAmount: BigInt(gateway.stake.amount),
+      stakeDenom: gateway.stake.denom,
       status: StakeStatus.Staked
     })
   }
 
   await Promise.all([
     store.bulkCreate('Gateway', gateways),
-    store.bulkCreate('GatewayStakeMsg', gatewayMsgStakes),
+    store.bulkCreate('MsgStakeGateway', gatewayMsgStakes),
     store.bulkCreate('Transaction', transactions)
   ])
 }

@@ -1,14 +1,14 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import {
   Supplier,
-  SupplierStakeMsg,
-  SupplierUnstakeMsg,
-  SupplierService,
-  SupplierUnbondingBeginEvent,
-  SupplierUnbondingEndEvent,
+  MsgStakeSupplier as MsgStakeSupplierEntity,
+  MsgUnstakeSupplier as MsgUnstakeSupplierEntity,
+  SupplierServiceConfig,
+  EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
+  EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity,
 } from "../../types";
-import { SupplierServiceProps } from "../../types/models/SupplierService";
-import { SupplierStakeMsgServiceProps } from "../../types/models/SupplierStakeMsgService";
+import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
+import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
 import { MsgStakeSupplier, MsgUnstakeSupplier } from "../../types/proto-interfaces/poktroll/supplier/tx";
 import { StakeStatus } from "../constants";
 import {
@@ -55,36 +55,33 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
 
   const msgId = messageId(msg)
 
-  // TODO(@Alann27): this should be a BigInt? Should we use coin for stake or we should split amount and denom?
-  const stakeCoin = {
-    amount: msg.msg.decodedMsg.stake.amount,
-    denom: msg.msg.decodedMsg.stake.denom,
-  }
-
-  const supplierMsgStake = SupplierStakeMsg.create({
+  const supplierMsgStake = MsgStakeSupplierEntity.create({
     id: msgId,
     signerId: msg.msg.decodedMsg.signer,
     supplierId: msg.msg.decodedMsg.operatorAddress,
     ownerId: msg.msg.decodedMsg.ownerAddress,
-    stake: stakeCoin,
+    stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
+    stakeDenom: msg.msg.decodedMsg.stake.denom,
     blockId: msg.block.block.id,
     transactionId: msg.tx.hash,
+    messageId: msgId,
   })
 
   const supplier = Supplier.create({
     id: msg.msg.decodedMsg.operatorAddress,
     operatorId: msg.msg.decodedMsg.operatorAddress,
     ownerId: msg.msg.decodedMsg.ownerAddress,
-    stake: stakeCoin,
+    stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
+    stakeDenom: msg.msg.decodedMsg.stake.denom,
     status: StakeStatus.Staked,
-    unstakingHeight: undefined,
-    unstakedAtBlockId: undefined,
-    unstakingStartBlockId: undefined,
+    unstakingEndHeight: undefined,
+    unstakingEndBlockId: undefined,
+    unstakingBeginBlockId: undefined,
   })
 
   const servicesId: Array<string> = []
-  const supplierMsgStakeServices: Array<SupplierStakeMsgServiceProps> = []
-  const newSupplierServices: Array<SupplierServiceProps> = []
+  const supplierMsgStakeServices: Array<MsgStakeSupplierServiceProps> = []
+  const newSupplierServices: Array<SupplierServiceConfigProps> = []
 
   const operatorAddress = msg.msg.decodedMsg.operatorAddress
 
@@ -105,7 +102,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     supplierMsgStakeServices.push({
       id: getMsgStakeServiceId(msgId, serviceId),
       serviceId,
-      supplierStakeMsgId: msgId,
+      stakeMsgId: msgId,
       endpoints: endpointsArr,
       revShare: revShareArr
     })
@@ -119,7 +116,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     })
   }
 
-  const currentSupplierServices = await SupplierService.getBySupplierId(operatorAddress, {})
+  const currentSupplierServices = await SupplierServiceConfig.getBySupplierId(operatorAddress, {})
 
   const servicesToRemove: Array<string> = []
 
@@ -134,12 +131,12 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
   const promises: Array<Promise<void>> = [
     supplierMsgStake.save(),
     supplier.save(),
-    store.bulkCreate('SupplierMsgStakeService', supplierMsgStakeServices),
-    store.bulkCreate('SupplierService', newSupplierServices),
+    store.bulkCreate('MsgStakeSupplierService', supplierMsgStakeServices),
+    store.bulkCreate('SupplierServiceConfig', newSupplierServices),
   ]
 
   if (servicesToRemove.length > 0) {
-    promises.push(store.bulkRemove('SupplierService', servicesToRemove))
+    promises.push(store.bulkRemove('SupplierServiceConfig', servicesToRemove))
   }
 
   await Promise.all(promises)
@@ -155,16 +152,19 @@ async function _handleUnstakeSupplierMsg(
     throw new Error(`[handleUnstakeSupplierMsg] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`)
   }
 
-  const msgUnstakeSupplier = SupplierUnstakeMsg.create({
-    id: messageId(msg),
+  const msgId = messageId(msg)
+
+  const msgUnstakeSupplier = MsgUnstakeSupplierEntity.create({
+    id: msgId,
     signerId: msg.msg.decodedMsg.signer,
     supplierId: msg.msg.decodedMsg.operatorAddress,
     blockId: msg.block.block.id,
     transactionId: msg.tx.hash,
+    messageId: msgId,
   })
 
   supplier.status = StakeStatus.Unstaking
-  supplier.unstakingStartBlockId = msg.block.block.id
+  supplier.unstakingBeginBlockId = msg.block.block.id
 
   await Promise.all([
     supplier.save(),
@@ -198,15 +198,18 @@ async function _handleSupplierUnbondingBeginEvent(
     throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`)
   }
 
-  supplier.unstakingHeight = BigInt((unbondingHeight as unknown as string).replaceAll('"', ""))
+  supplier.unstakingEndHeight = BigInt((unbondingHeight as unknown as string).replaceAll('"', ""))
+
+  const eventId = getEventId(event)
 
   await Promise.all([
     supplier.save(),
-    SupplierUnbondingBeginEvent.create({
-      id: getEventId(event),
+    EventSupplierUnbondingBeginEntity.create({
+      id: eventId,
       supplierId: msg.msg.decodedMsg.operatorAddress,
       blockId: event.block.block.id,
-      transactionId: event.tx.hash
+      transactionId: event.tx.hash,
+      eventId,
     }).save(),
   ])
 }
@@ -234,18 +237,21 @@ async function _handleSupplierUnbondingEndEvent(
     throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`)
   }
 
-  supplier.unstakedAtBlockId = event.block.block.id
+  supplier.unstakingEndBlockId = event.block.block.id
   supplier.status = StakeStatus.Unstaked
 
-  const supplierServices = (await SupplierService.getBySupplierId(supplierAddress, {}) || []).map(item => item.id)
+  const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, {}) || []).map(item => item.id)
+
+  const eventId = getEventId(event)
 
   await Promise.all([
-    SupplierUnbondingEndEvent.create({
-      id: getEventId(event),
+    EventSupplierUnbondingEndEntity.create({
+      id: eventId,
       supplierId: supplierAddress,
       blockId: event.block.block.id,
+      eventId,
     }).save(),
     supplier.save(),
-    store.bulkRemove('SupplierService', supplierServices),
+    store.bulkRemove('SupplierServiceConfig', supplierServices),
   ])
 }

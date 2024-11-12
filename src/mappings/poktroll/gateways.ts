@@ -1,5 +1,10 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
-import { Gateway, GatewayStakeMsg, GatewayUnstakedEvent, GatewayUnstakeMsg } from "../../types";
+import {
+  Gateway,
+  MsgStakeGateway as MsgStakeGatewayEntity,
+  MsgUnstakeGateway as MsgUnstakeGatewayEntity,
+  EventGatewayUnstaked as EventGatewayUnstakedEntity,
+} from "../../types";
 import { MsgStakeGateway, MsgUnstakeGateway } from "../../types/proto-interfaces/poktroll/gateway/tx";
 import { StakeStatus } from "../constants";
 import {
@@ -39,20 +44,25 @@ async function _handleGatewayMsgStake(
 
   const gateway = Gateway.create({
     id: msg.msg.decodedMsg.address,
-    stake,
+    stakeAmount: BigInt(stake.amount),
+    stakeDenom: stake.denom,
     accountId: msg.msg.decodedMsg.address,
     status: StakeStatus.Staked,
-    unstakingStartBlockId: undefined,
-    unstakedAtBlockId: undefined
+    unstakingBeginBlockId: undefined,
+    unstakingEndBlockId: undefined
   })
 
+  const msgId = messageId(msg)
+
   await Promise.all([
-    GatewayStakeMsg.create({
-      id: messageId(msg),
+    MsgStakeGatewayEntity.create({
+      id: msgId,
       gatewayId: msg.msg.decodedMsg.address,
-      stake,
+      stakeAmount: BigInt(stake.amount),
+      stakeDenom: stake.denom,
       blockId: msg.block.block.id,
-      transactionId: msg.tx.hash
+      transactionId: msg.tx.hash,
+      messageId: msgId
     }).save(),
     gateway.save()
   ])
@@ -69,15 +79,18 @@ async function _handleGatewayMsgUnstake(
   }
 
   gateway.status = StakeStatus.Unstaking
-  gateway.unstakingStartBlockId = msg.block.block.id
+  gateway.unstakingBeginBlockId = msg.block.block.id
+
+  const msgId = messageId(msg)
 
   await Promise.all([
     gateway.save(),
-    GatewayUnstakeMsg.create({
-      id: messageId(msg),
+    MsgUnstakeGatewayEntity.create({
+      id: msgId,
       transactionId: msg.tx.hash,
       blockId: msg.block.block.id,
-      gatewayId: msg.msg.decodedMsg.address
+      gatewayId: msg.msg.decodedMsg.address,
+      messageId: msgId
     }).save()
   ])
 }
@@ -106,15 +119,18 @@ async function _handleGatewayUnstakeEvent(
     throw new Error(`[handleGatewayMsgUnstake] gateway not found with address: ${gatewayAddress}`);
   }
 
-  gateway.unstakedAtBlockId = event.block.block.id
+  gateway.unstakingEndBlockId = event.block.block.id
   gateway.status = StakeStatus.Unstaked
 
+  const eventId = getEventId(event)
+
   await Promise.all([
-    GatewayUnstakedEvent.create({
-      id: getEventId(event),
+    EventGatewayUnstakedEntity.create({
+      id: eventId,
       gatewayId: gatewayAddress,
       blockId: event.block.block.id,
-      transactionId: event.tx.hash
+      transactionId: event.tx.hash,
+      eventId
     }).save(),
     gateway.save()
   ])
