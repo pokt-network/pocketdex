@@ -1,7 +1,7 @@
 import util from "util";
 import {CosmosMessage} from "@subql/types-cosmos";
 import allModuleTypes from "../../cosmjs/proto";
-import { AuthzExec, AuthzExecMessage, Message } from "../../types";
+import { AuthzExec, AuthzMsgExec, Message } from "../../types";
 import { _handleUpdateParam } from "../poktroll/params";
 import { AuthzExecMsg } from "../types";
 import { attemptHandling, messageId, stringify, unprocessedEventHandler } from "../utils";
@@ -71,10 +71,10 @@ async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void>
         blockId: msg.block.block.id,
       }).save();
 
-      /* NB: Create AuthzExecMessage entity to join AuthzExec and Messages
+      /* NB: Create AuthzMsgExec entity to join AuthzExec and Messages
              without requiring a foreign key in Message type.
        */
-      await AuthzExecMessage.create({
+      await AuthzMsgExec.create({
         id: subMsgId,
         authzExecId,
         messageId: subMsgId,

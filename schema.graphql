@@ -314,6 +314,7 @@ type MsgStakeSupplier @entity {
   block: Block!
   transaction: Transaction!
   message: Message!
+  serviceConfigs: [MsgStakeSupplierService] @derivedFrom(field: "stakeMsg")
 }
 
 type MsgStakeSupplierService @entity {
@@ -355,7 +356,7 @@ type Supplier @entity {
   # Block where the supplier was unstaked/unbonded.
   # This is received with the EventSupplierUnbondingEnd event.
   unstakingEndBlock: Block
-  services: [SupplierServiceConfig] @derivedFrom(field: "supplier")
+  serviceConfigs: [SupplierServiceConfig] @derivedFrom(field: "supplier")
 }
 
 type ConfigOption @jsonField {
@@ -572,14 +573,14 @@ type ConsensusParam @entity {
 type AuthzExec @entity {
   id: ID!
   grantee: String! @index
-  subMessages: [AuthzExecMessage]! @derivedFrom(field: "authzExec")
+  subMessages: [AuthzMsgExec]! @derivedFrom(field: "authzExec")
   message: Message!
   transaction: Transaction!
   block: Block!
 }
 
 # NB: AuthzExec --|{ Message join table
-type AuthzExecMessage @entity {
+type AuthzMsgExec @entity {
   id: ID!
   authzExec: AuthzExec!
   message: Message!
