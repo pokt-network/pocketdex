@@ -47,9 +47,7 @@ async function _handleGatewayMsgStake(
     stakeAmount: BigInt(stake.amount),
     stakeDenom: stake.denom,
     accountId: msg.msg.decodedMsg.address,
-    status: StakeStatus.Staked,
-    unstakingBeginBlockId: undefined,
-    unstakingEndBlockId: undefined
+    stakeStatus: StakeStatus.Staked,
   })
 
   const msgId = messageId(msg)
@@ -78,7 +76,7 @@ async function _handleGatewayMsgUnstake(
     throw new Error(`[handleGatewayMsgUnstake] gateway not found with address: ${msg.msg.decodedMsg.address}`);
   }
 
-  gateway.status = StakeStatus.Unstaking
+  gateway.stakeStatus = StakeStatus.Unstaking
   gateway.unstakingBeginBlockId = msg.block.block.id
 
   const msgId = messageId(msg)
@@ -120,7 +118,7 @@ async function _handleGatewayUnstakeEvent(
   }
 
   gateway.unstakingEndBlockId = event.block.block.id
-  gateway.status = StakeStatus.Unstaked
+  gateway.stakeStatus = StakeStatus.Unstaked
 
   const eventId = getEventId(event)
 

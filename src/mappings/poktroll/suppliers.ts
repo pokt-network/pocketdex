@@ -5,7 +5,7 @@ import {
   MsgUnstakeSupplier as MsgUnstakeSupplierEntity,
   SupplierServiceConfig,
   EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
-  EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity,
+  EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity, SupplierEndpoint, SupplierRevShare,
 } from "../../types";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
 import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
@@ -73,14 +73,13 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     ownerId: msg.msg.decodedMsg.ownerAddress,
     stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
     stakeDenom: msg.msg.decodedMsg.stake.denom,
-    status: StakeStatus.Staked,
-    unstakingEndHeight: undefined,
-    unstakingEndBlockId: undefined,
-    unstakingBeginBlockId: undefined,
+    stakeStatus: StakeStatus.Staked,
   })
 
   const servicesId: Array<string> = []
+  // used to create the services that came in the stake message
   const supplierMsgStakeServices: Array<MsgStakeSupplierServiceProps> = []
+  // used to have the services that are currently configured for the supplier
   const newSupplierServices: Array<SupplierServiceConfigProps> = []
 
   const operatorAddress = msg.msg.decodedMsg.operatorAddress
@@ -88,13 +87,13 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
   for (const {endpoints, revShare, serviceId} of msg.msg.decodedMsg.services) {
     servicesId.push(serviceId)
 
-    const endpointsArr = endpoints.map((endpoint) => ({
+    const endpointsArr: Array<SupplierEndpoint> = endpoints.map((endpoint) => ({
       url: endpoint.url,
       rpcType: endpoint.rpcType,
       configs: endpoint.configs,
     }))
 
-    const revShareArr = revShare.map((revShare) => ({
+    const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,
       revSharePercentage: revShare.revSharePercentage,
     }))
@@ -163,7 +162,7 @@ async function _handleUnstakeSupplierMsg(
     messageId: msgId,
   })
 
-  supplier.status = StakeStatus.Unstaking
+  supplier.stakeStatus = StakeStatus.Unstaking
   supplier.unstakingBeginBlockId = msg.block.block.id
 
   await Promise.all([
@@ -238,7 +237,7 @@ async function _handleSupplierUnbondingEndEvent(
   }
 
   supplier.unstakingEndBlockId = event.block.block.id
-  supplier.status = StakeStatus.Unstaked
+  supplier.stakeStatus = StakeStatus.Unstaked
 
   const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, {}) || []).map(item => item.id)
 

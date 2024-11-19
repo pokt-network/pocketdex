@@ -189,7 +189,7 @@ type Application @entity {
   stakeAmount: BigInt!
   stakeDenom: String!
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  status: Int!
+  stakeStatus: Int!
   # Block where the msg to unstake the application was received
   unstakingBeginBlock: Block
   # Height of the block where the application is going to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
@@ -347,7 +347,7 @@ type Supplier @entity {
   unstakingBeginEvents: [EventSupplierUnbondingBegin] @derivedFrom(field: "supplier")
   unstakingEndEvents: [EventSupplierUnbondingEnd] @derivedFrom(field: "supplier")
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  status: Int!
+  stakeStatus: Int!
   # Block where MsgUnstakeSupplier was received
   unstakingBeginBlock: Block
   # Height of the block where the supplier is going to be unstaked/unbonded.
@@ -420,7 +420,7 @@ type Gateway @entity {
   stakeAmount: BigInt!
   stakeDenom: String!
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  status: Int!
+  stakeStatus: Int!
   unstakingBeginBlock: Block
   unstakingEndBlock: Block
   stakeMsgs: [MsgStakeGateway] @derivedFrom(field: "gateway")

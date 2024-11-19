@@ -28,7 +28,7 @@ import {
   MsgUnstakeApplication,
 } from "../../types/proto-interfaces/poktroll/application/tx";
 import { ApplicationSDKType } from "../../types/proto-interfaces/poktroll/application/types";
-import { StakeStatus } from "../constants";
+import { ApplicationUnbondingReason, StakeStatus } from "../constants";
 import {
   attemptHandling,
   getAppDelegatedToGatewayId,
@@ -127,15 +127,13 @@ async function _handleAppMsgStake(
     accountId: address,
     stakeAmount,
     stakeDenom,
-    status: StakeStatus.Staked,
-    unstakingBeginBlockId: undefined,
-    unstakingEndHeight: undefined,
-    unstakingReason: undefined,
-    unstakingEndBlockId: undefined,
+    stakeStatus: StakeStatus.Staked,
   })
 
   const servicesId: Array<string> = []
+  // used to create the services that came in the stake message
   const appMsgStakeServices: Array<MsgStakeApplicationServiceProps> = []
+  // used to have the services that are currently configured for the application
   const newApplicationServices: Array<ApplicationServiceProps> = []
 
   for (const {serviceId} of msg.msg.decodedMsg.services) {
@@ -243,7 +241,7 @@ async function _handleUnstakeApplicationMsg(
     throw new Error(`[handleUnstakeApplicationMsg] application not found for address ${msg.msg.decodedMsg.address}`)
   }
 
-  application.status = StakeStatus.Unstaking
+  application.stakeStatus = StakeStatus.Unstaking
   application.unstakingBeginBlockId = msg.block.block.id
 
   const msgId = messageId(msg)
@@ -346,8 +344,8 @@ async function _handleTransferApplicationEndEvent(
   sourceApplication.transferringToId = undefined
   sourceApplication.transferEndHeight = undefined
   sourceApplication.transferEndBlockId = event.block.block.id
-  sourceApplication.status = StakeStatus.Unstaked
-  sourceApplication.unstakingReason = 2
+  sourceApplication.stakeStatus = StakeStatus.Unstaked
+  sourceApplication.unstakingReason = ApplicationUnbondingReason.TRANSFERRED
   sourceApplication.unstakingEndBlockId = event.block.block.id
 
   const destinationAppStringified = event.event.attributes.find(attribute => attribute.key === "destination_application")?.value as string
@@ -368,7 +366,7 @@ async function _handleTransferApplicationEndEvent(
     accountId: destinationApp.address,
     stakeAmount: BigInt(stake.amount),
     stakeDenom: stake.denom,
-    status: StakeStatus.Staked,
+    stakeStatus: StakeStatus.Staked,
     sourceApplicationId: sourceAddress,
     transferredFromAtId: event.block.block.id,
     unstakingEndBlockId: sourceApplication.unstakingEndBlockId,
@@ -513,6 +511,7 @@ async function _handleApplicationUnbondingBeginEvent(
   }
 
   application.unstakingEndHeight = unstakingEndHeight
+  // comes form the event and parsing it using applicationUnbondingReasonFromJSON function
   application.unstakingReason = reason
 
   const eventId = getEventId(event)
@@ -588,7 +587,7 @@ async function _handleApplicationUnbondingEndEvent(
   }
 
   application.unstakingEndBlockId = event.block.block.id
-  application.status = StakeStatus.Unstaked
+  application.stakeStatus = StakeStatus.Unstaked
   application.unstakingReason = reason
 
   const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address, {}) || []).map(item => item.id)

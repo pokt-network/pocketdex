@@ -1,3 +1,5 @@
+import { ApplicationUnbondingReason as ApplicationUnbondingReasonEnum } from "../client/poktroll/application/event";
+
 export const PREFIX = "poktroll";
 
 export enum StakeStatus {
@@ -10,3 +12,9 @@ export enum TxStatus {
   Success = 0,
   Error = 1,
 }
+
+// extending the enum to add a TRANSFERRED value
+export const ApplicationUnbondingReason = {
+  ...ApplicationUnbondingReasonEnum,
+  TRANSFERRED: 2,
+} as const

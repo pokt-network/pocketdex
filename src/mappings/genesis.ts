@@ -63,6 +63,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   }).save();
 }
 
+// Creates an event for the entities that requires it. Doing this we are still requiring the events in the schema.
 async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
   await Event.create({
     id: "genesis",
@@ -72,72 +73,49 @@ async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
 }
 
 async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  // get Accounts
-  const accounts : Array<AccountProps> = genesis.app_state.auth.accounts.map(account => {
-    return {
+  const accounts : Array<AccountProps> = []
+
+  for (const account of genesis.app_state.auth.accounts) {
+    accounts.push({
       id: account.address,
       chainId: block.block.header.chainId,
-    }
-  })
+    })
+  }
 
   // get balances
   const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
   const genesisBalances: Array<GenesisBalanceProps> = [];
   const balances: Array<BalanceProps> = [];
 
-  type AmountByAccountAndDenom = Record<string, {
-    accountId: string,
-    amount: bigint,
-    denom: string,
-  }>
 
-  // here we are grouping the amount of each denom for each account
-  const amountByAccountAndDenom: AmountByAccountAndDenom = genesis.app_state.bank.balances.reduce((acc, balance) => {
-    const amountByDenom: Record<string, bigint> = balance.coins.reduce((acc, coin) => ({
-      ...acc,
-      [coin.denom]: BigInt(acc[coin.denom] || 0) +  BigInt(coin.amount),
-    }), {} as Record<string, bigint>)
-
-    for (const [denom, amount] of Object.entries(amountByDenom)) {
+  for (const balance of genesis.app_state.bank.balances) {
+    for (const {amount, denom} of balance.coins) {
       const id = getBalanceId(balance.address, denom)
-      if (acc[id]) {
-        acc[id].amount += amount
-      } else {
-        acc[id] = {
-          amount,
-          denom,
-          accountId: balance.address,
-        }
-      }
+
+      nativeBalanceChanges.push({
+        id,
+        balanceOffset: BigInt(amount),
+        denom,
+        accountId: balance.address,
+        eventId: "genesis",
+        blockId: block.block.id,
+      });
+
+      genesisBalances.push({
+        id,
+        amount: BigInt(amount),
+        denom,
+        accountId: balance.address,
+      });
+
+      balances.push({
+        id,
+        amount: BigInt(amount),
+        denom,
+        accountId: balance.address,
+        lastUpdatedBlockId: block.block.id,
+      });
     }
-
-    return acc
-  }, {} as AmountByAccountAndDenom)
-
-  for (const [id, {accountId, amount, denom}] of Object.entries(amountByAccountAndDenom)) {
-    nativeBalanceChanges.push({
-      id,
-      balanceOffset: amount.valueOf(),
-      denom,
-      accountId: accountId,
-      eventId: "genesis",
-      blockId: block.block.id,
-    });
-
-    genesisBalances.push({
-      id,
-      amount: amount,
-      denom,
-      accountId: accountId,
-    });
-
-    balances.push({
-      id,
-      amount: amount,
-      denom,
-      accountId: accountId,
-      lastUpdatedBlockId: block.block.id,
-    });
   }
 
   await Promise.all([
@@ -218,7 +196,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       ownerId: supplier.owner_address,
       stakeAmount: BigInt(supplier.stake.amount),
       stakeDenom: supplier.stake.denom,
-      status: StakeStatus.Staked
+      stakeStatus: StakeStatus.Staked
     })
 
     for (const service of supplier.services) {
@@ -321,7 +299,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       accountId: app.address,
       stakeAmount: BigInt(app.stake.amount),
       stakeDenom: app.stake.denom,
-      status: StakeStatus.Staked
+      stakeStatus: StakeStatus.Staked
     })
 
     for (const service of app.service_configs) {
@@ -389,7 +367,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       accountId: gateway.address,
       stakeAmount: BigInt(gateway.stake.amount),
       stakeDenom: gateway.stake.denom,
-      status: StakeStatus.Staked
+      stakeStatus: StakeStatus.Staked
     })
   }
 
