@@ -26,7 +26,7 @@ export function parseJson<T>(str: string, reviver?: (this: unknown, key: string,
 }
 
 export function stringify(value: unknown, replacer?: (this: unknown, key: string, value: unknown) => unknown, space?: string | number): string {
-  return JSONBig.stringify(value, replacer, space);
+  return JSONBig.stringify(value, replacer || undefined, space);
 }
 
 // messageId returns the id of the message passed or
@@ -76,6 +76,10 @@ export async function attemptHandling(
 
 export async function unprocessedEventHandler(err: Error, event: CosmosEvent): Promise<void> {
   await trackUnprocessed(err, primitivesFromEvent(event));
+}
+
+export async function unprocessedMsgHandler(err: Error, msg: CosmosMessage): Promise<void> {
+  await trackUnprocessed(err, primitivesFromMsg(msg));
 }
 
 export function primitivesFromTx(tx: CosmosTransaction): Primitives {
@@ -130,10 +134,51 @@ export async function trackUnprocessed(error: Error, primitives: Primitives): Pr
   }
 }
 
+// Returns the id of the entity that establishes the relationship between the MsgStake and Service.
+export function getMsgStakeServiceId(msgStakeId: string, serviceId: string): string {
+  return `${msgStakeId}-${serviceId}`;
+}
+
+// Returns the id of the entity that establishes the relationship between the Entity staked and Service.
+export function getStakeServiceId(entityStakedId: string, serviceId: string): string {
+  return `${entityStakedId}-${serviceId}`;
+}
+
 // getBalanceId returns the id of the Balance entity using the address and denom passed.
 // Use this to get the id of the Balance entities across the indexing process.
 export function getBalanceId(address: string, denom: string): string {
   return `${address}-${denom}`;
+}
+
+// Returns the id of the entity that establishes the relationship between the Gateway that the app is being delegated to.
+export function getAppDelegatedToGatewayId(appAddress: string, gatewayAddress: string): string {
+  return `${appAddress}-${gatewayAddress}`;
+}
+
+// Returns a string that satisfies the format of a transaction hash.
+export function getGenesisFakeTxHash(entity: 'app' | 'supplier' | 'gateway' | 'service', index: number): string {
+  const num = index + 1;
+  let entityId: string
+
+  switch (entity) {
+    case 'app':
+      entityId = 'A';
+      break
+    case 'supplier':
+      entityId = 'B';
+      break
+    case "gateway":
+      entityId = 'C';
+      break
+    case 'service':
+      entityId = 'D';
+      break;
+    default: {
+      throw new Error('Not implemented');
+    }
+  }
+
+  return `${'0'.repeat(64 - num.toString().length - entityId.length)}${num}${entityId}`;
 }
 
 export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
@@ -155,4 +200,9 @@ export async function updateAccountBalance(address: string, denom: string, offse
   await balance.save();
 
   logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balance?.amount}`);
+}
+
+// Returns the id of the param entity using the key and blockId passed.
+export function getParamId(key: string, blockId: string): string {
+  return `${key}-${blockId}`;
 }

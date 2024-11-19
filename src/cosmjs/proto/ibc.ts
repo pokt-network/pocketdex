@@ -1,4 +1,4 @@
-import {GeneratedType} from "@cosmjs/proto-signing";
+import type {GeneratedType} from "@cosmjs/proto-signing";
 import {MsgTransfer} from "cosmjs-types/ibc/applications/transfer/v1/tx";
 import {
   MsgAcknowledgement,

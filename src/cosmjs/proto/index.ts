@@ -1,4 +1,4 @@
-import {GeneratedType} from "@cosmjs/proto-signing";
+import type {GeneratedType} from "@cosmjs/proto-signing";
 import {bankTypes} from "./bank";
 import {distributionTypes} from "./distribution";
 import {govTypes} from "./gov";

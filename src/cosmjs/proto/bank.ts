@@ -1,4 +1,4 @@
-import {GeneratedType} from "@cosmjs/proto-signing";
+import type {GeneratedType} from "@cosmjs/proto-signing";
 import {MsgMultiSend, MsgSend} from "cosmjs-types/cosmos/bank/v1beta1/tx";
 
 export const bankTypes: ReadonlyArray<[string, GeneratedType]> = [
