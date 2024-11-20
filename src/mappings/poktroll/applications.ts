@@ -39,7 +39,6 @@ import {
   unprocessedEventHandler,
   unprocessedMsgHandler,
 } from "../utils/handlers";
-import { stringify } from "../utils/json";
 import {
   getAppDelegatedToGatewayId,
   getEventId,
@@ -47,6 +46,7 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { stringify } from "../utils/json";
 
 export async function handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
