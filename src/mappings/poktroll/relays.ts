@@ -1,6 +1,5 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
-import { getEventId, getRelayId, messageId, stringify } from "../utils";
-import { MsgCreateClaim, MsgSubmitProof } from "../../types/proto-interfaces/poktroll/proof/tx";
+import { claimExpirationReasonFromJSON } from "../../client/poktroll/tokenomics/event";
 import {
   ClaimExpirationReason,
   EventClaimCreated,
@@ -14,19 +13,22 @@ import {
   ProofRequirementReason,
   Relay
 } from "../../types";
+import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
+import { MsgCreateClaim, MsgSubmitProof } from "../../types/proto-interfaces/poktroll/proof/tx";
 import {
   ClaimSDKType,
   proofRequirementReasonFromJSON,
   ProofRequirementReasonSDKType,
   ProofSDKType,
 } from "../../types/proto-interfaces/poktroll/proof/types";
-import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
-import { claimExpirationReasonFromJSON } from "../../client/poktroll/tokenomics/event";
 import { ClaimExpirationReasonSDKType } from "../../types/proto-interfaces/poktroll/tokenomics/event";
+import { RelayStatus } from "../constants";
+import { getEventId, getRelayId, messageId, stringify } from "../utils";
 
 function parseAttribute(attribute: unknown): string {
   return (attribute as string).replaceAll('"', '')
 }
+// eslint-disable-next-line complexity
 export async function handleEventClaimSettled(event: CosmosEvent): Promise<void> {
   logger.debug(`[handleEventClaimSettled] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
@@ -73,7 +75,7 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
     }
   }
 
-  const {session_header, supplier_operator_address, root_hash} = claim
+  const {root_hash, session_header, supplier_operator_address} = claim
 
   const id = getRelayId({
     applicationId: session_header?.application_address || '',
@@ -93,12 +95,8 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimed: {
-      amount: claimed?.amount || '',
-      denom: claimed?.denom || '',
-    },
-    transactionId: event.tx?.hash,
-    blockId: event.block.block.id,
+    claimedDenom: claimed?.denom || '',
+    claimedAmount: BigInt(claimed?.amount || '0'),
   } as const
 
   const relay = await Relay.get(id)
@@ -108,17 +106,19 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
       ...relay,
       ...shared,
       id,
-      status: 1,
+      status: RelayStatus.SUCCESSFUL,
       eventClaimSettledId: getEventId(event),
     }).save(),
     EventClaimSettled.create({
       ...shared,
+      transactionId: event.tx?.hash,
+      blockId: event.block.block.id,
       id: getEventId(event),
       proofRequirement
     }).save()
   ])
 }
-
+// eslint-disable-next-line complexity
 export async function handleEventClaimExpired(event: CosmosEvent): Promise<void> {
   logger.debug(`[handleEventClaimExpired] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
@@ -185,12 +185,8 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimed: {
-      amount: claimed?.amount || '',
-      denom: claimed?.denom || '',
-    },
-    transactionId: event.tx?.hash,
-    blockId: event.block.block.id,
+    claimedDenom: claimed?.denom || '',
+    claimedAmount: BigInt(claimed?.amount || '0'),
   } as const
 
   const relay = await Relay.get(id)
@@ -201,12 +197,14 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
       ...shared,
       id,
       eventClaimExpiredId: getEventId(event),
-      status: 2
+      status: RelayStatus.FAILED,
     }).save(),
     EventClaimExpired.create({
       ...shared,
       id: getEventId(event),
       expirationReason,
+      transactionId: event.tx?.hash,
+      blockId: event.block.block.id,
     }).save()
   ])
 }
@@ -235,19 +233,19 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
     rootHash: stringify(rootHash),
-    transactionId: msg.tx.hash,
-    blockId: msg.block.block.id,
   }
 
   await Promise.all([
     MsgCreateClaimEntity.create({
       id: messageId(msg),
       ...shared,
+      transactionId: msg.tx.hash,
+      blockId: msg.block.block.id,
     }).save(),
     Relay.create({
       id,
       ...shared,
-      status: 0,
+      status: RelayStatus.PENDING,
       msgCreateClaimId: messageId(msg),
     }).save()
   ])
@@ -306,12 +304,8 @@ export async function handleEventClaimCreated(event: CosmosEvent): Promise<void>
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimed: {
-      amount: claimed?.amount || '',
-      denom: claimed?.denom || '',
-    },
-    transactionId: event.tx?.hash,
-    blockId: event.block.block.id,
+    claimedDenom: claimed?.denom || '',
+    claimedAmount: BigInt(claimed?.amount || '0'),
   }
 
   await Promise.all([
@@ -319,12 +313,14 @@ export async function handleEventClaimCreated(event: CosmosEvent): Promise<void>
       ...relay,
       ...shared,
       id,
-      status: 0,
+      status: RelayStatus.PENDING,
       eventClaimCreatedId: getEventId(event),
     }).save(),
     EventClaimCreated.create({
       id: getEventId(event),
       ...shared,
+      transactionId: event.tx?.hash,
+      blockId: event.block.block.id,
     }).save()
   ])
 }
@@ -380,12 +376,8 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimed: {
-      amount: claimed?.amount || '',
-      denom: claimed?.denom || '',
-    },
-    transactionId: event.tx?.hash,
-    blockId: event.block.block.id,
+    claimedDenom: claimed?.denom || '',
+    claimedAmount: BigInt(claimed?.amount || '0'),
   } as const
 
   const relay = await Relay.get(id)
@@ -395,12 +387,14 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
       ...relay,
       ...shared,
       id,
-      status: 0,
+      status: RelayStatus.PENDING,
     }).save(),
     EventClaimUpdated.create({
       ...shared,
       id: getEventId(event),
       relayId: id,
+      transactionId: event.tx?.hash,
+      blockId: event.block.block.id,
     }).save()
   ])
 }
@@ -427,8 +421,6 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
     supplierId: supplierOperatorAddress,
     sessionId,
     serviceId,
-    transactionId: msg.tx.hash,
-    blockId: msg.block.block.id,
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
   }
@@ -439,12 +431,14 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
     MsgSubmitProofEntity.create({
       ...shared,
       proof: stringify(proof),
+      transactionId: msg.tx.hash,
+      blockId: msg.block.block.id,
     }).save(),
     Relay.create({
       ...relay,
       ...shared,
       id,
-      status: 0,
+      status: RelayStatus.PENDING,
       msgSubmitProofId: id,
     }).save()
   ])
@@ -496,12 +490,8 @@ export async function handleEventProofSubmitted(event: CosmosEvent): Promise<voi
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimed: {
-      amount: claimed?.amount || '',
-      denom: claimed?.denom || '',
-    },
-    transactionId: event.tx?.hash,
-    blockId: event.block.block.id,
+    claimedDenom: claimed?.denom || '',
+    claimedAmount: BigInt(claimed?.amount || '0'),
   } as const
 
   const id = getRelayId({
@@ -518,12 +508,14 @@ export async function handleEventProofSubmitted(event: CosmosEvent): Promise<voi
       id: getEventId(event),
       ...shared,
       closestMerkleProof: proof ? stringify(proof.closest_merkle_proof) : undefined,
+      transactionId: event.tx?.hash,
+      blockId: event.block.block.id,
     }).save(),
     Relay.create({
       id,
       ...relay,
       ...shared,
-      status: 0,
+      status: RelayStatus.PENDING,
       eventProofSubmittedId: getEventId(event),
     })
   ])
@@ -575,12 +567,8 @@ export async function handleEventProofUpdated(event: CosmosEvent): Promise<void>
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimed: {
-      amount: claimed?.amount || '',
-      denom: claimed?.denom || '',
-    },
-    transactionId: event.tx?.hash,
-    blockId: event.block.block.id,
+    claimedDenom: claimed?.denom || '',
+    claimedAmount: BigInt(claimed?.amount || '0'),
   } as const
 
 
@@ -599,12 +587,14 @@ export async function handleEventProofUpdated(event: CosmosEvent): Promise<void>
       ...shared,
       closestMerkleProof: proof ? stringify(proof.closest_merkle_proof) : undefined,
       relayId: id,
+      transactionId: event.tx?.hash,
+      blockId: event.block.block.id,
     }).save(),
     Relay.create({
       id,
       ...relay,
       ...shared,
-      status: 0,
+      status: RelayStatus.PENDING,
     })
   ])
 }

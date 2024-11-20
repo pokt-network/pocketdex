@@ -7,3 +7,4 @@ export * from "./poktroll/gateways";
 export * from "./poktroll/relays";
 export * from "./genesis";
 export * from "./authz/exec";
+export * from "./poktroll/reports";

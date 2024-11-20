@@ -12,26 +12,23 @@ import {
   isString,
 } from "lodash";
 import {
-  Application, ApplicationService,
   Block,
   BlockHeader,
   BlockId,
   BlockLastCommit,
   BlockMetadata,
   BlockSupply,
+  SupplyDenom,
   Event,
   EventAttribute,
   Message,
-  SupplyDenom,
-  Supplier,
-  SupplierService,
   Transaction,
 } from "../types";
 import {
   _handleSupply,
   getSupplyId,
 } from "./bank/supply";
-import { PREFIX, StakeStatus, TxStatus,
+import { PREFIX, TxStatus,
 } from "./constants";
 import {
   ConvertedBlockJson,
@@ -65,7 +62,7 @@ export async function handleEvent(event: CosmosEvent): Promise<void> {
 }
 
 async function _handleBlock(block: CosmosBlock): Promise<void> {
-  logger.debug(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
+  logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
   const { header: { chainId, height, time }, id } = block.block;
   const timestamp = new Date(time.getTime());
 
@@ -127,8 +124,24 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
     proposerAddress: processedBlock.header.proposerAddress as string,
     size,
     metadataId: id,
-    txAmount: block.block.txs.length,
     stakedSuppliers: 0,
+    totalComputedUnits: BigInt(0),
+    totalRelays: BigInt(0),
+    failedTxs: 0,
+    validTxs: 0,
+    totalTxs: 0,
+    suppliersStakedTokens: BigInt(0),
+    unstakingSuppliers: 0,
+    suppliersUnstakingTokens: BigInt(0),
+    took: 0,
+    unstakedSuppliers: 0,
+    unstakedTokensOfSuppliers: BigInt(0),
+    stakedApps: 0,
+    appsStakedTokens: BigInt(0),
+    unstakingApps: 0,
+    appsUnstakingTokens: BigInt(0),
+    unstakedApps: 0,
+    unstakedTokensOfApps: BigInt(0),
   });
 
   await blockEntity.save();
@@ -138,137 +151,6 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
   await _handleSupply(block);
 }
 
-async function getStakedSuppliersData() {
-  const stakedSuppliers = await Supplier.getByFields([["status", "=", StakeStatus.Staked]], {})
-  const stakedSuppliersByServiceMap: Record<string,{
-    tokens: bigint,
-    amount: number,
-  }> = {}
-
-  let stakedTokensBySupplier = BigInt(0)
-
-  for (const supplier of stakedSuppliers) {
-    stakedTokensBySupplier += BigInt(supplier.stake.amount)
-
-    const services = await SupplierService.getBySupplierId(supplier.id, {})
-
-    for (const {serviceId} of services) {
-      if (!stakedSuppliersByServiceMap[serviceId]) {
-        stakedSuppliersByServiceMap[serviceId] = {
-          tokens: BigInt(0),
-          amount: 0,
-        }
-      } else {
-        stakedSuppliersByServiceMap[serviceId].tokens += BigInt(supplier.stake.amount)
-        stakedSuppliersByServiceMap[serviceId].amount += 1
-      }
-    }
-  }
-
-  const stakedSuppliersByService = Object.entries(stakedSuppliersByServiceMap).map(([service, {amount, tokens}]) => ({
-    service,
-    tokens,
-    amount,
-  }))
-
-  return {
-    stakedSuppliers: stakedSuppliers.length,
-    stakedTokensBySupplier,
-    stakedSuppliersByService
-  }
-}
-
-async function getUnstakingSuppliersData() {
-  const unstakingSuppliers = await Supplier.getByFields([["status", "=", StakeStatus.Unstaking]], {})
-  const unstakingTokensBySupplier = unstakingSuppliers.reduce((acc, supplier) => acc + BigInt(supplier.stake.amount), BigInt(0))
-
-  return {
-    unstakingSuppliers: unstakingSuppliers.length,
-    unstakingTokensBySupplier,
-  }
-}
-
-async function getTook(block: CosmosBlock) {
-  if (block.header.height === 0) {
-    return 0
-  }
-
-  const previousHeight = BigInt(block.header.height - 1)
-  const previousBlock = (await Block.getByHeight(previousHeight, {}))[0]
-
-  // took is the time between the previous block and the current block
-  return block.header.time.getTime() - previousBlock.timestamp.getTime()
-}
-
-async function getUnstakedSuppliersData(blockId: string) {
-  const unstakedSuppliers = await Supplier.getByUnstakedAtBlockId(blockId, {})
-  const unstakedTokensBySupplier = unstakedSuppliers.reduce((acc, supplier) => acc + BigInt(supplier.stake.amount), BigInt(0))
-
-  return {
-    unstakedSuppliers: unstakedSuppliers.length,
-    unstakedTokensBySupplier,
-  }
-}
-
-async function getStakedAppsData() {
-  const stakedApps = await Application.getByFields([["status", "=", StakeStatus.Staked]], {})
-  const stakedAppsByServiceMap: Record<string,{
-    tokens: bigint,
-    amount: number,
-  }> = {}
-
-  let stakedTokensByApp = BigInt(0)
-
-  for (const app of stakedApps) {
-    stakedTokensByApp += BigInt(app.stake.amount)
-
-    const services = await ApplicationService.getByApplicationId(app.id, {})
-
-    for (const {serviceId} of services) {
-      if (!stakedAppsByServiceMap[serviceId]) {
-        stakedAppsByServiceMap[serviceId] = {
-          tokens: BigInt(0),
-          amount: 0,
-        }
-      } else {
-        stakedAppsByServiceMap[serviceId].tokens += BigInt(app.stake.amount)
-        stakedAppsByServiceMap[serviceId].amount += 1
-      }
-    }
-  }
-
-  const stakedAppsByService = Object.entries(stakedAppsByServiceMap).map(([service, {amount, tokens}]) => ({
-    service,
-    tokens,
-    amount,
-  }))
-
-  return {
-    stakedSuppliers: stakedApps.length,
-    stakedTokensByApp,
-    stakedAppsByService
-  }
-}
-
-async function getUnstakingAppsData() {
-  const unstakingApps = await Application.getByFields([["status", "=", StakeStatus.Unstaking]], {})
-  const unstakingTokensByApp = unstakingApps.reduce((acc, app) => acc + BigInt(app.stake.amount), BigInt(0))
-
-  return {
-    unstakingApps: unstakingApps.length,
-    unstakingTokensByApp,
-  }
-}
-
-async function getUnstakedAppssData(blockId: string) {
-  const unstakedApps = await Application.getByUnstakedAtBlockId(blockId, {})
-  const unstakedTokensByApp = unstakedApps.reduce((acc, app) => acc + BigInt(app.stake.amount), BigInt(0))
-
-  return {
-    unstakedApps: unstakedApps.length,
-    unstakedTokensByApp,
-  }
-}
 
 async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
   let status = tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;

@@ -405,6 +405,10 @@ const project: CosmosProject = {
           },
           // --- Primitives
           {
+            handler: "handleBlock",
+            kind: CosmosHandlerKind.Block,
+          },
+          {
             handler: "handleTransaction",
             kind: CosmosHandlerKind.Transaction,
           },
@@ -579,10 +583,6 @@ const project: CosmosProject = {
               type: "/cosmos.authz.v1beta1.MsgExec",
             }
           },
-          {
-            handler: "handleBlock",
-            kind: CosmosHandlerKind.Block,
-          },
           // --- Relays
           {
             handler: "handleEventClaimSettled",
@@ -639,7 +639,12 @@ const project: CosmosProject = {
             filter: {
               type: "poktroll.proof.EventProofSubmitted",
             }
-          }
+          },
+          // --- Reports
+          {
+            handler: "handleAddBlockReports",
+            kind: CosmosHandlerKind.Block,
+          },
         ],
       },
     },

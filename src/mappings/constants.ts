@@ -18,3 +18,9 @@ export const ApplicationUnbondingReason = {
   ...ApplicationUnbondingReasonEnum,
   TRANSFERRED: 2,
 } as const
+
+export enum RelayStatus {
+  PENDING = 0,
+  SUCCESSFUL = 1,
+  FAILED = 2,
+}

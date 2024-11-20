@@ -106,6 +106,29 @@ type Block @entity {
   supplierParams: [SupplierParam] @derivedFrom(field: "block")
   tokenomicsParams: [TokenomicsParam] @derivedFrom(field: "block")
   consensusParams: [ConsensusParam] @derivedFrom(field: "block")
+  # REPORTS
+  totalComputedUnits: BigInt
+  totalRelays: BigInt
+  failedTxs: Int
+  validTxs: Int
+  totalTxs: Int
+  stakedSuppliers: Int
+  suppliersStakedTokens: BigInt
+  unstakingSuppliers: Int
+  suppliersUnstakingTokens: BigInt
+  took: Int
+  unstakedSuppliers: Int
+  unstakedTokensOfSuppliers: BigInt
+  stakedApps: Int
+  appsStakedTokens: BigInt
+  unstakingApps: Int
+  appsUnstakingTokens: BigInt
+  unstakedApps: Int
+  unstakedTokensOfApps: BigInt
+  stakedGateways: Int
+  gatewaysStakedTokens: BigInt
+  unstakingGateways: Int
+  gatewaysUnstakingTokens: BigInt
 }
 
 type Transaction @entity {
@@ -227,7 +250,7 @@ type MsgUnstakeApplication @entity {
   message: Message!
 }
 
-type DelegateToGatewayMsg @entity {
+type MsgDelegateToGateway @entity {
   id: ID!
   application: Application! @index
   gateway: Gateway! @index
@@ -245,7 +268,7 @@ type MsgUndelegateFromGateway @entity {
   message: Message!
 }
 
-type TransferApplicationMsg @entity {
+type MsgTransferApplication @entity {
   id: ID!
   sourceApplication: Application! @index
   destinationApplication: Application! @index
@@ -262,7 +285,7 @@ type Application @entity {
   stakeAmount: BigInt!
   stakeDenom: String!
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int!
+  stakeStatus: Int! @index
   # Block where the msg to unstake the application was received
   unstakingBeginBlock: Block
   # Height of the block where the application is going to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
@@ -339,7 +362,7 @@ type EventTransferError @entity {
   event: Event!
 }
 
-type ApplicationUnbondingBeginEvent @entity {
+type EventApplicationUnbondingBegin @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   application: Application!
@@ -351,7 +374,7 @@ type ApplicationUnbondingBeginEvent @entity {
   event: Event!
 }
 
-type ApplicationUnbondingEndEvent @entity {
+type EventApplicationUnbondingEnd @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   application: Application!
@@ -421,7 +444,7 @@ type Supplier @entity {
   unstakingBeginEvents: [EventSupplierUnbondingBegin] @derivedFrom(field: "supplier")
   unstakingEndEvents: [EventSupplierUnbondingEnd] @derivedFrom(field: "supplier")
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int!
+  stakeStatus: Int! @index
   # Block where MsgUnstakeSupplier was received
   unstakingBeginBlock: Block
   # Height of the block where the supplier is going to be unstaked/unbonded.
@@ -495,7 +518,7 @@ type Gateway @entity {
   stakeAmount: BigInt!
   stakeDenom: String!
   # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int!
+  stakeStatus: Int! @index
   unstakingBeginBlock: Block
   unstakingEndBlock: Block
   stakeMsgs: [MsgStakeGateway] @derivedFrom(field: "gateway")
@@ -699,7 +722,8 @@ type EventClaimCreated @entity {
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
-  claimed: Coin
+  claimedAmount: BigInt
+  claimedDenom: String
   transaction: Transaction
   block: Block!
 }
@@ -716,7 +740,8 @@ type EventClaimUpdated @entity {
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
-  claimed: Coin
+  claimedAmount: BigInt
+  claimedDenom: String
   transaction: Transaction
   block: Block!
   relay: Relay
@@ -741,7 +766,8 @@ type EventClaimExpired @entity {
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
-  claimed: Coin
+  claimedAmount: BigInt
+  claimedDenom: String
   transaction: Transaction
   block: Block!
 }
@@ -766,7 +792,8 @@ type EventClaimSettled @entity {
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
-  claimed: Coin
+  claimedAmount: BigInt
+  claimedDenom: String
   transaction: Transaction
   block: Block!
 }
@@ -784,7 +811,8 @@ type Relay @entity {
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
-  claimed: Coin
+  claimedAmount: BigInt
+  claimedDenom: String
   msgCreateClaim: MsgCreateClaim
   eventClaimCreated: EventClaimCreated
   eventsClaimUpdated: [EventClaimUpdated] @derivedFrom(field: "relay")
@@ -814,7 +842,8 @@ type EventProofSubmitted @entity {
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
-  claimed: Coin
+  claimedAmount: BigInt
+  claimedDenom: String
   transaction: Transaction
   block: Block!
 }
@@ -832,10 +861,36 @@ type EventProofUpdated @entity {
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
-  claimed: Coin
+  claimedAmount: BigInt
+  claimedDenom: String
   transaction: Transaction
   block: Block!
   relay: Relay
+}
+
+type RelayByBlockAndService @entity {
+  id: ID!
+  relays: BigInt!
+  computedUnits: BigInt!
+  amount: Int!
+  block: Block!
+  service: Service!
+}
+
+type StakedSuppliersByBlockAndService @entity {
+  id: ID!
+  tokens: BigInt!
+  amount: Int!
+  block: Block!
+  service: Service!
+}
+
+type StakedAppsByBlockAndService @entity {
+  id: ID!
+  tokens: BigInt!
+  amount: Int!
+  block: Block!
+  service: Service!
 }
 
 type Supply @entity {
