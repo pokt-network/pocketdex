@@ -23,7 +23,8 @@ import {
 } from "../../types/proto-interfaces/poktroll/proof/types";
 import { ClaimExpirationReasonSDKType } from "../../types/proto-interfaces/poktroll/tokenomics/event";
 import { RelayStatus } from "../constants";
-import { getEventId, getRelayId, messageId, stringify } from "../utils";
+import { getEventId, getRelayId, messageId } from "../utils/ids";
+import {  stringify } from "../utils/json";
 
 function parseAttribute(attribute: unknown): string {
   return (attribute as string).replaceAll('"', '')

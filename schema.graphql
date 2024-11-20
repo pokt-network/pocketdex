@@ -81,8 +81,6 @@ type Block @entity {
   proposerAddress: String!
   metadata: BlockMetadata!
   size: Int!
-  txAmount: Int!
-  stakedSuppliers: Int!
   # relations
   transactions: [Transaction] @derivedFrom(field: "block")
   messages: [Message] @derivedFrom(field: "block")
