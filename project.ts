@@ -1,4 +1,8 @@
-import { CosmosDatasourceKind, CosmosHandlerKind, CosmosProject } from "@subql/types-cosmos";
+import {
+  CosmosDatasourceKind,
+  CosmosHandlerKind,
+  CosmosProject,
+} from "@subql/types-cosmos";
 
 import * as dotenv from "dotenv";
 import path from "path";

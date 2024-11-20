@@ -46,6 +46,7 @@ export interface Genesis {
     bank: {
       params: Params
       balances: Array<Balance>
+      supply: Array<Coin>
     },
     distribution: ObjectWithParams
     gov: ObjectWithParams

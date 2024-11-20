@@ -9,6 +9,11 @@ type EventAttribute @entity {
   event: Event!
 }
 
+type SupplyDenom @entity {
+  # ID is the supply coin denomination.
+  id: ID!
+}
+
 type Block @entity {
   id: ID! # The block header hash
   chainId: String! @index
@@ -18,6 +23,7 @@ type Block @entity {
   messages: [Message] @derivedFrom(field: "block")
   events: [Event] @derivedFrom(field: "block")
   balancesOfAccountByDenom: [Balance] @derivedFrom(field: "lastUpdatedBlock")
+  supplies: [BlockSupply]! @derivedFrom(field: "block")
   # PARAMS
   appParams: [AppParam] @derivedFrom(field: "block")
   authParams: [AuthParam] @derivedFrom(field: "block")
@@ -584,4 +590,18 @@ type AuthzMsgExec @entity {
   id: ID!
   authzExec: AuthzExec!
   message: Message!
+}
+
+type Supply @entity {
+  id: ID!
+  denom: String! @index
+  amount: BigInt!
+  blocks: [BlockSupply]! @derivedFrom(field: "supply")
+}
+
+# This entity is a Join between Block and Supply
+type BlockSupply @entity {
+  id: ID!
+  block: Block!
+  supply: Supply!
 }
