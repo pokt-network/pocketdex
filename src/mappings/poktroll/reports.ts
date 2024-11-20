@@ -97,7 +97,7 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
 
 async function getRelaysData(block: CosmosBlock){
   const relays: Array<EventClaimSettled> = [];
-  const limit = 1000;
+  const limit = 100;
   let offset = 0;
 
   // eslint-disable-next-line no-constant-condition
@@ -161,7 +161,7 @@ async function getRelaysData(block: CosmosBlock){
 
 async function getTransactionsData(block: CosmosBlock){
   const transactions: Array<Transaction> = [];
-  const limit = 1000;
+  const limit = 100;
   let offset = 0;
 
   // eslint-disable-next-line no-constant-condition
