@@ -178,9 +178,9 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
   const transactions: Array<TransactionProps> = [];
 
   for (let i = 0; i < genesis.app_state.supplier.supplierList.length; i++) {
-    const supplier = genesis.app_state.supplier.supplierList[i];
-    const msgId = `genesis-${supplier.operator_address}`;
-    const transactionHash = getGenesisFakeTxHash("app", i);
+    const supplier = genesis.app_state.supplier.supplierList[i]
+    const msgId = `genesis-${supplier.operator_address}`
+    const transactionHash = getGenesisFakeTxHash('supplier', i)
 
     transactions.push({
       id: transactionHash,
@@ -189,6 +189,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
+      code: 0
     });
 
     supplierMsgStakes.push({
@@ -275,6 +276,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
+      code: 0
     });
 
     if (app.delegatee_gateway_addresses.length > 0) {
@@ -363,6 +365,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
+      code: 0
     });
 
     gatewayMsgStakes.push({

@@ -18,19 +18,17 @@ import {
   BlockLastCommit,
   BlockMetadata,
   BlockSupply,
+  SupplyDenom,
   Event,
   EventAttribute,
   Message,
-  SupplyDenom,
   Transaction,
 } from "../types";
 import {
   _handleSupply,
   getSupplyId,
 } from "./bank/supply";
-import {
-  PREFIX,
-  TxStatus,
+import { PREFIX, TxStatus,
 } from "./constants";
 import {
   ConvertedBlockJson,
@@ -126,6 +124,28 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
     proposerAddress: processedBlock.header.proposerAddress as string,
     size,
     metadataId: id,
+    stakedSuppliers: 0,
+    totalComputedUnits: BigInt(0),
+    totalRelays: BigInt(0),
+    failedTxs: 0,
+    successfulTxs: 0,
+    totalTxs: 0,
+    stakedSuppliersTokens: BigInt(0),
+    unstakingSuppliers: 0,
+    unstakingSuppliersTokens: BigInt(0),
+    timeToBlock: 0,
+    unstakedSuppliers: 0,
+    unstakedSuppliersTokens: BigInt(0),
+    stakedApps: 0,
+    stakedAppsTokens: BigInt(0),
+    unstakingApps: 0,
+    unstakingAppsTokens: BigInt(0),
+    stakedGateways: 0,
+    stakedGatewaysTokens: BigInt(0),
+    unstakedGateways: 0,
+    unstakedGatewaysTokens: BigInt(0),
+    unstakedAppsTokens: BigInt(0),
+    unstakedApps: 0,
   });
 
   await blockEntity.save();
@@ -134,6 +154,7 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
   // it will be replaced by handling the claim/proof settle event.
   await _handleSupply(block);
 }
+
 
 async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
   let status = tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;
@@ -150,6 +171,7 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
     // Encode the raw address to Bech32
     signerAddress = toBech32(PREFIX, addressBytes);
   }
+
 
   logger.debug(`[handleTransaction] (block ${tx.block.block.header.height}): indexing transaction ${tx.idx + 1} / ${tx.block.txs.length} status=${status} signer=${signerAddress}`);
   logger.debug(`[handleTransaction] (tx.decodedTx): ${stringify(tx.decodedTx, undefined, 2)}`);
@@ -169,6 +191,8 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
     log: tx.tx.log || "",
     status,
     signerAddress,
+    code: tx.tx.code,
+    codespace: tx.tx.codespace,
   });
   await txEntity.save();
 }
@@ -204,7 +228,7 @@ async function _handleEvent(event: CosmosEvent): Promise<void> {
   if (event.tx) {
     id = `${messageId(event)}-${event.idx}`;
   } else {
-    id = `${event.block.blockId}-${event.idx}`;
+    id = `${event.block.block.id}-${event.idx}`;
   }
 
   // NB: sanitize attribute values (may contain non-text characters)
