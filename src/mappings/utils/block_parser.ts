@@ -1,4 +1,7 @@
-import { toBech32 } from "@cosmjs/encoding";
+import {
+  toBech32,
+  toHex,
+} from "@cosmjs/encoding";
 import { CosmosBlock } from "@subql/types-cosmos";
 import _ from "lodash";
 
@@ -11,16 +14,6 @@ export type ConvertedBlockJson = {
   block: ConvertedBlockJson;
   [key: string]: string | number | boolean | ConvertedBlockJson | ConvertedBlockJson[];
 };
-
-// Utility function to convert Uint8Array to a hex string
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
-}
-
-// Utility function to convert Uint8Array to a Bech32 address
-function bytesToBech32(bytes: Uint8Array, prefix: string): string {
-  return toBech32(prefix, bytes);
-}
 
 // Check if an object is an uint map
 function isUintMap(obj: unknown): obj is UintMap {
@@ -56,8 +49,8 @@ function convert(obj: unknown, bech32Prefix: string): ConvertedBlockJson | Conve
     _.forOwn(obj, (value, key) => {
       if ((value as unknown) instanceof Uint8Array) {
         result[key] = key.toLowerCase().includes("address")
-          ? bytesToBech32(value, bech32Prefix)
-          : bytesToHex(value);
+          ? toBech32(bech32Prefix, value)
+          : toHex(value);
       } else {
         result[key] = convert(value, bech32Prefix);
       }

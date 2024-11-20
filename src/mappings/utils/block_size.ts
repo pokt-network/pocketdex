@@ -2,7 +2,10 @@ import { TextEncoder } from "util";
 import {
   CosmosBlock,
   Header,
+  TxData,
+  TxEvent,
 } from "@subql/types-cosmos";
+import { Attribute } from "../../types/proto-interfaces/cosmos/base/abci/v1beta1/abci";
 import { stringify } from "./json";
 
 // Utility function to get the byte size of a Uint8Array
@@ -83,6 +86,35 @@ function getLastCommitSize(lastCommit: any): number {
   return size;
 }
 
+// Utility function to get the byte size of EventAttribute
+function getEventAttributeSize(attribute: Attribute): number {
+  let size = 0;
+  size += getStringOrNumberSize(attribute.key);
+  size += getStringOrNumberSize(attribute.value);
+  return size;
+}
+
+// Utility function to get the byte size of an Event
+function getEventSize(event: TxEvent): number {
+  let size = 0;
+  size += getStringOrNumberSize(event.type);
+  size += event.attributes.reduce((total, attr) => total + getEventAttributeSize(attr as Attribute), 0);
+  return size;
+}
+
+// Utility function to get the byte size of TxData
+function getTxDataSize(txData: TxData): number {
+  let size = 0;
+  size += getStringOrNumberSize(txData.code);
+  if (txData.codespace) size += getStringOrNumberSize(txData.codespace);
+  if (txData.log) size += getStringOrNumberSize(txData.log);
+  if (txData.data) size += getUint8ArraySize(txData.data);
+  size += txData.events.reduce((total, event) => total + getEventSize(event), 0);
+  size += getStringOrNumberSize(txData.gasWanted.toString());
+  size += getStringOrNumberSize(txData.gasUsed.toString());
+  return size;
+}
+
 // Utility function to get the byte size of an Evidence
 function getEvidenceSize(evidence: any): number {
   // Adjust as per actual evidence structure
@@ -100,15 +132,17 @@ export function getBlockByteSize(block: CosmosBlock): number {
   // Calculate the byte size of the Header using the utility function
   size += getHeaderSize(block.block.header);
 
-  // Calculate the total size of transaction data (txs array) by converting each transaction to a JSON string and measuring its byte length
-  size += block.txs.reduce((total, tx) => total + new TextEncoder().encode(stringify(tx).trim()).length, 0);
+  // Calculate the total size of transaction data (txs array) using detailed parsing
+  size += block.txs.reduce((total, tx) => total + getTxDataSize(tx), 0);
 
-  // Reference the correct field for evidence and measure its size if available
+  // Evidence on TypeScript is defined as any,
+  // so due to the unknown on the structure, use stringify and calculate it is
+  // the best for now.
   if (block.block.evidence) {
     size += block.block.evidence.reduce((total, ev) => total + getEvidenceSize(ev), 0);
   }
 
-  // Calculate last commit size, including its nested structures
+  // Calculate the last commit size, including its nested structures
   if (block.block.lastCommit) {
     size += getLastCommitSize(block.block.lastCommit);
   }
