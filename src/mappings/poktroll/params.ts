@@ -39,27 +39,29 @@ import {
 } from "../../client/poktroll/tokenomics/tx";
 import { AppParamProps } from "../../types/models/AppParam";
 import { EncodedMsg } from "../types";
-import { getParamId, stringify } from "../utils";
+import { getParamId } from "../utils/ids";
+import { stringify } from "../utils/json";
+
 
 const msgUpdateParamsMap: Record<string, {
   decode(bytes: BinaryReader | Uint8Array | any): unknown
   toJSON(obj: unknown): unknown
 }> = {
-  '/poktroll.application.MsgUpdateParam': MsgUpdateApplicationParam,
-  '/poktroll.application.MsgUpdateParams': MsgUpdateApplicationParams,
-  '/poktroll.service.MsgUpdateParam': MsgUpdateServiceParam,
-  '/poktroll.service.MsgUpdateParams': MsgUpdateServiceParams,
-  '/poktroll.supplier.MsgUpdateParam': MsgUpdateSupplierParam,
-  '/poktroll.supplier.MsgUpdateParams': MsgUpdateSupplierParams,
-  '/poktroll.gateway.MsgUpdateParam': MsgUpdateGatewayParam,
-  '/poktroll.gateway.MsgUpdateParams': MsgUpdateGatewayParams,
-  '/poktroll.proof.MsgUpdateParam': MsgUpdateProofParam,
-  '/poktroll.proof.MsgUpdateParams': MsgUpdateProofParams,
-  '/poktroll.shared.MsgUpdateParam': MsgUpdateSharedParam,
-  '/poktroll.shared.MsgUpdateParams': MsgUpdateSharedParams,
-  '/poktroll.tokenomics.MsgUpdateParam': MsgUpdateTokenomicsParam,
-  '/poktroll.tokenomics.MsgUpdateParams': MsgUpdateTokenomicsParams,
-  '/poktroll.session.MsgUpdateParams': MsgUpdateSessionParams,
+  "/poktroll.application.MsgUpdateParam": MsgUpdateApplicationParam,
+  "/poktroll.application.MsgUpdateParams": MsgUpdateApplicationParams,
+  "/poktroll.service.MsgUpdateParam": MsgUpdateServiceParam,
+  "/poktroll.service.MsgUpdateParams": MsgUpdateServiceParams,
+  "/poktroll.supplier.MsgUpdateParam": MsgUpdateSupplierParam,
+  "/poktroll.supplier.MsgUpdateParams": MsgUpdateSupplierParams,
+  "/poktroll.gateway.MsgUpdateParam": MsgUpdateGatewayParam,
+  "/poktroll.gateway.MsgUpdateParams": MsgUpdateGatewayParams,
+  "/poktroll.proof.MsgUpdateParam": MsgUpdateProofParam,
+  "/poktroll.proof.MsgUpdateParams": MsgUpdateProofParams,
+  "/poktroll.shared.MsgUpdateParam": MsgUpdateSharedParam,
+  "/poktroll.shared.MsgUpdateParams": MsgUpdateSharedParams,
+  "/poktroll.tokenomics.MsgUpdateParam": MsgUpdateTokenomicsParam,
+  "/poktroll.tokenomics.MsgUpdateParams": MsgUpdateTokenomicsParams,
+  "/poktroll.session.MsgUpdateParams": MsgUpdateSessionParams,
   "/cosmos.auth.v1beta1.MsgUpdateParams": MsgUpdateAuthParams,
   "/cosmos.bank.v1beta1.MsgUpdateParams": MsgUpdateBankParams,
   "/cosmos.distribution.v1beta1.MsgUpdateParams": MsgUpdateDistributionParams,
@@ -68,32 +70,32 @@ const msgUpdateParamsMap: Record<string, {
   "/cosmos.staking.v1beta1.MsgUpdateParams": MsgUpdateStakingParams,
   "/cosmos.consensus.v1.MsgUpdateParams": MsgUpdateConsensusParams,
   "/cosmos.gov.v1.MsgUpdateParams": MsgUpdateGovParams,
-}
+};
 
 const paramMapping: Record<string, string> = {
-  '/poktroll.application.MsgUpdateParams': 'AppParam',
-  '/poktroll.application.MsgUpdateParam': 'AppParam',
-  '/cosmos.auth.v1beta1.MsgUpdateParams': 'AuthParam',
-  '/cosmos.bank.v1beta1.MsgUpdateParams': 'BankParam',
-  '/cosmos.distribution.v1beta1.MsgUpdateParams': 'DistributionParam',
-  '/poktroll.gateway.MsgUpdateParams': 'GatewayParam',
-  '/poktroll.gateway.MsgUpdateParam': 'GatewayParam',
-  '/cosmos.gov.v1.MsgUpdateParams': 'GovParam',
-  '/cosmos.mint.v1beta1.MsgUpdateParams': 'MintParam',
-  '/poktroll.proof.MsgUpdateParams': 'ProofParam',
-  '/poktroll.proof.MsgUpdateParam': 'ProofParam',
-  '/poktroll.service.MsgUpdateParams': 'ServiceParam',
-  '/poktroll.service.MsgUpdateParam': 'ServiceParam',
-  '/poktroll.session.MsgUpdateParams': 'SessionParam',
-  '/poktroll.shared.MsgUpdateParams': 'SharedParam',
-  '/poktroll.shared.MsgUpdateParam': 'SharedParam',
-  '/cosmos.slashing.v1beta1.MsgUpdateParams': 'SlashingParam',
-  '/cosmos.staking.v1beta1.MsgUpdateParams': 'StakingParam',
-  '/poktroll.supplier.MsgUpdateParams': 'SupplierParam',
-  '/poktroll.supplier.MsgUpdateParam': 'SupplierParam',
-  '/poktroll.tokenomics.MsgUpdateParams': 'TokenomicsParam',
-  '/poktroll.tokenomics.MsgUpdateParam': 'TokenomicsParam',
-  '/cosmos.consensus.v1.MsgUpdateParams': 'ConsensusParam',
+  "/poktroll.application.MsgUpdateParams": "AppParam",
+  "/poktroll.application.MsgUpdateParam": "AppParam",
+  "/cosmos.auth.v1beta1.MsgUpdateParams": "AuthParam",
+  "/cosmos.bank.v1beta1.MsgUpdateParams": "BankParam",
+  "/cosmos.distribution.v1beta1.MsgUpdateParams": "DistributionParam",
+  "/poktroll.gateway.MsgUpdateParams": "GatewayParam",
+  "/poktroll.gateway.MsgUpdateParam": "GatewayParam",
+  "/cosmos.gov.v1.MsgUpdateParams": "GovParam",
+  "/cosmos.mint.v1beta1.MsgUpdateParams": "MintParam",
+  "/poktroll.proof.MsgUpdateParams": "ProofParam",
+  "/poktroll.proof.MsgUpdateParam": "ProofParam",
+  "/poktroll.service.MsgUpdateParams": "ServiceParam",
+  "/poktroll.service.MsgUpdateParam": "ServiceParam",
+  "/poktroll.session.MsgUpdateParams": "SessionParam",
+  "/poktroll.shared.MsgUpdateParams": "SharedParam",
+  "/poktroll.shared.MsgUpdateParam": "SharedParam",
+  "/cosmos.slashing.v1beta1.MsgUpdateParams": "SlashingParam",
+  "/cosmos.staking.v1beta1.MsgUpdateParams": "StakingParam",
+  "/poktroll.supplier.MsgUpdateParams": "SupplierParam",
+  "/poktroll.supplier.MsgUpdateParam": "SupplierParam",
+  "/poktroll.tokenomics.MsgUpdateParams": "TokenomicsParam",
+  "/poktroll.tokenomics.MsgUpdateParam": "TokenomicsParam",
+  "/cosmos.consensus.v1.MsgUpdateParams": "ConsensusParam",
 };
 
 function getEntityParamName(typeUrl: string): string {
@@ -106,29 +108,29 @@ function getEntityParamName(typeUrl: string): string {
 
 export async function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: string): Promise<unknown> {
   if (!(encodedMsg.typeUrl in msgUpdateParamsMap)) {
-    return
+    return;
   }
 
   const entityName = getEntityParamName(encodedMsg.typeUrl);
-  const entities: Array<AppParamProps> = []
+  const entities: Array<AppParamProps> = [];
 
-  const msgCodec = msgUpdateParamsMap[encodedMsg.typeUrl]
-  const uintArray = new Uint8Array(Object.values(encodedMsg.value))
-  let decodedMsg: unknown
+  const msgCodec = msgUpdateParamsMap[encodedMsg.typeUrl];
+  const uintArray = new Uint8Array(Object.values(encodedMsg.value));
+  let decodedMsg: unknown;
 
   // We need to pass a BinaryReader to decode poktroll messages because
   // TextDecoder.decode can't decode the Uint8Array for some unknown reason
-  if (encodedMsg.typeUrl.startsWith('/poktroll')) {
+  if (encodedMsg.typeUrl.startsWith("/poktroll")) {
     decodedMsg = msgCodec.decode(
       new BinaryReader(
         uintArray,
         (bytes) => {
           return Buffer.from(bytes).toString("utf-8");
-        })
+        }),
     );
   } else {
     decodedMsg = msgCodec.decode(
-      uintArray
+      uintArray,
     );
   }
 
@@ -141,26 +143,26 @@ export async function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: string
       entities.push({
         id: getParamId(snakeKey, blockId),
         key: snakeKey,
-        value: typeof value === 'object' ? stringify(value) : (value || "").toString(),
+        value: typeof value === "object" ? stringify(value) : (value || "").toString(),
         blockId,
-      })
+      });
     }
   } else {
     for (const key of Object.keys(decodedJsonMsg)) {
       const value = decodedJsonMsg[key];
-      if (key.startsWith('as')) {
+      if (key.startsWith("as")) {
         const snakeKey = snakeCase(decodedJsonMsg.name);
         entities.push({
           id: getParamId(snakeKey, blockId),
           key: snakeKey,
-          value: typeof value === 'object' ? stringify(value) : (value || "").toString(),
+          value: typeof value === "object" ? stringify(value) : (value || "").toString(),
           blockId,
-        })
+        });
       }
     }
   }
 
-  await store.bulkCreate(entityName, entities)
+  await store.bulkCreate(entityName, entities);
 
-  return decodedMsg
+  return decodedMsg;
 }

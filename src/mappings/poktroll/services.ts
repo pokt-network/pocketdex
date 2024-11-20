@@ -1,23 +1,31 @@
 import { CosmosMessage } from "@subql/types-cosmos";
-import { MsgAddService as MsgAddServiceEntity, Service } from "../../types";
+import {
+  MsgAddService as MsgAddServiceEntity,
+  Service,
+} from "../../types";
 import { MsgAddService } from "../../types/proto-interfaces/poktroll/service/tx";
-import { attemptHandling, messageId, stringify, unprocessedMsgHandler } from "../utils";
+import {
+  attemptHandling,
+  unprocessedMsgHandler,
+} from "../utils/handlers";
+import { messageId } from "../utils/ids";
+import { stringify } from "../utils/json";
 
 export async function handleMsgAddService(
-  msg: CosmosMessage<MsgAddService>
+  msg: CosmosMessage<MsgAddService>,
 ): Promise<void> {
   await attemptHandling(msg, _handleMsgAddService, unprocessedMsgHandler);
 }
 
 async function _handleMsgAddService(
-  msg: CosmosMessage<MsgAddService>
+  msg: CosmosMessage<MsgAddService>,
 ) {
   logger.info(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
-  const {ownerAddress, service: {computeUnitsPerRelay, id, name}} = msg.msg.decodedMsg
+  const { ownerAddress, service: { computeUnitsPerRelay, id, name } } = msg.msg.decodedMsg;
 
-  const units = BigInt(computeUnitsPerRelay.toString())
-  const msgId = messageId(msg)
+  const units = BigInt(computeUnitsPerRelay.toString());
+  const msgId = messageId(msg);
 
   await Promise.all([
     Service.create({
@@ -34,7 +42,7 @@ async function _handleMsgAddService(
       computeUnitsPerRelay: units,
       blockId: msg.block.block.id,
       transactionId: msg.tx.hash,
-      messageId: msgId
-    }).save()
-  ])
+      messageId: msgId,
+    }).save(),
+  ]);
 }

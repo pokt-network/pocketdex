@@ -40,8 +40,9 @@ import {
   getMsgStakeServiceId,
   getParamId,
   getStakeServiceId,
-  stringify,
-} from "./utils";
+} from "./utils/ids";
+import { stringify } from "./utils/json";
+
 
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   // we MUST load the JSON this way due to the sandboxed environment

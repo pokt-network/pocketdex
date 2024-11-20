@@ -14,11 +14,74 @@ type SupplyDenom @entity {
   id: ID!
 }
 
+type BlockIdParts @jsonField(indexed: false) {
+  total: Int!
+  hash: String!
+}
+
+type BlockId @jsonField(indexed: false) {
+  hash: String!
+  parts: BlockIdParts!
+}
+
+type BlockVersion @jsonField(indexed: false) {
+  version: BigInt!
+  app: Int!
+}
+
+type BlockHeader @jsonField {
+  chainId: String!
+  height: BigInt! @index
+  time: Date!
+  version: BlockVersion!
+  lastBlockId: BlockId!
+  lastCommitHash: String!
+  dataHash: String!
+  validatorsHash: String!
+  nextValidatorsHash: String!
+  consensusHash: String!
+  appHash: String!
+  lastResultsHash: String!
+  evidenceHash: String!
+  proposerAddress: String!
+}
+
+type BlockCommitSignature @jsonField(indexed: false) {
+  blockIdFlag: Int!
+  validatorAddress: String!
+  timestamp: Date!
+  signature: String!
+}
+
+type BlockLastCommit @jsonField(indexed: false) {
+  id: ID!
+  blockIdHash: String!
+  blockIdPartsTotal: Int!
+  blockIdPartsHash: String!
+  height: BigInt! @index
+  round: Int!
+  signatures: [BlockCommitSignature]!
+}
+
+# This handle all the information that is coming with the block but is not often used
+# but could help in some debug environment.
+type BlockMetadata @entity {
+  id: ID!
+  blockId: BlockId!
+  header: BlockHeader!
+  # first block has this null on js
+  lastCommit: BlockLastCommit
+}
+
 type Block @entity {
   id: ID! # The block header hash
   chainId: String! @index
   height: BigInt! @index
   timestamp: Date!
+  proposerAddress: String!
+  metadata: BlockMetadata!
+  size: Int!
+  # relations
   transactions: [Transaction] @derivedFrom(field: "block")
   messages: [Message] @derivedFrom(field: "block")
   events: [Event] @derivedFrom(field: "block")

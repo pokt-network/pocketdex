@@ -6,10 +6,10 @@ import { NativeTransfer } from "../../types";
 import { NativeTransferMsg } from "../types";
 import {
   attemptHandling,
-  messageId,
-  stringify,
   unprocessedEventHandler,
-} from "../utils";
+} from "../utils/handlers";
+import { messageId } from "../utils/ids";
+import { stringify } from "../utils/json";
 
 export async function handleNativeTransfer(event: CosmosEvent): Promise<void> {
   await attemptHandling(event, _handleNativeTransfer, unprocessedEventHandler);

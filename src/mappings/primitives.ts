@@ -13,6 +13,10 @@ import {
 } from "lodash";
 import {
   Block,
+  BlockHeader,
+  BlockId,
+  BlockLastCommit,
+  BlockMetadata,
   BlockSupply,
   Event,
   EventAttribute,
@@ -29,14 +33,19 @@ import {
   TxStatus,
 } from "./constants";
 import {
+  ConvertedBlockJson,
+  processBlockJson,
+} from "./utils/block_parser";
+import { getBlockByteSize } from "./utils/block_size";
+import {
   attemptHandling,
-  messageId,
-  primitivesFromTx,
-  stringify,
   trackUnprocessed,
   unprocessedEventHandler,
   unprocessedMsgHandler,
-} from "./utils";
+} from "./utils/handlers";
+import { messageId } from "./utils/ids";
+import { stringify } from "./utils/json";
+import { primitivesFromTx } from "./utils/primitives";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
   await attemptHandling(block, _handleBlock, _handleBlockError);
@@ -56,7 +65,6 @@ export async function handleEvent(event: CosmosEvent): Promise<void> {
 
 async function _handleBlock(block: CosmosBlock): Promise<void> {
   logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
-
   const { header: { chainId, height, time }, id } = block.block;
   const timestamp = new Date(time.getTime());
 
@@ -65,6 +73,7 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
 
   const blockSupplies: BlockSupply[] = [];
 
+  // TODO: (@jorgecuesta) we should move blockSupply and block metadata into separated functions for readability
   if (block.header.height > 1) {
     // on any block after genesis, we need to look up for the previous BlockSupply to copy the supply id of the
     // right one, then the claim/proof settlement or ibc txs will update to the right supply id if a new one
@@ -94,11 +103,29 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
     }));
   }
 
+  // CosmosBlock has hash and addresses as Uint8array which is not the expected value on the graphql schema/db model,
+  // so here we get a parsed version of its data that match the expected values base on words ending
+  const processedBlock = processBlockJson(block, PREFIX) as ConvertedBlockJson;
+
+  const blockMetadata = BlockMetadata.create({
+    id,
+    blockId: processedBlock.blockId as unknown as BlockId,
+    header: processedBlock.header as unknown as BlockHeader,
+    lastCommit: processedBlock.block.lastCommit as unknown as BlockLastCommit,
+  });
+
+  await blockMetadata.save();
+
+  const size = getBlockByteSize(block);
+
   const blockEntity = Block.create({
     id,
     chainId,
     height: BigInt(height),
     timestamp,
+    proposerAddress: processedBlock.header.proposerAddress as string,
+    size,
+    metadataId: id,
   });
 
   await blockEntity.save();
