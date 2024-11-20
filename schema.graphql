@@ -77,7 +77,7 @@ type Block @entity {
   id: ID! # The block header hash
   chainId: String! @index
   height: BigInt! @index
-  timestamp: Date!
+  timestamp: Date! @index
   proposerAddress: String!
   metadata: BlockMetadata!
   size: Int!
@@ -110,25 +110,27 @@ type Block @entity {
   totalComputedUnits: BigInt
   totalRelays: BigInt
   failedTxs: Int
-  validTxs: Int
+  successfulTxs: Int
   totalTxs: Int
   stakedSuppliers: Int
-  suppliersStakedTokens: BigInt
+  stakedSuppliersTokens: BigInt
   unstakingSuppliers: Int
-  suppliersUnstakingTokens: BigInt
-  took: Int
+  unstakingSuppliersTokens: BigInt
+  # How much time (in ms) the block took to be produced.
+  # In fact this is the subtract of the timestamp of the current block against the previous one.
+  timeToBlock: Int
   unstakedSuppliers: Int
-  unstakedTokensOfSuppliers: BigInt
+  unstakedSuppliersTokens: BigInt
   stakedApps: Int
-  appsStakedTokens: BigInt
+  stakedAppsTokens: BigInt
   unstakingApps: Int
-  appsUnstakingTokens: BigInt
+  unstakingAppsTokens: BigInt
   unstakedApps: Int
-  unstakedTokensOfApps: BigInt
+  unstakedAppsTokens: BigInt
   stakedGateways: Int
-  gatewaysStakedTokens: BigInt
-  unstakingGateways: Int
-  gatewaysUnstakingTokens: BigInt
+  stakedGatewaysTokens: BigInt
+  unstakedGateways: Int
+  unstakedGatewaysTokens: BigInt
 }
 
 type Transaction @entity {
@@ -172,8 +174,8 @@ type Coin @jsonField {
 
 type NativeTransfer @entity {
   id: ID!
-  to: Account! @index
-  from: Account! @index
+  recipient: Account! @index
+  sender: Account! @index
   amounts: [Coin]!
   denom: String! @index
   message: Message!
@@ -868,15 +870,18 @@ type EventProofUpdated @entity {
   relay: Relay
 }
 
+# Entity used to store summarized data related to relays by block and service
 type RelayByBlockAndService @entity {
   id: ID!
   relays: BigInt!
   computedUnits: BigInt!
+  claimedUpokt: BigInt!
   amount: Int!
   block: Block!
   service: Service!
 }
 
+# Entity used to store summarized data related to staked suppliers by block and service
 type StakedSuppliersByBlockAndService @entity {
   id: ID!
   tokens: BigInt!
@@ -885,6 +890,7 @@ type StakedSuppliersByBlockAndService @entity {
   service: Service!
 }
 
+# Entity used to store summarized data related to staked apps by block and service
 type StakedAppsByBlockAndService @entity {
   id: ID!
   tokens: BigInt!

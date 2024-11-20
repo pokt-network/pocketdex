@@ -11,7 +11,7 @@ import {
 import { RelayByBlockAndServiceProps } from "../../types/models/RelayByBlockAndService";
 import { StakedAppsByBlockAndServiceProps } from "../../types/models/StakedAppsByBlockAndService";
 import { StakedSuppliersByBlockAndServiceProps } from "../../types/models/StakedSuppliersByBlockAndService";
-import { StakeStatus, TxStatus } from "../constants";
+import { StakeStatus } from "../constants";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   const [
@@ -47,25 +47,25 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   blockEntity.totalComputedUnits = computedUnits
   blockEntity.totalRelays = relays
   blockEntity.failedTxs = invalidTxs
-  blockEntity.validTxs = validTxs
-  blockEntity.took = took
+  blockEntity.successfulTxs = validTxs
+  blockEntity.timeToBlock = took
   blockEntity.totalTxs = validTxs + invalidTxs
   blockEntity.stakedSuppliers = stakedSuppliers
-  blockEntity.suppliersStakedTokens = stakedTokensBySupplier
+  blockEntity.stakedSuppliersTokens = stakedTokensBySupplier
   blockEntity.unstakingSuppliers = unstakingSuppliers
-  blockEntity.suppliersUnstakingTokens = unstakingTokensBySupplier
+  blockEntity.unstakingSuppliersTokens = unstakingTokensBySupplier
   blockEntity.unstakedSuppliers = unstakedSuppliers
-  blockEntity.unstakedTokensOfSuppliers = unstakedTokensBySupplier
+  blockEntity.unstakedSuppliersTokens = unstakedTokensBySupplier
   blockEntity.stakedApps = stakedApps
-  blockEntity.appsStakedTokens = stakedTokensByApp
+  blockEntity.stakedAppsTokens = stakedTokensByApp
   blockEntity.unstakingApps = unstakingApps
-  blockEntity.appsUnstakingTokens = unstakingTokensByApp
+  blockEntity.unstakingAppsTokens = unstakingTokensByApp
   blockEntity.unstakedApps = unstakedApps
-  blockEntity.unstakedTokensOfApps = unstakedTokensByApp
+  blockEntity.unstakedAppsTokens = unstakedTokensByApp
   blockEntity.stakedGateways = stakedGateways
-  blockEntity.gatewaysStakedTokens = stakedTokensByGateway
-  blockEntity.unstakingGateways = unstakedGateways
-  blockEntity.gatewaysUnstakingTokens = unstakedTokensByGateway
+  blockEntity.stakedGatewaysTokens = stakedTokensByGateway
+  blockEntity.unstakedGateways = unstakedGateways
+  blockEntity.unstakedGatewaysTokens = unstakedTokensByGateway
 
   await Promise.all([
     blockEntity.save(),
@@ -74,6 +74,7 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       relays: relay.relays,
       amount: relay.amount,
       computedUnits: relay.computedUnits,
+      claimedUpokt: relay.tokens,
       blockId: block.block.id,
       serviceId: relay.service,
     } as RelayByBlockAndServiceProps))),
@@ -95,7 +96,24 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
 }
 
 async function getRelaysData(block: CosmosBlock){
-  const relays = await EventClaimSettled.getByFields([["blockId", "=", block.block.id]], {})
+  const relays: Array<EventClaimSettled> = [];
+  const limit = 1000;
+  let offset = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const items: Array<EventClaimSettled> = await EventClaimSettled.getByFields([["blockId", "=", block.block.id]], { limit, offset });
+
+    // eslint-disable-next-line
+    //@ts-ignore
+    if (items.length === 0) {
+      break;
+    }
+
+    relays.push(...items);
+    offset += limit;
+  }
+
   const relaysByServiceMap: Record<string,{
     tokens: bigint,
     computedUnits: bigint,
@@ -142,7 +160,23 @@ async function getRelaysData(block: CosmosBlock){
 }
 
 async function getTransactionsData(block: CosmosBlock){
-  const transactions = await Transaction.getByBlockId(block.block.id, {})
+  const transactions: Array<Transaction> = [];
+  const limit = 1000;
+  let offset = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const items: Array<Transaction> = await Transaction.getByFields([["blockId", "=", block.block.id]], { limit, offset });
+
+    // eslint-disable-next-line
+    //@ts-ignore
+    if (items.length === 0) {
+      break;
+    }
+
+    transactions.push(...items);
+    offset += limit;
+  }
 
   let validTxs = 0, invalidTxs = 0;
 

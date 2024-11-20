@@ -35,8 +35,8 @@ async function _handleNativeTransfer(event: CosmosEvent): Promise<void> {
   const id = messageId(msg);
   const transferEntity = NativeTransfer.create({
     id,
-    toId: toAddress,
-    fromId: fromAddress,
+    senderId: toAddress,
+    recipientId: fromAddress,
     amounts,
     denom,
     // timeline,

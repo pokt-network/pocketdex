@@ -28,15 +28,28 @@ import { getEventId, getRelayId, messageId, stringify } from "../utils";
 function parseAttribute(attribute: unknown): string {
   return (attribute as string).replaceAll('"', '')
 }
-// eslint-disable-next-line complexity
-export async function handleEventClaimSettled(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleEventClaimSettled] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
+function getAttributes(attributes: CosmosEvent['event']['attributes']) {
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  let claim: ClaimSDKType = {}, proofRequirement: ProofRequirementReason = ProofRequirementReason.NOT_REQUIRED, numRelays = BigInt(0), numClaimedComputedUnits = BigInt(0), numEstimatedComputedUnits = BigInt(0), claimed: CoinSDKType = {};
+  let proof: ProofSDKType = {},
+    expirationReason: ClaimExpirationReason = ClaimExpirationReason.EXPIRATION_REASON_UNSPECIFIED,
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    claim: ClaimSDKType = {},
+    proofRequirement: ProofRequirementReason = ProofRequirementReason.NOT_REQUIRED,
+    numRelays = BigInt(0),
+    numClaimedComputedUnits = BigInt(0),
+    numEstimatedComputedUnits = BigInt(0),
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    claimed: CoinSDKType = {};
 
-  for (const attribute of event.event.attributes) {
+  for (const attribute of attributes) {
+    if (attribute.key === 'proof') {
+      proof = JSON.parse(attribute.value as string)
+    }
+
     if (attribute.key === 'claim') {
       claim = JSON.parse(attribute.value as string)
     }
@@ -73,7 +86,49 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
         }
       }
     }
+
+    if (attribute.key === 'expiration_reason') {
+      switch (claimExpirationReasonFromJSON(parseAttribute(attribute.value))) {
+        case ClaimExpirationReasonSDKType.EXPIRATION_REASON_UNSPECIFIED:
+          expirationReason = ClaimExpirationReason.EXPIRATION_REASON_UNSPECIFIED
+          break;
+        case ClaimExpirationReasonSDKType.PROOF_INVALID:
+          expirationReason = ClaimExpirationReason.PROOF_INVALID
+          break;
+        case ClaimExpirationReasonSDKType.PROOF_MISSING:
+          expirationReason = ClaimExpirationReason.PROOF_MISSING
+          break;
+        default: {
+          throw new Error(`Unknown ClaimExpirationReason: ${attribute.value}`)
+        }
+      }
+    }
   }
+
+  return {
+    claim,
+    proof,
+    numRelays,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    claimed,
+    proofRequirement,
+    expirationReason
+  }
+}
+
+// eslint-disable-next-line complexity
+export async function handleEventClaimSettled(event: CosmosEvent): Promise<void> {
+  logger.debug(`[handleEventClaimSettled] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
+
+  const {
+    claim,
+    claimed,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays,
+    proofRequirement
+  } = getAttributes(event.event.attributes)
 
   const {root_hash, session_header, supplier_operator_address} = claim
 
@@ -122,48 +177,14 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
 export async function handleEventClaimExpired(event: CosmosEvent): Promise<void> {
   logger.debug(`[handleEventClaimExpired] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  let claim: ClaimSDKType = {}, expirationReason: ClaimExpirationReason = ClaimExpirationReason.EXPIRATION_REASON_UNSPECIFIED, numRelays = BigInt(0), numClaimedComputedUnits = BigInt(0), numEstimatedComputedUnits = BigInt(0), claimed: CoinSDKType = {};
-
-  for (const attribute of event.event.attributes) {
-    if (attribute.key === 'claim') {
-      claim = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'num_relays') {
-      numRelays = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_claimed_computed_units') {
-      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_estimated_computed_units') {
-      numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'claimed') {
-      claimed = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'proof_requirement') {
-      switch (claimExpirationReasonFromJSON(parseAttribute(attribute.value))) {
-        case ClaimExpirationReasonSDKType.EXPIRATION_REASON_UNSPECIFIED:
-          expirationReason = ClaimExpirationReason.EXPIRATION_REASON_UNSPECIFIED
-          break;
-        case ClaimExpirationReasonSDKType.PROOF_INVALID:
-          expirationReason = ClaimExpirationReason.PROOF_INVALID
-          break;
-        case ClaimExpirationReasonSDKType.PROOF_MISSING:
-          expirationReason = ClaimExpirationReason.PROOF_MISSING
-          break;
-        default: {
-          throw new Error(`Unknown ClaimExpirationReason: ${attribute.value}`)
-        }
-      }
-    }
-  }
+  const {
+    claim,
+    claimed,
+    expirationReason,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays,
+  } = getAttributes(event.event.attributes)
 
   const {root_hash, session_header, supplier_operator_address} = claim
 
@@ -254,31 +275,13 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
 export async function handleEventClaimCreated(event: CosmosEvent): Promise<void> {
   logger.debug(`[handleEventClaimCreated] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  let claim: ClaimSDKType = {}, numRelays = BigInt(0), numClaimedComputedUnits = BigInt(0), numEstimatedComputedUnits = BigInt(0), claimed: CoinSDKType = {};
-
-  for (const attribute of event.event.attributes) {
-    if (attribute.key === 'claim') {
-      claim = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'num_relays') {
-      numRelays = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_claimed_computed_units') {
-      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_estimated_computed_units') {
-      numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'claimed') {
-      claimed = JSON.parse(attribute.value as string)
-    }
-  }
+  const {
+    claim,
+    claimed,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays,
+  } = getAttributes(event.event.attributes)
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
@@ -328,31 +331,13 @@ export async function handleEventClaimCreated(event: CosmosEvent): Promise<void>
 export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void> {
   logger.debug(`[handleEventClaimUpdated] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  let claim: ClaimSDKType = {}, numRelays = BigInt(0), numClaimedComputedUnits = BigInt(0), numEstimatedComputedUnits = BigInt(0), claimed: CoinSDKType = {};
-
-  for (const attribute of event.event.attributes) {
-    if (attribute.key === 'claim') {
-      claim = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'num_relays') {
-      numRelays = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_claimed_computed_units') {
-      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_estimated_computed_units') {
-      numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'claimed') {
-      claimed = JSON.parse(attribute.value as string)
-    }
-  }
+  const {
+    claim,
+    claimed,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays,
+  } = getAttributes(event.event.attributes)
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
@@ -447,35 +432,14 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
 export async function handleEventProofSubmitted(event: CosmosEvent): Promise<void> {
   logger.debug(`[EventProofSubmitted] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  let proof: ProofSDKType = {}, claim: ClaimSDKType = {}, numRelays = BigInt(0), numClaimedComputedUnits = BigInt(0), numEstimatedComputedUnits = BigInt(0), claimed: CoinSDKType = {};
-
-  for (const attribute of event.event.attributes) {
-    if (attribute.key === 'proof') {
-      proof = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'claim') {
-      claim = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'num_relays') {
-      numRelays = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_claimed_computed_units') {
-      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_estimated_computed_units') {
-      numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'claimed') {
-      claimed = JSON.parse(attribute.value as string)
-    }
-  }
+  const {
+    claim,
+    claimed,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays,
+    proof
+  } = getAttributes(event.event.attributes)
 
   const {root_hash, session_header, supplier_operator_address, } = claim
 
@@ -524,35 +488,14 @@ export async function handleEventProofSubmitted(event: CosmosEvent): Promise<voi
 export async function handleEventProofUpdated(event: CosmosEvent): Promise<void> {
   logger.debug(`[EventProofSubmitted] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  let proof: ProofSDKType = {}, claim: ClaimSDKType = {}, numRelays = BigInt(0), numClaimedComputedUnits = BigInt(0), numEstimatedComputedUnits = BigInt(0), claimed: CoinSDKType = {};
-
-  for (const attribute of event.event.attributes) {
-    if (attribute.key === 'proof') {
-      proof = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'claim') {
-      claim = JSON.parse(attribute.value as string)
-    }
-
-    if (attribute.key === 'num_relays') {
-      numRelays = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_claimed_computed_units') {
-      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'num_estimated_computed_units') {
-      numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value))
-    }
-
-    if (attribute.key === 'claimed') {
-      claimed = JSON.parse(attribute.value as string)
-    }
-  }
+  const {
+    claim,
+    claimed,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays,
+    proof
+  } = getAttributes(event.event.attributes)
 
   const {root_hash, session_header, supplier_operator_address, } = claim
 
