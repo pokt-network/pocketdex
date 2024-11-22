@@ -1,6 +1,6 @@
 FROM node:22.5-slim AS builder
 
-ARG GENESIS_FILENAME=testnet.json
+ARG GENESIS_FILENAME=localnet.json
 ARG NODE_ENV=production
 ARG ENDPOINT
 ARG CHAIN_ID=poktroll
