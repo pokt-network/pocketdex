@@ -1,55 +1,20 @@
 {
   "app_name": "poktrolld",
-  "app_version": "0.0.8",
-  "genesis_time": "2024-09-13T22:52:24.819672Z",
-  "chain_id": "poktroll",
+  "app_version": "0.0.11-rc",
+  "genesis_time": "2024-11-20T16:00:07.993015Z",
+  "chain_id": "pocket-beta",
   "initial_height": 1,
   "app_hash": null,
   "app_state": {
     "application": {
-      "applicationList": [
-        {
-          "address": "pokt1mrqt5f7qh8uxs27cjm9t7v9e74a9vvdnq5jva4",
-          "delegatee_gateway_addresses": [],
-          "service_configs": [
-            {
-              "service_id": "anvil"
-            },
-            {
-              "service_id": "rest"
-            },
-            {
-              "service_id": "ollama"
-            }
-          ],
-          "stake": {
-            "amount": "1000068",
-            "denom": "upokt"
-          }
-        },
-        {
-          "address": "pokt1ad28jdap2zfanjd7hpkh984yveney6k9a42man",
-          "delegatee_gateway_addresses": [],
-          "service_configs": [
-            {
-              "service_id": "anvil"
-            },
-            {
-              "service_id": "rest"
-            },
-            {
-              "service_id": "ollama"
-            }
-          ],
-          "stake": {
-            "amount": "1000068",
-            "denom": "upokt"
-          }
-        }
-      ],
+      "applicationList": [],
       "application_list": [],
       "params": {
-        "max_delegated_gateways": "7"
+        "max_delegated_gateways": "7",
+        "min_stake": {
+          "amount": "100000000",
+          "denom": "upokt"
+        }
       }
     },
     "auth": {
@@ -63,114 +28,51 @@
       "accounts": [
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1v3mcrj0h2zfekyf2n8m369x4v9wfvdm34hecd9",
+          "address": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "pub_key": null,
           "account_number": "0",
           "sequence": "0"
         },
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "address": "pokt1kq2ecszhhrn0z3nwqgqkegeqhr9ftslu5t4ya5",
           "pub_key": null,
           "account_number": "1",
           "sequence": "0"
         },
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1s7n67e4eqhprewp7s6mz0tluy7f3e4c3wh7m73",
+          "address": "pokt15ux823wusfvvkw7y4nnqqx5s95ag5p8xwmj02z",
           "pub_key": null,
           "account_number": "2",
           "sequence": "0"
         },
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1uaau3t0ajveql5wefvugzx7zqjj68ukyfg3k3m",
+          "address": "pokt17mgzg2wrq248yu5gpvp5adqgwl6s6xg47jdtm0",
           "pub_key": null,
           "account_number": "3",
           "sequence": "0"
         },
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1h39qzumgqwwpknhlrzyk0986y8qfq7m44j57pq",
+          "address": "pokt1a5f5hxgaxg83y6s5w8k47dpwylkms4jjjrl9l6",
           "pub_key": null,
           "account_number": "4",
           "sequence": "0"
         },
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1p69tfcgkhqsdl7jumpj9qll3p45rn267lezvgk",
+          "address": "pokt19csy3xzhpnzk8eu9ykjjzxk3vzma8gxz5rx3dy",
           "pub_key": null,
           "account_number": "5",
           "sequence": "0"
         },
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1794zjrsw8xh9w2ah3jcpqdqnmgz5qjztv4jcft",
+          "address": "pokt1fpxstscnqtzc9tq0u0nlvg69hqt6zhaxyka2mj",
           "pub_key": null,
           "account_number": "6",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1e59xh0xu98m5q0zpppy2hc37e4tzkmxa8r0ltv",
-          "pub_key": null,
-          "account_number": "7",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1re0vjdav5ufm7txhxu56jdlp6avraslw6pse8l",
-          "pub_key": null,
-          "account_number": "8",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1gtsq37fhu4ucv3zgme5ccxjy0tl7xewqmhw4x4",
-          "pub_key": null,
-          "account_number": "9",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1alhmeer46fqr4js6fs7ztm0en54hawqhpdyhex",
-          "pub_key": null,
-          "account_number": "10",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1c8c0t7daufm8pnqakdzfwx83kslnzxr3cshcs8",
-          "pub_key": null,
-          "account_number": "11",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1jffnecf38pej2ff98jwehv49z6v9kpmyttyspv",
-          "pub_key": null,
-          "account_number": "12",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt16ypg63ul20s5w0s9qhemld3dkp3ksuwh524xh8",
-          "pub_key": null,
-          "account_number": "13",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt1wygftlqrge9wvfpx67tjssxzqt0wdnq04gj3gq",
-          "pub_key": null,
-          "account_number": "14",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "pokt150cyxs3u9468he65jthl4rfg05flyzkhv2g9us",
-          "pub_key": null,
-          "account_number": "15",
           "sequence": "0"
         }
       ]
@@ -179,7 +81,7 @@
       "authorization": [
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.service.MsgUpdateParams"
@@ -188,7 +90,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.session.MsgUpdateParams"
@@ -197,7 +99,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.gateway.MsgUpdateParams"
@@ -206,7 +108,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.application.MsgUpdateParams"
@@ -215,7 +117,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.supplier.MsgUpdateParams"
@@ -224,7 +126,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.proof.MsgUpdateParams"
@@ -233,7 +135,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.tokenomics.MsgUpdateParams"
@@ -242,7 +144,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.shared.MsgUpdateParams"
@@ -251,7 +153,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.service.MsgUpdateParam"
@@ -260,7 +162,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.session.MsgUpdateParam"
@@ -269,7 +171,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.gateway.MsgUpdateParam"
@@ -278,7 +180,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.application.MsgUpdateParam"
@@ -287,7 +189,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.supplier.MsgUpdateParam"
@@ -296,7 +198,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.proof.MsgUpdateParam"
@@ -305,7 +207,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.tokenomics.MsgUpdateParam"
@@ -314,7 +216,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/poktroll.shared.MsgUpdateParam"
@@ -323,7 +225,43 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
+          "authorization": {
+            "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
+            "msg": "/poktroll.gateway.MsgUpdateParam"
+          },
+          "expiration": "2500-01-01T00:00:00Z"
+        },
+        {
+          "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
+          "authorization": {
+            "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
+            "msg": "/poktroll.application.MsgUpdateParam"
+          },
+          "expiration": "2500-01-01T00:00:00Z"
+        },
+        {
+          "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
+          "authorization": {
+            "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
+            "msg": "/poktroll.supplier.MsgUpdateParam"
+          },
+          "expiration": "2500-01-01T00:00:00Z"
+        },
+        {
+          "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
+          "authorization": {
+            "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
+            "msg": "/poktroll.session.MsgUpdateParam"
+          },
+          "expiration": "2500-01-01T00:00:00Z"
+        },
+        {
+          "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.upgrade.v1beta1.MsgSoftwareUpgrade"
@@ -332,7 +270,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.upgrade.v1beta1.MsgCancelUpgrade"
@@ -341,7 +279,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.auth.v1beta1.MsgUpdateParams"
@@ -350,7 +288,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.bank.v1beta1.MsgUpdateParams"
@@ -359,7 +297,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.distribution.v1beta1.MsgUpdateParams"
@@ -368,7 +306,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.mint.v1beta1.MsgUpdateParams"
@@ -377,7 +315,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.staking.v1beta1.MsgUpdateParams"
@@ -386,7 +324,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.slashing.v1beta1.MsgUpdateParams"
@@ -395,7 +333,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.gov.v1.MsgUpdateParams"
@@ -404,7 +342,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.gov.v1.MsgCancelProposal"
@@ -413,7 +351,7 @@
         },
         {
           "granter": "pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t",
-          "grantee": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "grantee": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "authorization": {
             "@type": "/cosmos.authz.v1beta1.GenericAuthorization",
             "msg": "/cosmos.consensus.v1.MsgUpdateParams"
@@ -429,182 +367,65 @@
       },
       "balances": [
         {
-          "address": "pokt1p69tfcgkhqsdl7jumpj9qll3p45rn267lezvgk",
+          "address": "pokt19csy3xzhpnzk8eu9ykjjzxk3vzma8gxz5rx3dy",
           "coins": [
             {
               "denom": "upokt",
-              "amount": "300000000"
+              "amount": "1000000001000000"
             }
           ]
         },
         {
-          "address": "pokt1re0vjdav5ufm7txhxu56jdlp6avraslw6pse8l",
+          "address": "pokt1fpxstscnqtzc9tq0u0nlvg69hqt6zhaxyka2mj",
           "coins": [
             {
               "denom": "upokt",
-              "amount": "220000000"
+              "amount": "9999999999999999999999999999999999999999999999999999999999999999"
             }
           ]
         },
         {
-          "address": "pokt1r6ja6rz6rpae58njfrsgs5n5sp3r36r2q9j04h",
+          "address": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
           "coins": [
             {
               "denom": "upokt",
-              "amount": "69000000000000000000042"
+              "amount": "69420000000"
             }
           ]
         },
         {
-          "address": "pokt1rl3gjgzexmplmds3tq3r3yk84zlwdl6djzgsvm",
+          "address": "pokt15ux823wusfvvkw7y4nnqqx5s95ag5p8xwmj02z",
           "coins": [
             {
               "denom": "upokt",
-              "amount": "1000068"
+              "amount": "1000000001000000"
             }
           ]
         },
         {
-          "address": "pokt1gtsq37fhu4ucv3zgme5ccxjy0tl7xewqmhw4x4",
+          "address": "pokt1kq2ecszhhrn0z3nwqgqkegeqhr9ftslu5t4ya5",
           "coins": [
             {
               "denom": "upokt",
-              "amount": "330000000"
+              "amount": "1000000001000000"
             }
           ]
         },
         {
-          "address": "pokt1f6j7u6875p2cvyrgjr0d2uecyzah0kget9vlpl",
+          "address": "pokt1a5f5hxgaxg83y6s5w8k47dpwylkms4jjjrl9l6",
           "coins": [
             {
               "denom": "upokt",
-              "amount": "1000068"
+              "amount": "1000000001000000"
             }
           ]
         },
         {
-          "address": "pokt1v3mcrj0h2zfekyf2n8m369x4v9wfvdm34hecd9",
+          "address": "pokt17mgzg2wrq248yu5gpvp5adqgwl6s6xg47jdtm0",
           "coins": [
             {
               "denom": "upokt",
-              "amount": "999999999999999999"
-            }
-          ]
-        },
-        {
-          "address": "pokt1wygftlqrge9wvfpx67tjssxzqt0wdnq04gj3gq",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "6900000000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1s7n67e4eqhprewp7s6mz0tluy7f3e4c3wh7m73",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "900000000000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1jffnecf38pej2ff98jwehv49z6v9kpmyttyspv",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "300000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1j40dzzmn6cn9kxku7a5tjnud6hv37vesr5ccaa",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "1000068"
-            }
-          ]
-        },
-        {
-          "address": "pokt1nhmtqf4gcmpxu0p6e53hpgtwj0llmsqpxtumcf",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "1000000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt150cyxs3u9468he65jthl4rfg05flyzkhv2g9us",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "100000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1h39qzumgqwwpknhlrzyk0986y8qfq7m44j57pq",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "200000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1c8c0t7daufm8pnqakdzfwx83kslnzxr3cshcs8",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "200000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1e59xh0xu98m5q0zpppy2hc37e4tzkmxa8r0ltv",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "110000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt16ypg63ul20s5w0s9qhemld3dkp3ksuwh524xh8",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "6900000000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1uaau3t0ajveql5wefvugzx7zqjj68ukyfg3k3m",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "100000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1alhmeer46fqr4js6fs7ztm0en54hawqhpdyhex",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "100000000"
-            }
-          ]
-        },
-        {
-          "address": "pokt1794zjrsw8xh9w2ah3jcpqdqnmgz5qjztv4jcft",
-          "coins": [
-            {
-              "denom": "upokt",
-              "amount": "1000000"
+              "amount": "1000000001000000"
             }
           ]
         }
@@ -612,7 +433,7 @@
       "supply": [
         {
           "denom": "upokt",
-          "amount": "69001000913802864100245"
+          "amount": "10000000000000000000000000000000000000000000000005000069424999999"
         }
       ],
       "denom_metadata": [],
@@ -655,17 +476,14 @@
       "allowances": []
     },
     "gateway": {
-      "gatewayList": [
-        {
-          "address": "pokt15vzxjqklzjtlz7lahe8z2dfe9nm5vxwwmscne4",
-          "stake": {
-            "amount": "1000068",
-            "denom": "upokt"
-          }
-        }
-      ],
+      "gatewayList": [],
       "gateway_list": [],
-      "params": {}
+      "params": {
+        "min_stake": {
+          "amount": "1000000",
+          "denom": "upokt"
+        }
+      }
     },
     "genutil": {
       "gen_txs": [
@@ -675,7 +493,7 @@
               {
                 "@type": "/cosmos.staking.v1beta1.MsgCreateValidator",
                 "description": {
-                  "moniker": "grove1",
+                  "moniker": "validator1",
                   "identity": "",
                   "website": "",
                   "security_contact": "",
@@ -688,18 +506,18 @@
                 },
                 "min_self_delegation": "1",
                 "delegator_address": "",
-                "validator_address": "poktvaloper1s7n67e4eqhprewp7s6mz0tluy7f3e4c3vyde4f",
+                "validator_address": "poktvaloper1kq2ecszhhrn0z3nwqgqkegeqhr9ftslukcxxkv",
                 "pubkey": {
                   "@type": "/cosmos.crypto.ed25519.PubKey",
-                  "key": "/OtS59OyGjmbgBgmYxnRe7BZmdCBS4dZE6V8VQnpO/g="
+                  "key": "XhR/v3G7N3NuyYaw36s5dJrjfLKtZtgNzC/yrhGsPDY="
                 },
                 "value": {
                   "denom": "upokt",
-                  "amount": "900000000"
+                  "amount": "1000000000000000"
                 }
               }
             ],
-            "memo": "47a89ea16de68e7ddddec21eed3f3c53bada6ef7@192.168.88.196:26656",
+            "memo": "3b22532b929038d9addaf6f8c4cab1a833f2613e@192.168.88.36:26656",
             "timeout_height": "0",
             "extension_options": [],
             "non_critical_extension_options": []
@@ -709,7 +527,7 @@
               {
                 "public_key": {
                   "@type": "/cosmos.crypto.secp256k1.PubKey",
-                  "key": "AzzYnbvFsTpMWRIdWxBxW7Xvnj8SoWU7eVUa56Qmuiz2"
+                  "key": "AzXCeqCBuiFNz9HkoR8hc52hwtgwPDiikioMhierS67T"
                 },
                 "mode_info": {
                   "single": {
@@ -728,7 +546,7 @@
             "tip": null
           },
           "signatures": [
-            "o6eiWX73FG33xI6Wf4fT5x1eRskcnPZo2K7iIa34/vwMkY+g0D46sDlJOBM0lDA7H+oZMhyMhXFUqOqZbJO8IA=="
+            "z8R/uZCpyhCNyn4/lQuiJgrGeHPNqLAgPHrnO3WyLNhsAeo/NjI4ghl/Gec4xfyKmA4qpFe2aW5RewkR+FsXKw=="
           ]
         }
       ]
@@ -800,16 +618,18 @@
       "claim_list": [],
       "params": {
         "proof_missing_penalty": {
-          "amount": "320",
+          "amount": "320000000",
           "denom": "upokt"
         },
         "proof_request_probability": "0.25",
-        "proof_requirement_threshold": 20,
+        "proof_requirement_threshold": {
+          "amount": "20000000",
+          "denom": "upokt"
+        },
         "proof_submission_fee": {
           "amount": "1000000",
           "denom": "upokt"
-        },
-        "relay_difficulty_target_hash": "//////////////////////////////////////////8="
+        }
       },
       "proof_list": []
     },
@@ -821,41 +641,26 @@
           "denom": "upokt"
         }
       },
-      "serviceList": [
-        {
-          "compute_units_per_relay": 1,
-          "id": "anvil",
-          "name": "anvil",
-          "owner_address": "pokt1cwnu460557x0z78jv3hhc7356hhkrgc86c87q5"
-        },
-        {
-          "compute_units_per_relay": 1,
-          "id": "ollama",
-          "name": "ollama",
-          "owner_address": "pokt1mx0klkkrj6v3dw8gs4nzlq0cq8lsktmx35t03e"
-        },
-        {
-          "compute_units_per_relay": 1,
-          "id": "rest",
-          "name": "rest",
-          "owner_address": "pokt1mx0klkkrj6v3dw8gs4nzlq0cq8lsktmx35t03e"
-        }
-      ],
+      "relayMiningDifficultyList": [],
+      "serviceList": [],
       "service_list": []
     },
     "session": {
-      "params": {}
+      "params": {
+        "num_suppliers_per_session": 15
+      }
     },
     "shared": {
       "params": {
-        "application_unbonding_period_sessions": "4",
+        "application_unbonding_period_sessions": 1,
         "claim_window_close_offset_blocks": 4,
         "claim_window_open_offset_blocks": 1,
+        "compute_units_to_tokens_multiplier": 42,
         "grace_period_end_offset_blocks": 1,
         "num_blocks_per_session": 10,
         "proof_window_close_offset_blocks": 4,
         "proof_window_open_offset_blocks": 0,
-        "supplier_unbonding_period_sessions": "4"
+        "supplier_unbonding_period_sessions": 1
       }
     },
     "slashing": {
@@ -878,7 +683,7 @@
         "bond_denom": "upokt",
         "historical_entries": 10000,
         "max_entries": 7,
-        "max_validators": 3,
+        "max_validators": 10,
         "min_commission_rate": "0.000000000000000000",
         "unbonding_time": "1814400s"
       },
@@ -887,73 +692,25 @@
       "validators": []
     },
     "supplier": {
-      "params": {},
-      "supplierList": [
-        {
-          "operator_address": "pokt19a3t4yunp0dlpfjrp7qwnzwlrzd5fzs2gjaaaj",
-          "owner_address": "pokt19a3t4yunp0dlpfjrp7qwnzwlrzd5fzs2gjaaaj",
-          "services": [
-            {
-              "endpoints": [
-                {
-                  "configs": [],
-                  "rpc_type": "JSON_RPC",
-                  "url": "http://relayminer1:8545"
-                }
-              ],
-              "rev_share": [
-                {
-                  "address": "pokt19a3t4yunp0dlpfjrp7qwnzwlrzd5fzs2gjaaaj",
-                  "rev_share_percentage": "100"
-                }
-              ],
-              "service_id": "anvil"
-            },
-            {
-              "endpoints": [
-                {
-                  "configs": [],
-                  "rpc_type": "REST",
-                  "url": "http://relayminer1:8545"
-                }
-              ],
-              "rev_share": [
-                {
-                  "address": "pokt19a3t4yunp0dlpfjrp7qwnzwlrzd5fzs2gjaaaj",
-                  "rev_share_percentage": "100"
-                }
-              ],
-              "service_id": "rest"
-            },
-            {
-              "endpoints": [
-                {
-                  "configs": [],
-                  "rpc_type": "REST",
-                  "url": "http://relayminer1:8545"
-                }
-              ],
-              "rev_share": [
-                {
-                  "address": "pokt19a3t4yunp0dlpfjrp7qwnzwlrzd5fzs2gjaaaj",
-                  "rev_share_percentage": "100"
-                }
-              ],
-              "service_id": "ollama"
-            }
-          ],
-          "stake": {
-            "amount": "1000068",
-            "denom": "upokt"
-          }
+      "params": {
+        "min_stake": {
+          "amount": "1000000",
+          "denom": "upokt"
         }
-      ]
+      },
+      "supplierList": []
     },
     "tokenomics": {
       "params": {
-        "compute_units_to_tokens_multiplier": "42"
-      },
-      "relayMiningDifficultyList": []
+        "dao_reward_address": "pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e",
+        "mint_allocation_percentages": {
+          "application": 0,
+          "dao": 0.1,
+          "proposer": 0.05,
+          "source_owner": 0.15,
+          "supplier": 0.7
+        }
+      }
     },
     "upgrade": {},
     "vesting": {}
