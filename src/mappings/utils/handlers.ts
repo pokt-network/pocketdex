@@ -35,8 +35,8 @@ export async function unprocessedMsgHandler(err: Error, msg: CosmosMessage): Pro
 }
 
 export async function trackUnprocessed(error: Error, primitives: Primitives): Promise<void> {
-  logger.warn(`[trackUnprocessable] (error.message): ${error.message}`);
-  logger.warn(`[trackUnprocessable] (error.stack): ${error.stack}`);
+  logger.error(`[trackUnprocessable] (error.message): ${error.message}`);
+  logger.trace(`[trackUnprocessable] (error.stack): ${error.stack}`);
   // NB: failsafe try/catch
   try {
     const { block, event, msg, tx } = primitives;
@@ -70,6 +70,6 @@ export async function trackUnprocessed(error: Error, primitives: Primitives): Pr
     return await unprocessedEntity.save();
   } catch {
     logger.error("[trackUnprocessable] (ERROR): unable to persist unprocessable entity");
-    logger.error(`[trackUnprocessable] (ERROR | stack): ${error.stack}`);
+    logger.trace(`[trackUnprocessable] (ERROR | stack): ${error.stack}`);
   }
 }
