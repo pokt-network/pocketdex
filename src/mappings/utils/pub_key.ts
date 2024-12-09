@@ -40,7 +40,7 @@ function rawSecp256k1PubKeyToRawAddress(pubKey: Uint8Array): Uint8Array {
   return ripemd160(sha256(pk));
 }
 
-function pubKeyToRawAddress(type: string, pubKey: Uint8Array, prefix?: string) {
+function pubKeyToRawAddress(type: string, pubKey: Uint8Array, prefix?: string): string {
   switch (type) {
     case Ed25519:
       return toHex(rawEd25519PubKeyToRawAddress(pubKey)).toUpperCase();
