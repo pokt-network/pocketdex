@@ -1,5 +1,3 @@
-import { sha256 } from "@cosmjs/crypto";
-import { toBech32 } from "@cosmjs/encoding";
 import {
   CosmosBlock,
   CosmosEvent,
@@ -18,17 +16,19 @@ import {
   BlockLastCommit,
   BlockMetadata,
   BlockSupply,
-  SupplyDenom,
   Event,
   EventAttribute,
   Message,
+  SupplyDenom,
   Transaction,
 } from "../types";
 import {
   _handleSupply,
   getSupplyId,
 } from "./bank/supply";
-import { PREFIX, TxStatus,
+import {
+  PREFIX,
+  TxStatus,
 } from "./constants";
 import {
   ConvertedBlockJson,
@@ -44,6 +44,7 @@ import {
 import { messageId } from "./utils/ids";
 import { stringify } from "./utils/json";
 import { primitivesFromTx } from "./utils/primitives";
+import { pubKeyToAddress } from "./utils/pub_key";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
   await attemptHandling(block, _handleBlock, _handleBlockError);
@@ -166,10 +167,11 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
     status = TxStatus.Error;
     logger.error(`[handleTransaction] (block ${tx.block.block.header.height}): hash=${tx.hash} missing signerInfos public key`);
   } else {
-    // Apply sha256 to the public key to get the address bytes
-    const addressBytes = sha256(tx.decodedTx.authInfo.signerInfos[0]?.publicKey?.value).slice(0, 20);
-    // Encode the raw address to Bech32
-    signerAddress = toBech32(PREFIX, addressBytes);
+    signerAddress = pubKeyToAddress(
+      tx.decodedTx.authInfo.signerInfos[0]?.publicKey.typeUrl,
+      tx.decodedTx.authInfo.signerInfos[0]?.publicKey.value,
+      PREFIX,
+    );
   }
 
 
