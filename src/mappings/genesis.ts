@@ -11,6 +11,7 @@ import type { AppParamProps } from "../types/models/AppParam";
 import type { BalanceProps } from "../types/models/Balance";
 import type { GatewayProps } from "../types/models/Gateway";
 import type { GenesisBalanceProps } from "../types/models/GenesisBalance";
+import { MessageProps } from "../types/models/Message";
 import { MsgAddServiceProps } from "../types/models/MsgAddService";
 import { MsgDelegateToGatewayProps } from "../types/models/MsgDelegateToGateway";
 import { MsgStakeApplicationProps } from "../types/models/MsgStakeApplication";
@@ -23,10 +24,14 @@ import type { ServiceProps } from "../types/models/Service";
 import type { SupplierProps } from "../types/models/Supplier";
 import { SupplierServiceConfigProps } from "../types/models/SupplierServiceConfig";
 import type { TransactionProps } from "../types/models/Transaction";
+import {MsgStakeApplication as MsgStakeApplicationType} from '../types/proto-interfaces/poktroll/application/tx'
+import {MsgStakeGateway as MsgStakeGatewayType} from '../types/proto-interfaces/poktroll/gateway/tx'
+import {MsgAddService as MsgAddServiceType} from '../types/proto-interfaces/poktroll/service/tx'
 import {
   configOptionsFromJSON,
   rPCTypeFromJSON,
 } from "../types/proto-interfaces/poktroll/shared/service";
+import {MsgStakeSupplier as MsgStakeSupplierType} from '../types/proto-interfaces/poktroll/supplier/tx'
 import { getSupplyRecord } from "./bank/supply";
 import {
   StakeStatus,
@@ -42,7 +47,6 @@ import {
   getStakeServiceId,
 } from "./utils/ids";
 import { stringify } from "./utils/json";
-
 
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   // we MUST load the JSON this way due to the sandboxed environment
@@ -140,7 +144,10 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
 }
 
 async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const services: Array<ServiceProps> = [], addServiceMsgs: Array<MsgAddServiceProps> = [];
+  const services: Array<ServiceProps> = [],
+    addServiceMsgs: Array<MsgAddServiceProps> = [],
+    msgs: Array<MessageProps> = [],
+    transactions: Array<TransactionProps> = [];
 
   for (const service of genesis.app_state.service.serviceList) {
     services.push({
@@ -151,6 +158,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
     });
 
     const msgId = `genesis-${service.id}`;
+    const transactionHash = getGenesisFakeTxHash("service", 0);
 
     addServiceMsgs.push({
       id: msgId,
@@ -162,11 +170,42 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       transactionId: getGenesisFakeTxHash("service", 0),
       messageId: msgId,
     });
+
+    transactions.push({
+      id: transactionHash,
+      blockId: block.block.id,
+      gasUsed: BigInt(0),
+      gasWanted: BigInt(0),
+      fees: [],
+      status: TxStatus.Success,
+      code: 0
+    });
+
+    // used to create correctly the content of the message
+    const msgAddService: MsgAddServiceType = {
+      ownerAddress: service.owner_address,
+      service: {
+        id: service.id,
+        name: service.name,
+        computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
+        ownerAddress: service.owner_address,
+      }
+    }
+
+    msgs.push({
+      id: msgId,
+      typeUrl: "/poktroll.service.MsgAddService",
+      json: stringify(msgAddService),
+      blockId: block.block.id,
+      transactionId: transactionHash,
+    })
   }
 
   await Promise.all([
     store.bulkCreate("Service", services),
     store.bulkCreate("MsgAddService", addServiceMsgs),
+    store.bulkCreate("Transaction", transactions),
+    store.bulkCreate("Message", msgs),
   ]);
 }
 
@@ -176,6 +215,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
   const supplierServices: Array<SupplierServiceConfigProps> = [];
   const servicesAndSupplierMsgStakes: Array<MsgStakeSupplierServiceProps> = [];
   const transactions: Array<TransactionProps> = [];
+  const msgs: Array<MessageProps> = [];
 
   for (let i = 0; i < genesis.app_state.supplier.supplierList.length; i++) {
     const supplier = genesis.app_state.supplier.supplierList[i]
@@ -212,6 +252,40 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       stakeDenom: supplier.stake.denom,
       stakeStatus: StakeStatus.Staked,
     });
+
+    // used to create correctly the content of the message
+    const msgStakeSupplier: MsgStakeSupplierType = {
+      stake: {
+        amount: supplier.stake.amount,
+        denom: supplier.stake.denom,
+      },
+      ownerAddress: supplier.owner_address,
+      operatorAddress: supplier.operator_address,
+      signer: supplier.owner_address,
+      services: supplier.services.map(service => ({
+        serviceId: service.service_id,
+        endpoints: service.endpoints.map(endpoint => ({
+          url: endpoint.url,
+          rpcType: rPCTypeFromJSON(endpoint.rpc_type),
+          configs: endpoint.configs.map(config => ({
+            key: configOptionsFromJSON(config.key),
+            value: config.value,
+          })),
+        })),
+        revShare: service.rev_share.map(revShare => ({
+          address: revShare.address,
+          revSharePercentage: revShare.rev_share_percentage,
+        })),
+      }))
+    }
+
+    msgs.push({
+      id: msgId,
+      typeUrl: "/poktroll.supplier.MsgStakeSupplier",
+      json: stringify(msgStakeSupplier),
+      blockId: block.block.id,
+      transactionId: transactionHash,
+    })
 
     for (const service of supplier.services) {
       const endpoints = service.endpoints.map((endpoint) => ({
@@ -252,6 +326,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
     store.bulkCreate("SupplierServiceConfig", supplierServices),
     store.bulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes),
     store.bulkCreate("Transaction", transactions),
+    store.bulkCreate("Message", msgs),
   ]);
 }
 
@@ -263,6 +338,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
   const msgDelegateToGateways: Array<MsgDelegateToGatewayProps> = [];
   const transactions: Array<TransactionProps> = [];
   const appsDelegatedToGateways: Array<ApplicationGatewayProps> = [];
+  const msgs: Array<MessageProps> = [];
 
   for (let i = 0; i < genesis.app_state.application.applicationList.length; i++) {
     const app = genesis.app_state.application.applicationList[i];
@@ -317,6 +393,26 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       stakeStatus: StakeStatus.Staked,
     });
 
+    // used to create correctly the content of the message
+    const msgStakeApplication: MsgStakeApplicationType = {
+      address: app.address,
+      stake: {
+        amount: app.stake.amount,
+        denom: app.stake.denom,
+      },
+      services: app.service_configs.map(service => ({
+        serviceId: service.service_id,
+      })),
+    }
+
+    msgs.push({
+      id: msgId,
+      typeUrl: "/poktroll.application.MsgStakeApplication",
+      json: stringify(msgStakeApplication),
+      blockId: block.block.id,
+      transactionId: transactionHash,
+    })
+
     for (const service of app.service_configs) {
       servicesAndAppMsgStakes.push({
         id: getMsgStakeServiceId(msgId, service.service_id),
@@ -339,6 +435,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
     store.bulkCreate("ApplicationService", appServices),
     store.bulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes),
     store.bulkCreate("ApplicationGateway", appsDelegatedToGateways),
+    store.bulkCreate("Message", msgs),
   ];
 
   if (msgDelegateToGateways.length > 0) {
@@ -352,6 +449,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
   const gateways: Array<GatewayProps> = [];
   const gatewayMsgStakes: Array<MsgStakeGatewayProps> = [];
   const transactions: Array<TransactionProps> = [];
+  const msgs: Array<MessageProps> = [];
 
   for (let i = 0; i < genesis.app_state.gateway.gatewayList.length; i++) {
     const gateway = genesis.app_state.gateway.gatewayList[i];
@@ -385,12 +483,30 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       stakeDenom: gateway.stake.denom,
       stakeStatus: StakeStatus.Staked,
     });
+
+    // used to create correctly the content of the message
+    const msgStakeGateway: MsgStakeGatewayType = {
+      address: gateway.address,
+      stake: {
+        amount: gateway.stake.amount,
+        denom: gateway.stake.denom,
+      },
+    }
+
+    msgs.push({
+      id: msgId,
+      typeUrl: "/poktroll.gateway.MsgStakeGateway",
+      json: stringify(msgStakeGateway),
+      blockId: block.block.id,
+      transactionId: transactionHash,
+    })
   }
 
   await Promise.all([
     store.bulkCreate("Gateway", gateways),
     store.bulkCreate("MsgStakeGateway", gatewayMsgStakes),
     store.bulkCreate("Transaction", transactions),
+    store.bulkCreate("Message", msgs),
   ]);
 }
 
