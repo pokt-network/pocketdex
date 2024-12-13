@@ -12,7 +12,7 @@ export function messageId(msg: CosmosMessage | CosmosEvent): string {
 // getEventId returns the id of the event passed.
 // Use this to get the id of the events across the indexing process.
 export function getEventId(event: CosmosEvent): string {
-  return `${event.tx?.hash || event.block.blockId}-${event.idx}`;
+  return `${event.tx?.hash || event.block.block.id}-${event.idx}`;
 }
 
 // getBalanceId returns the id of the Balance entity using the address and denom passed.
