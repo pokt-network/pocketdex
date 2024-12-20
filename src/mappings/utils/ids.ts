@@ -2,6 +2,7 @@ import {
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
+import { FakeTxType } from "../types/genesis";
 
 // messageId returns the id of the message passed or
 // that of the message which generated the event passed.
@@ -32,7 +33,7 @@ export function getAppDelegatedToGatewayId(appAddress: string, gatewayAddress: s
 }
 
 // Returns a string that satisfies the format of a transaction hash.
-export function getGenesisFakeTxHash(entity: "app" | "supplier" | "gateway" | "service", index: number): string {
+export function getGenesisFakeTxHash(entity: FakeTxType, index: number): string {
   const num = index + 1;
   let entityId: string;
 
@@ -48,6 +49,9 @@ export function getGenesisFakeTxHash(entity: "app" | "supplier" | "gateway" | "s
       break;
     case "service":
       entityId = "D";
+      break;
+    case "validator":
+      entityId = "E";
       break;
     default: {
       throw new Error("Not implemented");

@@ -445,6 +445,14 @@ const project: CosmosProject = {
               type: "coin_received",
             }
           },
+          // --- Validator (@TODO: test it asap with @bryan)
+          {
+            handler: "handleValidatorMsgCreate",
+            kind: CosmosHandlerKind.Message,
+            filter: {
+              type: "/cosmos.staking.v1beta1.MsgCreateValidator",
+            },
+          },
           // --- Applications
           {
             handler: "handleAppMsgStake",

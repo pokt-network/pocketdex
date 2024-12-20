@@ -1,7 +1,4 @@
-import {
-  toBech32,
-  toHex,
-} from "@cosmjs/encoding";
+import { toHex } from "@cosmjs/encoding";
 import { CosmosBlock } from "@subql/types-cosmos";
 import _ from "lodash";
 
@@ -48,9 +45,7 @@ function convert(obj: unknown, bech32Prefix: string): ConvertedBlockJson | Conve
     const result: Record<string, unknown> = {};
     _.forOwn(obj, (value, key) => {
       if ((value as unknown) instanceof Uint8Array) {
-        result[key] = key.toLowerCase().includes("address")
-          ? toBech32(bech32Prefix, value)
-          : toHex(value);
+        result[key] = toHex(value).toUpperCase();
       } else {
         result[key] = convert(value, bech32Prefix);
       }

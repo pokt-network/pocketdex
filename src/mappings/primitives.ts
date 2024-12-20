@@ -122,6 +122,7 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
     chainId,
     height: BigInt(height),
     timestamp,
+    // this is the HEX address that comes on the block
     proposerAddress: processedBlock.header.proposerAddress as string,
     size,
     metadataId: id,
@@ -160,8 +161,6 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
 async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
   let status = tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;
 
-  // const timeline = BigInt((tx.block.block.header.height * 100000) + tx.idx);
-
   let signerAddress;
   if (isEmpty(tx.decodedTx.authInfo.signerInfos) || isNil(tx.decodedTx.authInfo.signerInfos[0]?.publicKey)) {
     status = TxStatus.Error;
@@ -173,7 +172,6 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
       PREFIX,
     );
   }
-
 
   logger.debug(`[handleTransaction] (block ${tx.block.block.header.height}): indexing transaction ${tx.idx + 1} / ${tx.block.txs.length} status=${status} signer=${signerAddress}`);
   logger.debug(`[handleTransaction] (tx.decodedTx): ${stringify(tx.decodedTx, undefined, 2)}`);
