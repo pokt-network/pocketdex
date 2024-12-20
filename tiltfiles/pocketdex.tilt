@@ -40,6 +40,6 @@ def pocketdex(pocketdex_root, *,
 
     k8s_resource(workload="gql-engine-deployment",
                  new_name="GraphQL API",
-                 port_forwards=["3001:3001"],
+                 port_forwards=["3001:3000"],
                  resource_deps=["Postgres", "Indexer"],
                  labels=["Pocketdex"])
