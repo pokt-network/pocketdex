@@ -208,6 +208,69 @@ type NativeBalanceChange @entity {
   block: Block!
 }
 
+type PublicKey @jsonField {
+  type: String!
+  key: String!
+}
+
+type ValidatorDescription @jsonField(indexed: true) {
+  moniker: String!
+  identity: String
+  website: String
+  securityContract: String
+  details: String
+}
+
+type ValidatorCommission @jsonField {
+  # commission block in plain format
+  rate: String!
+  maxRate: String!
+  maxChangeRate: String!
+}
+
+# Msg Doc: https://docs.cosmos.network/main/build/modules/staking#msgcreatevalidator
+type MsgCreateValidator @entity {
+  id: ID!
+  # ed25519 pubKey
+  pubkey: PublicKey!
+  # hex value of the ed25519 pubKey
+  address: String!
+  # secp256k1 account
+  signer: Account!
+  # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
+  delegator: Account
+  description: ValidatorDescription!
+  commission: ValidatorCommission!
+  minSelfDelegation: Int!
+  stakeDenom: String!
+  stakeAmount: BigInt!
+  transaction: Transaction!
+  block: Block!
+  message: Message!
+}
+
+# What is a validator?: https://github.com/cosmos/cosmos/blob/master/VALIDATORS_FAQ.md
+type Validator @entity {
+  # ed25519 pubkey hex that is used on proposer_address and address at /validators endpoint of tendermint
+  id: ID!
+  # secp256k1 PubKey relation
+  signer: Account!
+  delegator: Account
+  description: ValidatorDescription!
+  commission: ValidatorCommission!
+  minSelfDelegation: Int!
+  # value block in plain format
+  stakeDenom: String!
+  stakeAmount: BigInt!
+  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
+  stakeStatus: Int! @index
+  transaction: Transaction!
+  block: Block!
+  createMsg: MsgCreateValidator!
+  # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
+  #updateMsg: [MsgEditValidator]!
+}
+
 type UnprocessedEntity @entity {
   id: ID!
   error: String!

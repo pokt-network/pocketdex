@@ -1,6 +1,7 @@
 import { ApplicationUnbondingReason as ApplicationUnbondingReasonEnum } from "../client/poktroll/application/event";
 
 export const PREFIX = "pokt";
+export const VALIDATOR_PREFIX = "poktvaloper";
 
 export enum StakeStatus {
   Staked = 0,

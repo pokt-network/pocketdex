@@ -1,4 +1,9 @@
+import { fromBase64 } from "@cosmjs/encoding";
 import { CosmosBlock } from "@subql/types-cosmos";
+import {
+  get,
+  isNil,
+} from "lodash";
 import {
   Event,
   GenesisFile as GenesisEntity,
@@ -13,6 +18,7 @@ import type { GatewayProps } from "../types/models/Gateway";
 import type { GenesisBalanceProps } from "../types/models/GenesisBalance";
 import { MessageProps } from "../types/models/Message";
 import { MsgAddServiceProps } from "../types/models/MsgAddService";
+import { MsgCreateValidatorProps } from "../types/models/MsgCreateValidator";
 import { MsgDelegateToGatewayProps } from "../types/models/MsgDelegateToGateway";
 import { MsgStakeApplicationProps } from "../types/models/MsgStakeApplication";
 import { MsgStakeApplicationServiceProps } from "../types/models/MsgStakeApplicationService";
@@ -24,20 +30,26 @@ import type { ServiceProps } from "../types/models/Service";
 import type { SupplierProps } from "../types/models/Supplier";
 import { SupplierServiceConfigProps } from "../types/models/SupplierServiceConfig";
 import type { TransactionProps } from "../types/models/Transaction";
-import {MsgStakeApplication as MsgStakeApplicationType} from '../types/proto-interfaces/poktroll/application/tx'
-import {MsgStakeGateway as MsgStakeGatewayType} from '../types/proto-interfaces/poktroll/gateway/tx'
-import {MsgAddService as MsgAddServiceType} from '../types/proto-interfaces/poktroll/service/tx'
+import { ValidatorProps } from "../types/models/Validator";
+import { MsgStakeApplication as MsgStakeApplicationType } from "../types/proto-interfaces/poktroll/application/tx";
+import { MsgStakeGateway as MsgStakeGatewayType } from "../types/proto-interfaces/poktroll/gateway/tx";
+import { MsgAddService as MsgAddServiceType } from "../types/proto-interfaces/poktroll/service/tx";
 import {
   configOptionsFromJSON,
   rPCTypeFromJSON,
 } from "../types/proto-interfaces/poktroll/shared/service";
-import {MsgStakeSupplier as MsgStakeSupplierType} from '../types/proto-interfaces/poktroll/supplier/tx'
+import { MsgStakeSupplier as MsgStakeSupplierType } from "../types/proto-interfaces/poktroll/supplier/tx";
+import { checkBalancesAccount } from "./bank";
 import { getSupplyRecord } from "./bank/supply";
 import {
   StakeStatus,
   TxStatus,
+  VALIDATOR_PREFIX,
 } from "./constants";
-import type { Genesis } from "./types/genesis";
+import {
+  Genesis,
+  GenesisTransaction,
+} from "./types/genesis";
 import {
   getAppDelegatedToGatewayId,
   getBalanceId,
@@ -47,6 +59,11 @@ import {
   getStakeServiceId,
 } from "./utils/ids";
 import { stringify } from "./utils/json";
+import {
+  Ed25519,
+  pubKeyToAddress,
+  Secp256k1,
+} from "./utils/pub_key";
 
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   // we MUST load the JSON this way due to the sandboxed environment
@@ -72,6 +89,8 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
     _handleGenesisApplications(genesis, block),
     // PARAMS
     _handleGenesisParams(genesis, block),
+
+    _handleGenesisGenTxs(genesis, block),
   ]);
 
   await GenesisEntity.create({
@@ -178,7 +197,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
-      code: 0
+      code: 0,
     });
 
     // used to create correctly the content of the message
@@ -189,8 +208,8 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
         name: service.name,
         computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
         ownerAddress: service.owner_address,
-      }
-    }
+      },
+    };
 
     msgs.push({
       id: msgId,
@@ -198,7 +217,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       json: stringify(msgAddService),
       blockId: block.block.id,
       transactionId: transactionHash,
-    })
+    });
   }
 
   await Promise.all([
@@ -218,9 +237,9 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
   const msgs: Array<MessageProps> = [];
 
   for (let i = 0; i < genesis.app_state.supplier.supplierList.length; i++) {
-    const supplier = genesis.app_state.supplier.supplierList[i]
-    const msgId = `genesis-${supplier.operator_address}`
-    const transactionHash = getGenesisFakeTxHash('supplier', i)
+    const supplier = genesis.app_state.supplier.supplierList[i];
+    const msgId = `genesis-${supplier.operator_address}`;
+    const transactionHash = getGenesisFakeTxHash("supplier", i);
 
     transactions.push({
       id: transactionHash,
@@ -229,7 +248,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
-      code: 0
+      code: 0,
     });
 
     supplierMsgStakes.push({
@@ -276,8 +295,8 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
           address: revShare.address,
           revSharePercentage: revShare.rev_share_percentage,
         })),
-      }))
-    }
+      })),
+    };
 
     msgs.push({
       id: msgId,
@@ -285,7 +304,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       json: stringify(msgStakeSupplier),
       blockId: block.block.id,
       transactionId: transactionHash,
-    })
+    });
 
     for (const service of supplier.services) {
       const endpoints = service.endpoints.map((endpoint) => ({
@@ -352,7 +371,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
-      code: 0
+      code: 0,
     });
 
     if (app.delegatee_gateway_addresses.length > 0) {
@@ -403,7 +422,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       services: app.service_configs.map(service => ({
         serviceId: service.service_id,
       })),
-    }
+    };
 
     msgs.push({
       id: msgId,
@@ -411,7 +430,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       json: stringify(msgStakeApplication),
       blockId: block.block.id,
       transactionId: transactionHash,
-    })
+    });
 
     for (const service of app.service_configs) {
       servicesAndAppMsgStakes.push({
@@ -463,7 +482,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       gasWanted: BigInt(0),
       fees: [],
       status: TxStatus.Success,
-      code: 0
+      code: 0,
     });
 
     gatewayMsgStakes.push({
@@ -491,7 +510,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
         amount: gateway.stake.amount,
         denom: gateway.stake.denom,
       },
-    }
+    };
 
     msgs.push({
       id: msgId,
@@ -499,7 +518,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       json: stringify(msgStakeGateway),
       blockId: block.block.id,
       transactionId: transactionHash,
-    })
+    });
   }
 
   await Promise.all([
@@ -562,4 +581,129 @@ async function _handleGenesisSupplyDenom(genesis: Genesis): Promise<void> {
 
 async function _handleGenesisSupply(genesis: Genesis, block: CosmosBlock): Promise<void> {
   return store.bulkCreate("Supply", genesis.app_state.bank.supply.map(supply => getSupplyRecord(supply, block)));
+}
+
+// Handle genutil.gen_txs payloads
+async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promise<void> {
+  const promises: Array<Promise<void>> = [];
+  const transactions: Array<TransactionProps> = [];
+  const typedMessages: Map<string, Array<MsgCreateValidatorProps>> = new Map<string, Array<MsgCreateValidatorProps>>();
+  const validators: Array<ValidatorProps> = [];
+  const messages: Array<MessageProps> = [];
+
+  logger.debug(`[handleGenesisGenTxs] Looping over gen_txs Transactions: ${genesis.app_state.genutil.gen_txs.length}`);
+  for (let i = 0; i < genesis.app_state.genutil.gen_txs.length; i++) {
+    const genTx = genesis.app_state.genutil.gen_txs[i];
+    // assume that the first message type is the type of the transaction
+    const type = get(genTx, "body.messages[0].@type");
+
+    if (isNil(type)) {
+      throw new Error(`[handleGenesisGenTxs] Null/Undefined gen_t.body.messages[0].@type: ${type}`);
+    }
+
+    let txHash, signerAddress: string;
+
+    switch (type) {
+      case "/cosmos.staking.v1beta1.MsgCreateValidator":
+        // eslint-disable-next-line no-case-declarations
+        const validatorMsg = _handleMsgCreateValidator(genTx, i, block);
+
+        txHash = validatorMsg.transactionId;
+        signerAddress = validatorMsg.signerId;
+
+        // ensure signer account exists
+        await checkBalancesAccount(validatorMsg.signerId, block.header.chainId);
+
+        if (typedMessages.has(type)) {
+          typedMessages.get(type)?.push(validatorMsg);
+        } else {
+          typedMessages.set(type, [validatorMsg]);
+        }
+
+        validators.push({
+          id: validatorMsg.address,
+          signerId: validatorMsg.signerId,
+          description: validatorMsg.description,
+          commission: validatorMsg.commission,
+          minSelfDelegation: validatorMsg.minSelfDelegation,
+          stakeDenom: validatorMsg.stakeDenom,
+          stakeAmount: validatorMsg.stakeAmount,
+          stakeStatus: 0,
+          transactionId: validatorMsg.transactionId,
+          blockId: validatorMsg.blockId,
+          createMsgId: validatorMsg.id,
+        });
+
+        messages.push({
+          id: validatorMsg.id,
+          typeUrl: type,
+          json: stringify(genTx.body.messages[0]),
+          blockId: block.block.id,
+          transactionId: validatorMsg.transactionId,
+        });
+
+        break;
+      // NOTE: implement any other gen_tx once they are needed, right now we just have MsgCreateValidator.
+      default:
+        throw new Error(`[handleGenesisGenTxs] Unknown gen_txs type: ${type}`);
+    }
+
+    transactions.push({
+      id: txHash,
+      blockId: block.block.id,
+      signerAddress,
+      gasUsed: BigInt(0),
+      gasWanted: BigInt(0),
+      // TODO: should it parse auth_info.fee?
+      fees: [],
+      status: TxStatus.Success,
+      code: 0,
+    });
+  }
+
+  logger.debug(`[handleGenesisGenTxs] Saving Transactions: ${transactions.length}`);
+  logger.debug(`[handleGenesisGenTxs] Saving Validator: ${validators.length}`);
+  promises.push(store.bulkCreate("Transaction", transactions));
+  promises.push(store.bulkCreate("Validator", validators));
+  promises.push(store.bulkCreate("Message", messages));
+
+  let entity: string;
+  for (const [key, value] of typedMessages) {
+    entity = key.split(".")?.at(-1) as string;
+    logger.debug(`[handleGenesisGenTxs] creating ${value.length} documents of type: ${entity}`);
+    promises.push(store.bulkCreate(entity, value));
+  }
+
+  await Promise.all(promises);
+
+  return;
+}
+
+function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, block: CosmosBlock): MsgCreateValidatorProps {
+  const txHash = getGenesisFakeTxHash("validator", index);
+  const msg = genTx.body.messages[0];
+  const signer = genTx.auth_info.signer_infos[0];
+  const signerAddress = pubKeyToAddress(Secp256k1, fromBase64(signer.public_key.key), VALIDATOR_PREFIX);
+
+  return {
+    id: `genesis-gen-txs-${index}-0`,
+    pubkey: {
+      type: msg.pubkey["@type"],
+      key: msg.pubkey.key,
+    },
+    address: pubKeyToAddress(Ed25519, fromBase64(msg.pubkey.key)),
+    signerId: signerAddress,
+    description: msg.description,
+    commission: {
+      rate: msg.commission.rate,
+      maxRate: msg.commission.max_rate,
+      maxChangeRate: msg.commission.max_change_rate,
+    },
+    minSelfDelegation: parseInt(msg.min_self_delegation, 10),
+    stakeDenom: msg.value.denom,
+    stakeAmount: BigInt(msg.value.amount),
+    blockId: block.block.id,
+    transactionId: txHash,
+    messageId: `genesis-gen-txs-${index}-0`,
+  };
 }
