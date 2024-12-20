@@ -36,6 +36,7 @@ spec:
             - --name={{ .Values.env.DB_SCHEMA }}
             - --indexer={{ .Values.indexer_endpoint }}
             - --port={{ .Values.port }}
+            - --subscription
             {{- if .Values.enable_graphiql_playground }}
             - --playground
             {{- end }}
