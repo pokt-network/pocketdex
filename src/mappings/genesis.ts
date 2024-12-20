@@ -661,15 +661,17 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
     });
   }
 
-  logger.info(`[handleGenesisGenTxs] Saving Transactions: ${transactions.length}`);
-  logger.info(`[handleGenesisGenTxs] Saving Validator: ${validators.length}`);
+  logger.debug(`[handleGenesisGenTxs] Saving Transactions: ${transactions.length}`);
+  logger.debug(`[handleGenesisGenTxs] Saving Validator: ${validators.length}`);
   promises.push(store.bulkCreate("Transaction", transactions));
   promises.push(store.bulkCreate("Validator", validators));
   promises.push(store.bulkCreate("Message", messages));
 
+  let entity: string;
   for (const [key, value] of typedMessages) {
-    logger.info(`Saving ${key}: ${value.length}`);
-    promises.push(store.bulkCreate(key, value));
+    entity = key.split(".")?.at(-1) as string;
+    logger.debug(`[handleGenesisGenTxs] creating ${value.length} documents of type: ${entity}`);
+    promises.push(store.bulkCreate(entity, value));
   }
 
   await Promise.all(promises);

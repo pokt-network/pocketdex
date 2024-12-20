@@ -56,8 +56,8 @@ export interface TransactionBody<T extends AllMessages = AllMessages> {
   messages: T[];
   memo: string;
   timeout_height: string;
-  extension_options?: any[];
-  non_critical_extension_options?: any[];
+  extension_options?: never[];
+  non_critical_extension_options?: never[];
 }
 
 // Signer info in auth_info
