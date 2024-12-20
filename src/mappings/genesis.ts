@@ -603,7 +603,6 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
 
     let txHash, signerAddress: string;
 
-
     switch (type) {
       case "/cosmos.staking.v1beta1.MsgCreateValidator":
         // eslint-disable-next-line no-case-declarations
@@ -627,8 +626,9 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
           description: validatorMsg.description,
           commission: validatorMsg.commission,
           minSelfDelegation: validatorMsg.minSelfDelegation,
-          denom: validatorMsg.denom,
+          stakeDenom: validatorMsg.stakeDenom,
           stakeAmount: validatorMsg.stakeAmount,
+          stakeStatus: 0,
           transactionId: validatorMsg.transactionId,
           blockId: validatorMsg.blockId,
           createMsgId: validatorMsg.id,
@@ -700,7 +700,7 @@ function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, blo
       maxChangeRate: msg.commission.max_change_rate,
     },
     minSelfDelegation: parseInt(msg.min_self_delegation, 10),
-    denom: msg.value.denom,
+    stakeDenom: msg.value.denom,
     stakeAmount: BigInt(msg.value.amount),
     blockId: block.block.id,
     transactionId: txHash,

@@ -228,6 +228,7 @@ type ValidatorCommission @jsonField {
   maxChangeRate: String!
 }
 
+# Msg Doc: https://docs.cosmos.network/main/build/modules/staking#msgcreatevalidator
 type MsgCreateValidator @entity {
   id: ID!
   # ed25519 pubKey
@@ -241,13 +242,14 @@ type MsgCreateValidator @entity {
   description: ValidatorDescription!
   commission: ValidatorCommission!
   minSelfDelegation: Int!
-  denom: String!
+  stakeDenom: String!
   stakeAmount: BigInt!
   transaction: Transaction!
   block: Block!
   message: Message!
 }
 
+# What is a validator?: https://github.com/cosmos/cosmos/blob/master/VALIDATORS_FAQ.md
 type Validator @entity {
   # ed25519 pubkey hex that is used on proposer_address and address at /validators endpoint of tendermint
   id: ID!
@@ -258,8 +260,10 @@ type Validator @entity {
   commission: ValidatorCommission!
   minSelfDelegation: Int!
   # value block in plain format
-  denom: String!
+  stakeDenom: String!
   stakeAmount: BigInt!
+  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
+  stakeStatus: Int! @index
   transaction: Transaction!
   block: Block!
   createMsg: MsgCreateValidator!
