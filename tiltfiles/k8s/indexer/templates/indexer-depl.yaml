@@ -26,6 +26,7 @@ spec:
           image: indexer
           args:
             - --subscription
+            - --debug="*"
           readinessProbe:
             initialDelaySeconds: 30
             httpGet:

@@ -7,7 +7,6 @@ import {
   BlockSupply,
   Supply,
 } from "../../types";
-import { stringify } from "../utils/json";
 
 export const getSupplyId = function(denom: string, height: number): string {
   return `${denom}@${height}`;
@@ -35,18 +34,18 @@ export async function queryTotalSupply(): Promise<Coin[]> {
 
     // Initial call to get the first set of results
     const initialResponse: QueryTotalSupplyResponse = await queryClient.bank.totalSupply() as unknown as QueryTotalSupplyResponse;
-    logger.debug(`[handleTotalSupply]: initialResponse=${stringify(initialResponse, undefined, 2)}`);
+    // logger.debug(`[handleTotalSupply]: initialResponse=${stringify(initialResponse, undefined, 2)}`);
     finalSupply.push(...initialResponse.supply);
     paginationKey = initialResponse.pagination?.nextKey;
 
     // Continue fetching if there is a nextKey
     while (paginationKey && paginationKey.length > 0) {
-      logger.debug(`[handleTotalSupply]: loading more supply pages pagination.nextKey=${JSON.stringify(paginationKey, undefined, 2)}`);
+      // logger.debug(`[handleTotalSupply]: loading more supply pages pagination.nextKey=${JSON.stringify(paginationKey, undefined, 2)}`);
       const response = await queryClient.bank.totalSupply(paginationKey);
       finalSupply.push(...response.supply);
       paginationKey = response.pagination?.nextKey;
     }
-    logger.debug(`[handleTotalSupply]: all_total_supply=${JSON.stringify(finalSupply, undefined, 2)}`);
+    // logger.debug(`[handleTotalSupply]: all_total_supply=${JSON.stringify(finalSupply, undefined, 2)}`);
   } catch (error) {
     logger.error(`[handleTotalSupply] errored: ${error}`);
   }

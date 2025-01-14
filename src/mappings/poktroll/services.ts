@@ -9,7 +9,6 @@ import {
   unprocessedMsgHandler,
 } from "../utils/handlers";
 import { messageId } from "../utils/ids";
-import { stringify } from "../utils/json";
 
 export async function handleMsgAddService(
   msg: CosmosMessage<MsgAddService>,
@@ -20,7 +19,7 @@ export async function handleMsgAddService(
 async function _handleMsgAddService(
   msg: CosmosMessage<MsgAddService>,
 ) {
-  logger.debug(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const { ownerAddress, service: { computeUnitsPerRelay, id, name } } = msg.msg.decodedMsg;
 

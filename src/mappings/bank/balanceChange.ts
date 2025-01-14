@@ -15,7 +15,6 @@ import {
   getEventId,
   messageId,
 } from "../utils/ids";
-import { stringify } from "../utils/json";
 
 export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
   let balance = await Balance.get(getBalanceId(address, denom));
@@ -35,7 +34,7 @@ export async function updateAccountBalance(address: string, denom: string, offse
 
   await balance.save();
 
-  logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balance?.amount}`);
+  // logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balance?.amount}`);
 }
 
 export async function checkBalancesAccount(address: string, chainId: string): Promise<void> {
@@ -95,9 +94,9 @@ export async function handleNativeBalanceIncrement(event: CosmosEvent): Promise<
 }
 
 async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleNativeBalanceDecrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.event): ${stringify(event.event, undefined, 2)}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.log): ${stringify(event.log, undefined, 2)}`);
+  // logger.debug(`[handleNativeBalanceDecrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
+  // logger.debug(`[handleNativeBalanceDecrement] (event.event): ${stringify(event.event, undefined, 2)}`);
+  // logger.debug(`[handleNativeBalanceDecrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
   // sample event.event.attributes:
   // [
@@ -141,9 +140,9 @@ async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> 
 }
 
 async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleNativeBalanceIncrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.event): ${stringify(event.event, undefined, 2)}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.log): ${stringify(event.log, undefined, 2)}`);
+  // logger.debug(`[handleNativeBalanceIncrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
+  // logger.debug(`[handleNativeBalanceIncrement] (event.event): ${stringify(event.event, undefined, 2)}`);
+  // logger.debug(`[handleNativeBalanceIncrement] (event.log): ${stringify(event.log, undefined, 2)}`);
 
   // sample event.event.attributes:
   // [

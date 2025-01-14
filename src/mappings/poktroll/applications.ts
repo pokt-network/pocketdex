@@ -46,7 +46,6 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
-import { stringify } from "../utils/json";
 
 export async function handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
@@ -111,7 +110,7 @@ export async function handleApplicationUnbondingBeginEvent(
 async function _handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
 ): Promise<void> {
-  logger.debug(`[handleAppMsgStake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleAppMsgStake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const msgId = messageId(msg);
   const { address, stake } = msg.msg.decodedMsg;
@@ -159,7 +158,8 @@ async function _handleAppMsgStake(
     });
   }
 
-  const currentAppServices = await ApplicationService.getByApplicationId(address, {});
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const currentAppServices = await ApplicationService.getByApplicationId(address, { limit: 100 });
 
   const servicesToRemove: Array<string> = [];
 
@@ -188,7 +188,7 @@ async function _handleAppMsgStake(
 async function _handleDelegateToGatewayMsg(
   msg: CosmosMessage<MsgDelegateToGateway>,
 ) {
-  logger.debug(`[handleDelegateToGatewayMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)})`);
+  // logger.debug(`[handleDelegateToGatewayMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)})`);
 
   const msgId = messageId(msg);
 
@@ -215,7 +215,7 @@ async function _handleDelegateToGatewayMsg(
 async function _handleUndelegateFromGatewayMsg(
   msg: CosmosMessage<MsgUndelegateFromGateway>,
 ) {
-  logger.debug(`[handleUndelegateFromGatewayMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleUndelegateFromGatewayMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const msgId = messageId(msg);
 
@@ -240,7 +240,7 @@ async function _handleUndelegateFromGatewayMsg(
 async function _handleUnstakeApplicationMsg(
   msg: CosmosMessage<MsgUnstakeApplication>,
 ) {
-  logger.debug(`[handleUnstakeApplicationMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleUnstakeApplicationMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const application = await Application.get(msg.msg.decodedMsg.address);
 
@@ -268,7 +268,7 @@ async function _handleUnstakeApplicationMsg(
 async function _handleTransferApplicationMsg(
   msg: CosmosMessage<MsgTransferApplication>,
 ) {
-  logger.debug(`[handleTransferApplicationMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleTransferApplicationMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const application = await Application.get(msg.msg.decodedMsg.sourceAddress);
 
@@ -296,7 +296,7 @@ async function _handleTransferApplicationMsg(
 async function _handleTransferApplicationBeginEvent(
   event: CosmosEvent,
 ) {
-  logger.debug(`[handleTransferApplicationBeginEvent] (event.msg): ${stringify(event.msg, undefined, 2)}`);
+  // logger.debug(`[handleTransferApplicationBeginEvent] (event.msg): ${stringify(event.msg, undefined, 2)}`);
   const msg: CosmosMessage<EventTransferBegin> = event.msg;
 
   const transferEndHeight = event.event.attributes.find(attribute => attribute.key === "transfer_end_height")?.value as string;
@@ -331,7 +331,7 @@ async function _handleTransferApplicationBeginEvent(
 async function _handleTransferApplicationEndEvent(
   event: CosmosEvent,
 ) {
-  logger.debug(`[handleTransferApplicationEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  // logger.debug(`[handleTransferApplicationEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   let sourceAddress = event.event.attributes.find(attribute => attribute.key === "source_address")?.value as unknown as string;
 
@@ -386,8 +386,10 @@ async function _handleTransferApplicationEndEvent(
     gatewayId: gateway,
   }));
 
-  const sourceApplicationServices = await ApplicationService.getByApplicationId(sourceAddress, {}) || [];
-  const sourceApplicationGateways = await ApplicationGateway.getByApplicationId(sourceAddress, {}) || [];
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const sourceApplicationServices = await ApplicationService.getByApplicationId(sourceAddress, { limit: 100 }) || [];
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const sourceApplicationGateways = await ApplicationGateway.getByApplicationId(sourceAddress, { limit: 100 }) || [];
   const newApplicationServices: Array<ApplicationServiceProps> = service_configs?.map(service => ({
     id: getStakeServiceId(destinationApp.address, service.service_id),
     serviceId: service.service_id,
@@ -416,7 +418,7 @@ async function _handleTransferApplicationEndEvent(
 async function _handleTransferApplicationErrorEvent(
   event: CosmosEvent,
 ) {
-  logger.debug(`[handleTransferApplicationErrorEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  // logger.debug(`[handleTransferApplicationErrorEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   let sourceAddress = "", destinationAddress = "", error = "";
 
@@ -473,7 +475,7 @@ async function _handleTransferApplicationErrorEvent(
 async function _handleApplicationUnbondingBeginEvent(
   event: CosmosEvent,
 ) {
-  logger.debug(`[handleApplicationUnbondingBeginEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  // logger.debug(`[handleApplicationUnbondingBeginEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   const msg: CosmosMessage<MsgUnstakeApplication> = event.msg;
 
@@ -540,7 +542,7 @@ async function _handleApplicationUnbondingBeginEvent(
 async function _handleApplicationUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  logger.debug(`[handleApplicationUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  // logger.debug(`[handleApplicationUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   let unstakingEndHeight: bigint, sessionEndHeight: bigint, reason: number, applicationSdk: ApplicationSDKType;
 
@@ -597,7 +599,8 @@ async function _handleApplicationUnbondingEndEvent(
   application.stakeStatus = StakeStatus.Unstaked;
   application.unstakingReason = reason;
 
-  const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address, {}) || []).map(item => item.id);
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address, { limit: 100 }) || []).map(item => item.id);
 
   const eventId = getEventId(event);
 

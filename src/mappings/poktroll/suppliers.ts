@@ -57,7 +57,7 @@ export async function handleSupplierUnbondingEndEvent(
 }
 
 async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
-  logger.debug(`[handleSupplierStakeMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleSupplierStakeMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   if (!msg.msg.decodedMsg.stake) {
     return logger.error(`[handleSupplierStakeMsg] stake not provided in msg`);
@@ -125,7 +125,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     });
   }
 
-  const currentSupplierServices = await SupplierServiceConfig.getBySupplierId(operatorAddress, {});
+  const currentSupplierServices = await SupplierServiceConfig.getBySupplierId(operatorAddress, { limit: 100 });
 
   const servicesToRemove: Array<string> = [];
 
@@ -248,8 +248,8 @@ async function _handleSupplierUnbondingEndEvent(
 
   supplier.unstakingEndBlockId = event.block.block.id;
   supplier.stakeStatus = StakeStatus.Unstaked;
-
-  const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, {}) || []).map(item => item.id);
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, { limit: 100 }) || []).map(item => item.id);
 
   const eventId = getEventId(event);
 

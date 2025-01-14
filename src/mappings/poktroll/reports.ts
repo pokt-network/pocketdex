@@ -3,7 +3,8 @@ import {
   Application,
   ApplicationService,
   Block,
-  EventClaimSettled, Gateway,
+  EventClaimSettled,
+  Gateway,
   Supplier,
   SupplierServiceConfig,
   Transaction,
@@ -14,6 +15,7 @@ import { StakedSuppliersByBlockAndServiceProps } from "../../types/models/Staked
 import { StakeStatus } from "../constants";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
+  throw new Error("DEBUG, FORCED EXIT 1");
   const [
     {computedUnits, relays, relaysByService},
     {invalidTxs, validTxs},
@@ -195,7 +197,8 @@ async function getTransactionsData(block: CosmosBlock){
 }
 
 async function getStakedSuppliersData() {
-  const stakedSuppliers = await Supplier.getByFields([["stakeStatus", "=", StakeStatus.Staked]], {})
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const stakedSuppliers = await Supplier.getByFields([["stakeStatus", "=", StakeStatus.Staked]], { limit: 100 });
   const stakedSuppliersByServiceMap: Record<string,{
     tokens: bigint,
     amount: number,
@@ -205,8 +208,8 @@ async function getStakedSuppliersData() {
 
   for (const supplier of stakedSuppliers) {
     stakedTokensBySupplier += supplier.stakeAmount
-
-    const services = await SupplierServiceConfig.getBySupplierId(supplier.id, {})
+    // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+    const services = await SupplierServiceConfig.getBySupplierId(supplier.id, { limit: 100 });
 
     for (const {serviceId} of services) {
       if (!stakedSuppliersByServiceMap[serviceId]) {
@@ -235,7 +238,8 @@ async function getStakedSuppliersData() {
 }
 
 async function getUnstakingSuppliersData() {
-  const unstakingSuppliers = await Supplier.getByFields([["stakeStatus", "=", StakeStatus.Unstaking]], {})
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const unstakingSuppliers = await Supplier.getByFields([["stakeStatus", "=", StakeStatus.Unstaking]], { limit: 100 });
   const unstakingTokensBySupplier = unstakingSuppliers.reduce((acc, supplier) => acc + BigInt(supplier.stakeAmount), BigInt(0))
 
   return {
@@ -250,14 +254,15 @@ async function getTook(block: CosmosBlock) {
   }
 
   const previousHeight = BigInt(block.header.height - 1)
-  const previousBlock = (await Block.getByHeight(previousHeight, {}))[0]
+  const previousBlock = (await Block.getByHeight(previousHeight, { limit: 1 }))[0];
 
   // took is the time between the previous block and the current block
   return block.header.time.getTime() - previousBlock.timestamp.getTime()
 }
 
 async function getUnstakedSuppliersData(blockId: string) {
-  const unstakedSuppliers = await Supplier.getByUnstakingEndBlockId(blockId, {})
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const unstakedSuppliers = await Supplier.getByUnstakingEndBlockId(blockId, { limit: 100 });
   const unstakedTokensBySupplier = unstakedSuppliers.reduce((acc, supplier) => acc + BigInt(supplier.stakeAmount), BigInt(0))
 
   return {
@@ -267,7 +272,7 @@ async function getUnstakedSuppliersData(blockId: string) {
 }
 
 async function getStakedAppsData() {
-  const stakedApps = await Application.getByFields([["stakeStatus", "=", StakeStatus.Staked]], {})
+  const stakedApps = await Application.getByFields([["stakeStatus", "=", StakeStatus.Staked]], { limit: 100 });
   const stakedAppsByServiceMap: Record<string,{
     tokens: bigint,
     amount: number,
@@ -278,7 +283,7 @@ async function getStakedAppsData() {
   for (const app of stakedApps) {
     stakedTokensByApp += app.stakeAmount
 
-    const services = await ApplicationService.getByApplicationId(app.id, {})
+    const services = await ApplicationService.getByApplicationId(app.id, { limit: 100 });
 
     for (const {serviceId} of services) {
       if (!stakedAppsByServiceMap[serviceId]) {
@@ -307,7 +312,8 @@ async function getStakedAppsData() {
 }
 
 async function getUnstakingAppsData() {
-  const unstakingApps = await Application.getByFields([["stakeStatus", "=", StakeStatus.Unstaking]], {})
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const unstakingApps = await Application.getByFields([["stakeStatus", "=", StakeStatus.Unstaking]], { limit: 100 });
   const unstakingTokensByApp = unstakingApps.reduce((acc, app) => acc + app.stakeAmount, BigInt(0))
 
   return {
@@ -317,7 +323,8 @@ async function getUnstakingAppsData() {
 }
 
 async function getUnstakedAppssData(blockId: string) {
-  const unstakedApps = await Application.getByUnstakingEndBlockId(blockId, {})
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const unstakedApps = await Application.getByUnstakingEndBlockId(blockId, { limit: 100 });
   const unstakedTokensByApp = unstakedApps.reduce((acc, app) => acc + BigInt(app.stakeAmount), BigInt(0))
 
   return {
@@ -327,7 +334,8 @@ async function getUnstakedAppssData(blockId: string) {
 }
 
 async function getStakedGatewaysData() {
-  const stakedGateways = await Gateway.getByFields([["stakeStatus", "=", StakeStatus.Staked]], {})
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const stakedGateways = await Gateway.getByFields([["stakeStatus", "=", StakeStatus.Staked]], { limit: 100 });
   const stakedTokensByGateway = stakedGateways.reduce((acc, gateway) => acc + BigInt(gateway.stakeAmount), BigInt(0))
 
   return {
@@ -338,7 +346,8 @@ async function getStakedGatewaysData() {
 
 
 async function getUnstakedGatewaysData(blockId: string) {
-  const unstakedGateways = await Gateway.getByUnstakingEndBlockId(blockId, {})
+  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const unstakedGateways = await Gateway.getByUnstakingEndBlockId(blockId, { limit: 100 });
   const unstakedTokensByGateway = unstakedGateways.reduce((acc, gateway) => acc + BigInt(gateway.stakeAmount), BigInt(0))
 
   return {

@@ -22,7 +22,6 @@ import {
   getEventId,
   messageId,
 } from "../utils/ids";
-import { stringify } from "../utils/json";
 
 export async function handleGatewayMsgStake(msg: CosmosMessage<MsgStakeGateway>): Promise<void> {
   await attemptHandling(msg, _handleGatewayMsgStake, unprocessedMsgHandler);
@@ -39,7 +38,7 @@ export async function handleGatewayUnstakeEvent(event: CosmosEvent): Promise<voi
 async function _handleGatewayMsgStake(
   msg: CosmosMessage<MsgStakeGateway>,
 ) {
-  logger.debug(`[handleGatewayMsgStake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleGatewayMsgStake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   if (!msg.msg.decodedMsg.stake) {
     throw new Error(`[handleGatewayMsgStake] stake not provided in msg`);
@@ -77,7 +76,7 @@ async function _handleGatewayMsgStake(
 async function _handleGatewayMsgUnstake(
   msg: CosmosMessage<MsgUnstakeGateway>,
 ) {
-  logger.debug(`[handleGatewayMsgUnstake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleGatewayMsgUnstake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   const gateway = await Gateway.get(msg.msg.decodedMsg.address);
 
   if (!gateway) {
@@ -105,7 +104,7 @@ async function _handleGatewayMsgUnstake(
 async function _handleGatewayUnstakeEvent(
   event: CosmosEvent,
 ) {
-  logger.debug(`[handleGatewayUnstakeEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  // logger.debug(`[handleGatewayUnstakeEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
 
   const gatewayStringified = event.event.attributes.find(attribute => attribute.key === "gateway")?.value as unknown as string;
 

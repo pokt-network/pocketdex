@@ -1,4 +1,8 @@
-import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
+import {
+  CosmosEvent,
+  CosmosMessage,
+} from "@subql/types-cosmos";
+import isNil from "lodash/isNil";
 import { claimExpirationReasonFromJSON } from "../../client/poktroll/tokenomics/event";
 import {
   ClaimExpirationReason,
@@ -8,13 +12,16 @@ import {
   EventClaimUpdated,
   EventProofSubmitted,
   EventProofUpdated,
-  MsgCreateClaim as MsgCreateClaimEntity,
   MsgSubmitProof as MsgSubmitProofEntity,
   ProofRequirementReason,
-  Relay
+  Relay,
 } from "../../types";
+import { MsgCreateClaimProps } from "../../types/models/MsgCreateClaim";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
-import { MsgCreateClaim, MsgSubmitProof } from "../../types/proto-interfaces/poktroll/proof/tx";
+import {
+  MsgCreateClaim,
+  MsgSubmitProof,
+} from "../../types/proto-interfaces/poktroll/proof/tx";
 import {
   ClaimSDKType,
   proofRequirementReasonFromJSON,
@@ -23,14 +30,19 @@ import {
 } from "../../types/proto-interfaces/poktroll/proof/types";
 import { ClaimExpirationReasonSDKType } from "../../types/proto-interfaces/poktroll/tokenomics/event";
 import { RelayStatus } from "../constants";
-import { getEventId, getRelayId, messageId } from "../utils/ids";
-import {  stringify } from "../utils/json";
+import {
+  getEventId,
+  getRelayId,
+  messageId,
+} from "../utils/ids";
+import { stringify } from "../utils/json";
+import { RelayProps } from "../../types/models/Relay";
 
 function parseAttribute(attribute: unknown): string {
-  return (attribute as string).replaceAll('"', '')
+  return (attribute as string).replaceAll("\"", "");
 }
 
-function getAttributes(attributes: CosmosEvent['event']['attributes']) {
+function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
   let proof: ProofSDKType = {},
@@ -47,60 +59,60 @@ function getAttributes(attributes: CosmosEvent['event']['attributes']) {
     claimed: CoinSDKType = {};
 
   for (const attribute of attributes) {
-    if (attribute.key === 'proof') {
-      proof = JSON.parse(attribute.value as string)
+    if (attribute.key === "proof") {
+      proof = JSON.parse(attribute.value as string);
     }
 
-    if (attribute.key === 'claim') {
-      claim = JSON.parse(attribute.value as string)
+    if (attribute.key === "claim") {
+      claim = JSON.parse(attribute.value as string);
     }
 
-    if (attribute.key === 'num_relays') {
-      numRelays = BigInt(parseAttribute(attribute.value))
+    if (attribute.key === "num_relays") {
+      numRelays = BigInt(parseAttribute(attribute.value));
     }
 
-    if (attribute.key === 'num_claimed_computed_units') {
-      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value))
+    if (attribute.key === "num_claimed_computed_units") {
+      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value));
     }
 
-    if (attribute.key === 'num_estimated_computed_units') {
-      numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value))
+    if (attribute.key === "num_estimated_computed_units") {
+      numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value));
     }
 
-    if (attribute.key === 'claimed') {
-      claimed = JSON.parse(attribute.value as string)
+    if (attribute.key === "claimed") {
+      claimed = JSON.parse(attribute.value as string);
     }
 
-    if (attribute.key === 'proof_requirement') {
+    if (attribute.key === "proof_requirement") {
       switch (proofRequirementReasonFromJSON(parseAttribute(attribute.value))) {
         case ProofRequirementReasonSDKType.THRESHOLD:
-          proofRequirement = ProofRequirementReason.THRESHOLD
+          proofRequirement = ProofRequirementReason.THRESHOLD;
           break;
         case ProofRequirementReasonSDKType.NOT_REQUIRED:
-          proofRequirement = ProofRequirementReason.NOT_REQUIRED
+          proofRequirement = ProofRequirementReason.NOT_REQUIRED;
           break;
         case ProofRequirementReasonSDKType.PROBABILISTIC:
-          proofRequirement = ProofRequirementReason.PROBABILISTIC
+          proofRequirement = ProofRequirementReason.PROBABILISTIC;
           break;
         default: {
-          throw new Error(`Unknown ProofRequirementReason: ${attribute.value}`)
+          throw new Error(`Unknown ProofRequirementReason: ${attribute.value}`);
         }
       }
     }
 
-    if (attribute.key === 'expiration_reason') {
+    if (attribute.key === "expiration_reason") {
       switch (claimExpirationReasonFromJSON(parseAttribute(attribute.value))) {
         case ClaimExpirationReasonSDKType.EXPIRATION_REASON_UNSPECIFIED:
-          expirationReason = ClaimExpirationReason.EXPIRATION_REASON_UNSPECIFIED
+          expirationReason = ClaimExpirationReason.EXPIRATION_REASON_UNSPECIFIED;
           break;
         case ClaimExpirationReasonSDKType.PROOF_INVALID:
-          expirationReason = ClaimExpirationReason.PROOF_INVALID
+          expirationReason = ClaimExpirationReason.PROOF_INVALID;
           break;
         case ClaimExpirationReasonSDKType.PROOF_MISSING:
-          expirationReason = ClaimExpirationReason.PROOF_MISSING
+          expirationReason = ClaimExpirationReason.PROOF_MISSING;
           break;
         default: {
-          throw new Error(`Unknown ClaimExpirationReason: ${attribute.value}`)
+          throw new Error(`Unknown ClaimExpirationReason: ${attribute.value}`);
         }
       }
     }
@@ -114,13 +126,13 @@ function getAttributes(attributes: CosmosEvent['event']['attributes']) {
     numEstimatedComputedUnits,
     claimed,
     proofRequirement,
-    expirationReason
-  }
+    expirationReason,
+  };
 }
 
 // eslint-disable-next-line complexity
 export async function handleEventClaimSettled(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleEventClaimSettled] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
+  // logger.debug(`[handleEventClaimSettled] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
   const {
     claim,
@@ -128,34 +140,34 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-    proofRequirement
-  } = getAttributes(event.event.attributes)
+    proofRequirement,
+  } = getAttributes(event.event.attributes);
 
-  const {root_hash, session_header, supplier_operator_address} = claim
+  const { root_hash, session_header, supplier_operator_address } = claim;
 
   const id = getRelayId({
-    applicationId: session_header?.application_address || '',
+    applicationId: session_header?.application_address || "",
     supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
   });
 
   const shared = {
     supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || '',
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    applicationId: session_header?.application_address || "",
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
     rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || '',
-    claimedAmount: BigInt(claimed?.amount || '0'),
-  } as const
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
+  } as const;
 
-  const relay = await Relay.get(id)
+  const relay = await Relay.get(id);
 
   await Promise.all([
     Relay.create({
@@ -170,13 +182,14 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
       transactionId: event.tx?.hash,
       blockId: event.block.block.id,
       id: getEventId(event),
-      proofRequirement
-    }).save()
-  ])
+      proofRequirement,
+    }).save(),
+  ]);
 }
+
 // eslint-disable-next-line complexity
 export async function handleEventClaimExpired(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleEventClaimExpired] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
+  // logger.debug(`[handleEventClaimExpired] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
   const {
     claim,
@@ -185,33 +198,33 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-  } = getAttributes(event.event.attributes)
+  } = getAttributes(event.event.attributes);
 
-  const {root_hash, session_header, supplier_operator_address} = claim
+  const { root_hash, session_header, supplier_operator_address } = claim;
 
   const id = getRelayId({
-    applicationId: session_header?.application_address || '',
+    applicationId: session_header?.application_address || "",
     supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
   });
 
   const shared = {
     supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || '',
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    applicationId: session_header?.application_address || "",
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
     rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || '',
-    claimedAmount: BigInt(claimed?.amount || '0'),
-  } as const
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
+  } as const;
 
-  const relay = await Relay.get(id)
+  const relay = await Relay.get(id);
 
   await Promise.all([
     Relay.create({
@@ -227,18 +240,17 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
       expirationReason,
       transactionId: event.tx?.hash,
       blockId: event.block.block.id,
-    }).save()
-  ])
+    }).save(),
+  ]);
 }
 
+// eslint-disable-next-line complexity
 export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): Promise<void> {
-  logger.debug(`[handleMsgCreateClaim] msg.msg: ${stringify(msg.msg, undefined,2 )}`);
-
-  const {rootHash, sessionHeader, supplierOperatorAddress} = msg.msg.decodedMsg;
-
-  const applicationId = sessionHeader?.applicationAddress || '';
-  const serviceId = sessionHeader?.serviceId || '';
-  const sessionId = sessionHeader?.sessionId || '';
+  logger.info(`[handleMsgCreateClaim] @@@ height=${msg.block.header.height} tx=${msg.tx.hash} msg.idx=${msg.idx}`);
+  const { rootHash, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
+  const applicationId = sessionHeader?.applicationAddress || "";
+  const serviceId = sessionHeader?.serviceId || "";
+  const sessionId = sessionHeader?.sessionId || "";
 
   const id = getRelayId({
     applicationId,
@@ -247,7 +259,7 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
     sessionId,
   });
 
-  const shared  = {
+  const shared = {
     supplierId: supplierOperatorAddress,
     applicationId,
     serviceId,
@@ -255,26 +267,61 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
     rootHash: stringify(rootHash),
+  };
+
+  // get the array from cache
+  // TODO: maybe a better key solution, otherwise we need to "know" all the "keys" on the cache at the BlockHandler that will save them in bulk
+  let msgs = await cache.get("MsgCreateClaim") as Array<MsgCreateClaimProps> | null | undefined;
+  let relays = await cache.get("Relay") as Array<RelayProps> | null | undefined;
+
+  // if it does not exist, create it
+  if (isNil(msgs)) {
+    msgs = [];
+  }
+  if (isNil(relays)) {
+    relays = [];
   }
 
-  await Promise.all([
-    MsgCreateClaimEntity.create({
-      id: messageId(msg),
-      ...shared,
-      transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
-    }).save(),
-    Relay.create({
-      id,
-      ...shared,
-      status: RelayStatus.PENDING,
-      msgCreateClaimId: messageId(msg),
-    }).save()
-  ])
+  // add the entity
+  msgs.push({
+    id: messageId(msg),
+    ...shared,
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    transactionId: msg.tx.hash,
+    blockId: msg.block.block.id,
+  });
+  relays.push({
+    id,
+    ...shared,
+    status: RelayStatus.PENDING,
+    msgCreateClaimId: messageId(msg),
+  });
+
+  // set to the cache again
+  await cache.set("MsgCreateClaim", msgs);
+  await cache.set("Relay", msgs);
+
+  // await Promise.all([
+  //   MsgCreateClaimEntity.create({
+  //     id: messageId(msg),
+  //     ...shared,
+  //     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  //     // @ts-ignore
+  //     transactionId: msg.tx.hash,
+  //     blockId: msg.block.block.id,
+  //   }),
+  //   Relay.create({
+  //     id,
+  //     ...shared,
+  //     status: RelayStatus.PENDING,
+  //     msgCreateClaimId: messageId(msg),
+  //   }).save()
+  // ])
 }
 
 export async function handleEventClaimCreated(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleEventClaimCreated] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
+  // logger.debug(`[handleEventClaimCreated] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
   const {
     claim,
@@ -282,35 +329,35 @@ export async function handleEventClaimCreated(event: CosmosEvent): Promise<void>
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-  } = getAttributes(event.event.attributes)
+  } = getAttributes(event.event.attributes);
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  const {root_hash, session_header, supplier_operator_address, } = claim
+  const { root_hash, session_header, supplier_operator_address } = claim;
 
   const id = getRelayId({
-    applicationId: session_header?.application_address || '',
+    applicationId: session_header?.application_address || "",
     supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
   });
 
-  const relay = await Relay.get(id)
+  const relay = await Relay.get(id);
 
   const shared = {
     supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || '',
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    applicationId: session_header?.application_address || "",
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
     rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || '',
-    claimedAmount: BigInt(claimed?.amount || '0'),
-  }
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
+  };
 
   await Promise.all([
     Relay.create({
@@ -325,12 +372,12 @@ export async function handleEventClaimCreated(event: CosmosEvent): Promise<void>
       ...shared,
       transactionId: event.tx?.hash,
       blockId: event.block.block.id,
-    }).save()
-  ])
+    }).save(),
+  ]);
 }
 
 export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleEventClaimUpdated] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
+  // logger.debug(`[handleEventClaimUpdated] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
   const {
     claim,
@@ -338,35 +385,35 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-  } = getAttributes(event.event.attributes)
+  } = getAttributes(event.event.attributes);
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  const {root_hash, session_header, supplier_operator_address, } = claim
+  const { root_hash, session_header, supplier_operator_address } = claim;
 
   const id = getRelayId({
-    applicationId: session_header?.application_address || '',
+    applicationId: session_header?.application_address || "",
     supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
   });
 
-  const shared  = {
+  const shared = {
     supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || '',
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    applicationId: session_header?.application_address || "",
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
     rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || '',
-    claimedAmount: BigInt(claimed?.amount || '0'),
-  } as const
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
+  } as const;
 
-  const relay = await Relay.get(id)
+  const relay = await Relay.get(id);
 
   await Promise.all([
     Relay.create({
@@ -381,18 +428,18 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
       relayId: id,
       transactionId: event.tx?.hash,
       blockId: event.block.block.id,
-    }).save()
-  ])
+    }).save(),
+  ]);
 }
 
 export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): Promise<void> {
-  logger.debug(`[handleMsgSubmitProof] msg.msg: ${stringify(msg.msg, undefined,2 )}`);
+  // logger.debug(`[handleMsgSubmitProof] msg.msg: ${stringify(msg.msg, undefined,2 )}`);
 
-  const { proof, sessionHeader, supplierOperatorAddress,} = msg.msg.decodedMsg
+  const { proof, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
 
-  const applicationId = sessionHeader?.applicationAddress || '';
-  const serviceId = sessionHeader?.serviceId || '';
-  const sessionId = sessionHeader?.sessionId || '';
+  const applicationId = sessionHeader?.applicationAddress || "";
+  const serviceId = sessionHeader?.serviceId || "";
+  const sessionId = sessionHeader?.sessionId || "";
 
   const id = getRelayId({
     applicationId,
@@ -409,9 +456,9 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
     serviceId,
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
-  }
+  };
 
-  const relay = await Relay.get(id)
+  const relay = await Relay.get(id);
 
   await Promise.all([
     MsgSubmitProofEntity.create({
@@ -426,12 +473,12 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
       id,
       status: RelayStatus.PENDING,
       msgSubmitProofId: id,
-    }).save()
-  ])
+    }).save(),
+  ]);
 }
 
 export async function handleEventProofSubmitted(event: CosmosEvent): Promise<void> {
-  logger.debug(`[EventProofSubmitted] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
+  // logger.debug(`[EventProofSubmitted] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
   const {
     claim,
@@ -439,34 +486,34 @@ export async function handleEventProofSubmitted(event: CosmosEvent): Promise<voi
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-    proof
-  } = getAttributes(event.event.attributes)
+    proof,
+  } = getAttributes(event.event.attributes);
 
-  const {root_hash, session_header, supplier_operator_address, } = claim
+  const { root_hash, session_header, supplier_operator_address } = claim;
 
   const shared = {
     supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || '',
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    applicationId: session_header?.application_address || "",
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
     rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || '',
-    claimedAmount: BigInt(claimed?.amount || '0'),
-  } as const
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
+  } as const;
 
   const id = getRelayId({
-    applicationId: session_header?.application_address || '',
+    applicationId: session_header?.application_address || "",
     supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
-  })
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
+  });
 
-  const relay = await Relay.get(id)
+  const relay = await Relay.get(id);
 
   await Promise.all([
     EventProofSubmitted.create({
@@ -482,12 +529,12 @@ export async function handleEventProofSubmitted(event: CosmosEvent): Promise<voi
       ...shared,
       status: RelayStatus.PENDING,
       eventProofSubmittedId: getEventId(event),
-    })
-  ])
+    }),
+  ]);
 }
 
 export async function handleEventProofUpdated(event: CosmosEvent): Promise<void> {
-  logger.debug(`[EventProofSubmitted] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
+  // logger.debug(`[EventProofSubmitted] event.attributes: ${stringify(event.event.attributes, undefined,2 )}`);
 
   const {
     claim,
@@ -495,35 +542,35 @@ export async function handleEventProofUpdated(event: CosmosEvent): Promise<void>
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-    proof
-  } = getAttributes(event.event.attributes)
+    proof,
+  } = getAttributes(event.event.attributes);
 
-  const {root_hash, session_header, supplier_operator_address, } = claim
+  const { root_hash, session_header, supplier_operator_address } = claim;
 
   const shared = {
     supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || '',
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
+    applicationId: session_header?.application_address || "",
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
     rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || '',
-    claimedAmount: BigInt(claimed?.amount || '0'),
-  } as const
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
+  } as const;
 
 
   const id = getRelayId({
-    applicationId: session_header?.application_address || '',
+    applicationId: session_header?.application_address || "",
     supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || '',
-    sessionId: session_header?.session_id || '',
-  })
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
+  });
 
-  const relay = await Relay.get(id)
+  const relay = await Relay.get(id);
 
   await Promise.all([
     EventProofUpdated.create({
@@ -539,6 +586,6 @@ export async function handleEventProofUpdated(event: CosmosEvent): Promise<void>
       ...relay,
       ...shared,
       status: RelayStatus.PENDING,
-    })
-  ])
+    }),
+  ]);
 }

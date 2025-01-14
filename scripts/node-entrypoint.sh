@@ -8,7 +8,8 @@ set -e
 # NOTE: this is needed because we exec the command with su - app which start a new session where the available
 # env from root will not been available.
 # all this is to been able to join WATCH and Normal execution in a single dockerfile
-cmd="env NODE_ENV=$NODE_ENV \
+cmd="env NODE_OPTIONS=$NODE_OPTIONS \
+NODE_ENV=$NODE_ENV \
 CHAIN_ID=$CHAIN_ID"
 
 if [ "$NODE_ENV" = "test" ]

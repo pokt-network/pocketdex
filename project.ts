@@ -399,213 +399,213 @@ const project: CosmosProject = {
         file: "./dist/index.js",
         handlers: [
           // handleGenesis is called before handleBlock, and it's reading the genesis file from ./src/mappings/genesis.json
-          {
-            handler: "handleGenesis",
-            kind: CosmosHandlerKind.Block,
-          },
+          // {
+          //   handler: "handleGenesis",
+          //   kind: CosmosHandlerKind.Block,
+          // },
           // --- Primitives
           {
             handler: "handleBlock",
             kind: CosmosHandlerKind.Block,
           },
-          {
-            handler: "handleTransaction",
-            kind: CosmosHandlerKind.Transaction,
-          },
-          {
-            handler: "handleMessage",
-            kind: CosmosHandlerKind.Message,
-          },
-          {
-            handler: "handleEvent",
-            kind: CosmosHandlerKind.Event,
-          },
+          // {
+          //   handler: "handleTransaction",
+          //   kind: CosmosHandlerKind.Transaction,
+          // },
+          // {
+          //   handler: "handleMessage",
+          //   kind: CosmosHandlerKind.Message,
+          // },
+          // {
+          //   handler: "handleEvent",
+          //   kind: CosmosHandlerKind.Event,
+          // },
           // --- Bank
-          {
-            handler: "handleNativeTransfer",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "transfer",
-              messageFilter: {
-                type: "/cosmos.bank.v1beta1.MsgSend"
-              }
-            }
-          },
-          {
-            handler: "handleNativeBalanceDecrement",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "coin_spent",
-            }
-          },
-          {
-            handler: "handleNativeBalanceIncrement",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "coin_received",
-            }
-          },
+          // {
+          //   handler: "handleNativeTransfer",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "transfer",
+          //     messageFilter: {
+          //       type: "/cosmos.bank.v1beta1.MsgSend"
+          //     }
+          //   }
+          // },
+          // {
+          //   handler: "handleNativeBalanceDecrement",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "coin_spent",
+          //   }
+          // },
+          // {
+          //   handler: "handleNativeBalanceIncrement",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "coin_received",
+          //   }
+          // },
           // --- Validator (@TODO: test it asap with @bryan)
-          {
-            handler: "handleValidatorMsgCreate",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/cosmos.staking.v1beta1.MsgCreateValidator",
-            },
-          },
+          // {
+          //   handler: "handleValidatorMsgCreate",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/cosmos.staking.v1beta1.MsgCreateValidator",
+          //   },
+          // },
           // --- Applications
-          {
-            handler: "handleAppMsgStake",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgStakeApplication",
-            }
-          },
-          {
-            handler: "handleDelegateToGatewayMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgDelegateToGateway",
-            }
-          },
-          {
-            handler: "handleUndelegateFromGatewayMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgUndelegateFromGateway",
-            }
-          },
-          {
-            handler: "handleUnstakeApplicationMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgUnstakeApplication",
-            }
-          },
-          {
-            handler: "handleTransferApplicationMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgTransferApplication",
-            }
-          },
-          {
-            handler: "handleTransferApplicationBeginEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventTransferBegin",
-            }
-          },
-          {
-            handler: "handleTransferApplicationEndEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventTransferEnd",
-            }
-          },
-          {
-            handler: "handleTransferApplicationErrorEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventTransferError",
-            }
-          },
-          {
-            handler: "handleApplicationUnbondingBeginEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventApplicationUnbondingBegin",
-            }
-          },
-          {
-            handler: "handleApplicationUnbondingEndEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventApplicationUnbondingEnd",
-            }
-          },
+          // {
+          //   handler: "handleAppMsgStake",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.application.MsgStakeApplication",
+          //   }
+          // },
+          // {
+          //   handler: "handleDelegateToGatewayMsg",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.application.MsgDelegateToGateway",
+          //   }
+          // },
+          // {
+          //   handler: "handleUndelegateFromGatewayMsg",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.application.MsgUndelegateFromGateway",
+          //   }
+          // },
+          // {
+          //   handler: "handleUnstakeApplicationMsg",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.application.MsgUnstakeApplication",
+          //   }
+          // },
+          // {
+          //   handler: "handleTransferApplicationMsg",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.application.MsgTransferApplication",
+          //   }
+          // },
+          // {
+          //   handler: "handleTransferApplicationBeginEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.application.EventTransferBegin",
+          //   }
+          // },
+          // {
+          //   handler: "handleTransferApplicationEndEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.application.EventTransferEnd",
+          //   }
+          // },
+          // {
+          //   handler: "handleTransferApplicationErrorEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.application.EventTransferError",
+          //   }
+          // },
+          // {
+          //   handler: "handleApplicationUnbondingBeginEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.application.EventApplicationUnbondingBegin",
+          //   }
+          // },
+          // {
+          //   handler: "handleApplicationUnbondingEndEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.application.EventApplicationUnbondingEnd",
+          //   }
+          // },
           // --- Services
-          {
-            handler: "handleMsgAddService",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.service.MsgAddService",
-            }
-          },
+          // {
+          //   handler: "handleMsgAddService",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.service.MsgAddService",
+          //   }
+          // },
           // --- Suppliers
-          {
-            handler: "handleSupplierStakeMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.supplier.MsgStakeSupplier",
-            }
-          },
-          {
-            handler: "handleUnstakeSupplierMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.supplier.MsgUnstakeSupplier",
-            }
-          },
-          {
-            handler: "handleSupplierUnbondingBeginEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.supplier.EventSupplierUnbondingBegin",
-            }
-          },
-          {
-            handler: "handleSupplierUnbondingEndEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.supplier.EventSupplierUnbondingEnd",
-            }
-          },
+          // {
+          //   handler: "handleSupplierStakeMsg",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.supplier.MsgStakeSupplier",
+          //   }
+          // },
+          // {
+          //   handler: "handleUnstakeSupplierMsg",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.supplier.MsgUnstakeSupplier",
+          //   }
+          // },
+          // {
+          //   handler: "handleSupplierUnbondingBeginEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.supplier.EventSupplierUnbondingBegin",
+          //   }
+          // },
+          // {
+          //   handler: "handleSupplierUnbondingEndEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.supplier.EventSupplierUnbondingEnd",
+          //   }
+          // },
           // --- Gateways
-          {
-            handler: "handleGatewayMsgStake",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.gateway.MsgStakeGateway",
-            }
-          },
-          {
-            handler: "handleGatewayMsgUnstake",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.gateway.MsgUnstakeGateway",
-            }
-          },
-          {
-            handler: "handleGatewayUnstakeEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.gateway.EventGatewayUnstaked",
-            }
-          },
+          // {
+          //   handler: "handleGatewayMsgStake",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.gateway.MsgStakeGateway",
+          //   }
+          // },
+          // {
+          //   handler: "handleGatewayMsgUnstake",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.gateway.MsgUnstakeGateway",
+          //   }
+          // },
+          // {
+          //   handler: "handleGatewayUnstakeEvent",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.gateway.EventGatewayUnstaked",
+          //   }
+          // },
           // --- Authz
-          {
-            handler: "handleAuthzExec",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/cosmos.authz.v1beta1.MsgExec",
-            }
-          },
+          // {
+          //   handler: "handleAuthzExec",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/cosmos.authz.v1beta1.MsgExec",
+          //   }
+          // },
           // --- Relays
-          {
-            handler: "handleEventClaimSettled",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.tokenomics.EventClaimSettled",
-            }
-          },
-          {
-            handler: "handleEventClaimExpired",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.tokenomics.EventClaimExpired",
-            }
-          },
+          // {
+          //   handler: "handleEventClaimSettled",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.tokenomics.EventClaimSettled",
+          //   }
+          // },
+          // {
+          //   handler: "handleEventClaimExpired",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.tokenomics.EventClaimExpired",
+          //   }
+          // },
           {
             handler: "handleMsgCreateClaim",
             kind: CosmosHandlerKind.Message,
@@ -613,45 +613,59 @@ const project: CosmosProject = {
               type: "/poktroll.proof.MsgCreateClaim",
             }
           },
-          {
-            handler: "handleEventClaimUpdated",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventClaimUpdated",
-            }
-          },
-          {
-            handler: "handleEventProofUpdated",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventProofUpdated",
-            }
-          },
-          {
-            handler: "handleMsgSubmitProof",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.proof.MsgSubmitProof",
-            }
-          },
-          {
-            handler: "handleEventClaimCreated",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventClaimCreated",
-            }
-          },
-          {
-            handler: "handleEventProofSubmitted",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventProofSubmitted",
-            }
-          },
+          // {
+          //   handler: "handleEventClaimUpdated",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.proof.EventClaimUpdated",
+          //   }
+          // },
+          // {
+          //   handler: "handleEventProofUpdated",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.proof.EventProofUpdated",
+          //   }
+          // },
+          // {
+          //   handler: "handleMsgSubmitProof",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.proof.MsgSubmitProof",
+          //   }
+          // },
+          // {
+          //   handler: "handleEventClaimCreated",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.proof.EventClaimCreated",
+          //   }
+          // },
+          // {
+          //   handler: "handleEventProofSubmitted",
+          //   kind: CosmosHandlerKind.Event,
+          //   filter: {
+          //     type: "poktroll.proof.EventProofSubmitted",
+          //   }
+          // },
           // --- Reports
+          // {
+          //   handler: "handleAddBlockReports",
+          //   kind: CosmosHandlerKind.Block,
+          // },
+          // TODO: all this logic need anyway to handle the edge case where there is blocks without transactions
+          // but those blocks could have block events.
           {
-            handler: "handleAddBlockReports",
-            kind: CosmosHandlerKind.Block,
+            handler: "handleLastMessage",
+            kind: CosmosHandlerKind.Message,
+          },
+          {
+            handler: "handleLastEvent",
+            kind: CosmosHandlerKind.Event,
+          },
+          {
+            handler: "handleFinalizeBlock",
+            kind: CosmosHandlerKind.Event,
           },
         ],
       },

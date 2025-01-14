@@ -17,8 +17,8 @@ export async function handleNativeTransfer(event: CosmosEvent): Promise<void> {
 
 async function _handleNativeTransfer(event: CosmosEvent): Promise<void> {
   const msg: CosmosMessage<NativeTransferMsg> = event.msg;
-  logger.debug(`[handleNativeTransfer] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
-  logger.debug(`[handleNativeTransfer] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleNativeTransfer] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
+  // logger.debug(`[handleNativeTransfer] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   // const timeline = getTimeline(event);
 
   const fromAddress = msg.msg?.decodedMsg?.fromAddress;

@@ -591,7 +591,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   const validators: Array<ValidatorProps> = [];
   const messages: Array<MessageProps> = [];
 
-  logger.debug(`[handleGenesisGenTxs] Looping over gen_txs Transactions: ${genesis.app_state.genutil.gen_txs.length}`);
+  // logger.debug(`[handleGenesisGenTxs] Looping over gen_txs Transactions: ${genesis.app_state.genutil.gen_txs.length}`);
   for (let i = 0; i < genesis.app_state.genutil.gen_txs.length; i++) {
     const genTx = genesis.app_state.genutil.gen_txs[i];
     // assume that the first message type is the type of the transaction
@@ -661,8 +661,8 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
     });
   }
 
-  logger.debug(`[handleGenesisGenTxs] Saving Transactions: ${transactions.length}`);
-  logger.debug(`[handleGenesisGenTxs] Saving Validator: ${validators.length}`);
+  // logger.debug(`[handleGenesisGenTxs] Saving Transactions: ${transactions.length}`);
+  // logger.debug(`[handleGenesisGenTxs] Saving Validator: ${validators.length}`);
   promises.push(store.bulkCreate("Transaction", transactions));
   promises.push(store.bulkCreate("Validator", validators));
   promises.push(store.bulkCreate("Message", messages));
@@ -670,7 +670,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   let entity: string;
   for (const [key, value] of typedMessages) {
     entity = key.split(".")?.at(-1) as string;
-    logger.debug(`[handleGenesisGenTxs] creating ${value.length} documents of type: ${entity}`);
+    // logger.debug(`[handleGenesisGenTxs] creating ${value.length} documents of type: ${entity}`);
     promises.push(store.bulkCreate(entity, value));
   }
 

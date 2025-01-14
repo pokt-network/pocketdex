@@ -10,7 +10,6 @@ import {
   unprocessedMsgHandler,
 } from "../utils/handlers";
 import { messageId } from "../utils/ids";
-import { stringify } from "../utils/json";
 import {
   Ed25519,
   pubKeyToAddress,
@@ -26,7 +25,7 @@ export async function handleValidatorMsgCreate(
 async function _handleValidatorMsgCreate(
   msg: CosmosMessage<MsgCreateValidator>,
 ): Promise<void> {
-  logger.debug(`[handleValidatorMsgCreate] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleValidatorMsgCreate] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   const msgId = messageId(msg);
   const createValMsg = msg.msg.decodedMsg;
   const signer = msg.tx.decodedTx.authInfo.signerInfos[0];

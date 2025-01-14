@@ -25,7 +25,7 @@ export async function handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise
 
 async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void> {
   logger.info(`[handleAuthzExec] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
-  logger.debug(`[handleAuthzExec] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+  // logger.debug(`[handleAuthzExec] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
 
   const authzExecId = messageId(msg);
   const typeUrl = msg.msg.typeUrl;
@@ -68,7 +68,7 @@ async function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): Promise<void>
     }
 
     if (decodedMsg) {
-      logger.debug(`[handleAuthzExec] msgType: ${typeUrl}, decodedMsg: ${stringify(decodedMsg, undefined, 2)}`);
+      // logger.debug(`[handleAuthzExec] msgType: ${typeUrl}, decodedMsg: ${stringify(decodedMsg, undefined, 2)}`);
       const subMsgId = `${authzExecId}-${i}`;
 
       // Create primitive message entity for sub-message
