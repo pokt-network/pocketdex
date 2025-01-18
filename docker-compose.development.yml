@@ -74,13 +74,15 @@ services:
       - ./schema.graphql:/app/schema.graphql
       - ./project.ts:/app/project.ts
       - ./proto:/app/proto
+      # if you modify vendors/* you need to rebuild the image,
+      # because handle the rebuild of those everytime is too much time between builds.
       - ./src:/app/src
       - ignore_types:/app/src/types
     command:
       - --subscriptions
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/ready" ]
       interval: 3s
       timeout: 5s
       retries: 103
@@ -95,7 +97,7 @@ services:
     depends_on:
       "postgres":
         condition: service_healthy
-      "subquery-node":
+      "indexer":
         condition: service_healthy
     restart: always
     environment:

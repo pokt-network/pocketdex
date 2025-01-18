@@ -10,6 +10,7 @@ ARG CHAIN_ID=poktroll
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
+# Required after this version: https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
 ENV TZ=utc
 
 # Create and set up a non-root user for security
@@ -29,23 +30,48 @@ RUN apt-get update && apt-get install -y \
     chmod +x /usr/bin/yq && \
     rm -rf /var/lib/apt/lists/*
 
-# TODO: split this to first copy everything to run the vendor things event the build, then the other things.
-# Copy the entire project into the Docker image
-COPY . /home/app
+# Copy the scripts folder, which includes install-vendor.sh
+COPY scripts /home/app/scripts
 
-# Install dependencies, build vendor packages, and the application
+# Allow execution for every shell script in the `scripts` folder.
 RUN chmod +x /home/app/scripts/*.sh
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Vendor
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Copy the vendor workspace folder
+COPY vendor /home/app/vendor
 
 RUN /home/app/scripts/install-vendor.sh
 
 RUN /home/app/scripts/build-vendor.sh
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Pocketdex
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Copy only dependency-related files to maximize cache and avoid unnecessary rebuilds.
+COPY package.json yarn.lock .yarnrc.yml /home/app/
+COPY .yarn /home/app/.yarn
+# Install project dependencies
 RUN yarn install
 
-RUN yarn run build
+# Copy all the relevant files for building the application.
+COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /home/app/
+COPY src /home/app/src
+COPY proto /home/app/proto
+COPY genesis/${GENESIS_FILENAME} /home/app/genesis.json
 
-# Allow execution for every shell script in the `scripts` folder
-RUN find /home/app/scripts -type f -name "*.sh" -exec chmod +x {} \;
+# Build pocketdex
+RUN yarn run build  \
+    # Use `yarn workspaces focus` to reduce dependencies to only production-level requirements.
+    && yarn workspaces focus --production
+
+# we do not need this at this point.
+RUN rm -rf /home/app/vendor/subql
+RUN rm -rf /home/app/src
+RUN rm -rf /home/app/vendor/subql-cosmos/node_modules/@subql/testing
 
 # Switch to the non-root user created earlier
 USER app

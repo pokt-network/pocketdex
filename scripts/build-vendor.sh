@@ -29,6 +29,11 @@ trap cleanup EXIT
 # Navigate to the base directory for packages
 cd vendor/subql/packages
 
+# hold the original value
+nodeEnv=$NODE_ENV
+# the yarn pack need to have this on production for some of them and because we use this to distribute subql on subql-cosmos
+# its ok.
+export NODE_ENV=production
 # Step 1: Loop through each package folder
 for packageDir in */; do
   # Enter the package directory
@@ -72,6 +77,8 @@ for packageDir in */; do
   # Navigate back to vendor/subql/packages
   cd ..
 done
+# set what it was again.
+export NODE_ENV=$nodeEnv
 
 # Step 2: Move to vendor/subql-cosmos and run yarn build
 info_log "Switching to 'vendor/subql-cosmos'..."
