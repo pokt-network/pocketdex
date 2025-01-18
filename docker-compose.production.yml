@@ -39,7 +39,7 @@ services:
     networks:
       - pocketdex
 
-  subquery-node:
+  indexer:
     build:
       context: .
       dockerfile: ./docker/node.dockerfile
@@ -70,9 +70,11 @@ services:
     volumes:
       - ./genesis/${GENESIS_FILENAME:-testnet.json}:/app/genesis.json
     command:
+      - --subscriptions
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/ready" ]
       interval: 3s
       timeout: 5s
       retries: 10
@@ -80,14 +82,14 @@ services:
       - localnet_proxy
       - pocketdex
 
-  graphql-engine:
+  query:
     image: subquerynetwork/subql-query:${SUBQUERY_GRAPHQL_ENGINE_VERSION}
     ports:
       - ${SUBQUERY_GRAPHQL_ENGINE_PORT}:3000
     depends_on:
       "postgres":
         condition: service_healthy
-      "subquery-node":
+      "indexer":
         condition: service_healthy
     restart: always
     environment:
@@ -99,8 +101,9 @@ services:
     command:
       - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
       - --name=${DB_SCHEMA}
-      - --indexer=http://subquery-node:3000
+      - --indexer=http://indexer:3000
       - --playground
+      - --subscriptions
     networks:
       - pocketdex
 

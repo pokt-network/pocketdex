@@ -7,7 +7,7 @@ import { FakeTxType } from "../types/genesis";
 // messageId returns the id of the message passed or
 // that of the message which generated the event passed.
 export function messageId(msg: CosmosMessage | CosmosEvent): string {
-  return `${msg.tx.hash}-${msg.idx}`;
+  return `${msg.tx?.hash}-${msg.idx}`;
 }
 
 // getEventId returns the id of the event passed.

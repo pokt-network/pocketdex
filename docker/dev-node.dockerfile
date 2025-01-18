@@ -11,41 +11,55 @@ ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
 ENV CI=$CI
 
-# typescript is added here because is wrongly used on some of the workspaces, just by the name
-# without the use of npm exec, yarn exec or any other to ensure they are looking into the node_modules
+# Typescript is added here because it is incorrectly used in some workspaces
+# directly by the name, without using `npm exec`, `yarn exec`, or other methods
+# to ensure `typescript` is sourced from `node_modules`.
 RUN apt-get update \
     && apt-get install -y tree git postgresql-client tini curl jq \
     # The following was necessary to install in order to add support for building
-    # the docker container on an M1 chip (i.e. ARM64)
+    # the docker container on an M1 chip (i.e., ARM64).
     make build-essential pkg-config python3 libusb-1.0-0-dev libudev-dev \
     && npm i -g typescript
 
-# add specific version of yq because depending on the operative system it could get another implementation or version
-# than produce error on shell scripts later.
+# Add a specific version of `yq` because different implementations or versions,
+# depending on the operating system, can cause errors later in shell scripts.
 RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq &&\
             chmod +x /usr/bin/yq
 
 WORKDIR /app
 
-# Copy the minimum required to run install and vendor:setup
-# preventing this step need to be re-build everytime due to change on dev files
-# but if for X reason you update a vendor package this step CACHE will be dropped
-# by docker and fully rebuild
+# -------------------------------------------
+# Dependencies step: Handles main and vendor
+# -------------------------------------------
+# Copy only dependency-related files to maximize cache and avoid unnecessary rebuilds.
 COPY package.json yarn.lock .yarnrc.yml /app/
-COPY scripts /app/scripts
 COPY .yarn /app/.yarn
+
+# Explicitly add vendor files to the image.
+# These files are assumed to be prepared in the `vendor/` directory of the repo.
+# This ensures everything needed from submodules is baked into the image at build time.
+COPY vendor /app/vendor
+
+# Install project dependencies (including vendor files).
+RUN yarn install
+# Install vendor dependencies
+RUN yarn install:vendor
+# Build vendor modules
+RUN yarn build:vendor
+
+# -------------------------------------------
+# Source code step: Separate for better caching
+# -------------------------------------------
+# Copy genesis file.
 COPY ./genesis/${GENESIS_FILENAME} /app/genesis.json
 
-# Install dev dependencies
-RUN yarn install
-
-# Copy everything because we use nodemon on development to build and watch.
+# Copy remaining project sources for local dev, as `nodemon` will enable file watching.
 COPY . /app
 
-# Required after this version https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
+# Required after this version: https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
 ENV TZ=utc
 
-# Allow execution for every shell script at scripts folder
+# Allow execution for every shell script in the `scripts` folder.
 RUN find /app/scripts -type f -name "*.sh" -exec chmod +x {} \;
 
 ENTRYPOINT ["tini", "--", "/app/scripts/node-entrypoint.sh"]

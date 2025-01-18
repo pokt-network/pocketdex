@@ -1,4 +1,7 @@
-import { CosmosEvent } from "@subql/types-cosmos";
+import {
+  CosmosEvent,
+  CosmosEventKind,
+} from "@subql/types-cosmos";
 import { parseCoins } from "../../cosmjs/utils";
 import {
   Account,
@@ -66,15 +69,22 @@ export async function saveNativeBalanceEvent(id: string, address: string, amount
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function saveNativeFeesEvent(event: CosmosEvent) {
+  if (!event.tx) {
+    if (event.kind !== CosmosEventKind.Transaction && event.kind !== CosmosEventKind.Message) {
+      return;
+    }
+    logger.warn(`[saveNativeFeesEvent] (block=${event.block.header.height} event=${event.idx}): transaction not found, but it should...`);
+    return;
+  }
   const transaction = await Transaction.get(event.tx.hash);
   if (!transaction) {
-    // TODO(@bryanchriswhite): add logging.
+    logger.warn(`[saveNativeFeesEvent] (tx ${event.tx.hash}): transaction not found, but it should...`);
     return;
   }
 
   const { fees, signerAddress } = transaction as Transaction;
   if (!signerAddress) {
-    // TODO(@bryanchriswhite): add logging.
+    logger.warn(`[saveNativeFeesEvent] (block=${event.block.header.height} tx=${event.tx.hash} event=${event.idx} kind=${event.kind}): signerAddress not found, but it should...`);
     return;
   }
 
@@ -94,17 +104,6 @@ export async function handleNativeBalanceIncrement(event: CosmosEvent): Promise<
 }
 
 async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> {
-  // logger.debug(`[handleNativeBalanceDecrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
-  // logger.debug(`[handleNativeBalanceDecrement] (event.event): ${stringify(event.event, undefined, 2)}`);
-  // logger.debug(`[handleNativeBalanceDecrement] (event.log): ${stringify(event.log, undefined, 2)}`);
-
-  // sample event.event.attributes:
-  // [
-  //   {"key":"spender","value":"fetch1jv65s3grqf6v6jl3dp4t6c9t9rk99cd85zdctg"},
-  //   {"key":"amount","value":"75462013217046121atestfet"},
-  //   {"key":"spender","value":"fetch1wurz7uwmvchhc8x0yztc7220hxs9jxdjdsrqmn"},
-  //   {"key":"amount","value":"100atestfet"}
-  // ]
   const spendEvents = [];
   for (const [i, e] of Object.entries(event.event.attributes)) {
     if (e.key !== "spender") {

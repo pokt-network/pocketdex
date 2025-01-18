@@ -1,3 +1,4 @@
+export * from "./debug";
 export * from "./primitives";
 export * from "./bank";
 export * from "./poktroll/validator";

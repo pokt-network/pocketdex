@@ -1,0 +1,12 @@
+# Syncs changes in .gitmodules
+# git submodule sync
+# git submodule update --init --recursive --remote
+
+[submodule "vendor/subql"]
+	path = vendor/subql
+	url = https://github.com/pokt-scan/subql.git
+	branch = feature/add-batch-and-conn-tunning
+[submodule "vendor/subql-cosmos"]
+	path = vendor/subql-cosmos
+	url = https://github.com/pokt-scan/subql-cosmos.git
+	branch = enhance-events-handling-and-add-post-index-handler

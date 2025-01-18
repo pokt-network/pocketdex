@@ -1,6 +1,7 @@
 import {
   CosmosEvent,
   CosmosMessage,
+  CosmosTransaction,
 } from "@subql/types-cosmos";
 import { applicationUnbondingReasonFromJSON } from "../../client/poktroll/application/event";
 import {
@@ -296,8 +297,8 @@ async function _handleTransferApplicationMsg(
 async function _handleTransferApplicationBeginEvent(
   event: CosmosEvent,
 ) {
-  // logger.debug(`[handleTransferApplicationBeginEvent] (event.msg): ${stringify(event.msg, undefined, 2)}`);
-  const msg: CosmosMessage<EventTransferBegin> = event.msg;
+  const msg = event.msg as CosmosMessage<EventTransferBegin>;
+  const tx = event.tx as CosmosTransaction;
 
   const transferEndHeight = event.event.attributes.find(attribute => attribute.key === "transfer_end_height")?.value as string;
 
@@ -321,7 +322,7 @@ async function _handleTransferApplicationBeginEvent(
       id: eventId,
       sourceId: msg.msg.decodedMsg.sourceAddress,
       destinationId: msg.msg.decodedMsg.destinationAddress,
-      transactionId: event.tx.hash,
+      transactionId: tx.hash,
       blockId: event.block.block.id,
       eventId,
     }).save(),
@@ -475,9 +476,7 @@ async function _handleTransferApplicationErrorEvent(
 async function _handleApplicationUnbondingBeginEvent(
   event: CosmosEvent,
 ) {
-  // logger.debug(`[handleApplicationUnbondingBeginEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
-
-  const msg: CosmosMessage<MsgUnstakeApplication> = event.msg;
+  const msg = event.msg as CosmosMessage<MsgUnstakeApplication>;
 
   let unstakingEndHeight = BigInt(0), sessionEndHeight: bigint, reason: number;
 

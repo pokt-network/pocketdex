@@ -31,3 +31,5 @@ docs
 */**/.yarn/cache
 
 kubernetes
+
+.last_build

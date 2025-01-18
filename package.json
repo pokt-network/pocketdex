@@ -3,12 +3,21 @@
   "version": "0.0.1",
   "description": "Pocketdex is an indexer for the Shannon implementation of the pocket network protocol.",
   "main": "dist/index.js",
+  "private": true,
+  "workspaces": [
+    "vendor/subql-cosmos/packages/*"
+  ],
   "scripts": {
     "preinstall": "npx only-allow yarn",
     "postinstall": "yarn run env:prepare",
     "precommit": "./scripts/before-commit.sh",
+    "install:vendor": "bash ./scripts/install-vendor.sh",
+    "clean:all": "yarn clean:cache && bash ./scripts/remove-all-node-modules.sh",
+    "clean:cache": "yarn cache clean && yarn clean:cache:vendor",
+    "clean:cache:vendor": "yarn cache clean --cwd vendor/subql && yarn cache clean --cwd vendor/subql-cosmos",
     "codegen": "yarn exec subql codegen",
     "build": "./scripts/build.sh",
+    "build:vendor": "bash ./scripts/build-vendor.sh",
     "watch:build": "./scripts/build.sh no-lint",
     "lint": "yarn exec eslint src --ext .ts",
     "lint:fix": "yarn exec eslint src --ext .ts --fix",
@@ -16,6 +25,7 @@
     "format:ci": "yarn exec pretty-quick --verbose --check --pattern 'src/*.{js,ts,jsx,tsx}' --branch origin/main",
     "test": "yarn run build && subql-node-cosmos test",
     "test:ci": "env node vendor/subql-cosmos/packages/node/bin/run test",
+    "vendor:prepare": "bash ./scripts/update-submodules.sh",
     "env:prepare": "./scripts/prepare-dotenv.sh",
     "docker:compose": "./scripts/docker-compose.sh",
     "poktroll:proxy:start": "./scripts/proxy-tunnel.sh start",
@@ -54,7 +64,7 @@
     "schema.graphql",
     "project.yaml"
   ],
-  "author": "Grove Team",
+  "author": "POKTscan & Grove Team",
   "license": "MIT",
   "devDependencies": {
     "@cosmjs/stargate": "^0.32.4",
@@ -76,8 +86,8 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.2.3",
-    "@subql/node-cosmos": "^4.1.3",
-    "@subql/types-cosmos": "^4.0.0",
+    "@subql/node-cosmos": "workspaces:*",
+    "@subql/types-cosmos": "workspaces:*",
     "@subql/utils": "^2.17.0",
     "@types/json-bigint": "^1.0.4",
     "@types/node": "^22.0.0",

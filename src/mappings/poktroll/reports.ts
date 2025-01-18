@@ -9,92 +9,92 @@ import {
   SupplierServiceConfig,
   Transaction,
 } from "../../types";
-import { RelayByBlockAndServiceProps } from "../../types/models/RelayByBlockAndService";
-import { StakedAppsByBlockAndServiceProps } from "../../types/models/StakedAppsByBlockAndService";
-import { StakedSuppliersByBlockAndServiceProps } from "../../types/models/StakedSuppliersByBlockAndService";
 import { StakeStatus } from "../constants";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
-  throw new Error("DEBUG, FORCED EXIT 1");
-  const [
-    {computedUnits, relays, relaysByService},
-    {invalidTxs, validTxs},
-    {stakedSuppliers, stakedSuppliersByService, stakedTokensBySupplier},
-    {unstakingSuppliers, unstakingTokensBySupplier},
-    took,
-    {unstakedSuppliers, unstakedTokensBySupplier},
-    {stakedApps, stakedAppsByService, stakedTokensByApp},
-    {unstakingApps, unstakingTokensByApp},
-    {unstakedApps, unstakedTokensByApp},
-    {stakedGateways, stakedTokensByGateway},
-    {unstakedGateways, unstakedTokensByGateway},
-    blockFromDB
-  ] = await Promise.all([
-    getRelaysData(block),
-    getTransactionsData(block),
-    getStakedSuppliersData(),
-    getUnstakingSuppliersData(),
-    getTook(block),
-    getUnstakedSuppliersData(block.block.id),
-    getStakedAppsData(),
-    getUnstakingAppsData(),
-    getUnstakedAppssData(block.block.id),
-    getStakedGatewaysData(),
-    getUnstakedGatewaysData(block.block.id),
-    Block.get(block.block.id)!
-  ] as const)
-
-  const blockEntity = blockFromDB as Block
-
-  blockEntity.totalComputedUnits = computedUnits
-  blockEntity.totalRelays = relays
-  blockEntity.failedTxs = invalidTxs
-  blockEntity.successfulTxs = validTxs
-  blockEntity.timeToBlock = took
-  blockEntity.totalTxs = validTxs + invalidTxs
-  blockEntity.stakedSuppliers = stakedSuppliers
-  blockEntity.stakedSuppliersTokens = stakedTokensBySupplier
-  blockEntity.unstakingSuppliers = unstakingSuppliers
-  blockEntity.unstakingSuppliersTokens = unstakingTokensBySupplier
-  blockEntity.unstakedSuppliers = unstakedSuppliers
-  blockEntity.unstakedSuppliersTokens = unstakedTokensBySupplier
-  blockEntity.stakedApps = stakedApps
-  blockEntity.stakedAppsTokens = stakedTokensByApp
-  blockEntity.unstakingApps = unstakingApps
-  blockEntity.unstakingAppsTokens = unstakingTokensByApp
-  blockEntity.unstakedApps = unstakedApps
-  blockEntity.unstakedAppsTokens = unstakedTokensByApp
-  blockEntity.stakedGateways = stakedGateways
-  blockEntity.stakedGatewaysTokens = stakedTokensByGateway
-  blockEntity.unstakedGateways = unstakedGateways
-  blockEntity.unstakedGatewaysTokens = unstakedTokensByGateway
-
-  await Promise.all([
-    blockEntity.save(),
-    store.bulkCreate('RelayByBlockAndService', relaysByService.map(relay => ({
-      id: `${block.block.id}-${relay.service}`,
-      relays: relay.relays,
-      amount: relay.amount,
-      computedUnits: relay.computedUnits,
-      claimedUpokt: relay.tokens,
-      blockId: block.block.id,
-      serviceId: relay.service,
-    } as RelayByBlockAndServiceProps))),
-    store.bulkCreate('StakedSuppliersByBlockAndService', stakedSuppliersByService.map(staked => ({
-      id: `${block.block.id}-${staked.service}`,
-      tokens: staked.tokens,
-      amount: staked.amount,
-      blockId: block.block.id,
-      serviceId: staked.service,
-    } as StakedSuppliersByBlockAndServiceProps))),
-    store.bulkCreate('StakedAppsByBlockAndService', stakedAppsByService.map(staked => ({
-      id: `${block.block.id}-${staked.service}`,
-      tokens: staked.tokens,
-      amount: staked.amount,
-      blockId: block.block.id,
-      serviceId: staked.service,
-    } as StakedAppsByBlockAndServiceProps))),
-  ])
+  logger.info(`[handleAddBlockReports] Generating block #${block.header.height} reports...`);
+  const startTime = (await cache.get("startTime")) ?? Date.now();
+  // const [
+  //   {computedUnits, relays, relaysByService},
+  //   {invalidTxs, validTxs},
+  //   {stakedSuppliers, stakedSuppliersByService, stakedTokensBySupplier},
+  //   {unstakingSuppliers, unstakingTokensBySupplier},
+  //   took,
+  //   {unstakedSuppliers, unstakedTokensBySupplier},
+  //   {stakedApps, stakedAppsByService, stakedTokensByApp},
+  //   {unstakingApps, unstakingTokensByApp},
+  //   {unstakedApps, unstakedTokensByApp},
+  //   {stakedGateways, stakedTokensByGateway},
+  //   {unstakedGateways, unstakedTokensByGateway},
+  //   blockFromDB
+  // ] = await Promise.all([
+  //   getRelaysData(block),
+  //   getTransactionsData(block),
+  //   getStakedSuppliersData(),
+  //   getUnstakingSuppliersData(),
+  //   getTook(block),
+  //   getUnstakedSuppliersData(block.block.id),
+  //   getStakedAppsData(),
+  //   getUnstakingAppsData(),
+  //   getUnstakedAppssData(block.block.id),
+  //   getStakedGatewaysData(),
+  //   getUnstakedGatewaysData(block.block.id),
+  //   Block.get(block.block.id)!
+  // ] as const)
+  //
+  // const blockEntity = blockFromDB as Block
+  //
+  // blockEntity.totalComputedUnits = computedUnits
+  // blockEntity.totalRelays = relays
+  // blockEntity.failedTxs = invalidTxs
+  // blockEntity.successfulTxs = validTxs
+  // blockEntity.timeToBlock = took
+  // blockEntity.totalTxs = validTxs + invalidTxs
+  // blockEntity.stakedSuppliers = stakedSuppliers
+  // blockEntity.stakedSuppliersTokens = stakedTokensBySupplier
+  // blockEntity.unstakingSuppliers = unstakingSuppliers
+  // blockEntity.unstakingSuppliersTokens = unstakingTokensBySupplier
+  // blockEntity.unstakedSuppliers = unstakedSuppliers
+  // blockEntity.unstakedSuppliersTokens = unstakedTokensBySupplier
+  // blockEntity.stakedApps = stakedApps
+  // blockEntity.stakedAppsTokens = stakedTokensByApp
+  // blockEntity.unstakingApps = unstakingApps
+  // blockEntity.unstakingAppsTokens = unstakingTokensByApp
+  // blockEntity.unstakedApps = unstakedApps
+  // blockEntity.unstakedAppsTokens = unstakedTokensByApp
+  // blockEntity.stakedGateways = stakedGateways
+  // blockEntity.stakedGatewaysTokens = stakedTokensByGateway
+  // blockEntity.unstakedGateways = unstakedGateways
+  // blockEntity.unstakedGatewaysTokens = unstakedTokensByGateway
+  //
+  // await Promise.all([
+  //   blockEntity.save(),
+  //   store.bulkCreate('RelayByBlockAndService', relaysByService.map(relay => ({
+  //     id: `${block.block.id}-${relay.service}`,
+  //     relays: relay.relays,
+  //     amount: relay.amount,
+  //     computedUnits: relay.computedUnits,
+  //     claimedUpokt: relay.tokens,
+  //     blockId: block.block.id,
+  //     serviceId: relay.service,
+  //   } as RelayByBlockAndServiceProps))),
+  //   store.bulkCreate('StakedSuppliersByBlockAndService', stakedSuppliersByService.map(staked => ({
+  //     id: `${block.block.id}-${staked.service}`,
+  //     tokens: staked.tokens,
+  //     amount: staked.amount,
+  //     blockId: block.block.id,
+  //     serviceId: staked.service,
+  //   } as StakedSuppliersByBlockAndServiceProps))),
+  //   store.bulkCreate('StakedAppsByBlockAndService', stakedAppsByService.map(staked => ({
+  //     id: `${block.block.id}-${staked.service}`,
+  //     tokens: staked.tokens,
+  //     amount: staked.amount,
+  //     blockId: block.block.id,
+  //     serviceId: staked.service,
+  //   } as StakedAppsByBlockAndServiceProps))),
+  // ])
+  const end = Date.now();
+  logger.info(`[handleAddBlockReports] Block #${block.header.height} processed in ${end - startTime}ms.`);
 }
 
 async function getRelaysData(block: CosmosBlock){

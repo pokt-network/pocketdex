@@ -12,13 +12,16 @@ else
   environments="development production test"
 
   for environment in $environments; do
+    # Ensure the .env.$environment file doesn't already exist
+    if [ -f .env.$environment ]; then
+      warning_log ".env.$environment already exists. Skipping creation for this environment."
+      continue
+    fi
+
     # Create a copy of .env.sample for each environment
     cp .env.sample .env.$environment
 
     # Replace ENV= with ENV=<environment> in each file
-    # The command differs depending on the Unix-based system (Linux/BSD) or Mac, due to differences in the sed command
-    # - On GNU sed (default on Linux), no space is used between -i and '' (or ""): sed -i'' 's/foo/bar/g'.
-    # - On BSD sed (default on MacOS), a space is required between -i and '' (or ""): sed -i '' 's/foo/bar/g'.
     if [ "$(uname)" = "Darwin" ]; then
       # Mac OS X
       sed -i '' -e "s/^ENV=.*$/ENV=$environment/g" .env.$environment

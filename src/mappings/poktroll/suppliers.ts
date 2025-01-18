@@ -1,6 +1,7 @@
 import {
   CosmosEvent,
   CosmosMessage,
+  CosmosTransaction,
 } from "@subql/types-cosmos";
 import {
   EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
@@ -154,7 +155,6 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
 async function _handleUnstakeSupplierMsg(
   msg: CosmosMessage<MsgUnstakeSupplier>,
 ) {
-  logger.info(`[handleUnstakeSupplierMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   const supplier = await Supplier.get(msg.msg.decodedMsg.operatorAddress);
 
   if (!supplier) {
@@ -184,9 +184,8 @@ async function _handleUnstakeSupplierMsg(
 async function _handleSupplierUnbondingBeginEvent(
   event: CosmosEvent,
 ) {
-  logger.info(`[handleSupplierUnbondingBeginEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
-
-  const msg: CosmosMessage<MsgUnstakeSupplier> = event.msg;
+  const msg = event.msg as CosmosMessage<MsgUnstakeSupplier>;
+  const tx = event.tx as CosmosTransaction;
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
   const unbondingBeginEvent = event.tx.tx.events.find(item => item.type === "poktroll.supplier.EventSupplierUnbondingBegin");
@@ -217,7 +216,7 @@ async function _handleSupplierUnbondingBeginEvent(
       id: eventId,
       supplierId: msg.msg.decodedMsg.operatorAddress,
       blockId: event.block.block.id,
-      transactionId: event.tx.hash,
+      transactionId: tx.hash,
       eventId,
     }).save(),
   ]);

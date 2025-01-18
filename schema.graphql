@@ -2,11 +2,9 @@
 # Add the `@index` or `@index(unique: true)` annotation after any non-key field
 # https://academy.subquery.network/build/graphql.html#indexing-by-non-primary-key-field
 
-type EventAttribute @entity {
-  id: ID!
+type EventAttribute @jsonField(indexed: false) {
   key: String!
   value: String!
-  event: Event!
 }
 
 type SupplyDenom @entity {
@@ -157,10 +155,24 @@ type Message @entity {
   block: Block!
 }
 
+enum EventKind {
+  # Hardcode non-blockchain kind just to be used on entities created by the genesis file
+  Genesis
+  # Events related to a msg using msg_index
+  Message
+  # Events produced on a transaction but not related to any msg, like fee or tip
+  Transaction
+  # Block events which are not related to transactions at all
+  BeginBlock
+  EndBlock
+  FinalizeBlock
+}
+
 type Event @entity {
   id: ID!
   type: String! @index
-  attributes: [EventAttribute]! @derivedFrom(field: "event")
+  kind: EventKind!
+  attributes: [EventAttribute]!
   transaction: Transaction
   block: Block!
 }
@@ -176,6 +188,7 @@ type NativeTransfer @entity {
   sender: Account! @index
   amounts: [Coin]!
   denom: String! @index
+  event: Event!
   message: Message!
   transaction: Transaction!
   block: Block!
@@ -773,24 +786,6 @@ type MsgSubmitProof @entity {
   block: Block!
 }
 
-type EventClaimCreated @entity {
-  id: ID!
-  supplier: Supplier!
-  application: Application!
-  service: Service!
-  sessionId: String!
-  sessionStartHeight: BigInt!
-  sessionEndHeight: BigInt!
-  rootHash: String
-  numRelays: BigInt
-  numClaimedComputedUnits: BigInt
-  numEstimatedComputedUnits: BigInt
-  claimedAmount: BigInt
-  claimedDenom: String
-  transaction: Transaction
-  block: Block!
-}
-
 type EventClaimUpdated @entity {
   id: ID!
   supplier: Supplier!
@@ -877,12 +872,10 @@ type Relay @entity {
   claimedAmount: BigInt
   claimedDenom: String
   msgCreateClaim: MsgCreateClaim
-  eventClaimCreated: EventClaimCreated
+  msgSubmitProof: MsgSubmitProof
   eventsClaimUpdated: [EventClaimUpdated] @derivedFrom(field: "relay")
   eventClaimExpired: EventClaimExpired
   eventClaimSettled: EventClaimSettled
-  eventProofSubmitted: EventProofSubmitted
-  msgSubmitProof: MsgSubmitProof
   eventsProofUpdated: [EventProofUpdated] @derivedFrom(field: "relay")
   # 0 = PENDING, 1 = SUCCESSFUL, 2 = FAILED
   status: Int!
@@ -890,25 +883,6 @@ type Relay @entity {
   requiredProof: Boolean
   # this must be a value of the enums ClaimErrors or ProofErrors. We are using Int because we can't define enums with numbers.
   failedCode: Int
-}
-
-type EventProofSubmitted @entity {
-  id: ID!
-  supplier: Supplier!
-  application: Application!
-  service: Service!
-  sessionId: String!
-  sessionStartHeight: BigInt!
-  sessionEndHeight: BigInt!
-  rootHash: String
-  closestMerkleProof: String
-  numRelays: BigInt
-  numClaimedComputedUnits: BigInt
-  numEstimatedComputedUnits: BigInt
-  claimedAmount: BigInt
-  claimedDenom: String
-  transaction: Transaction
-  block: Block!
 }
 
 type EventProofUpdated @entity {

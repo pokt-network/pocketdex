@@ -1,6 +1,7 @@
 import {
   CosmosEvent,
   CosmosMessage,
+  CosmosTransaction,
 } from "@subql/types-cosmos";
 import {
   EventGatewayUnstaked as EventGatewayUnstakedEntity,
@@ -76,7 +77,6 @@ async function _handleGatewayMsgStake(
 async function _handleGatewayMsgUnstake(
   msg: CosmosMessage<MsgUnstakeGateway>,
 ) {
-  // logger.debug(`[handleGatewayMsgUnstake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   const gateway = await Gateway.get(msg.msg.decodedMsg.address);
 
   if (!gateway) {
@@ -104,7 +104,7 @@ async function _handleGatewayMsgUnstake(
 async function _handleGatewayUnstakeEvent(
   event: CosmosEvent,
 ) {
-  // logger.debug(`[handleGatewayUnstakeEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  const tx = event.tx as CosmosTransaction;
 
   const gatewayStringified = event.event.attributes.find(attribute => attribute.key === "gateway")?.value as unknown as string;
 
@@ -134,7 +134,7 @@ async function _handleGatewayUnstakeEvent(
       id: eventId,
       gatewayId: gatewayAddress,
       blockId: event.block.block.id,
-      transactionId: event.tx.hash,
+      transactionId: tx.hash,
       eventId,
     }).save(),
     gateway.save(),

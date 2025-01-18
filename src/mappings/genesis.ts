@@ -6,6 +6,7 @@ import {
 } from "lodash";
 import {
   Event,
+  EventKind,
   GenesisFile as GenesisEntity,
 } from "../types";
 import type { AccountProps } from "../types/models/Account";
@@ -104,7 +105,9 @@ async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
   await Event.create({
     id: "genesis",
     type: "genesis",
+    attributes: [],
     blockId: block.block.id,
+    kind: EventKind.Genesis,
   }).save();
 }
 

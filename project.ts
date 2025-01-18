@@ -5,7 +5,7 @@ import {
 } from "@subql/types-cosmos";
 
 import * as dotenv from "dotenv";
-import path from "path";
+import * as path from "path";
 
 const mode = process.env.NODE_ENV || 'production';
 
@@ -23,11 +23,11 @@ const project: CosmosProject = {
   runner: {
     node: {
       name: "@subql/node-cosmos",
-      version: ">=4.0.0",
+      version: ">=4.3.0",
     },
     query: {
       name: "@subql/query",
-      version: "*",
+      version: ">=2.19.0",
     },
   },
   schema: {
@@ -394,32 +394,51 @@ const project: CosmosProject = {
   dataSources: [
     {
       kind: CosmosDatasourceKind.Runtime,
-      startBlock: 1,
+      startBlock: 50133,
       mapping: {
         file: "./dist/index.js",
         handlers: [
-          // handleGenesis is called before handleBlock, and it's reading the genesis file from ./src/mappings/genesis.json
-          // {
-          //   handler: "handleGenesis",
-          //   kind: CosmosHandlerKind.Block,
-          // },
-          // --- Primitives
+          // add this handler only if we want to add the debug handler
+          ...(process.env.DEBUG_BLOCK === "true" ? [
+            {
+              handler: "debugBlock",
+              kind: CosmosHandlerKind.Block,
+            },
+            {
+              handler: "debugTransaction",
+              kind: CosmosHandlerKind.BatchTransaction,
+            },
+            {
+              handler: "debugMessage",
+              kind: CosmosHandlerKind.BatchMessage,
+            },
+            {
+              handler: "debugEvent",
+              kind: CosmosHandlerKind.BatchEvent,
+            },
+          ] : []),
+          // // handleGenesis is called before handleBlock, and it's reading the genesis file from ./src/mappings/genesis.json
+          {
+            handler: "handleGenesis",
+            kind: CosmosHandlerKind.Block,
+          },
+          // // --- Primitives
           {
             handler: "handleBlock",
             kind: CosmosHandlerKind.Block,
           },
-          // {
-          //   handler: "handleTransaction",
-          //   kind: CosmosHandlerKind.Transaction,
-          // },
-          // {
-          //   handler: "handleMessage",
-          //   kind: CosmosHandlerKind.Message,
-          // },
-          // {
-          //   handler: "handleEvent",
-          //   kind: CosmosHandlerKind.Event,
-          // },
+          {
+            handler: "handleTransactions",
+            kind: CosmosHandlerKind.BatchTransaction,
+          },
+          {
+            handler: "handleMessages",
+            kind: CosmosHandlerKind.BatchMessage,
+          },
+          {
+            handler: "handleEvents",
+            kind: CosmosHandlerKind.BatchEvent,
+          },
           // --- Bank
           // {
           //   handler: "handleNativeTransfer",
@@ -445,7 +464,7 @@ const project: CosmosProject = {
           //     type: "coin_received",
           //   }
           // },
-          // --- Validator (@TODO: test it asap with @bryan)
+          // // --- Validator (@TODO: test it asap with @bryan)
           // {
           //   handler: "handleValidatorMsgCreate",
           //   kind: CosmosHandlerKind.Message,
@@ -453,7 +472,7 @@ const project: CosmosProject = {
           //     type: "/cosmos.staking.v1beta1.MsgCreateValidator",
           //   },
           // },
-          // --- Applications
+          // // --- Applications
           // {
           //   handler: "handleAppMsgStake",
           //   kind: CosmosHandlerKind.Message,
@@ -524,7 +543,7 @@ const project: CosmosProject = {
           //     type: "poktroll.application.EventApplicationUnbondingEnd",
           //   }
           // },
-          // --- Services
+          // // --- Services
           // {
           //   handler: "handleMsgAddService",
           //   kind: CosmosHandlerKind.Message,
@@ -532,7 +551,7 @@ const project: CosmosProject = {
           //     type: "/poktroll.service.MsgAddService",
           //   }
           // },
-          // --- Suppliers
+          // // --- Suppliers
           // {
           //   handler: "handleSupplierStakeMsg",
           //   kind: CosmosHandlerKind.Message,
@@ -561,7 +580,7 @@ const project: CosmosProject = {
           //     type: "poktroll.supplier.EventSupplierUnbondingEnd",
           //   }
           // },
-          // --- Gateways
+          // // --- Gateways
           // {
           //   handler: "handleGatewayMsgStake",
           //   kind: CosmosHandlerKind.Message,
@@ -583,7 +602,7 @@ const project: CosmosProject = {
           //     type: "poktroll.gateway.EventGatewayUnstaked",
           //   }
           // },
-          // --- Authz
+          // // --- Authz
           // {
           //   handler: "handleAuthzExec",
           //   kind: CosmosHandlerKind.Message,
@@ -591,7 +610,21 @@ const project: CosmosProject = {
           //     type: "/cosmos.authz.v1beta1.MsgExec",
           //   }
           // },
-          // --- Relays
+          // // --- Relays
+          // {
+          //   handler: "handleMsgCreateClaim",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.proof.MsgCreateClaim",
+          //   }
+          // },
+          // {
+          //   handler: "handleMsgSubmitProof",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/poktroll.proof.MsgSubmitProof",
+          //   }
+          // },
           // {
           //   handler: "handleEventClaimSettled",
           //   kind: CosmosHandlerKind.Event,
@@ -606,13 +639,6 @@ const project: CosmosProject = {
           //     type: "poktroll.tokenomics.EventClaimExpired",
           //   }
           // },
-          {
-            handler: "handleMsgCreateClaim",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.proof.MsgCreateClaim",
-            }
-          },
           // {
           //   handler: "handleEventClaimUpdated",
           //   kind: CosmosHandlerKind.Event,
@@ -627,46 +653,11 @@ const project: CosmosProject = {
           //     type: "poktroll.proof.EventProofUpdated",
           //   }
           // },
-          // {
-          //   handler: "handleMsgSubmitProof",
-          //   kind: CosmosHandlerKind.Message,
-          //   filter: {
-          //     type: "/poktroll.proof.MsgSubmitProof",
-          //   }
-          // },
-          // {
-          //   handler: "handleEventClaimCreated",
-          //   kind: CosmosHandlerKind.Event,
-          //   filter: {
-          //     type: "poktroll.proof.EventClaimCreated",
-          //   }
-          // },
-          // {
-          //   handler: "handleEventProofSubmitted",
-          //   kind: CosmosHandlerKind.Event,
-          //   filter: {
-          //     type: "poktroll.proof.EventProofSubmitted",
-          //   }
-          // },
-          // --- Reports
+          // // --- Reports
           // {
           //   handler: "handleAddBlockReports",
-          //   kind: CosmosHandlerKind.Block,
+          //   kind: CosmosHandlerKind.PostIndex,
           // },
-          // TODO: all this logic need anyway to handle the edge case where there is blocks without transactions
-          // but those blocks could have block events.
-          {
-            handler: "handleLastMessage",
-            kind: CosmosHandlerKind.Message,
-          },
-          {
-            handler: "handleLastEvent",
-            kind: CosmosHandlerKind.Event,
-          },
-          {
-            handler: "handleFinalizeBlock",
-            kind: CosmosHandlerKind.Event,
-          },
         ],
       },
     },

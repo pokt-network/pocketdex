@@ -39,7 +39,7 @@ services:
     networks:
       - pocketdex
 
-  subquery-node:
+  indexer:
     build:
       context: .
       dockerfile: ./docker/dev-node.dockerfile
@@ -77,6 +77,7 @@ services:
       - ./src:/app/src
       - ignore_types:/app/src/types
     command:
+      - --subscriptions
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://subquery-node:3000/ready"]
@@ -87,7 +88,7 @@ services:
       - localnet_proxy
       - pocketdex
 
-  graphql-engine:
+  query:
     image: subquerynetwork/subql-query:${SUBQUERY_GRAPHQL_ENGINE_VERSION}
     ports:
       - ${SUBQUERY_GRAPHQL_ENGINE_PORT}:3000
@@ -106,7 +107,7 @@ services:
     command:
       - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
       - --name=${DB_SCHEMA}
-      - --indexer=http://subquery-node:3000
+      - --indexer=http://indexer:3000
       - --playground
     networks:
       - pocketdex

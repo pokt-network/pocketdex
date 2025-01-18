@@ -8,6 +8,7 @@ import {
   isEmpty,
   isNil,
   isString,
+  pick,
 } from "lodash";
 import {
   Block,
@@ -16,12 +17,11 @@ import {
   BlockLastCommit,
   BlockMetadata,
   BlockSupply,
-  Event,
-  EventAttribute,
-  Message,
   SupplyDenom,
-  Transaction,
 } from "../types";
+import { EventProps } from "../types/models/Event";
+import { MessageProps } from "../types/models/Message";
+import { TransactionProps } from "../types/models/Transaction";
 import {
   _handleSupply,
   getSupplyId,
@@ -38,186 +38,46 @@ import { getBlockByteSize } from "./utils/block_size";
 import {
   attemptHandling,
   trackUnprocessed,
-  unprocessedEventHandler,
-  unprocessedMsgHandler,
 } from "./utils/handlers";
 import { messageId } from "./utils/ids";
 import { stringify } from "./utils/json";
-import { primitivesFromTx } from "./utils/primitives";
+import {
+  getEventKind,
+  primitivesFromTx,
+} from "./utils/primitives";
 import { pubKeyToAddress } from "./utils/pub_key";
-import { Entity } from "@subql/types-core";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
-  if (block.block.header.height === 50134) {
-    throw new Error("test");
-  }
   await attemptHandling(block, _handleBlock, _handleBlockError);
 }
 
-export async function handleTransaction(tx: CosmosTransaction): Promise<void> {
-  await attemptHandling(tx, _handleTransaction, _handleTransactionError);
+export async function handleTransactions(txs: CosmosTransaction[]): Promise<void> {
+  await store.bulkCreate("Transaction", txs.map(tx => _handleTransaction(tx)));
+  // restore attempt handling for batches
+  // await attemptHandling(tx, _handleTransaction, _handleTransactionError);
 }
 
-export async function handleMessage(msg: CosmosMessage): Promise<void> {
-  await attemptHandling(msg, _handleMessage, unprocessedMsgHandler);
+export async function handleMessages(msgs: CosmosMessage[]): Promise<void> {
+  await store.bulkCreate("Message", msgs.map(msg => _handleMessage(msg)));
+  // restore attempt handling for batches
+  // await attemptHandling(msg, _handleMessage, _handleMessageError);
 }
 
-export async function handleEvent(event: CosmosEvent): Promise<void> {
-  await attemptHandling(event, _handleEvent, unprocessedEventHandler);
+export async function handleEvents(events: CosmosEvent[]): Promise<void> {
+  await store.bulkCreate("Event", events.map(evt => _handleEvent(evt)));
+  // restore attempt handling for batches
+  // await attemptHandling(event, _handleEvent, unprocessedEventHandler);
 }
-
-function isLastTransaction(tx: CosmosTransaction): boolean {
-  return tx.idx === tx.block.txs.length - 1;
-}
-
-function isLastMessage(msg: CosmosMessage): boolean {
-  return msg.idx === msg.tx.decodedTx.body.messages.length - 1;
-}
-
-function isLastTransactionEvent(event: CosmosEvent, totalTxEvents: number): boolean {
-  // If idx is within the range of transaction-produced events, it's still transactional
-  return event.idx + 1 === totalTxEvents;
-}
-
-function isLastEvent(event: CosmosEvent): boolean {
-  logger.info(`[isLastEvent] Checking if is last event event.idx=${event.idx} event.tx.tx.events.length=${event.msg?.tx?.tx?.events?.length}`);
-  // If `msg` is missing, the event order cannot rely on messages
-  if (!event.msg) {
-    logger.warn(`[isLastEvent] Cannot determine last event as 'msg' is null.`);
-    return false;
-  }
-
-  // Transactional event: Safe to check the message event index
-  if (!event.msg.tx) {
-    logger.warn(`[isLastEvent] Cannot determine last event as 'msg.tx' is null.`);
-    return false; // No events in this message to compare against
-  }
-
-  // Valid event: Compare index to the length of events for this message
-  return event.idx === event.msg.tx.tx.events.length - 1;
-}
-
-export async function handleLastMessage(msg: CosmosMessage): Promise<void> {
-  if (isLastMessage(msg) && isLastTransaction(msg.tx)) {
-    logger.info(`Last message (${msg.msg.typeUrl}) in block ${msg.tx.block.header.height}`);
-    await cache.set("isLastMessage", true);
-  }
-}
-
-export async function handleLastEvent(event: CosmosEvent): Promise<void> {
-  // we are assuming that event handler is called after messages one, like the block is first, then txs, and then
-  // messages and then events.
-  try {
-
-    // 1. Retrieve the total number of events from the cache
-    const totalEvents = await cache.get(`block:${event.block.header.height}:totalEvents`);
-    logger.info(`[handleLastEvent] Processing event ${event.idx} of ${totalEvents} in block ${event.block.header.height}`);
-
-    if (!totalEvents) {
-      logger.error(`[handleLastEvent] Total events cache missing for block ${event.block.header.height}.`);
-      return;
-    }
-
-    // 2. Check if this is a block-level event
-    if (!event.msg) {
-      logger.info(`[handleLastEvent] Block-level event detected: "${event.event?.type || "unknown"}".`);
-
-      // Compare idx against total events to determine if this is the last block-level event
-      if (event.idx + 1 === totalEvents) {
-        logger.info(`[handleLastEvent] Last block-level event "${event.event?.type || "unknown"}".`);
-        await cache.set("isLastEvent", true); // Mark the last event
-      }
-      return;
-    }
-
-    // 3. Transactional event: Ensure required structures exist
-    const { msg } = event;
-    if (!msg.tx) {
-      logger.warn(`[handleLastEvent] Event (${event.event?.type || "unknown"}) has no associated transaction.`);
-      return;
-    }
-
-    // 4. Handle transactional events (if applicable)
-    const block = msg.tx.block;
-    if (event.idx + 1 === totalEvents) {
-      logger.info(`[handleLastEvent] Last transactional event "${event.event?.type || "unknown"}" in block ${block.header.height}.`);
-      await cache.set("isLastEvent", true); // Mark the last event
-    }
-  } catch (error) {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    logger.error(`[handleLastEvent] Error processing event: ${error.message}`, error);
-  }
-}
-
-async function readDocsAndBulkWrite(kind: string): Promise<void> {
-  const docs = await cache.get(kind) as Array<Entity> | null | undefined;
-  if (isNil(docs)) {
-    logger.info(`[readDocsAndBulkWrite] There are no ${kind} data to process.`);
-    return;
-  }
-  await store.bulkCreate(kind, docs);
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export async function handleFinalizeBlock(evt: CosmosEvent): Promise<void> {
-  const block = evt.block.block;
-  try {
-    const isLastEvent = (await cache.get("isLastEvent")) ?? false; // Default to false
-    const isLastMessage = (await cache.get("isLastMessage")) ?? false;
-    const startTime = (await cache.get("startTime")) ?? Date.now();
-    const totalEvents = await cache.get(`block:${evt.block.header.height}:totalEvents`);
-
-    logger.info(`%%%%%%%%%%%%%%%% ${block.header.height} isLastEvent=${isLastEvent} isLastMessage=${isLastMessage} isLastEvent=${isLastEvent} totalEvents=${totalEvents}`);
-
-    // Identify a truly empty block (no transactions, no flags set)
-    const isEmptyBlock = block.txs.length === 0 && !isLastEvent && !isLastMessage;
-
-    if (isEmptyBlock) {
-      // Finalize an empty block (e.g., save metadata or log the block as empty)
-      // ...
-
-      const endTime = Date.now();
-      logger.info(`################# [handleFinalizeBlock] Empty block ${block.header.height} finalized in ${endTime - startTime}ms.`);
-      return;
-    }
-
-    // Finalize non-empty blocks normally
-    if (isLastEvent && isLastMessage) {
-      logger.info(`@@@@@@@@@@@@@@@@@ [handleFinalizeBlock] Finalizing block ${block.header.height} with activity...`);
-
-      // Perform finalization logic
-      // bulk write all the docs in parallel (this should optimize the times)
-      await Promise.all([
-        readDocsAndBulkWrite("MsgCreateClaim"),
-        readDocsAndBulkWrite("Relay"),
-      ]);
-
-      const end = Date.now();
-      logger.info(`[handleFinalizeBlock] @@@@@@@@@@@@@@@@@ Non-empty block ${block.header.height} processed in ${end - startTime}ms.`);
-    }
-  } catch (error) {
-    logger.error(`[handleFinalizeBlock] &&&&&&&&&&&&&& Error during finalization of block ${block.header.height}: ${error}`);
-    throw error;
-  }
-}
-
 
 async function _handleBlock(block: CosmosBlock): Promise<void> {
   logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
   const start = Date.now();
   await cache.set("startTime", start);
-  // prevent them to be true from previous block
-  await cache.set("isLastEvent", false);
-  await cache.set("isLastMessage", false);
 
   const { header: { chainId, height, time }, id } = block.block;
   const timestamp = new Date(time.getTime());
 
-  const totalTxEvents = block.txs.reduce((count, tx) => count + (tx.events?.length || 0), 0);
-  await cache.set(`block:${block.header.height}:totalEvents`, totalTxEvents);
-
-  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  // // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
   const supplyDenom = await SupplyDenom.getByFields([], { limit: 100 });
   const supplyIdHeight = block.header.height === 1 ? block.header.height : block.header.height - 1;
 
@@ -255,7 +115,11 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
 
   // CosmosBlock has hash and addresses as Uint8array which is not the expected value on the graphql schema/db model,
   // so here we get a parsed version of its data that match the expected values base on words ending
-  const processedBlock = processBlockJson(block, PREFIX) as ConvertedBlockJson;
+  const processedBlock = processBlockJson(
+    // just pick whatever we need to process/convert to avoid waste time on other CosmosBlock properties.
+    pick(block, ["blockId", "block", "header"]) as CosmosBlock,
+    PREFIX,
+  ) as ConvertedBlockJson;
 
   const blockMetadata = BlockMetadata.create({
     id,
@@ -263,7 +127,6 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
     header: processedBlock.header as unknown as BlockHeader,
     lastCommit: processedBlock.block.lastCommit as unknown as BlockLastCommit,
   });
-
   await blockMetadata.save();
 
   const size = getBlockByteSize(block);
@@ -300,7 +163,6 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
     unstakedAppsTokens: BigInt(0),
     unstakedApps: 0,
   });
-
   await blockEntity.save();
 
   // We need to track the supply on every block, and this is the way we can do with the RPC, but on a future
@@ -308,8 +170,7 @@ async function _handleBlock(block: CosmosBlock): Promise<void> {
   await _handleSupply(block);
 }
 
-
-async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
+function _handleTransaction(tx: CosmosTransaction): TransactionProps {
   let status = tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;
 
   let signerAddress;
@@ -324,13 +185,9 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
     );
   }
 
-  // logger.debug(`[handleTransaction] (block ${tx.block.block.header.height}): indexing transaction ${tx.idx + 1} / ${tx.block.txs.length} status=${status} signer=${signerAddress}`);
-  // logger.debug(`[handleTransaction] (tx.decodedTx): ${stringify(tx.decodedTx, undefined, 2)}`);
-  // if (!isNil(tx.tx.log)) // logger.debug(`[handleTransaction] (tx.tx.log): ${tx.tx.log}`);
-
   const feeAmount = !isNil(tx.decodedTx.authInfo.fee) ? tx.decodedTx.authInfo.fee.amount : [];
 
-  const txEntity = Transaction.create({
+  return {
     id: tx.hash,
     // timeline,
     blockId: tx.block.block.id,
@@ -344,37 +201,23 @@ async function _handleTransaction(tx: CosmosTransaction): Promise<void> {
     signerAddress,
     code: tx.tx.code,
     codespace: tx.tx.codespace,
-  });
-  await txEntity.save();
+  };
 }
 
-async function _handleMessage(msg: CosmosMessage): Promise<void> {
-  // logger.debug(`[handleMessage] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
-  // logger.debug(`[handleMessage] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-  // const timeline = getTimeline(msg);
-
+function _handleMessage(msg: CosmosMessage): MessageProps {
   delete msg.msg?.decodedMsg?.wasmByteCode;
   const json = stringify(msg.msg.decodedMsg);
-  const msgEntity = Message.create({
+  return {
     id: messageId(msg),
     typeUrl: msg.msg.typeUrl,
     json,
     // timeline,
     transactionId: msg.tx.hash,
     blockId: msg.block.block.id,
-  });
-
-  await msgEntity.save();
+  };
 }
 
-async function _handleEvent(event: CosmosEvent): Promise<void> {
-  // TODO: generate an ID that will match on the event.event.type source depending on what type is.
-  if (!isEmpty(event.tx?.hash)) {
-    // logger.debug(`[handleEvent] (tx ${event.tx.hash}): indexing event ${event.idx + 1} / ${event.tx.tx.events.length}`);
-  } else {
-    // logger.debug(`[handleEvent]: indexing event ${event.idx + 1}${event.tx ? ` / ${event.tx.tx.events.length}` : ""}`);
-  }
-
+function _handleEvent(event: CosmosEvent): EventProps {
   let id;
   if (event.tx) {
     id = `${messageId(event)}-${event.idx}`;
@@ -384,39 +227,24 @@ async function _handleEvent(event: CosmosEvent): Promise<void> {
 
   // NB: sanitize attribute values (may contain non-text characters)
   const sanitize = (value: unknown): string => {
-    // avoid stringify an string
+    // avoid stringify a string
     if (isString(value)) return value;
     // otherwise return it as a stringifies object
     return stringify(value);
   };
   const attributes = event.event.attributes.map((attribute) => {
     const { key, value } = attribute;
-    return { key, value: sanitize(value) };
+    return { key: key as string, value: sanitize(value) };
   });
 
-  // logger.debug(`[handleEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
-  // logger.debug(`[handleEvent] (event.log): ${stringify(event.log, undefined, 2)}`);
-  // logger.debug(`[handleEvent] (event.attributes): ${stringify(attributes, undefined, 2)}`);
-
-  const eventEntity = Event.create({
+  return {
     id,
     type: event.event.type,
-    // sourceId: event
+    kind: getEventKind(event),
+    attributes,
     transactionId: event.tx?.hash,
     blockId: event.block.block.id,
-  });
-  await eventEntity.save();
-
-  for (const [i, attribute] of Object.entries(attributes)) {
-    const attrId = `${id}-${i}`;
-    const { key, value } = attribute;
-    await EventAttribute.create({
-      id: attrId,
-      key: key as string,
-      value,
-      eventId: eventEntity.id,
-    }).save();
-  }
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
