@@ -72,11 +72,11 @@ type BlockMetadata @entity {
 }
 
 type Block @entity {
-  id: ID! # The block header hash
+  id: ID! # the height as string # @dbType(type: "BigInt")
   chainId: String! @index
-  height: BigInt! @index
+  hash: String! @index
   timestamp: Date! @index
-  proposerAddress: String!
+  proposerAddress: String! @index
   metadata: BlockMetadata!
   size: Int!
   # relations
@@ -86,22 +86,7 @@ type Block @entity {
   balancesOfAccountByDenom: [Balance] @derivedFrom(field: "lastUpdatedBlock")
   supplies: [BlockSupply]! @derivedFrom(field: "block")
   # PARAMS
-  appParams: [AppParam] @derivedFrom(field: "block")
-  authParams: [AuthParam] @derivedFrom(field: "block")
-  bankParams: [BankParam] @derivedFrom(field: "block")
-  distributionParams: [DistributionParam] @derivedFrom(field: "block")
-  gatewayParams: [GatewayParam] @derivedFrom(field: "block")
-  govParams: [GovParam] @derivedFrom(field: "block")
-  mintParams: [MintParam] @derivedFrom(field: "block")
-  proofParams: [ProofParam] @derivedFrom(field: "block")
-  serviceParams: [ServiceParam] @derivedFrom(field: "block")
-  sessionParams: [SessionParam] @derivedFrom(field: "block")
-  sharedParams: [SharedParam] @derivedFrom(field: "block")
-  slashingParams: [SlashingParam] @derivedFrom(field: "block")
-  stakingParams: [StakingParam] @derivedFrom(field: "block")
-  supplierParams: [SupplierParam] @derivedFrom(field: "block")
-  tokenomicsParams: [TokenomicsParam] @derivedFrom(field: "block")
-  consensusParams: [ConsensusParam] @derivedFrom(field: "block")
+  params: [Param] @derivedFrom(field: "block")
   # REPORTS
   totalComputedUnits: BigInt
   totalRelays: BigInt
@@ -145,6 +130,7 @@ type Transaction @entity {
   # NB: only the first signer!
   signerAddress: String @index
   messages: [Message] @derivedFrom(field: "transaction")
+  events: [Event]@derivedFrom(field: "transaction")
 }
 
 type Message @entity {
@@ -152,6 +138,7 @@ type Message @entity {
   typeUrl: String! @index
   json: String
   transaction: Transaction!
+  events: [Event] @derivedFrom(field: "message")
   block: Block!
 }
 
@@ -174,6 +161,7 @@ type Event @entity {
   kind: EventKind!
   attributes: [EventAttribute]!
   transaction: Transaction
+  message: Message
   block: Block!
 }
 
@@ -218,6 +206,7 @@ type NativeBalanceChange @entity {
   account: Account!
   event: Event!
   transaction: Transaction
+  message: Message
   block: Block!
 }
 
@@ -282,15 +271,6 @@ type Validator @entity {
   createMsg: MsgCreateValidator!
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   #updateMsg: [MsgEditValidator]!
-}
-
-type UnprocessedEntity @entity {
-  id: ID!
-  error: String!
-  event: Event
-  message: Message
-  transaction: Transaction
-  block: Block
 }
 
 type Service @entity {
@@ -632,113 +612,9 @@ type EventGatewayUnstaked @entity {
 
 # PARAMS
 
-type AppParam @entity {
+type Param @entity {
   id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type AuthParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type BankParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type DistributionParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type GatewayParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type GovParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type MintParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type ProofParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type ServiceParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SessionParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SharedParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SlashingParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type StakingParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SupplierParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type TokenomicsParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type ConsensusParam @entity {
-  id: ID!
+  namespace: String! @index
   key: String! @index
   value: String!
   block: Block!

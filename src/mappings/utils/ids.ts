@@ -1,8 +1,20 @@
 import {
+  CosmosBlock,
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
 import { FakeTxType } from "../types/genesis";
+
+// We decide to make the block ID as the height, which is easier to follow on the graph/db
+// in any case we save the id(hash) as another property
+export function getBlockId(block: CosmosBlock): bigint {
+  return BigInt(block.block.header.height);
+}
+
+// Relationship properties are still a string.
+export function getBlockIdAsString(block: CosmosBlock): string {
+  return getBlockId(block).toString();
+}
 
 // messageId returns the id of the message passed or
 // that of the message which generated the event passed.
@@ -13,7 +25,7 @@ export function messageId(msg: CosmosMessage | CosmosEvent): string {
 // getEventId returns the id of the event passed.
 // Use this to get the id of the events across the indexing process.
 export function getEventId(event: CosmosEvent): string {
-  return `${event.tx?.hash || event.block.block.id}-${event.idx}`;
+  return `${event.tx?.hash || getBlockIdAsString(event.block)}-${event.kind}-${event.idx}`;
 }
 
 // getBalanceId returns the id of the Balance entity using the address and denom passed.
@@ -22,9 +34,9 @@ export function getBalanceId(address: string, denom: string): string {
   return `${address}-${denom}`;
 }
 
-// Returns the id of the param entity using the key and blockId passed.
-export function getParamId(key: string, blockId: string): string {
-  return `${key}-${blockId}`;
+// Returns the id of the param entity using the namespace, key, blockId passed.
+export function getParamId(ns: string, key: string, blockId: string): string {
+  return `${ns}-${key}-${blockId}`;
 }
 
 // Returns the id of the entity that establishes the relationship between the Gateway that the app is being delegated to.

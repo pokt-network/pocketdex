@@ -4,23 +4,11 @@ import {
   Service,
 } from "../../types";
 import { MsgAddService } from "../../types/proto-interfaces/poktroll/service/tx";
-import {
-  attemptHandling,
-  unprocessedMsgHandler,
-} from "../utils/handlers";
 import { messageId } from "../utils/ids";
-
-export async function handleMsgAddService(
-  msg: CosmosMessage<MsgAddService>,
-): Promise<void> {
-  await attemptHandling(msg, _handleMsgAddService, unprocessedMsgHandler);
-}
 
 async function _handleMsgAddService(
   msg: CosmosMessage<MsgAddService>,
 ) {
-  // logger.debug(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-
   const { ownerAddress, service: { computeUnitsPerRelay, id, name } } = msg.msg.decodedMsg;
 
   const units = BigInt(computeUnitsPerRelay.toString());
@@ -44,4 +32,10 @@ async function _handleMsgAddService(
       messageId: msgId,
     }).save(),
   ]);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleMsgAddService, referenced in project.ts
+export async function handleMsgAddService(msg: CosmosMessage<MsgAddService>): Promise<void> {
+  await _handleMsgAddService(msg);
 }

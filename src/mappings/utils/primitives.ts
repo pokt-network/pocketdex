@@ -1,32 +1,8 @@
 import {
-  CosmosBlock,
   CosmosEvent,
   CosmosEventKind,
-  CosmosMessage,
-  CosmosTransaction,
 } from "@subql/types-cosmos";
 import { EventKind } from "../../types";
-
-export type Primitive = CosmosEvent | CosmosMessage | CosmosTransaction | CosmosBlock;
-
-export interface Primitives {
-  event?: CosmosEvent;
-  msg?: CosmosMessage;
-  tx?: CosmosTransaction;
-  block?: CosmosBlock;
-}
-
-export function primitivesFromTx(tx: CosmosTransaction): Primitives {
-  return { block: tx.block, tx: tx };
-}
-
-export function primitivesFromMsg(msg: CosmosMessage): Primitives {
-  return { block: msg.block, tx: msg.tx };
-}
-
-export function primitivesFromEvent(event: CosmosEvent): Primitives {
-  return { block: event.block, tx: event.tx };
-}
 
 export function getEventKind(event: CosmosEvent): EventKind {
   let kind: EventKind;
@@ -56,4 +32,26 @@ export function getEventKind(event: CosmosEvent): EventKind {
 
 export function isEventOfMessageKind(event: CosmosEvent): boolean {
   return event.kind === CosmosEventKind.Message;
+}
+
+export function isEventOfTransactionKind(event: CosmosEvent): boolean {
+  return event.kind === CosmosEventKind.Transaction;
+}
+
+export function isEventOfMessageOrTransactionKind(event: CosmosEvent): boolean {
+  return isEventOfMessageKind(event) || isEventOfTransactionKind(event);
+}
+
+export function isEventOfBlockKind(event: CosmosEvent): boolean {
+  return event.kind === CosmosEventKind.BeginBlock || event.kind === CosmosEventKind.EndBlock || event.kind === CosmosEventKind.FinalizeBlock;
+}
+
+// on block 1, all the events at finalizeBlock, for example,
+// have index: false and a lot of values that do not make sense.
+// we need to ask poktroll devs about this, until that we will keep this
+export function getNonFirstBlockEvents(events: Array<CosmosEvent>): Array<CosmosEvent> {
+  const height = events[0].block.block.header.height;
+  // on block 1, all the events at finalizeBlock, for example,
+  // have index: false and a lot of values that do not make sense.
+  return height > 1 ? events : events.filter(evt => isEventOfMessageOrTransactionKind(evt));
 }

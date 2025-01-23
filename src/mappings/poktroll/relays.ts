@@ -126,7 +126,8 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
   };
 }
 
-// eslint-disable-next-line complexity
+// TODO: update this to work with BatchMessage handler
+// handleMsgCreateClaim, referenced in project.ts
 export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): Promise<void> {
   const { rootHash, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
   const applicationId = sessionHeader?.applicationAddress || "";
@@ -166,6 +167,8 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
   ]);
 }
 
+// TODO: update this to work with BatchMessage handler
+// handleMsgSubmitProof, referenced in project.ts
 export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): Promise<void> {
   const { proof, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
 
@@ -205,7 +208,8 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
   ]);
 }
 
-// eslint-disable-next-line complexity
+// TODO: update this to work with BatchEvent handler
+// handleEventClaimSettled, referenced in project.ts
 export async function handleEventClaimSettled(event: CosmosEvent): Promise<void> {
   const {
     claim,
@@ -255,7 +259,8 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
   ]);
 }
 
-// eslint-disable-next-line complexity
+// TODO: update this to work with BatchEvent handler
+// handleEventClaimExpired, referenced in project.ts
 export async function handleEventClaimExpired(event: CosmosEvent): Promise<void> {
   const {
     claim,
@@ -305,6 +310,8 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
   ]);
 }
 
+// TODO: update this to work with BatchEvent handler
+// handleEventClaimUpdated, referenced in project.ts
 export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void> {
   const {
     claim,
@@ -356,6 +363,8 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
   ]);
 }
 
+// TODO: update this to work with BatchEvent handler
+// handleEventProofUpdated, referenced in project.ts
 export async function handleEventProofUpdated(event: CosmosEvent): Promise<void> {
   const {
     claim,

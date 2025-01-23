@@ -35,11 +35,7 @@ import {
   ApplicationUnbondingReason,
   StakeStatus,
 } from "../constants";
-import {
-  attemptHandling,
-  unprocessedEventHandler,
-  unprocessedMsgHandler,
-} from "../utils/handlers";
+import { fetchPaginatedRecords } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
   getEventId,
@@ -48,64 +44,26 @@ import {
   messageId,
 } from "../utils/ids";
 
-export async function handleAppMsgStake(
-  msg: CosmosMessage<MsgStakeApplication>,
-): Promise<void> {
-  await attemptHandling(msg, _handleAppMsgStake, unprocessedMsgHandler);
+async function fetchAllApplicationServiceByApplicationId(applicationId: string): Promise<ApplicationService[]> {
+  return fetchPaginatedRecords({
+    fetchFn: (options) => ApplicationService.getByApplicationId(applicationId, options),
+    initialOptions: {
+      // add order and direction to speedup if there is a way
+      // orderBy: 'id', // Order results by ID
+      // orderDirection: 'ASC', // Ascending order
+    },
+  });
 }
 
-export async function handleDelegateToGatewayMsg(
-  msg: CosmosMessage<MsgDelegateToGateway>,
-): Promise<void> {
-  await attemptHandling(msg, _handleDelegateToGatewayMsg, unprocessedMsgHandler);
-}
-
-export async function handleUndelegateFromGatewayMsg(
-  msg: CosmosMessage<MsgUndelegateFromGateway>,
-): Promise<void> {
-  await attemptHandling(msg, _handleUndelegateFromGatewayMsg, unprocessedMsgHandler);
-}
-
-export async function handleUnstakeApplicationMsg(
-  msg: CosmosMessage<MsgUnstakeApplication>,
-): Promise<void> {
-  await attemptHandling(msg, _handleUnstakeApplicationMsg, unprocessedMsgHandler);
-}
-
-export async function handleTransferApplicationMsg(
-  msg: CosmosMessage<MsgTransferApplication>,
-): Promise<void> {
-  await attemptHandling(msg, _handleTransferApplicationMsg, unprocessedMsgHandler);
-}
-
-export async function handleTransferApplicationBeginEvent(
-  event: CosmosEvent,
-): Promise<void> {
-  await attemptHandling(event, _handleTransferApplicationBeginEvent, unprocessedEventHandler);
-}
-
-export async function handleTransferApplicationEndEvent(
-  event: CosmosEvent,
-): Promise<void> {
-  await attemptHandling(event, _handleTransferApplicationEndEvent, unprocessedEventHandler);
-}
-
-export async function handleTransferApplicationErrorEvent(
-  event: CosmosEvent,
-): Promise<void> {
-  await attemptHandling(event, _handleTransferApplicationErrorEvent, unprocessedEventHandler);
-}
-
-export async function handleApplicationUnbondingEndEvent(
-  event: CosmosEvent,
-): Promise<void> {
-  await attemptHandling(event, _handleApplicationUnbondingEndEvent, unprocessedEventHandler);
-}
-
-export async function handleApplicationUnbondingBeginEvent(
-  event: CosmosEvent,
-): Promise<void> {
-  await attemptHandling(event, _handleApplicationUnbondingBeginEvent, unprocessedEventHandler);
+async function fetchAllApplicationGatewayByApplicationId(applicationId: string): Promise<ApplicationGateway[]> {
+  return fetchPaginatedRecords({
+    fetchFn: (options) => ApplicationGateway.getByApplicationId(applicationId, options),
+    initialOptions: {
+      // add order and direction to speedup if there is a way
+      // orderBy: 'id', // Order results by ID
+      // orderDirection: 'ASC', // Ascending order
+    },
+  });
 }
 
 async function _handleAppMsgStake(
@@ -159,8 +117,9 @@ async function _handleAppMsgStake(
     });
   }
 
-  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
-  const currentAppServices = await ApplicationService.getByApplicationId(address, { limit: 100 });
+  // FIXED-> TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  // const currentAppServices = await ApplicationService.getByApplicationId(address, { limit: 100 });
+  const currentAppServices = await fetchAllApplicationServiceByApplicationId(address);
 
   const servicesToRemove: Array<string> = [];
 
@@ -241,8 +200,6 @@ async function _handleUndelegateFromGatewayMsg(
 async function _handleUnstakeApplicationMsg(
   msg: CosmosMessage<MsgUnstakeApplication>,
 ) {
-  // logger.debug(`[handleUnstakeApplicationMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-
   const application = await Application.get(msg.msg.decodedMsg.address);
 
   if (!application) {
@@ -269,8 +226,6 @@ async function _handleUnstakeApplicationMsg(
 async function _handleTransferApplicationMsg(
   msg: CosmosMessage<MsgTransferApplication>,
 ) {
-  // logger.debug(`[handleTransferApplicationMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-
   const application = await Application.get(msg.msg.decodedMsg.sourceAddress);
 
   if (!application) {
@@ -332,8 +287,6 @@ async function _handleTransferApplicationBeginEvent(
 async function _handleTransferApplicationEndEvent(
   event: CosmosEvent,
 ) {
-  // logger.debug(`[handleTransferApplicationEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
-
   let sourceAddress = event.event.attributes.find(attribute => attribute.key === "source_address")?.value as unknown as string;
 
   if (!sourceAddress) {
@@ -387,10 +340,10 @@ async function _handleTransferApplicationEndEvent(
     gatewayId: gateway,
   }));
 
-  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
-  const sourceApplicationServices = await ApplicationService.getByApplicationId(sourceAddress, { limit: 100 }) || [];
-  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
-  const sourceApplicationGateways = await ApplicationGateway.getByApplicationId(sourceAddress, { limit: 100 }) || [];
+  // FIXED-> TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const sourceApplicationServices = await fetchAllApplicationServiceByApplicationId(sourceAddress);
+  // FIXED-> TODO: ADD A WAY TO LOAD MORE (PAGINATION)
+  const sourceApplicationGateways = await fetchAllApplicationGatewayByApplicationId(sourceAddress);
   const newApplicationServices: Array<ApplicationServiceProps> = service_configs?.map(service => ({
     id: getStakeServiceId(destinationApp.address, service.service_id),
     serviceId: service.service_id,
@@ -419,8 +372,6 @@ async function _handleTransferApplicationEndEvent(
 async function _handleTransferApplicationErrorEvent(
   event: CosmosEvent,
 ) {
-  // logger.debug(`[handleTransferApplicationErrorEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
-
   let sourceAddress = "", destinationAddress = "", error = "";
 
   for (const attribute of event.event.attributes) {
@@ -541,8 +492,6 @@ async function _handleApplicationUnbondingBeginEvent(
 async function _handleApplicationUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  // logger.debug(`[handleApplicationUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
-
   let unstakingEndHeight: bigint, sessionEndHeight: bigint, reason: number, applicationSdk: ApplicationSDKType;
 
 
@@ -598,8 +547,7 @@ async function _handleApplicationUnbondingEndEvent(
   application.stakeStatus = StakeStatus.Unstaked;
   application.unstakingReason = reason;
 
-  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
-  const applicationServices = (await ApplicationService.getByApplicationId(applicationSdk.address, { limit: 100 }) || []).map(item => item.id);
+  const applicationServices = (await fetchAllApplicationServiceByApplicationId(applicationSdk.address)).map(item => item.id);
 
   const eventId = getEventId(event);
 
@@ -616,4 +564,84 @@ async function _handleApplicationUnbondingEndEvent(
     application.save(),
     store.bulkRemove("ApplicationService", applicationServices),
   ]);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleAppMsgStake, referenced in project.ts
+export async function handleAppMsgStake(
+  msg: CosmosMessage<MsgStakeApplication>,
+): Promise<void> {
+  await _handleAppMsgStake(msg);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleDelegateToGatewayMsg, referenced in project.ts
+export async function handleDelegateToGatewayMsg(
+  msg: CosmosMessage<MsgDelegateToGateway>,
+): Promise<void> {
+  await _handleDelegateToGatewayMsg(msg);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleUndelegateFromGatewayMsg, referenced in project.ts
+export async function handleUndelegateFromGatewayMsg(
+  msg: CosmosMessage<MsgUndelegateFromGateway>,
+): Promise<void> {
+  await _handleUndelegateFromGatewayMsg(msg);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleUnstakeApplicationMsg, referenced in project.ts
+export async function handleUnstakeApplicationMsg(
+  msg: CosmosMessage<MsgUnstakeApplication>,
+): Promise<void> {
+  await _handleUnstakeApplicationMsg(msg);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleTransferApplicationMsg, referenced in project.ts
+export async function handleTransferApplicationMsg(
+  msg: CosmosMessage<MsgTransferApplication>,
+): Promise<void> {
+  await _handleTransferApplicationMsg(msg);
+}
+
+// TODO: update this to work with BatchEvent handler
+// handleTransferApplicationBeginEvent, referenced in project.ts
+export async function handleTransferApplicationBeginEvent(
+  event: CosmosEvent,
+): Promise<void> {
+  await _handleTransferApplicationBeginEvent(event);
+}
+
+// TODO: update this to work with BatchEvent handler
+// handleTransferApplicationEndEvent, referenced in project.ts
+export async function handleTransferApplicationEndEvent(
+  event: CosmosEvent,
+): Promise<void> {
+  await _handleTransferApplicationEndEvent(event);
+}
+
+// TODO: update this to work with BatchEvent handler
+// handleTransferApplicationErrorEvent, referenced in project.ts
+export async function handleTransferApplicationErrorEvent(
+  event: CosmosEvent,
+): Promise<void> {
+  await _handleTransferApplicationErrorEvent(event);
+}
+
+// TODO: update this to work with BatchEvent handler
+// handleApplicationUnbondingEndEvent, referenced in project.ts
+export async function handleApplicationUnbondingEndEvent(
+  event: CosmosEvent,
+): Promise<void> {
+  await _handleApplicationUnbondingEndEvent(event);
+}
+
+// TODO: update this to work with BatchEvent handler
+// handleApplicationUnbondingBeginEvent, referenced in project.ts
+export async function handleApplicationUnbondingBeginEvent(
+  event: CosmosEvent,
+): Promise<void> {
+  await _handleApplicationUnbondingBeginEvent(event);
 }

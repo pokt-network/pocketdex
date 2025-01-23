@@ -394,55 +394,78 @@ const project: CosmosProject = {
   dataSources: [
     {
       kind: CosmosDatasourceKind.Runtime,
-      startBlock: 50133,
+      startBlock: 1,
       mapping: {
         file: "./dist/index.js",
         handlers: [
+          // --------------------------- DEBUG ---------------------------
           // add this handler only if we want to add the debug handler
+          // this env variable needs to be preset at BUILD time,
+          // because subql cli will generate project.yaml with/without this.
           ...(process.env.DEBUG_BLOCK === "true" ? [
             {
+              // See the definition in "src/mappings/debug/block.ts"
               handler: "debugBlock",
               kind: CosmosHandlerKind.Block,
             },
             {
+              // See the definition in "src/mappings/debug/transactions.ts"
               handler: "debugTransaction",
               kind: CosmosHandlerKind.BatchTransaction,
             },
             {
+              // See the definition in "src/mappings/debug/messages.ts"
               handler: "debugMessage",
               kind: CosmosHandlerKind.BatchMessage,
             },
             {
+              // See the definition in "src/mappings/debug/events.ts"
               handler: "debugEvent",
               kind: CosmosHandlerKind.BatchEvent,
             },
           ] : []),
-          // // handleGenesis is called before handleBlock, and it's reading the genesis file from ./src/mappings/genesis.json
+
+          // --------------------------- GENESIS ---------------------------
           {
+            // See the definition in "src/mappings/primitives/genesis.ts"
             handler: "handleGenesis",
             kind: CosmosHandlerKind.Block,
           },
-          // // --- Primitives
+
+          // --------------------------- PRIMITIVES ---------------------------
           {
+            // See the definition in "src/mappings/primitives/block.ts"
             handler: "handleBlock",
             kind: CosmosHandlerKind.Block,
           },
           {
-            handler: "handleTransactions",
-            kind: CosmosHandlerKind.BatchTransaction,
+            // NOTE: We need to track the supply on every block, and this is the way we can do with the RPC, but on a
+            // future it will be replaced by handling the claim/proof settle event.
+            // See the definition in "src/mappings/bank/supply.ts"
+            handler: "handleSupply",
+            kind: CosmosHandlerKind.Block,
           },
-          {
-            handler: "handleMessages",
-            kind: CosmosHandlerKind.BatchMessage,
-          },
-          {
-            handler: "handleEvents",
-            kind: CosmosHandlerKind.BatchEvent,
-          },
-          // --- Bank
           // {
+          //   // See the definition in "src/mappings/primitives/transactions.ts"
+          //   handler: "handleTransactions",
+          //   kind: CosmosHandlerKind.BatchTransaction,
+          // },
+          // {
+          //   // See the definition in "src/mappings/primitives/messages.ts"
+          //   handler: "handleMessages",
+          //   kind: CosmosHandlerKind.BatchMessage,
+          // },
+          // {
+          //   // See the definition in "src/mappings/primitives/events.ts"
+          //   handler: "handleEvents",
+          //   kind: CosmosHandlerKind.BatchEvent,
+          // },
+
+          // --------------------------- BANK ---------------------------
+          // {
+          //   // See the definition in "src/mappings/bank/transfer.ts"
           //   handler: "handleNativeTransfer",
-          //   kind: CosmosHandlerKind.Event,
+          //   kind: CosmosHandlerKind.BatchEvent,
           //   filter: {
           //     type: "transfer",
           //     messageFilter: {
@@ -451,17 +474,29 @@ const project: CosmosProject = {
           //   }
           // },
           // {
+          //   // See the definition in "src/mappings/bank/balanceChange.ts"
+          //   handler: "handleNativeBalanceIncrement",
+          //   kind: CosmosHandlerKind.BatchEvent,
+          //   filter: {
+          //     type: "coin_received",
+          //   }
+          // },
+          // {
+          //   // See the definition in "src/mappings/bank/balanceChange.ts"
           //   handler: "handleNativeBalanceDecrement",
-          //   kind: CosmosHandlerKind.Event,
+          //   kind: CosmosHandlerKind.BatchEvent,
           //   filter: {
           //     type: "coin_spent",
           //   }
           // },
+
+          // // --------------------------- AUTHZ ---------------------------
           // {
-          //   handler: "handleNativeBalanceIncrement",
-          //   kind: CosmosHandlerKind.Event,
+          //   // See the definition in "src/mappings/authz/exec.ts"
+          //   handler: "handleAuthzExec",
+          //   kind: CosmosHandlerKind.BatchMessage,
           //   filter: {
-          //     type: "coin_received",
+          //     type: "/cosmos.authz.v1beta1.MsgExec",
           //   }
           // },
           // // --- Validator (@TODO: test it asap with @bryan)
@@ -602,14 +637,7 @@ const project: CosmosProject = {
           //     type: "poktroll.gateway.EventGatewayUnstaked",
           //   }
           // },
-          // // --- Authz
-          // {
-          //   handler: "handleAuthzExec",
-          //   kind: CosmosHandlerKind.Message,
-          //   filter: {
-          //     type: "/cosmos.authz.v1beta1.MsgExec",
-          //   }
-          // },
+
           // // --- Relays
           // {
           //   handler: "handleMsgCreateClaim",

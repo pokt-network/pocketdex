@@ -21,41 +21,12 @@ import {
 } from "../../types/proto-interfaces/poktroll/supplier/tx";
 import { StakeStatus } from "../constants";
 import {
-  attemptHandling,
-  unprocessedEventHandler,
-  unprocessedMsgHandler,
-} from "../utils/handlers";
-import {
   getEventId,
   getMsgStakeServiceId,
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
 import { stringify } from "../utils/json";
-
-export async function handleSupplierStakeMsg(
-  msg: CosmosMessage<MsgStakeSupplier>,
-): Promise<void> {
-  await attemptHandling(msg, _handleSupplierStakeMsg, unprocessedMsgHandler);
-}
-
-export async function handleUnstakeSupplierMsg(
-  msg: CosmosMessage<MsgUnstakeSupplier>,
-): Promise<void> {
-  await attemptHandling(msg, _handleUnstakeSupplierMsg, unprocessedMsgHandler);
-}
-
-export async function handleSupplierUnbondingBeginEvent(
-  event: CosmosEvent,
-): Promise<void> {
-  await attemptHandling(event, _handleSupplierUnbondingBeginEvent, unprocessedEventHandler);
-}
-
-export async function handleSupplierUnbondingEndEvent(
-  event: CosmosEvent,
-): Promise<void> {
-  await attemptHandling(event, _handleSupplierUnbondingEndEvent, unprocessedEventHandler);
-}
 
 async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
   // logger.debug(`[handleSupplierStakeMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
@@ -262,4 +233,36 @@ async function _handleSupplierUnbondingEndEvent(
     supplier.save(),
     store.bulkRemove("SupplierServiceConfig", supplierServices),
   ]);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleSupplierStakeMsg, referenced in project.ts
+export async function handleSupplierStakeMsg(
+  msg: CosmosMessage<MsgStakeSupplier>,
+): Promise<void> {
+  await _handleSupplierStakeMsg(msg);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleUnstakeSupplierMsg, referenced in project.ts
+export async function handleUnstakeSupplierMsg(
+  msg: CosmosMessage<MsgUnstakeSupplier>,
+): Promise<void> {
+  await _handleUnstakeSupplierMsg(msg);
+}
+
+// TODO: update this to work with BatchEvent handler
+// handleSupplierUnbondingBeginEvent, referenced in project.ts
+export async function handleSupplierUnbondingBeginEvent(
+  event: CosmosEvent,
+): Promise<void> {
+  await _handleSupplierUnbondingBeginEvent(event);
+}
+
+// TODO: update this to work with BatchEvent handler
+// handleSupplierUnbondingEndEvent, referenced in project.ts
+export async function handleSupplierUnbondingEndEvent(
+  event: CosmosEvent,
+): Promise<void> {
+  await _handleSupplierUnbondingEndEvent(event);
 }

@@ -15,26 +15,10 @@ import {
 } from "../../types/proto-interfaces/poktroll/gateway/tx";
 import { StakeStatus } from "../constants";
 import {
-  attemptHandling,
-  unprocessedEventHandler,
-  unprocessedMsgHandler,
-} from "../utils/handlers";
-import {
   getEventId,
   messageId,
 } from "../utils/ids";
 
-export async function handleGatewayMsgStake(msg: CosmosMessage<MsgStakeGateway>): Promise<void> {
-  await attemptHandling(msg, _handleGatewayMsgStake, unprocessedMsgHandler);
-}
-
-export async function handleGatewayMsgUnstake(msg: CosmosMessage<MsgUnstakeGateway>): Promise<void> {
-  await attemptHandling(msg, _handleGatewayMsgUnstake, unprocessedMsgHandler);
-}
-
-export async function handleGatewayUnstakeEvent(event: CosmosEvent): Promise<void> {
-  await attemptHandling(event, _handleGatewayUnstakeEvent, unprocessedEventHandler);
-}
 
 async function _handleGatewayMsgStake(
   msg: CosmosMessage<MsgStakeGateway>,
@@ -139,4 +123,23 @@ async function _handleGatewayUnstakeEvent(
     }).save(),
     gateway.save(),
   ]);
+}
+
+
+// TODO: update this to work with BatchMessage handler
+// handleGatewayMsgStake, referenced in project.ts
+export async function handleGatewayMsgStake(msg: CosmosMessage<MsgStakeGateway>): Promise<void> {
+  await _handleGatewayMsgStake(msg);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleGatewayMsgStake, referenced in project.ts
+export async function handleGatewayMsgUnstake(msg: CosmosMessage<MsgUnstakeGateway>): Promise<void> {
+  await _handleGatewayMsgUnstake(msg);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleGatewayMsgStake, referenced in project.ts
+export async function handleGatewayUnstakeEvent(event: CosmosEvent): Promise<void> {
+  await _handleGatewayUnstakeEvent(event);
 }

@@ -5,10 +5,6 @@ import { isNil } from "lodash";
 import { Validator } from "../../types";
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
 import { VALIDATOR_PREFIX } from "../constants";
-import {
-  attemptHandling,
-  unprocessedMsgHandler,
-} from "../utils/handlers";
 import { messageId } from "../utils/ids";
 import {
   Ed25519,
@@ -16,15 +12,8 @@ import {
   Secp256k1,
 } from "../utils/pub_key";
 
-export async function handleValidatorMsgCreate(
-  msg: CosmosMessage<MsgCreateValidator>,
-): Promise<void> {
-  await attemptHandling(msg, _handleValidatorMsgCreate, unprocessedMsgHandler);
-}
 
-async function _handleValidatorMsgCreate(
-  msg: CosmosMessage<MsgCreateValidator>,
-): Promise<void> {
+async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>): Promise<void> {
   // logger.debug(`[handleValidatorMsgCreate] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   const msgId = messageId(msg);
   const createValMsg = msg.msg.decodedMsg;
@@ -76,4 +65,10 @@ async function _handleValidatorMsgCreate(
     validator.save(),
     msgCreateValidator.save(),
   ]);
+}
+
+// TODO: update this to work with BatchMessage handler
+// handleValidatorMsgCreate, referenced in project.ts
+export async function handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>): Promise<void> {
+  await _handleValidatorMsgCreate(msg);
 }
