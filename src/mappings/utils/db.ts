@@ -23,13 +23,13 @@ export async function fetchPaginatedRecords<T>({
   let results: T[] = [];
   const fetchFnName = fetchFn.name; // Get the function name for logging
   const logPrefix = `[fetchPaginated.${fetchFnName}]`; // Reusable log prefix
-  logger.info(`${logPrefix} Starting paginated fetch`);
+  logger.debug(`${logPrefix} Starting paginated fetch`);
 
   let offset = 0; // Initialize offset to 0
   let batch: T[]; // Placeholder for the currently fetched batch
 
   do {
-    logger.info(
+    logger.debug(
       `${logPrefix} Fetching batch with options: ${JSON.stringify({
         ...(initialOptions || {}),
         offset,
@@ -42,7 +42,7 @@ export async function fetchPaginatedRecords<T>({
     // Append batch to results
     results = results.concat(batch);
 
-    logger.info(
+    logger.debug(
       `${logPrefix} Fetched ${batch.length} records. Total records so far: ${results.length}`,
     );
 
@@ -52,6 +52,6 @@ export async function fetchPaginatedRecords<T>({
     // Continue until there are no more records in the current batch
   } while (batch.length > 0);
 
-  logger.info(`${logPrefix} Completed paginated fetch. Total records fetched: ${results.length}`);
+  logger.debug(`${logPrefix} Completed paginated fetch. Total records fetched: ${results.length}`);
   return results;
 }

@@ -2,6 +2,32 @@
 # Add the `@index` or `@index(unique: true)` annotation after any non-key field
 # https://academy.subquery.network/build/graphql.html#indexing-by-non-primary-key-field
 
+enum RelayStatus {
+  Pending
+  Success
+  Fail
+}
+
+enum StakeStatus {
+  Staked
+  Unstaking
+  Unstaked
+}
+
+enum TxStatus {
+  Success
+  Error
+}
+
+type Authz @entity {
+  id: ID!
+  granter: Account!
+  grantee: Account!
+  type: String! @index
+  msg: String! @index
+  expiration: Date
+}
+
 type EventAttribute @jsonField(indexed: false) {
   key: String!
   value: String!
@@ -121,8 +147,7 @@ type Transaction @entity {
   gasWanted: BigInt!
   fees: [Coin]!
   memo: String
-  # 0 = Success, 1 = Error
-  status: Int!
+  status: TxStatus! @index
   log: String
   code: Int!
   codespace: String
@@ -170,12 +195,15 @@ type Coin @jsonField {
   amount: String!
 }
 
+
+
 type NativeTransfer @entity {
   id: ID!
   recipient: Account! @index
   sender: Account! @index
   amounts: [Coin]!
   denom: String! @index
+  status: TxStatus! @index
   event: Event!
   message: Message!
   transaction: Transaction!
@@ -239,6 +267,7 @@ type MsgCreateValidator @entity {
   address: String!
   # secp256k1 account
   signer: Account!
+  signerPoktPrefix: Account!
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   delegator: Account
   description: ValidatorDescription!
@@ -257,6 +286,7 @@ type Validator @entity {
   id: ID!
   # secp256k1 PubKey relation
   signer: Account!
+  signerPoktPrefix: Account!
   delegator: Account
   description: ValidatorDescription!
   commission: ValidatorCommission!
@@ -264,8 +294,7 @@ type Validator @entity {
   # value block in plain format
   stakeDenom: String!
   stakeAmount: BigInt!
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   transaction: Transaction!
   block: Block!
   createMsg: MsgCreateValidator!
@@ -340,8 +369,7 @@ type Application @entity {
   # we are not using Coin because we want to be able to query and sum by amount
   stakeAmount: BigInt!
   stakeDenom: String!
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   # Block where the msg to unstake the application was received
   unstakingBeginBlock: Block
   # Height of the block where the application is going to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
@@ -499,8 +527,7 @@ type Supplier @entity {
   unstakeMsgs: [MsgUnstakeSupplier] @derivedFrom(field: "supplier")
   unstakingBeginEvents: [EventSupplierUnbondingBegin] @derivedFrom(field: "supplier")
   unstakingEndEvents: [EventSupplierUnbondingEnd] @derivedFrom(field: "supplier")
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   # Block where MsgUnstakeSupplier was received
   unstakingBeginBlock: Block
   # Height of the block where the supplier is going to be unstaked/unbonded.
@@ -573,8 +600,7 @@ type Gateway @entity {
   # we are not using Coin because we want to be able to query and sum by amount
   stakeAmount: BigInt!
   stakeDenom: String!
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   unstakingBeginBlock: Block
   unstakingEndBlock: Block
   stakeMsgs: [MsgStakeGateway] @derivedFrom(field: "gateway")
@@ -753,8 +779,7 @@ type Relay @entity {
   eventClaimExpired: EventClaimExpired
   eventClaimSettled: EventClaimSettled
   eventsProofUpdated: [EventProofUpdated] @derivedFrom(field: "relay")
-  # 0 = PENDING, 1 = SUCCESSFUL, 2 = FAILED
-  status: Int!
+  status: RelayStatus!
   failedCodeSpace: String
   requiredProof: Boolean
   # this must be a value of the enums ClaimErrors or ProofErrors. We are using Int because we can't define enums with numbers.

@@ -12,6 +12,7 @@ import { sanitize } from "../utils/json";
 import {
   getEventKind,
   getNonFirstBlockEvents,
+  hasValidAmountAttribute,
   isEventOfMessageKind,
 } from "../utils/primitives";
 
@@ -35,7 +36,10 @@ function _handleEvent(event: CosmosEvent): EventProps {
 
 // handleEvents, referenced in project.ts, handles events and store as is in case we need to use them on a migration
 export async function handleEvents(events: CosmosEvent[]): Promise<void> {
-  const filteredEvents = getNonFirstBlockEvents(events);
+  const filteredEvents = getNonFirstBlockEvents(events).filter(
+    // event type message is not worth save
+    evt => hasValidAmountAttribute(evt) && evt.event.type !== "message",
+  );
   if (filteredEvents.length === 0) return;
   await store.bulkCreate(
     "Event",

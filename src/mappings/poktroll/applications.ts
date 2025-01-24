@@ -18,6 +18,7 @@ import {
   MsgTransferApplication as MsgTransferApplicationEntity,
   MsgUndelegateFromGateway as MsgUndelegateFromGatewayEntity,
   MsgUnstakeApplication as MsgUnstakeApplicationEntity,
+  StakeStatus,
 } from "../../types";
 import { ApplicationGatewayProps } from "../../types/models/ApplicationGateway";
 import { ApplicationServiceProps } from "../../types/models/ApplicationService";
@@ -31,10 +32,7 @@ import {
   MsgUnstakeApplication,
 } from "../../types/proto-interfaces/poktroll/application/tx";
 import { ApplicationSDKType } from "../../types/proto-interfaces/poktroll/application/types";
-import {
-  ApplicationUnbondingReason,
-  StakeStatus,
-} from "../constants";
+import { ApplicationUnbondingReason } from "../constants";
 import { fetchPaginatedRecords } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,

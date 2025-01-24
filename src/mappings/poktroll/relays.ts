@@ -13,6 +13,7 @@ import {
   MsgSubmitProof as MsgSubmitProofEntity,
   ProofRequirementReason,
   Relay,
+  RelayStatus,
 } from "../../types";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 import {
@@ -26,7 +27,6 @@ import {
   ProofSDKType,
 } from "../../types/proto-interfaces/poktroll/proof/types";
 import { ClaimExpirationReasonSDKType } from "../../types/proto-interfaces/poktroll/tokenomics/event";
-import { RelayStatus } from "../constants";
 import {
   getEventId,
   getRelayId,
@@ -161,7 +161,7 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
     Relay.create({
       id,
       ...shared,
-      status: RelayStatus.PENDING,
+      status: RelayStatus.Pending,
       msgCreateClaimId: messageId(msg),
     }).save(),
   ]);
@@ -202,7 +202,7 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
         serviceId,
         sessionId,
       }),
-      status: RelayStatus.PENDING,
+      status: RelayStatus.Pending,
       msgSubmitProofId: msgId,
     }] as Array<Relay>, [...Object.keys(shared), "id", "status", "msgSubmitProofId"]),
   ]);
@@ -246,7 +246,7 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
         serviceId: session_header?.service_id || "",
         sessionId: session_header?.session_id || "",
       }),
-      status: RelayStatus.SUCCESSFUL,
+      status: RelayStatus.Success,
       eventClaimSettledId: getEventId(event),
     }] as Array<Relay>, [...Object.keys(shared), "id", "status", "eventClaimSettledId"]),
     EventClaimSettled.create({
@@ -298,7 +298,7 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
         sessionId: session_header?.session_id || "",
       }),
       eventClaimExpiredId: getEventId(event),
-      status: RelayStatus.FAILED,
+      status: RelayStatus.Fail,
     }] as Array<Relay>, [...Object.keys(shared), "id", "status", "eventClaimExpiredId"]),
     EventClaimExpired.create({
       ...shared,
@@ -351,7 +351,7 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
     store.bulkUpdate("Relay", [{
       ...shared,
       id: relayId,
-      status: RelayStatus.PENDING,
+      status: RelayStatus.Pending,
     }] as Array<Relay>, [...Object.keys(shared), "id", "status"]),
     EventClaimUpdated.create({
       ...shared,
@@ -412,7 +412,7 @@ export async function handleEventProofUpdated(event: CosmosEvent): Promise<void>
     store.bulkUpdate("Relay", [{
       ...shared,
       id,
-      status: RelayStatus.PENDING,
+      status: RelayStatus.Pending,
     }] as Array<Relay>, [...Object.keys(shared), "id", "status"]),
   ]);
 }

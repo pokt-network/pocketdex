@@ -8,12 +8,12 @@ import {
   Gateway,
   MsgStakeGateway as MsgStakeGatewayEntity,
   MsgUnstakeGateway as MsgUnstakeGatewayEntity,
+  StakeStatus,
 } from "../../types";
 import {
   MsgStakeGateway,
   MsgUnstakeGateway,
 } from "../../types/proto-interfaces/poktroll/gateway/tx";
-import { StakeStatus } from "../constants";
 import {
   getEventId,
   messageId,

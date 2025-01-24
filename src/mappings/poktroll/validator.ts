@@ -2,9 +2,16 @@ import { toBase64 } from "@cosmjs/encoding";
 import { CosmosMessage } from "@subql/types-cosmos";
 import type { MsgCreateValidator } from "cosmjs-types/cosmos/staking/v1beta1/tx";
 import { isNil } from "lodash";
-import { Validator } from "../../types";
+import {
+  StakeStatus,
+  Validator,
+} from "../../types";
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
-import { VALIDATOR_PREFIX } from "../constants";
+import { enforceAccountExistence } from "../bank";
+import {
+  PREFIX,
+  VALIDATOR_PREFIX,
+} from "../constants";
 import { messageId } from "../utils/ids";
 import {
   Ed25519,
@@ -14,7 +21,6 @@ import {
 
 
 async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>): Promise<void> {
-  // logger.debug(`[handleValidatorMsgCreate] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
   const msgId = messageId(msg);
   const createValMsg = msg.msg.decodedMsg;
   const signer = msg.tx.decodedTx.authInfo.signerInfos[0];
@@ -28,6 +34,7 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   }
 
   const signerAddress = pubKeyToAddress(Secp256k1, signer.publicKey.value, VALIDATOR_PREFIX);
+  const poktSignerAddress = pubKeyToAddress(Secp256k1, signer.publicKey.value, PREFIX);
 
   const msgCreateValidator = MsgCreateValidatorEntity.create({
     id: msgId,
@@ -37,6 +44,7 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
     },
     address: pubKeyToAddress(Ed25519, createValMsg.pubkey?.value, VALIDATOR_PREFIX),
     signerId: signerAddress,
+    signerPoktPrefixId: poktSignerAddress,
     description: createValMsg.description,
     commission: createValMsg.commission,
     minSelfDelegation: parseInt(createValMsg.minSelfDelegation, 10),
@@ -50,12 +58,13 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   const validator = Validator.create({
     id: msgCreateValidator.address,
     signerId: msgCreateValidator.signerId,
+    signerPoktPrefixId: poktSignerAddress,
     description: msgCreateValidator.description,
     commission: msgCreateValidator.commission,
     minSelfDelegation: msgCreateValidator.minSelfDelegation,
     stakeDenom: msgCreateValidator.stakeDenom,
     stakeAmount: msgCreateValidator.stakeAmount,
-    stakeStatus: 0,
+    stakeStatus: StakeStatus.Staked,
     transactionId: msgCreateValidator.transactionId,
     blockId: msgCreateValidator.blockId,
     createMsgId: msgCreateValidator.id,
@@ -64,6 +73,8 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   await Promise.all([
     validator.save(),
     msgCreateValidator.save(),
+    enforceAccountExistence(signerAddress, msg.block.header.chainId),
+    enforceAccountExistence(poktSignerAddress, msg.block.header.chainId),
   ]);
 }
 

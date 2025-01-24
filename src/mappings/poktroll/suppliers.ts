@@ -8,6 +8,7 @@ import {
   EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity,
   MsgStakeSupplier as MsgStakeSupplierEntity,
   MsgUnstakeSupplier as MsgUnstakeSupplierEntity,
+  StakeStatus,
   Supplier,
   SupplierEndpoint,
   SupplierRevShare,
@@ -19,7 +20,6 @@ import {
   MsgStakeSupplier,
   MsgUnstakeSupplier,
 } from "../../types/proto-interfaces/poktroll/supplier/tx";
-import { StakeStatus } from "../constants";
 import {
   getEventId,
   getMsgStakeServiceId,

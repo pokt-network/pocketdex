@@ -5,11 +5,11 @@ import {
   Block,
   EventClaimSettled,
   Gateway,
+  StakeStatus,
   Supplier,
   SupplierServiceConfig,
   Transaction,
 } from "../../types";
-import { StakeStatus } from "../constants";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   logger.info(`[handleAddBlockReports] Generating block #${block.header.height} reports...`);

@@ -6,6 +6,7 @@ import type {
 } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 import type { GatewaySDKType } from "../../types/proto-interfaces/poktroll/gateway/types";
 import type { SupplierSDKType } from "../../types/proto-interfaces/poktroll/shared/supplier";
+import { GrantAuthorization } from "../../types/proto-interfaces/cosmos/authz/v1beta1/authz";
 
 type Supplier = Omit<SupplierSDKType, "stake"> & {stake: Required<CoinSDKType> }
 type Params = Record<string, unknown>
@@ -136,6 +137,9 @@ export interface Genesis {
       params: Params
       accounts: Array<BaseAccountSDKType>
     }
+    authz: {
+      authorization: Array<GrantAuthorization>
+    },
     bank: {
       params: Params
       balances: Array<Balance>

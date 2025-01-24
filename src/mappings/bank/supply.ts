@@ -36,6 +36,8 @@ export async function queryTotalSupply(): Promise<Coin[]> {
     // @ts-ignore
     const queryClient = api.forceGetQueryClient();
 
+    queryClient.auth;
+
     // Initial call to get the first set of results
     const initialResponse: QueryTotalSupplyResponse = await queryClient.bank.totalSupply() as unknown as QueryTotalSupplyResponse;
     logger.debug(`[handleTotalSupply]: initialResponse=${stringify(initialResponse, undefined, 2)}`);

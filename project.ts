@@ -7,7 +7,7 @@ import {
 import * as dotenv from "dotenv";
 import * as path from "path";
 
-const mode = process.env.NODE_ENV || 'production';
+const mode = process.env.NODE_ENV || "production";
 
 // Load the appropriate .env file
 const dotenvPath = path.resolve(__dirname, `.env.${mode}`);
@@ -44,7 +44,7 @@ const project: CosmosProject = {
      * If you use a rate limited endpoint, adjust the --batch-size and --workers parameters
      * These settings can be found in your docker-compose.yaml, they will slow indexing but prevent your project being rate limited
      */
-    endpoint: process.env.ENDPOINT!?.split(',') as string[] | string,
+    endpoint: process.env.ENDPOINT!?.split(",") as string[] | string,
     chaintypes: new Map([
       [
         "cosmos.slashing.v1beta1",
@@ -88,7 +88,7 @@ const project: CosmosProject = {
             "MsgDelegateToGateway",
             "MsgUndelegateFromGateway",
           ],
-        }
+        },
       ],
       [
         "poktroll.application_events",
@@ -114,7 +114,7 @@ const project: CosmosProject = {
             "Application",
             "UndelegatingGatewayList",
           ],
-        }
+        },
       ],
       [
         "poktroll.application_params",
@@ -123,7 +123,7 @@ const project: CosmosProject = {
           messages: [
             "Params",
           ],
-        }
+        },
       ],
       // --- Gateway
       [
@@ -445,50 +445,66 @@ const project: CosmosProject = {
             handler: "handleSupply",
             kind: CosmosHandlerKind.Block,
           },
-          // {
-          //   // See the definition in "src/mappings/primitives/transactions.ts"
-          //   handler: "handleTransactions",
-          //   kind: CosmosHandlerKind.BatchTransaction,
-          // },
-          // {
-          //   // See the definition in "src/mappings/primitives/messages.ts"
-          //   handler: "handleMessages",
-          //   kind: CosmosHandlerKind.BatchMessage,
-          // },
-          // {
-          //   // See the definition in "src/mappings/primitives/events.ts"
-          //   handler: "handleEvents",
-          //   kind: CosmosHandlerKind.BatchEvent,
-          // },
+          {
+            // See the definition in "src/mappings/primitives/transactions.ts"
+            handler: "handleTransactions",
+            kind: CosmosHandlerKind.BatchTransaction,
+            filter: {
+              includeFailedTx: true,
+            },
+          },
+          {
+            // See the definition in "src/mappings/primitives/messages.ts"
+            handler: "handleMessages",
+            kind: CosmosHandlerKind.BatchMessage,
+            filter: {
+              type: "*",
+              includeFailedTx: true,
+            },
+          },
+          {
+            // See the definition in "src/mappings/primitives/events.ts"
+            handler: "handleEvents",
+            kind: CosmosHandlerKind.BatchEvent,
+          },
 
           // --------------------------- BANK ---------------------------
-          // {
-          //   // See the definition in "src/mappings/bank/transfer.ts"
-          //   handler: "handleNativeTransfer",
-          //   kind: CosmosHandlerKind.BatchEvent,
-          //   filter: {
-          //     type: "transfer",
-          //     messageFilter: {
-          //       type: "/cosmos.bank.v1beta1.MsgSend"
-          //     }
-          //   }
-          // },
-          // {
-          //   // See the definition in "src/mappings/bank/balanceChange.ts"
-          //   handler: "handleNativeBalanceIncrement",
-          //   kind: CosmosHandlerKind.BatchEvent,
-          //   filter: {
-          //     type: "coin_received",
-          //   }
-          // },
-          // {
-          //   // See the definition in "src/mappings/bank/balanceChange.ts"
-          //   handler: "handleNativeBalanceDecrement",
-          //   kind: CosmosHandlerKind.BatchEvent,
-          //   filter: {
-          //     type: "coin_spent",
-          //   }
-          // },
+          {
+            // See the definition in "src/mappings/bank/transfer.ts"
+            handler: "handleNativeTransfer",
+            kind: CosmosHandlerKind.BatchMessage,
+            filter: {
+              type: "/cosmos.bank.v1beta1.MsgSend",
+              includeFailedTx: true,
+            },
+          },
+          {
+            // See the definition in "src/mappings/bank/balanceChange.ts"
+            handler: "handleNativeBalanceIncrement",
+            kind: CosmosHandlerKind.BatchEvent,
+            filter: {
+              type: "coin_received",
+            },
+          },
+          {
+            // See the definition in "src/mappings/bank/balanceChange.ts"
+            handler: "handleNativeBalanceDecrement",
+            kind: CosmosHandlerKind.BatchEvent,
+            filter: {
+              type: "coin_spent",
+            },
+          },
+          // --------------------------- VALIDATOR ---------------------------
+          {
+            handler: "handleValidatorMsgCreate",
+            kind: CosmosHandlerKind.Message,
+            filter: {
+              type: "/cosmos.staking.v1beta1.MsgCreateValidator",
+            },
+          },
+          // TODO: handle event type `rewards` where key=validator,value=<signer_validator> -> look for amount -> increase balance
+
+
 
           // // --------------------------- AUTHZ ---------------------------
           // {
@@ -499,14 +515,7 @@ const project: CosmosProject = {
           //     type: "/cosmos.authz.v1beta1.MsgExec",
           //   }
           // },
-          // // --- Validator (@TODO: test it asap with @bryan)
-          // {
-          //   handler: "handleValidatorMsgCreate",
-          //   kind: CosmosHandlerKind.Message,
-          //   filter: {
-          //     type: "/cosmos.staking.v1beta1.MsgCreateValidator",
-          //   },
-          // },
+
           // // --- Applications
           // {
           //   handler: "handleAppMsgStake",

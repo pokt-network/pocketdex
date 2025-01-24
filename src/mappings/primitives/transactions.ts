@@ -6,23 +6,27 @@ import {
 import { TransactionProps } from "../../types/models/Transaction";
 import {
   PREFIX,
-  TxStatus,
+  VALIDATOR_PREFIX,
 } from "../constants";
 import { getBlockIdAsString } from "../utils/ids";
+import {
+  getTxStatus,
+  isMsgValidatorRelated,
+} from "../utils/primitives";
 import { pubKeyToAddress } from "../utils/pub_key";
 
 function _handleTransaction(tx: CosmosTransaction): TransactionProps {
-  let status = tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;
-
   let signerAddress;
   if (isEmpty(tx.decodedTx.authInfo.signerInfos) || isNil(tx.decodedTx.authInfo.signerInfos[0]?.publicKey)) {
-    status = TxStatus.Error;
-    logger.error(`[handleTransaction] (block ${tx.block.block.header.height}): hash=${tx.hash} missing signerInfos public key`);
+    throw new Error(`[handleTransaction] (block ${tx.block.block.header.height}): hash=${tx.hash} missing signerInfos public key`);
   } else {
+    const prefix = isMsgValidatorRelated(tx.decodedTx.body.messages[0].typeUrl) ? VALIDATOR_PREFIX : PREFIX;
+    // if the first message is a MsgCreateValidator, we assume the signer is the account related to it,
+    // that is hashed with a different prefix.
     signerAddress = pubKeyToAddress(
       tx.decodedTx.authInfo.signerInfos[0]?.publicKey.typeUrl,
       tx.decodedTx.authInfo.signerInfos[0]?.publicKey.value,
-      PREFIX,
+      prefix,
     );
   }
 
@@ -38,7 +42,7 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
     timeoutHeight: tx.decodedTx.body.timeoutHeight,
     fees: feeAmount,
     log: tx.tx.log || "",
-    status,
+    status: getTxStatus(tx),
     signerAddress,
     code: tx.tx.code,
     codespace: tx.tx.codespace,

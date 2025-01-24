@@ -19,7 +19,6 @@ import {
 } from "../utils/ids";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
-  if (block.block.header.height === 370) throw new Error("Stopping indexing at block 370");
   logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
   const start = Date.now();
   await cache.set("startTime", start);

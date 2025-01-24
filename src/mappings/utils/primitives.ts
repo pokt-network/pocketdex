@@ -1,8 +1,12 @@
 import {
   CosmosEvent,
   CosmosEventKind,
+  CosmosTransaction,
 } from "@subql/types-cosmos";
-import { EventKind } from "../../types";
+import {
+  EventKind,
+  TxStatus,
+} from "../../types";
 
 export function getEventKind(event: CosmosEvent): EventKind {
   let kind: EventKind;
@@ -30,6 +34,11 @@ export function getEventKind(event: CosmosEvent): EventKind {
   return kind;
 }
 
+export function hasValidAmountAttribute(event: CosmosEvent): boolean {
+  // any event that has an amount but the amount is empty will return false
+  return !event.event.attributes.some(attribute => attribute.key === "amount" && !attribute.value);
+}
+
 export function isEventOfMessageKind(event: CosmosEvent): boolean {
   return event.kind === CosmosEventKind.Message;
 }
@@ -54,4 +63,24 @@ export function getNonFirstBlockEvents(events: Array<CosmosEvent>): Array<Cosmos
   // on block 1, all the events at finalizeBlock, for example,
   // have index: false and a lot of values that do not make sense.
   return height > 1 ? events : events.filter(evt => isEventOfMessageOrTransactionKind(evt));
+}
+
+export function isMsgValidatorRelated(typeUrl: string): boolean {
+  switch (typeUrl) {
+    case "/cosmos.staking.v1beta1.MsgCreateValidator":
+    case "/cosmos.staking.v1beta1.MsgEditValidator":
+    case "/cosmos.staking.v1beta1.MsgDelegate": // todo: ask bryan about the typeUrl below this (including this one):
+    case "/cosmos.staking.v1beta1.MsgUndelegate":
+    case "/cosmos.staking.v1beta1.MsgBeginRedelegate":
+    case "/cosmos.slashing.v1beta1.MsgUnjail":
+    case "/cosmos.distribution.v1beta1.MsgWithdrawValidatorCommission":
+    case "/cosmos.distribution.v1beta1.MsgSetWithdrawAddress":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function getTxStatus(tx: CosmosTransaction): TxStatus {
+  return tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;
 }

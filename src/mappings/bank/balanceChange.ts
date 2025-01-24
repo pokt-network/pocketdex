@@ -15,9 +15,9 @@ import {
   getEventId,
   messageId,
 } from "../utils/ids";
-import { stringify } from "../utils/json";
 import {
   getNonFirstBlockEvents,
+  hasValidAmountAttribute,
   isEventOfMessageKind,
 } from "../utils/primitives";
 
@@ -31,8 +31,8 @@ export async function enforceAccountExistence(address: string, chainId: string):
 // TODO: figure out a way to run a atomic update that modify the balance.amount without the need of load it.
 export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
   const id = getBalanceId(address, denom);
-  let balance = await cache.get(id);
-  if (!balance) balance = await Balance.get(getBalanceId(address, denom));
+  // let balance = await cache.get(id);
+  let balance = await Balance.get(id);
 
   if (!balance) {
     balance = Balance.create({
@@ -48,7 +48,7 @@ export async function updateAccountBalance(address: string, denom: string, offse
   }
 
   await balance.save();
-  await cache.set(id, balance);
+  // await cache.set(id, balance);
 }
 
 // TODO: re-work fee handling because this does not look like the best way.
@@ -112,17 +112,6 @@ async function handleNativeBalanceChange(
 
       const amountStr = event.event.attributes[parseInt(i) + 1]?.value as string;
 
-      if (amountStr === "") {
-        if (event.kind === CosmosEventKind.Transaction || event.kind === CosmosEventKind.Message) {
-          throw new Error(
-            `[handleNativeBalanceChange] (block=${event.block.block.header.height} tx=${event.tx?.hash} event=${event.idx} kind=${event.kind}) empty amount value ${stringify(
-              event.event,
-            )}`,
-          );
-        }
-        break; // Skip other events with empty amounts
-      }
-
       uniqueAddressSet.add(address);
 
       const coin = parseCoins(amountStr)[0];
@@ -169,14 +158,14 @@ async function handleNativeBalanceChange(
 
 // handleNativeBalanceDecrement, referenced in project.ts, handles events about a decrease on an account balance.
 export async function handleNativeBalanceDecrement(events: CosmosEvent[]): Promise<void> {
-  const filteredEvents = getNonFirstBlockEvents(events);
+  const filteredEvents = getNonFirstBlockEvents(events).filter(hasValidAmountAttribute);
   if (filteredEvents.length === 0) return;
   await handleNativeBalanceChange(filteredEvents, "spender");
 }
 
 // handleNativeBalanceDecrement, referenced in project.ts, handles events about an increase on an account balance.
 export async function handleNativeBalanceIncrement(events: CosmosEvent[]): Promise<void> {
-  const filteredEvents = getNonFirstBlockEvents(events);
+  const filteredEvents = getNonFirstBlockEvents(events).filter(hasValidAmountAttribute);
   if (filteredEvents.length === 0) return;
   await handleNativeBalanceChange(getNonFirstBlockEvents(filteredEvents), "receiver");
 }
