@@ -10,3 +10,7 @@
 	path = vendor/subql-cosmos
 	url = https://github.com/pokt-scan/subql-cosmos.git
 	branch = enhance-events-handling-and-add-post-index-handler
+[submodule "vendor/cosmjs"]
+	path = vendor/cosmjs
+	url = https://github.com/pokt-scan/x-cosmjs
+	branch = feature/add-module-accounts
