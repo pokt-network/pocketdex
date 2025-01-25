@@ -195,8 +195,6 @@ type Coin @jsonField {
   amount: String!
 }
 
-
-
 type NativeTransfer @entity {
   id: ID!
   recipient: Account! @index
@@ -210,10 +208,23 @@ type NativeTransfer @entity {
   block: Block!
 }
 
+type ModuleAccount @entity {
+  id: ID!
+  name: String! @index
+  # baseAccount.accountNumber
+  accountNumber: BigInt!
+  # baseAccount.sequence
+  sequence: BigInt!
+  permissions: [String]
+}
+
 type Account @entity {
   # id is the address
   id: ID!
   chainId: String! @index
+  # not always needed, but will be sometimes than an account is a module account and will be nice
+  # been able to load/filter by this probably
+  module: ModuleAccount
   nativeBalanceChanges: [NativeBalanceChange]! @derivedFrom(field: "account")
   genesisBalances: [GenesisBalance] @derivedFrom(field: "account")
   balances: [Balance] @derivedFrom(field: "account")

@@ -431,11 +431,15 @@ const project: CosmosProject = {
             handler: "handleGenesis",
             kind: CosmosHandlerKind.Block,
           },
-
           // --------------------------- PRIMITIVES ---------------------------
           {
             // See the definition in "src/mappings/primitives/block.ts"
             handler: "handleBlock",
+            kind: CosmosHandlerKind.Block,
+          },
+          {
+            // See the definition in "src/mappings/bank/moduleAccounts.ts"
+            handler: "handleModuleAccounts",
             kind: CosmosHandlerKind.Block,
           },
           {

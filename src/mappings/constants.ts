@@ -1,5 +1,7 @@
 import { ApplicationUnbondingReason as ApplicationUnbondingReasonEnum } from "../client/poktroll/application/event";
 
+export const CACHE_MODULE_ADDRESS = "moduleAccounts";
+
 export const PREFIX = "pokt";
 export const VALIDATOR_PREFIX = "poktvaloper";
 

@@ -20,6 +20,7 @@ import type { BalanceProps } from "../../types/models/Balance";
 import type { GatewayProps } from "../../types/models/Gateway";
 import type { GenesisBalanceProps } from "../../types/models/GenesisBalance";
 import { MessageProps } from "../../types/models/Message";
+import { ModuleAccountProps } from "../../types/models/ModuleAccount";
 import { MsgAddServiceProps } from "../../types/models/MsgAddService";
 import { MsgCreateValidatorProps } from "../../types/models/MsgCreateValidator";
 import { MsgDelegateToGatewayProps } from "../../types/models/MsgDelegateToGateway";
@@ -44,6 +45,7 @@ import {
 } from "../../types/proto-interfaces/poktroll/shared/service";
 import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/poktroll/supplier/tx";
 import { getSupplyRecord } from "../bank";
+import { queryModuleAccounts } from "../bank/moduleAccounts";
 import {
   PREFIX,
   VALIDATOR_PREFIX,
@@ -75,9 +77,8 @@ import {
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   // TODO: Investigate a way to load this from network and cache, because otherwise it will be called on every block.
   // we MUST load the JSON this way due to the sandboxed environment
-  // TODO: REMOVE THE IF, ONLY FOR DEVELOPMENT
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const genesis: Genesis = block.header.chainId === "pocket-beta" ? require("../../../genesis-beta.json") : require("../../../genesis.json");
+  const genesis: Genesis = require("../../../genesis.json");
 
   // IMPORTANT: Return early if this is not the genesis initial height as this is called for block indexed!
   if (block.block.header.height !== genesis.initial_height) {
@@ -88,6 +89,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
 
   // save records
   await Promise.all([
+    _handleModuleAccounts(block),
     _handleAuthz(genesis, block),
     _handleGenesisSupplyDenom(genesis),
     _handleGenesisSupply(genesis, block),
@@ -105,6 +107,69 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
     id: block.block.header.height.toString(),
     raw: JSON.stringify(genesis),
   }).save();
+}
+
+async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
+  const moduleAccounts = await queryModuleAccounts();
+
+  const accounts: Array<AccountProps> = [];
+  const mAccounts: Array<ModuleAccountProps> = [];
+  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
+  const genesisBalances: Array<GenesisBalanceProps> = [];
+  const balances: Array<BalanceProps> = [];
+
+  moduleAccounts.forEach(mAccount => {
+    const address = mAccount.baseAccount?.address as string;
+    accounts.push({
+      id: address,
+      chainId: block.header.chainId,
+      moduleId: mAccount.baseAccount?.address,
+    });
+
+    mAccounts.push({
+      id: address,
+      name: mAccount.name,
+      accountNumber: mAccount.baseAccount?.accountNumber as bigint,
+      sequence: mAccount.baseAccount?.sequence as bigint,
+      permissions: mAccount.permissions,
+    });
+
+    for (const { amount, denom } of mAccount.balances) {
+      const id = getBalanceId(address, denom);
+
+      nativeBalanceChanges.push({
+        id,
+        balanceOffset: BigInt(amount),
+        denom,
+        accountId: address,
+        eventId: "genesis",
+        blockId: getBlockIdAsString(block),
+      });
+
+      genesisBalances.push({
+        id,
+        amount: BigInt(amount),
+        denom,
+        accountId: address,
+      });
+
+      balances.push({
+        id,
+        amount: BigInt(amount),
+        denom,
+        accountId: address,
+        lastUpdatedBlockId: getBlockIdAsString(block),
+      });
+    }
+  });
+
+  await Promise.all([
+    store.bulkCreate("Account", accounts),
+    store.bulkCreate("ModuleAccount", mAccounts),
+    store.bulkCreate("GenesisBalance", genesisBalances),
+    store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
+    store.bulkCreate("Balance", balances),
+  ]);
 }
 
 async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void> {
@@ -154,7 +219,6 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
     accounts.add(account.address);
   }
 
-  // get balances
   const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
   const genesisBalances: Array<GenesisBalanceProps> = [];
   const balances: Array<BalanceProps> = [];

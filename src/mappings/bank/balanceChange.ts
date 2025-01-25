@@ -7,7 +7,9 @@ import { parseCoins } from "../../cosmjs/utils";
 import {
   Account,
   Balance,
+  ModuleAccount,
 } from "../../types";
+import { ModuleAccountProps } from "../../types/models/ModuleAccount";
 import { NativeBalanceChangeProps } from "../../types/models/NativeBalanceChange";
 import {
   getBalanceId,
@@ -20,18 +22,19 @@ import {
   hasValidAmountAttribute,
   isEventOfMessageKind,
 } from "../utils/primitives";
+import { getCacheModuleAccounts } from "./moduleAccounts";
 
-export async function enforceAccountExistence(address: string, chainId: string): Promise<void> {
+export async function enforceAccountExistence(address: string, chainId: string, module?: ModuleAccountProps): Promise<void> {
   const account = await Account.get(address);
   if (account) return;
   await Account.create({ id: address, chainId }).save();
+  if (module) await ModuleAccount.create(module).save();
 }
-
 
 // TODO: figure out a way to run a atomic update that modify the balance.amount without the need of load it.
 export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
   const id = getBalanceId(address, denom);
-  // let balance = await cache.get(id);
+
   let balance = await Balance.get(id);
 
   if (!balance) {
@@ -48,7 +51,6 @@ export async function updateAccountBalance(address: string, denom: string, offse
   }
 
   await balance.save();
-  // await cache.set(id, balance);
 }
 
 // TODO: re-work fee handling because this does not look like the best way.
@@ -98,6 +100,7 @@ async function handleNativeBalanceChange(
   events: CosmosEvent[],
   key: string,
 ): Promise<void> {
+  const moduleAccounts = await getCacheModuleAccounts();
   const chainId = events[0].block.block.header.chainId;
   const blockId = getBlockIdAsString(events[0].block);
 
@@ -109,6 +112,8 @@ async function handleNativeBalanceChange(
       if (attribute.key !== key) continue;
 
       const address = attribute.value as string;
+
+      if (moduleAccounts.has(address)) continue;
 
       const amountStr = event.event.attributes[parseInt(i) + 1]?.value as string;
 

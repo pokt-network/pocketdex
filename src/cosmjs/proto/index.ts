@@ -1,10 +1,11 @@
-import type {GeneratedType} from "@cosmjs/proto-signing";
-import {bankTypes} from "./bank";
-import {distributionTypes} from "./distribution";
-import {govTypes} from "./gov";
-import {ibcTypes} from "./ibc";
-import {stakingTypes} from "./staking";
-import {wasmTypes} from "./wasm";
+import type { GeneratedType } from "@cosmjs/proto-signing";
+import { authTypes } from "./auth";
+import { bankTypes } from "./bank";
+import { distributionTypes } from "./distribution";
+import { govTypes } from "./gov";
+import { ibcTypes } from "./ibc";
+import { stakingTypes } from "./staking";
+import { wasmTypes } from "./wasm";
 
 export * from "./bank";
 export * from "./distribution";
@@ -17,6 +18,7 @@ type protoTuple = [string, GeneratedType];
 type protoTuples = ReadonlyArray<protoTuple>;
 
 const _types = [
+  authTypes,
   bankTypes,
   distributionTypes,
   govTypes,
