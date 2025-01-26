@@ -1,0 +1,56 @@
+vendor-packages:
+  - name: "@cosmjs"
+    path: "vendor/cosmjs"
+    install:
+      required: true
+      script: "yarn install"
+    build:
+      required: true
+      script: "yarn build"
+    pack:
+      required: true
+    #      include:              # Control which packages are packed/unpacked
+    #        - "tendermint-rpc"  # Only process this specific package
+    #        - "stargate"        # ...and this one
+    unpack:
+      targets:
+        - "vendor/subql"
+        - "vendor/subql-cosmos"
+        - "vendor/subql-cosmos/node_modules/@cosmjs/cosmwasm-stargate"
+        - "vendor/subql-cosmos/node_modules/@cosmjs/stargate"
+        - "$$ROOT"
+
+  - name: "@subql"
+    path: "vendor/subql"
+    install:
+      required: true
+      script: "yarn install"
+    build:
+      required: true
+      script: "yarn build"
+    dependencies:
+      - "@cosmjs"
+    pack:
+      required: true
+      include: # nothing means all of them
+    unpack:
+      targets:
+        - "vendor/subql-cosmos"
+        - "$$ROOT"
+
+  - name: "@subql-cosmos"
+    path: "vendor/subql-cosmos"
+    install:
+      required: true
+      script: "yarn install"
+    build:
+      required: true
+      script: "yarn build"
+    dependencies:
+      - "@cosmjs"
+      - "@subql"
+    pack:
+      required: true         # Default behavior of including all packages
+    unpack:
+      targets:
+        - "$$ROOT"

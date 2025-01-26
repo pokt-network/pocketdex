@@ -45,6 +45,8 @@ COPY vendor /home/app/vendor
 
 RUN /home/app/scripts/install-vendor.sh
 
+RUN cd /home/app/vendor/cosmjs && yarn build && cd ../../
+
 RUN /home/app/scripts/build-vendor.sh
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -70,6 +72,7 @@ RUN yarn run build  \
 
 # we do not need this at this point.
 RUN rm -rf /home/app/vendor/subql
+RUN rm -rf /home/app/vendor/cosmjs
 RUN rm -rf /home/app/src
 RUN rm -rf /home/app/vendor/subql-cosmos/node_modules/@subql/testing
 

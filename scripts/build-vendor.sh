@@ -26,66 +26,90 @@ cleanup() {
 # Trap for unexpected exits or user interruptions
 trap cleanup EXIT
 
-# Navigate to the base directory for packages
-cd vendor/subql/packages
+# Function to process packages in a given directory
+process_packages() {
+  local baseDir="$1"   # Base directory of packages
+  local extractTarget="$2" # Target directory for extracting packages
 
-# hold the original value
-nodeEnv=$NODE_ENV
-# the yarn pack need to have this on production for some of them and because we use this to distribute subql on subql-cosmos
-# its ok.
-export NODE_ENV=production
-# Step 1: Loop through each package folder
-for packageDir in */; do
-  # Enter the package directory
-  cd "$packageDir"
+  # Hold the original NODE_ENV value
+  local originalNodeEnv=$NODE_ENV
+  export NODE_ENV=production
 
-  # Get the package name and version using jq
-  packageName=$(jq -r '.name' package.json)
-  packageVersion=$(jq -r '.version' package.json)
-  info_log "Processing package: $packageName@$packageVersion"
+  cd "$baseDir"
 
-  # Replace slashes in the package name with dashes
-  sanitizedPackageName=${packageName//\//-}
+  for packageDir in */; do
+    # Enter the package directory
+    cd "$packageDir"
 
-  # Define the name of the .tgz file to be created
-  tgzFile="${sanitizedPackageName}-${packageVersion}.tgz"
+    # Get the package name and version using jq
+    packageName=$(jq -r '.name' package.json)
+    packageVersion=$(jq -r '.version' package.json)
+    info_log "Processing package: $packageName@$packageVersion"
 
-  # Run yarn pack and specify the output file
-  info_log "Running 'yarn pack --out $tgzFile' in $packageDir..."
-  yarn pack --out "$tgzFile"
+    # Replace slashes in the package name with dashes
+    sanitizedPackageName=${packageName//\//-}
 
-  # Track the .tgz file for cleanup
-  created_files+=("$tgzFile")
+    # Define the name of the .tgz file to be created
+    tgzFile="${sanitizedPackageName}-${packageVersion}.tgz"
 
-  # Define the target directory for extraction
-  targetDir="../../../subql-cosmos/node_modules/@subql/$(basename "$packageName")"
+    # Run yarn pack and specify the output file
+    info_log "Running 'yarn pack --out $tgzFile' in $packageDir..."
+    yarn pack --out "$tgzFile"
 
-  # Create the target directory
-  info_log "Creating target directory: $targetDir"
-  mkdir -p "$targetDir"
+    # Track the .tgz file for cleanup
+    created_files+=("$tgzFile")
 
-  # Extract the .tgz file to the target directory
-  info_log "Extracting $tgzFile to $targetDir..."
-  tar -xzf "$tgzFile" -C "$targetDir" --strip-components=1
+    # Define the target directory for extraction
+    targetDir="$extractTarget/$(basename "$packageName")"
 
-  # Cleanup the .tgz file after extraction
-  info_log "Cleaning up $tgzFile..."
-  rm "$tgzFile"
-  # Remove it from the cleanup list since it has now been handled
-  created_files=("${created_files[@]/$tgzFile}")
+    # Create the target directory
+    info_log "Creating target directory: $targetDir"
+    mkdir -p "$targetDir"
 
-  # Navigate back to vendor/subql/packages
-  cd ..
-done
-# set what it was again.
-export NODE_ENV=$nodeEnv
+    # Extract the .tgz file to the target directory
+    info_log "Extracting $tgzFile to $targetDir..."
+    tar -xzf "$tgzFile" -C "$targetDir" --strip-components=1
 
-# Step 2: Move to vendor/subql-cosmos and run yarn build
-info_log "Switching to 'vendor/subql-cosmos'..."
-cd ../../subql-cosmos
+    # Cleanup the .tgz file after extraction
+    info_log "Cleaning up $tgzFile..."
+    rm "$tgzFile"
+    created_files=("${created_files[@]/$tgzFile}")
 
-info_log "Running 'yarn build' in vendor/subql-cosmos..."
-yarn build
+    pwd
+
+    # Navigate back to the base directory
+    cd ../
+  done
+
+  cd ../../../
+
+  # Restore the original NODE_ENV value
+  export NODE_ENV=$originalNodeEnv
+}
+
+# Function to handle the post-processing build task
+run_post_build() {
+  local buildDir="$1"
+
+  info_log "Switching to '$buildDir'..."
+  cd "$buildDir"
+
+  info_log "Running 'yarn build' in $buildDir..."
+  yarn build
+}
+
+# Process packages in vendor/cosmjs/packages and extract to node_modules/@cosmjs and packages/subql-cosmos/node_modules/@cosmjs
+# TODO: figure out how to avoid that
+# cosmjs need to be built before do this, and before build, need to be install, but the install need to be done before the pocketdex repo.
+#process_packages "vendor/cosmjs/packages" "../../../../node_modules/@cosmjs"
+#process_packages "vendor/cosmjs/packages" "../../../subql-cosmos/node_modules/@cosmjs"
+#process_packages "vendor/cosmjs/packages" "../../../subql/node_modules/@cosmjs"
+
+# Process packages in vendor/subql/packages and extract to subql-cosmos/node_modules/@subql
+process_packages "vendor/subql/packages" "../../../subql-cosmos/node_modules/@subql"
+
+# Post-build step for vendor/subql-cosmos
+run_post_build "vendor/subql-cosmos"
 
 # Disable the EXIT trap since everything was successful and cleanup is complete
 trap - EXIT

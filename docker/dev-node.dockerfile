@@ -44,6 +44,7 @@ RUN /app/scripts/build-vendor.sh
 
 # we do not need this at this point.
 RUN rm -rf /home/app/vendor/subql
+RUN rm -rf /home/app/vendor/cosmjs
 
 # -------------------------------------------
 # Dependencies step: Handles main and vendor
