@@ -272,6 +272,9 @@ async function processVendors(vendors, tempDir, dependenciesResolution = {}) {
 
       // Ensure we suppress logs during installation
       try {
+        if (install.cleanCache) {
+          runCommand("yarn cache clean", absolutePath, true); // Suppress logs
+        }
         runCommand(install.script || "yarn install", absolutePath, true); // Suppress logs
       } catch (error) {
         log("ERROR", `Failed to install dependencies for vendor "${name}": ${error.message}`);
