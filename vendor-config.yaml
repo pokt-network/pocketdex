@@ -1,4 +1,4 @@
-vendor-packages:
+vendors:
   - name: "@cosmjs"
     path: "vendor/cosmjs"
     install:
@@ -8,24 +8,12 @@ vendor-packages:
       required: true
       script: "yarn build"
     pack:
-      # @todo: probably pack should be implicit true
-      required: true
       # Control which packages are packed/unpacked
       # Only process this specific package
+      # And nothing means all of them
       include:
         - "tendermint-rpc"
         - "stargate"
-    aliases:
-      "@cosmjs/tendermint-rpc": "@subql/x-cosmos-tendermint-rpc" # <— Specific Alias
-    unpack:
-      targets:
-        - "$$ROOT"
-        - "vendor/subql"
-        - "vendor/subql-cosmos"
-        # This is needed to do to the modification of SubQL to @cosmjs repository, but they modify the package name.
-        #- "vendor/subql-cosmos/node_modules/@cosmjs/cosmwasm-stargate"
-        #- "vendor/subql-cosmos/node_modules/@cosmjs/stargate"
-
 
   - name: "@subql"
     path: "vendor/subql"
@@ -38,13 +26,8 @@ vendor-packages:
     dependencies:
       - "@cosmjs"
     pack:
-      required: true
-      include: # nothing means all of them
+      include:
         - "node-core"
-    unpack:
-      targets:
-        - "vendor/subql-cosmos"
-        - "$$ROOT"
 
   - name: "@subql-cosmos"
     path: "vendor/subql-cosmos"
@@ -54,11 +37,9 @@ vendor-packages:
     build:
       required: true
       script: "yarn build"
+    packageResolution:
+      "node-cosmos": "node"
+      "types-cosmos": "types"
     dependencies:
       - "@cosmjs"
       - "@subql"
-    pack:
-      required: true         # Default behavior of including all packages
-    unpack:
-      targets:
-        - "$$ROOT"
