@@ -10,6 +10,7 @@ ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
 ENV CI=$CI
+ENV DOCKER_BUILD="true"
 # Required after this version: https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
 ENV TZ=utc
 
@@ -32,28 +33,26 @@ COPY scripts /app/scripts
 # Allow execution for every shell script in the `scripts` folder.
 RUN chmod +x /app/scripts/*.sh
 
-# ---------------------------------------------------------------------------------------------------------------------
-# Vendor
-# ---------------------------------------------------------------------------------------------------------------------
-# Copy the vendor workspace folder
-COPY vendor /app/vendor
-
-RUN /app/scripts/install-vendor.sh
-
-RUN /app/scripts/build-vendor.sh
-
-# we do not need this at this point.
-RUN rm -rf /home/app/vendor/subql
-RUN rm -rf /home/app/vendor/cosmjs
-
 # -------------------------------------------
 # Dependencies step: Handles main and vendor
 # -------------------------------------------
 # Copy only dependency-related files to maximize cache and avoid unnecessary rebuilds.
-COPY package.json yarn.lock .yarnrc.yml /app/
+COPY package.json yarn.lock .yarnrc.yml vendor-builder.js vendor-config.yaml /app/
 COPY .yarn /app/.yarn
 # Install project dependencies
 RUN yarn install
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Vendor
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Copy the vendor workspace folder
+COPY vendor /app/vendor
+
+RUN yarn run vendors:build
+
+# Once they are build we do not really need them there because they are moved to node_modules with packaging.
+RUN rm -rf /app/vendor
 
 # -------------------------------------------
 # Source code step: Separate for better caching

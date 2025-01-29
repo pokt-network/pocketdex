@@ -10,6 +10,7 @@ ARG CHAIN_ID=poktroll
 ENV NODE_ENV=$NODE_ENV
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
+ENV DOCKER_BUILD="true"
 # Required after this version: https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
 ENV TZ=utc
 
@@ -36,6 +37,12 @@ COPY scripts /home/app/scripts
 # Allow execution for every shell script in the `scripts` folder.
 RUN chmod +x /home/app/scripts/*.sh
 
+# Copy only dependency-related files to maximize cache and avoid unnecessary rebuilds.
+COPY package.json yarn.lock .yarnrc.yml vendor-builder.js vendor-config.yaml /home/app/
+COPY .yarn /home/app/.yarn
+# Install project dependencies
+RUN yarn install
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Vendor
 # ---------------------------------------------------------------------------------------------------------------------
@@ -43,21 +50,14 @@ RUN chmod +x /home/app/scripts/*.sh
 # Copy the vendor workspace folder
 COPY vendor /home/app/vendor
 
-RUN /home/app/scripts/install-vendor.sh
+RUN yarn run vendors:build
 
-RUN cd /home/app/vendor/cosmjs && yarn build && cd ../../
-
-RUN /home/app/scripts/build-vendor.sh
+# Once they are build we do not really need them there because they are moved to node_modules with packaging.
+RUN rm -rf /home/app/vendor
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Pocketdex
 # ---------------------------------------------------------------------------------------------------------------------
-
-# Copy only dependency-related files to maximize cache and avoid unnecessary rebuilds.
-COPY package.json yarn.lock .yarnrc.yml /home/app/
-COPY .yarn /home/app/.yarn
-# Install project dependencies
-RUN yarn install
 
 # Copy all the relevant files for building the application.
 COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /home/app/
@@ -68,13 +68,11 @@ COPY genesis/${GENESIS_FILENAME} /home/app/genesis.json
 # Build pocketdex
 RUN yarn run build  \
     # Use `yarn workspaces focus` to reduce dependencies to only production-level requirements.
+    && yarn dedupe --strategy highest \
     && yarn workspaces focus --production
 
 # we do not need this at this point.
-RUN rm -rf /home/app/vendor/subql
-RUN rm -rf /home/app/vendor/cosmjs
 RUN rm -rf /home/app/src
-RUN rm -rf /home/app/vendor/subql-cosmos/node_modules/@subql/testing
 
 # Switch to the non-root user created earlier
 USER app

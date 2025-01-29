@@ -21,11 +21,11 @@ WORK_DIR=$(mktemp -d -p "${DIR}")
 WORK_DIR=$(cd "$WORK_DIR" && pwd)
 
 if [ -z "$WORK_DIR" ]; then
-  echo "Could not create temp dir"
+  error_log "Could not create temp dir"
   exit 1
 fi
 
-echo "Working in $WORK_DIR"
+info_log "Working in $WORK_DIR"
 
 cleanup() {
   info_log "Cleaning up..."

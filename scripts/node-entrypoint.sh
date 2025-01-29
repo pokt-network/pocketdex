@@ -58,7 +58,7 @@ EOF
     update_project
     params=$(get_params)
     # run the main node
-    cmd="$cmd node ./vendor/subql-cosmos/packages/node/bin/run $params $@"
+    cmd="$cmd node ./node_modules/@subql/node-cosmos/bin/run $params $@"
   fi
 fi
 

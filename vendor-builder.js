@@ -87,15 +87,25 @@ const vendorDependants = {};
  * @return {void} Does not return a value.
  */
 function log(level, message, force = false) {
+  const colorMap = {
+    ERROR: "\x1b[31m", // Red
+    WARN: "\x1b[33m",  // Yellow
+    INFO: "\x1b[32m",  // Green
+    DEBUG: "\x1b[34m", // Blue
+  };
+
+  const reset = "\x1b[0m";
+
   const shouldLog = {
-    "ERROR": true,
-    "WARN": true,
-    "INFO": !ONLY_ERRORS || force,
-    "DEBUG": DEBUG || force,
+    ERROR: true,
+    WARN: true,
+    INFO: !ONLY_ERRORS || force,
+    DEBUG: DEBUG || force,
   }[level];
 
   if (shouldLog) {
-    console.log(`[${level}] ${message}`);
+    const coloredLevel = `${colorMap[level] || ""}[${level}]${reset}`;
+    console.log(`${coloredLevel} ${message}`);
   }
 }
 
@@ -112,7 +122,7 @@ function runCommand(command, cwd, suppressLogs = false) {
     log("DEBUG", `Running: ${command} in ${cwd}`);
     execSync(command, {
       cwd,
-      stdio: suppressLogs ? "pipe" : "inherit", // Suppress logs if suppressLogs is true, otherwise inherit terminal
+      stdio: suppressLogs ? ["ignore", "ignore", "inherit"] : "inherit", // Suppress logs if suppressLogs is true, otherwise inherit terminal
       env: { ...process.env, NODE_ENV: "production" },
     });
   } catch (error) {
@@ -532,6 +542,11 @@ async function main() {
     // remove temporal directory if present
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+if (process.env.POSTINSTALL === "true" && process.env.DOCKER_BUILD === "true") {
+  log("WARN", "Vendor builders are excluded during the Docker build process via a postinstall script.");
+  process.exit(0);
 }
 
 // Entry point

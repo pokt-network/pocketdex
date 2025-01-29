@@ -2,16 +2,18 @@
 
 set -e
 
+export TERM=xterm-256color
+
 warning_log() {
-  echo "\033[1;33mWARN:\033[0m $1"
+  printf "\033[1;33m[WARN]\033[0m $1"
 }
 
 error_log() {
-  echo "\033[1;31mERROR:\033[0m $1"
+  printf "\033[1;31m[ERROR]\033[0m $1"
 }
 
 info_log() {
-  echo "\033[1;32mINFO:\033[0m $1"
+  printf "\033[1;32m[INFO]\033[0m $1"
 }
 
 update_project() {
