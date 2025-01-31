@@ -44,8 +44,10 @@ import {
   rPCTypeFromJSON,
 } from "../../types/proto-interfaces/poktroll/shared/service";
 import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/poktroll/supplier/tx";
-import { getSupplyRecord } from "../bank";
-import { queryModuleAccounts } from "../bank/moduleAccounts";
+import {
+  getSupplyRecord,
+  queryModuleAccounts,
+} from "../bank";
 import {
   PREFIX,
   VALIDATOR_PREFIX,
@@ -57,7 +59,7 @@ import {
 import {
   getAppDelegatedToGatewayId,
   getBalanceId,
-  getBlockIdAsString,
+  getBlockId,
   getGenesisFakeTxHash,
   getMsgStakeServiceId,
   getParamId,
@@ -143,7 +145,7 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
         denom,
         accountId: address,
         eventId: "genesis",
-        blockId: getBlockIdAsString(block),
+        blockId: getBlockId(block),
       });
 
       genesisBalances.push({
@@ -158,7 +160,7 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
         amount: BigInt(amount),
         denom,
         accountId: address,
-        lastUpdatedBlockId: getBlockIdAsString(block),
+        lastUpdatedBlockId: getBlockId(block),
       });
     }
   });
@@ -207,7 +209,7 @@ async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
     id: "genesis",
     type: "genesis",
     attributes: [],
-    blockId: block.block.id,
+    blockId: getBlockId(block),
     kind: EventKind.Genesis,
   }).save();
 }
@@ -234,7 +236,7 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
         denom,
         accountId: balance.address,
         eventId: "genesis",
-        blockId: getBlockIdAsString(block),
+        blockId: getBlockId(block),
       });
 
       genesisBalances.push({
@@ -249,7 +251,7 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
         amount: BigInt(amount),
         denom,
         accountId: balance.address,
-        lastUpdatedBlockId: getBlockIdAsString(block),
+        lastUpdatedBlockId: getBlockId(block),
       });
     }
   }
@@ -287,14 +289,14 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       name: service.name,
       computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
       ownerId: service.owner_address,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       transactionId: getGenesisFakeTxHash("service", 0),
       messageId: msgId,
     });
 
     transactions.push({
       id: transactionHash,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
       fees: [{ denom: "pokt", amount: "0" }],
@@ -320,7 +322,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       id: msgId,
       typeUrl: "/poktroll.service.MsgAddService",
       json: stringify(msgAddService),
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
   }
@@ -348,7 +350,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
     transactions.push({
       id: transactionHash,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
       status: TxStatus.Success,
@@ -362,7 +364,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
     supplierMsgStakes.push({
       id: msgId,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       stakeAmount: BigInt(supplier.stake.amount),
       stakeDenom: supplier.stake.denom,
       transactionId: transactionHash,
@@ -411,7 +413,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       id: msgId,
       typeUrl: "/poktroll.supplier.MsgStakeSupplier",
       json: stringify(msgStakeSupplier),
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
 
@@ -475,7 +477,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
 
     transactions.push({
       id: transactionHash,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
       fees: [{ denom: "pokt", amount: "0" }],
@@ -493,7 +495,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
           id: msgId,
           applicationId: app.address,
           gatewayId: gatewayAddress,
-          blockId: getBlockIdAsString(block),
+          blockId: getBlockId(block),
           transactionId: transactionHash,
           messageId: msgId,
         });
@@ -510,7 +512,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       id: msgId,
       stakeAmount: BigInt(app.stake.amount),
       stakeDenom: app.stake.denom,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       applicationId: app.address,
       transactionId: transactionHash,
       messageId: msgId,
@@ -540,7 +542,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       id: msgId,
       typeUrl: "/poktroll.application.MsgStakeApplication",
       json: stringify(msgStakeApplication),
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
 
@@ -589,7 +591,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
 
     transactions.push({
       id: transactionHash,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
       fees: [{ denom: "pokt", amount: "0" }],
@@ -604,7 +606,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       id: msgId,
       stakeAmount: BigInt(gateway.stake.amount),
       stakeDenom: gateway.stake.denom,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       gatewayId: gateway.address,
       transactionId: transactionHash,
       messageId: msgId,
@@ -631,7 +633,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       id: msgId,
       typeUrl: "/poktroll.gateway.MsgStakeGateway",
       json: stringify(msgStakeGateway),
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
   }
@@ -652,13 +654,13 @@ function saveParams(namespace: string, params: Record<string, unknown> | undefin
   }
 
   return paramsEntries.map(([key, value]) => ({
-    id: getParamId(namespace, key, block.block.id),
+    id: getParamId(namespace, key, getBlockId(block)),
     // we handle the key as is, which is snake case, so on the AuthzExec handler they will transform to snake too.
     key,
     namespace,
     // just using stringify for objects because if a string is passed in, it will put it in quotes
     value: sanitize(value),
-    blockId: getBlockIdAsString(block),
+    blockId: getBlockId(block),
   }));
 }
 
@@ -748,7 +750,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
           stakeAmount: validatorMsg.stakeAmount,
           stakeStatus: StakeStatus.Staked,
           transactionId: validatorMsg.transactionId,
-          blockId: getBlockIdAsString(block),
+          blockId: getBlockId(block),
           createMsgId: validatorMsg.id,
         });
 
@@ -756,7 +758,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
           id: validatorMsg.id,
           typeUrl: type,
           json: stringify(genTx.body.messages[0]),
-          blockId: getBlockIdAsString(block),
+          blockId: getBlockId(block),
           transactionId: validatorMsg.transactionId,
         });
 
@@ -768,7 +770,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
 
     transactions.push({
       id: txHash,
-      blockId: getBlockIdAsString(block),
+      blockId: getBlockId(block),
       signerAddress,
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
@@ -825,7 +827,7 @@ function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, blo
     minSelfDelegation: parseInt(msg.min_self_delegation, 10),
     stakeDenom: msg.value.denom,
     stakeAmount: BigInt(msg.value.amount),
-    blockId: getBlockIdAsString(block),
+    blockId: getBlockId(block),
     transactionId: txHash,
     messageId: `genesis-gen-txs-${index}-0`,
   };

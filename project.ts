@@ -36,14 +36,6 @@ const project: CosmosProject = {
   network: {
     /* The unique chainID of the Cosmos Zone */
     chainId: process.env.CHAIN_ID!,
-    /**
-     * These endpoint(s) should be public non-pruned archive node
-     * We recommend providing more than one endpoint for improved reliability, performance, and uptime
-     * Public nodes may be rate limited, which can affect indexing speed
-     * When developing your project we suggest getting a private API key
-     * If you use a rate limited endpoint, adjust the --batch-size and --workers parameters
-     * These settings can be found in your docker-compose.yaml, they will slow indexing but prevent your project being rate limited
-     */
     endpoint: process.env.ENDPOINT!?.split(",") as string[] | string,
     chaintypes: new Map([
       [
@@ -398,114 +390,121 @@ const project: CosmosProject = {
       mapping: {
         file: "./dist/index.js",
         handlers: [
-          // --------------------------- DEBUG ---------------------------
-          // add this handler only if we want to add the debug handler
-          // this env variable needs to be preset at BUILD time,
-          // because subql cli will generate project.yaml with/without this.
-          ...(process.env.DEBUG_BLOCK === "true" ? [
-            {
-              // See the definition in "src/mappings/debug/block.ts"
-              handler: "debugBlock",
-              kind: CosmosHandlerKind.Block,
-            },
-            {
-              // See the definition in "src/mappings/debug/transactions.ts"
-              handler: "debugTransaction",
-              kind: CosmosHandlerKind.BatchTransaction,
-            },
-            {
-              // See the definition in "src/mappings/debug/messages.ts"
-              handler: "debugMessage",
-              kind: CosmosHandlerKind.BatchMessage,
-            },
-            {
-              // See the definition in "src/mappings/debug/events.ts"
-              handler: "debugEvent",
-              kind: CosmosHandlerKind.BatchEvent,
-            },
-          ] : []),
+          {
+            // See the definition in "src/mappings/indexer.manager.ts"
+            // This is the responsible to call all the other handlers using BlockHandler to maximize performance
+            // and parallel operations.
+            handler: "indexingHandler",
+            kind: CosmosHandlerKind.Block,
+          }
+          // // --------------------------- DEBUG ---------------------------
+          // // add this handler only if we want to add the debug handler
+          // // this env variable needs to be preset at BUILD time,
+          // // because subql cli will generate project.yaml with/without this.
+          // ...(process.env.DEBUG_BLOCK === "true" ? [
+          //   {
+          //     // See the definition in "src/mappings/debug/block.ts"
+          //     handler: "debugBlock",
+          //     kind: CosmosHandlerKind.Block,
+          //   },
+          //   {
+          //     // See the definition in "src/mappings/debug/transactions.ts"
+          //     handler: "debugTransaction",
+          //     kind: CosmosHandlerKind.BatchTransaction,
+          //   },
+          //   {
+          //     // See the definition in "src/mappings/debug/messages.ts"
+          //     handler: "debugMessage",
+          //     kind: CosmosHandlerKind.BatchMessage,
+          //   },
+          //   {
+          //     // See the definition in "src/mappings/debug/events.ts"
+          //     handler: "debugEvent",
+          //     kind: CosmosHandlerKind.BatchEvent,
+          //   },
+          // ] : []),
 
-          // --------------------------- GENESIS ---------------------------
-          {
-            // See the definition in "src/mappings/primitives/genesis.ts"
-            handler: "handleGenesis",
-            kind: CosmosHandlerKind.Block,
-          },
-          // --------------------------- PRIMITIVES ---------------------------
-          {
-            // See the definition in "src/mappings/primitives/block.ts"
-            handler: "handleBlock",
-            kind: CosmosHandlerKind.Block,
-          },
-          {
-            // See the definition in "src/mappings/bank/moduleAccounts.ts"
-            handler: "handleModuleAccounts",
-            kind: CosmosHandlerKind.Block,
-          },
-          {
-            // NOTE: We need to track the supply on every block, and this is the way we can do with the RPC, but on a
-            // future it will be replaced by handling the claim/proof settle event.
-            // See the definition in "src/mappings/bank/supply.ts"
-            handler: "handleSupply",
-            kind: CosmosHandlerKind.Block,
-          },
-          {
-            // See the definition in "src/mappings/primitives/transactions.ts"
-            handler: "handleTransactions",
-            kind: CosmosHandlerKind.BatchTransaction,
-            filter: {
-              includeFailedTx: true,
-            },
-          },
-          {
-            // See the definition in "src/mappings/primitives/messages.ts"
-            handler: "handleMessages",
-            kind: CosmosHandlerKind.BatchMessage,
-            filter: {
-              type: "*",
-              includeFailedTx: true,
-            },
-          },
-          {
-            // See the definition in "src/mappings/primitives/events.ts"
-            handler: "handleEvents",
-            kind: CosmosHandlerKind.BatchEvent,
-          },
-
-          // --------------------------- BANK ---------------------------
-          {
-            // See the definition in "src/mappings/bank/transfer.ts"
-            handler: "handleNativeTransfer",
-            kind: CosmosHandlerKind.BatchMessage,
-            filter: {
-              type: "/cosmos.bank.v1beta1.MsgSend",
-              includeFailedTx: true,
-            },
-          },
-          {
-            // See the definition in "src/mappings/bank/balanceChange.ts"
-            handler: "handleNativeBalanceIncrement",
-            kind: CosmosHandlerKind.BatchEvent,
-            filter: {
-              type: "coin_received",
-            },
-          },
-          {
-            // See the definition in "src/mappings/bank/balanceChange.ts"
-            handler: "handleNativeBalanceDecrement",
-            kind: CosmosHandlerKind.BatchEvent,
-            filter: {
-              type: "coin_spent",
-            },
-          },
-          // --------------------------- VALIDATOR ---------------------------
-          {
-            handler: "handleValidatorMsgCreate",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/cosmos.staking.v1beta1.MsgCreateValidator",
-            },
-          },
+          // // --------------------------- GENESIS ---------------------------
+          // {
+          //   // See the definition in "src/mappings/primitives/genesis.ts"
+          //   handler: "handleGenesis",
+          //   kind: CosmosHandlerKind.Block,
+          // },
+          // // --------------------------- PRIMITIVES ---------------------------
+          // {
+          //   // See the definition in "src/mappings/primitives/block.ts"
+          //   handler: "handleBlock",
+          //   kind: CosmosHandlerKind.Block,
+          // },
+          // {
+          //   // See the definition in "src/mappings/bank/moduleAccounts.ts"
+          //   handler: "handleModuleAccounts",
+          //   kind: CosmosHandlerKind.Block,
+          // },
+          // {
+          //   // NOTE: We need to track the supply on every block, and this is the way we can do with the RPC, but on a
+          //   // future it will be replaced by handling the claim/proof settle event.
+          //   // See the definition in "src/mappings/bank/supply.ts"
+          //   handler: "handleSupply",
+          //   kind: CosmosHandlerKind.Block,
+          // },
+          // {
+          //   // See the definition in "src/mappings/primitives/transactions.ts"
+          //   handler: "handleTransactions",
+          //   kind: CosmosHandlerKind.BatchTransaction,
+          //   filter: {
+          //     includeFailedTx: true,
+          //   },
+          // },
+          // {
+          //   // See the definition in "src/mappings/primitives/messages.ts"
+          //   handler: "handleMessages",
+          //   kind: CosmosHandlerKind.BatchMessage,
+          //   filter: {
+          //     type: "*",
+          //     includeFailedTx: true,
+          //   },
+          // },
+          // {
+          //   // See the definition in "src/mappings/primitives/events.ts"
+          //   handler: "handleEvents",
+          //   kind: CosmosHandlerKind.BatchEvent,
+          // },
+          //
+          // // --------------------------- BANK ---------------------------
+          // {
+          //   // See the definition in "src/mappings/bank/transfer.ts"
+          //   handler: "handleNativeTransfer",
+          //   kind: CosmosHandlerKind.BatchMessage,
+          //   filter: {
+          //     type: "/cosmos.bank.v1beta1.MsgSend",
+          //     includeFailedTx: true,
+          //   },
+          // },
+          // {
+          //   // See the definition in "src/mappings/bank/balanceChange.ts"
+          //   handler: "handleNativeBalanceIncrement",
+          //   kind: CosmosHandlerKind.BatchEvent,
+          //   filter: {
+          //     type: "coin_received",
+          //   },
+          // },
+          // {
+          //   // See the definition in "src/mappings/bank/balanceChange.ts"
+          //   handler: "handleNativeBalanceDecrement",
+          //   kind: CosmosHandlerKind.BatchEvent,
+          //   filter: {
+          //     type: "coin_spent",
+          //   },
+          // },
+          // // --------------------------- VALIDATOR ---------------------------
+          // {
+          //   handler: "handleValidatorMsgCreate",
+          //   kind: CosmosHandlerKind.Message,
+          //   filter: {
+          //     type: "/cosmos.staking.v1beta1.MsgCreateValidator",
+          //   },
+          // },
           // TODO: handle event type `rewards` where key=validator,value=<signer_validator> -> look for amount -> increase balance
 
 

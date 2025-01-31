@@ -127,7 +127,7 @@ function runCommand(command, cwd, suppressLogs = false) {
     });
   } catch (error) {
     const errorMessage = suppressLogs
-      ? error.stderr.toString() || error.message
+      ? error.stderr ? error.stderr.toString() : error.message
       : error.message;
 
     throw new Error(`Command failed: ${command} in ${cwd} - ${errorMessage}`);

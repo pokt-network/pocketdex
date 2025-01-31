@@ -266,7 +266,7 @@ async function getTook(block: CosmosBlock) {
   }
 
   const previousHeight = BigInt(block.header.height - 1);
-  const previousBlock = await Block.get(previousHeight.toString());
+  const previousBlock = await Block.get(previousHeight);
 
   if (!previousBlock) {
     throw new Error(
@@ -278,7 +278,7 @@ async function getTook(block: CosmosBlock) {
   return block.header.time.getTime() - previousBlock.timestamp.getTime();
 }
 
-async function getUnstakedSuppliersData(blockId: string) {
+async function getUnstakedSuppliersData(blockId: bigint) {
   // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
   const unstakedSuppliers = await Supplier.getByUnstakingEndBlockId(blockId, { limit: 100 });
   const unstakedTokensBySupplier = unstakedSuppliers.reduce((acc, supplier) => acc + BigInt(supplier.stakeAmount), BigInt(0));
@@ -340,7 +340,7 @@ async function getUnstakingAppsData() {
   };
 }
 
-async function getUnstakedAppssData(blockId: string) {
+async function getUnstakedAppssData(blockId: bigint) {
   // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
   const unstakedApps = await Application.getByUnstakingEndBlockId(blockId, { limit: 100 });
   const unstakedTokensByApp = unstakedApps.reduce((acc, app) => acc + BigInt(app.stakeAmount), BigInt(0));
@@ -362,7 +362,7 @@ async function getStakedGatewaysData() {
   };
 }
 
-async function getUnstakedGatewaysData(blockId: string) {
+async function getUnstakedGatewaysData(blockId: bigint) {
   // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
   const unstakedGateways = await Gateway.getByUnstakingEndBlockId(blockId, { limit: 100 });
   const unstakedTokensByGateway = unstakedGateways.reduce((acc, gateway) => acc + BigInt(gateway.stakeAmount), BigInt(0));

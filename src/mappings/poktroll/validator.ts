@@ -12,7 +12,10 @@ import {
   PREFIX,
   VALIDATOR_PREFIX,
 } from "../constants";
-import { messageId } from "../utils/ids";
+import {
+  getBlockId,
+  messageId,
+} from "../utils/ids";
 import {
   Ed25519,
   pubKeyToAddress,
@@ -52,7 +55,7 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
     stakeAmount: BigInt(createValMsg.value.amount),
     messageId: msgId,
     transactionId: msg.tx.hash,
-    blockId: msg.block.block.id,
+    blockId: getBlockId(msg.block),
   });
 
   const validator = Validator.create({
@@ -80,6 +83,10 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
 
 // TODO: update this to work with BatchMessage handler
 // handleValidatorMsgCreate, referenced in project.ts
-export async function handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>): Promise<void> {
-  await _handleValidatorMsgCreate(msg);
+export async function handleValidatorMsgCreate(messages: Array<CosmosMessage<MsgCreateValidator>>): Promise<void> {
+  await Promise.all(
+    messages.map(
+      (msg) => _handleValidatorMsgCreate(msg),
+    ),
+  );
 }

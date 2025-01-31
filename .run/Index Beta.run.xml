@@ -21,6 +21,7 @@
                 <scripts>
                     <script value="build"/>
                 </scripts>
+                <arguments value="--mode=development"/>
                 <node-interpreter value="project"/>
                 <envs>
                     <env name="CHAIN_ID" value="pocket-beta"/>

@@ -5,7 +5,7 @@ import {
 import { NativeTransferProps } from "../../types/models/NativeTransfer";
 import { NativeTransferMsg } from "../types";
 import {
-  getBlockIdAsString,
+  getBlockId,
   messageId,
 } from "../utils/ids";
 import { getTxStatus } from "../utils/primitives";
@@ -37,7 +37,7 @@ function _handleNativeTransfer(msg: CosmosMessage<NativeTransferMsg>): NativeTra
     messageId: messageId(msg),
     // on event kind message or transaction, the transaction is guaranteed
     transactionId: txHash,
-    blockId: getBlockIdAsString(msg.block),
+    blockId: getBlockId(msg.block),
   };
 }
 

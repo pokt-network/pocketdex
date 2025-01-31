@@ -77,7 +77,7 @@ export type UpdateParamResult = {
   params: Array<ParamProps>
 }
 
-export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: string): UpdateParamResult | null {
+export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): UpdateParamResult | null {
   if (!(encodedMsg.typeUrl in msgUpdateParamsMap)) {
     // this will help us to identify other param types without ignore them
     return null;

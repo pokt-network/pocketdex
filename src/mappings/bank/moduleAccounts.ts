@@ -7,7 +7,7 @@ import { Any } from "../../types/proto-interfaces/google/protobuf/any";
 import { CACHE_MODULE_ADDRESS } from "../constants";
 import {
   getBalanceId,
-  getBlockIdAsString,
+  getBlockId,
 } from "../utils/ids";
 import { stringify } from "../utils/json";
 import { enforceAccountExistence } from "./balanceChange";
@@ -90,12 +90,12 @@ export async function handleModuleAccounts(block: CosmosBlock): Promise<void> {
           accountId: address,
           denom,
           amount: BigInt(amount),
-          lastUpdatedBlockId: getBlockIdAsString(block),
+          lastUpdatedBlockId: getBlockId(block),
         });
       } else {
         // if already exists, set the new amount
         balance.amount = BigInt(amount);
-        balance.lastUpdatedBlockId = getBlockIdAsString(block);
+        balance.lastUpdatedBlockId = getBlockId(block);
       }
 
       await balance.save();

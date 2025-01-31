@@ -7,7 +7,10 @@ import { MessageProps } from "../../types/models/Message";
 import { ParamProps } from "../../types/models/Param";
 import { _handleUpdateParam } from "../poktroll/params";
 import { AuthzExecMsg } from "../types";
-import { messageId } from "../utils/ids";
+import {
+  getBlockId,
+  messageId,
+} from "../utils/ids";
 import { stringify } from "../utils/json";
 
 // This is required for the binary reader to work. It expects TextEncoder and TextDecoder to be set in globalThis.
@@ -23,6 +26,7 @@ type HandleAuthzExecResult = {
 
 function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResult {
   logger.info(`[handleAuthzExec] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
+  const blockId = getBlockId(msg.block);
 
   const result: HandleAuthzExecResult = {
     messages: [],
@@ -42,7 +46,7 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
     typeUrl,
     json: stringify(msg.msg.decodedMsg),
     transactionId: msg.tx.hash,
-    blockId: msg.block.block.id,
+    blockId,
   });
 
   result.authzExec.push({
@@ -50,14 +54,14 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
     grantee,
     messageId: authzExecId,
     transactionId: msg.tx.hash,
-    blockId: msg.block.block.id,
+    blockId,
   });
 
   for (const [i, encodedMsg] of msgs.entries()) {
     // _handleUpdateParam will return the decoded message if it is a param update,
     // otherwise it will return undefined.
     // _handleUpdateParam will decode and save the message using its specific entity
-    const paramResult = _handleUpdateParam(encodedMsg, msg.block.block.id);
+    const paramResult = _handleUpdateParam(encodedMsg, blockId);
 
     let decodedMsg: unknown;
 
@@ -85,7 +89,7 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
         typeUrl,
         json: stringify(decodedMsg),
         transactionId: msg.tx.hash,
-        blockId: msg.block.block.id,
+        blockId,
       });
 
       // Create AuthzMsgExec entity to join AuthzExec and Messages without requiring a foreign key in the Message type.

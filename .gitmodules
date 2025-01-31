@@ -5,11 +5,11 @@
 [submodule "vendor/subql"]
 	path = vendor/subql
 	url = https://github.com/pokt-scan/subql.git
-	branch = feature/add-batch-and-conn-tunning
+	branch = fix/dbType-ts
 [submodule "vendor/subql-cosmos"]
 	path = vendor/subql-cosmos
 	url = https://github.com/pokt-scan/subql-cosmos.git
-	branch = enhance-events-handling-and-add-post-index-handler
+	branch = main
 [submodule "vendor/cosmjs"]
 	path = vendor/cosmjs
 	url = https://github.com/pokt-scan/x-cosmjs

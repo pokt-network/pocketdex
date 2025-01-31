@@ -10,6 +10,7 @@ import {
 } from "../../types";
 import { BlockSupplyProps } from "../../types/models/BlockSupply";
 import { fetchPaginatedRecords } from "../utils/db";
+import { getBlockId } from "../utils/ids";
 import { stringify } from "../utils/json";
 
 export const getSupplyId = function(denom: string, height: number): string {
@@ -90,7 +91,7 @@ export async function handleSupply(block: CosmosBlock): Promise<void> {
       const blockSupplyId = getSupplyId(supplyDenomItem.id, block.header.height);
       const blockSupplyProps = {
         id: blockSupplyId,
-        blockId: block.block.id,
+        blockId: getBlockId(block),
         supplyId: blockSupply.supplyId,
       };
       blockSuppliesMap.set(blockSupplyId, blockSupplyProps);
@@ -101,7 +102,7 @@ export async function handleSupply(block: CosmosBlock): Promise<void> {
       const blockSupplyId = getSupplyId(supplyDenomItem.id, block.header.height);
       const blockSupplyProps = {
         id: blockSupplyId,
-        blockId: block.block.id,
+        blockId: getBlockId(block),
         supplyId: getSupplyId(supplyDenomItem.id, supplyIdHeight),
       };
       blockSuppliesMap.set(blockSupplyId, blockSupplyProps);

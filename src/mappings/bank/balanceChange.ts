@@ -13,6 +13,7 @@ import { ModuleAccountProps } from "../../types/models/ModuleAccount";
 import { NativeBalanceChangeProps } from "../../types/models/NativeBalanceChange";
 import {
   getBalanceId,
+  getBlockId,
   getBlockIdAsString,
   getEventId,
   messageId,
@@ -32,7 +33,7 @@ export async function enforceAccountExistence(address: string, chainId: string, 
 }
 
 // TODO: figure out a way to run a atomic update that modify the balance.amount without the need of load it.
-export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
+export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: bigint): Promise<void> {
   const id = getBalanceId(address, denom);
 
   let balance = await Balance.get(id);
@@ -102,7 +103,7 @@ async function handleNativeBalanceChange(
 ): Promise<void> {
   const moduleAccounts = await getCacheModuleAccounts();
   const chainId = events[0].block.block.header.chainId;
-  const blockId = getBlockIdAsString(events[0].block);
+  const blockId = getBlockId(events[0].block);
 
   const uniqueAddressSet = new Set<string>();
   const balanceChangeEvents: NativeBalanceChangeProps[] = [];

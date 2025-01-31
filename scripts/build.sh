@@ -23,5 +23,5 @@ then
   yarn run lint
 fi
 
-info_log "Running 'subql' build"
-env yarn exec subql build
+info_log "Running 'subql' build --mode=${NODE_ENV}"
+env yarn exec subql build --mode=$NODE_ENV

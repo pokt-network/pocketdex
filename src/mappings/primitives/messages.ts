@@ -1,7 +1,7 @@
 import { CosmosMessage } from "@subql/types-cosmos";
 import { MessageProps } from "../../types/models/Message";
 import {
-  getBlockIdAsString,
+  getBlockId,
   messageId,
 } from "../utils/ids";
 import { stringify } from "../utils/json";
@@ -14,7 +14,7 @@ function _handleMessage(msg: CosmosMessage): MessageProps {
     typeUrl: msg.msg.typeUrl,
     json,
     transactionId: msg.tx.hash,
-    blockId: getBlockIdAsString(msg.block),
+    blockId: getBlockId(msg.block),
   };
 }
 

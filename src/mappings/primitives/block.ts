@@ -13,10 +13,7 @@ import {
   processBlockJson,
 } from "../utils/block_parser";
 import { getBlockByteSize } from "../utils/block_size";
-import {
-  getBlockId,
-  getBlockIdAsString,
-} from "../utils/ids";
+import { getBlockId } from "../utils/ids";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
   logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
@@ -36,7 +33,7 @@ export async function handleBlock(block: CosmosBlock): Promise<void> {
   ) as ConvertedBlockJson;
 
   const blockMetadata = BlockMetadata.create({
-    id: id.toString(),
+    id,
     blockId: processedBlock.blockId as unknown as BlockId,
     header: processedBlock.header as unknown as BlockHeader,
     lastCommit: processedBlock.block.lastCommit as unknown as BlockLastCommit,
@@ -45,14 +42,14 @@ export async function handleBlock(block: CosmosBlock): Promise<void> {
   const size = getBlockByteSize(block);
 
   const blockEntity = Block.create({
-    id: getBlockIdAsString(block),
+    id,
     chainId,
     hash: block.block.id,
     timestamp,
     // this is the HEX address that comes on the block
     proposerAddress: processedBlock.header.proposerAddress as string,
     size,
-    metadataId: id.toString(),
+    metadataId: id,
     stakedSuppliers: 0,
     totalComputedUnits: BigInt(0),
     totalRelays: BigInt(0),

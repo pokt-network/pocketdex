@@ -36,6 +36,7 @@ import { ApplicationUnbondingReason } from "../constants";
 import { fetchPaginatedRecords } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
+  getBlockId,
   getEventId,
   getMsgStakeServiceId,
   getStakeServiceId,
@@ -78,7 +79,7 @@ async function _handleAppMsgStake(
   const appMsgStake = MsgStakeApplicationEntity.create({
     id: msgId,
     transactionId: msg.tx.hash,
-    blockId: msg.block.block.id,
+    blockId: getBlockId(msg.block),
     applicationId: address,
     messageId: msgId,
     stakeAmount,
@@ -164,7 +165,7 @@ async function _handleDelegateToGatewayMsg(
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
       transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       messageId: msgId,
     }).save(),
   ]);
@@ -189,7 +190,7 @@ async function _handleUndelegateFromGatewayMsg(
       applicationId: msg.msg.decodedMsg.appAddress,
       gatewayId: msg.msg.decodedMsg.gatewayAddress,
       transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       messageId: msgId,
     }).save(),
   ]);
@@ -205,7 +206,7 @@ async function _handleUnstakeApplicationMsg(
   }
 
   application.stakeStatus = StakeStatus.Unstaking;
-  application.unstakingBeginBlockId = msg.block.block.id;
+  application.unstakingBeginBlockId = getBlockId(msg.block);
 
   const msgId = messageId(msg);
 
@@ -215,7 +216,7 @@ async function _handleUnstakeApplicationMsg(
       id: msgId,
       applicationId: msg.msg.decodedMsg.address,
       transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       messageId: msgId,
     }).save(),
   ]);
@@ -241,7 +242,7 @@ async function _handleTransferApplicationMsg(
       sourceApplicationId: msg.msg.decodedMsg.sourceAddress,
       destinationApplicationId: msg.msg.decodedMsg.destinationAddress,
       transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       messageId: msgId,
     }).save(),
   ]);
@@ -276,7 +277,7 @@ async function _handleTransferApplicationBeginEvent(
       sourceId: msg.msg.decodedMsg.sourceAddress,
       destinationId: msg.msg.decodedMsg.destinationAddress,
       transactionId: tx.hash,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       eventId,
     }).save(),
   ]);
@@ -302,10 +303,10 @@ async function _handleTransferApplicationEndEvent(
 
   sourceApplication.transferringToId = undefined;
   sourceApplication.transferEndHeight = undefined;
-  sourceApplication.transferEndBlockId = event.block.block.id;
+  sourceApplication.transferEndBlockId = getBlockId(event.block);
   sourceApplication.stakeStatus = StakeStatus.Unstaked;
   sourceApplication.unstakingReason = ApplicationUnbondingReason.TRANSFERRED;
-  sourceApplication.unstakingEndBlockId = event.block.block.id;
+  sourceApplication.unstakingEndBlockId = getBlockId(event.block);
 
   const destinationAppStringified = event.event.attributes.find(attribute => attribute.key === "destination_application")?.value as string;
 
@@ -327,7 +328,7 @@ async function _handleTransferApplicationEndEvent(
     stakeDenom: stake.denom,
     stakeStatus: StakeStatus.Staked,
     sourceApplicationId: sourceAddress,
-    transferredFromAtId: event.block.block.id,
+    transferredFromAtId: getBlockId(event.block),
     unstakingEndBlockId: sourceApplication.unstakingEndBlockId,
     unstakingBeginBlockId: sourceApplication.unstakingBeginBlockId,
   });
@@ -357,7 +358,7 @@ async function _handleTransferApplicationEndEvent(
       id: eventId,
       sourceId: sourceAddress,
       destinationId: destinationApp.address,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       eventId,
     }).save(),
     store.bulkCreate("ApplicationService", newApplicationServices),
@@ -416,7 +417,7 @@ async function _handleTransferApplicationErrorEvent(
       sourceId: sourceAddress,
       destinationId: destinationAddress,
       error: error,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       eventId,
     }).save(),
   ]);
@@ -478,7 +479,7 @@ async function _handleApplicationUnbondingBeginEvent(
     EventApplicationUnbondingBeginEntity.create({
       id: eventId,
       applicationId: msg.msg.decodedMsg.address,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       unstakingEndHeight,
       sessionEndHeight,
       reason,
@@ -541,7 +542,7 @@ async function _handleApplicationUnbondingEndEvent(
     throw new Error(`[handleApplicationUnbondingEndEvent] application not found for address ${applicationSdk.address}`);
   }
 
-  application.unstakingEndBlockId = event.block.block.id;
+  application.unstakingEndBlockId = getBlockId(event.block);
   application.stakeStatus = StakeStatus.Unstaked;
   application.unstakingReason = reason;
 
@@ -552,7 +553,7 @@ async function _handleApplicationUnbondingEndEvent(
   await Promise.all([
     EventApplicationUnbondingEndEntity.create({
       id: eventId,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       sessionEndHeight,
       unstakingEndHeight,
       reason,

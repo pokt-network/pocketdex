@@ -1,1 +1,1 @@
-export * from "./mappings";
+export * from "./mappings/indexer.manager";

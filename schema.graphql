@@ -90,7 +90,7 @@ type BlockLastCommit @jsonField(indexed: false) {
 # This handle all the information that is coming with the block but is not often used
 # but could help in some debug environment.
 type BlockMetadata @entity {
-  id: ID!
+  id: ID! @dbType(type: "BigInt")
   blockId: BlockId!
   header: BlockHeader!
   # first block has this null on js
@@ -98,7 +98,7 @@ type BlockMetadata @entity {
 }
 
 type Block @entity {
-  id: ID! # the height as string # @dbType(type: "BigInt")
+  id: ID! @dbType(type: "BigInt")
   chainId: String! @index
   hash: String! @index
   timestamp: Date! @index

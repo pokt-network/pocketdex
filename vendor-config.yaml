@@ -28,7 +28,14 @@ vendors:
       - "@cosmjs"
     pack:
       include:
+        - "cli"
+        - "common"
+        - "node"
         - "node-core"
+        - "query"
+        - "types"
+        - "types-core"
+        - "utils"
 
   - name: "@subql-cosmos"
     path: "vendor/subql-cosmos"

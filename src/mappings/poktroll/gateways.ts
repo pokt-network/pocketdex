@@ -15,6 +15,7 @@ import {
   MsgUnstakeGateway,
 } from "../../types/proto-interfaces/poktroll/gateway/tx";
 import {
+  getBlockId,
   getEventId,
   messageId,
 } from "../utils/ids";
@@ -50,7 +51,7 @@ async function _handleGatewayMsgStake(
       gatewayId: msg.msg.decodedMsg.address,
       stakeAmount: BigInt(stake.amount),
       stakeDenom: stake.denom,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       transactionId: msg.tx.hash,
       messageId: msgId,
     }).save(),
@@ -68,7 +69,7 @@ async function _handleGatewayMsgUnstake(
   }
 
   gateway.stakeStatus = StakeStatus.Unstaking;
-  gateway.unstakingBeginBlockId = msg.block.block.id;
+  gateway.unstakingBeginBlockId = getBlockId(msg.block);
 
   const msgId = messageId(msg);
 
@@ -77,7 +78,7 @@ async function _handleGatewayMsgUnstake(
     MsgUnstakeGatewayEntity.create({
       id: msgId,
       transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       gatewayId: msg.msg.decodedMsg.address,
       messageId: msgId,
     }).save(),
@@ -108,7 +109,7 @@ async function _handleGatewayUnstakeEvent(
     throw new Error(`[handleGatewayMsgUnstake] gateway not found with address: ${gatewayAddress}`);
   }
 
-  gateway.unstakingEndBlockId = event.block.block.id;
+  gateway.unstakingEndBlockId = getBlockId(event.block);
   gateway.stakeStatus = StakeStatus.Unstaked;
 
   const eventId = getEventId(event);
@@ -117,7 +118,7 @@ async function _handleGatewayUnstakeEvent(
     EventGatewayUnstakedEntity.create({
       id: eventId,
       gatewayId: gatewayAddress,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       transactionId: tx.hash,
       eventId,
     }).save(),

@@ -8,7 +8,7 @@ import {
   PREFIX,
   VALIDATOR_PREFIX,
 } from "../constants";
-import { getBlockIdAsString } from "../utils/ids";
+import { getBlockId } from "../utils/ids";
 import {
   getTxStatus,
   isMsgValidatorRelated,
@@ -35,7 +35,7 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
   return {
     id: tx.hash,
     // timeline,
-    blockId: getBlockIdAsString(tx.block),
+    blockId: getBlockId(tx.block),
     gasUsed: tx.tx.gasUsed,
     gasWanted: tx.tx.gasWanted,
     memo: tx.decodedTx.body.memo,

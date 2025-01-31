@@ -4,7 +4,10 @@ import {
   Service,
 } from "../../types";
 import { MsgAddService } from "../../types/proto-interfaces/poktroll/service/tx";
-import { messageId } from "../utils/ids";
+import {
+  getBlockId,
+  messageId,
+} from "../utils/ids";
 
 async function _handleMsgAddService(
   msg: CosmosMessage<MsgAddService>,
@@ -27,7 +30,7 @@ async function _handleMsgAddService(
       ownerId: ownerAddress,
       serviceId: id,
       computeUnitsPerRelay: units,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       transactionId: msg.tx.hash,
       messageId: msgId,
     }).save(),

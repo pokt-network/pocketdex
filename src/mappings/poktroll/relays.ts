@@ -28,6 +28,7 @@ import {
 } from "../../types/proto-interfaces/poktroll/proof/types";
 import { ClaimExpirationReasonSDKType } from "../../types/proto-interfaces/poktroll/tokenomics/event";
 import {
+  getBlockId,
   getEventId,
   getRelayId,
   messageId,
@@ -156,7 +157,7 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
       id: messageId(msg),
       ...shared,
       transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
     }),
     Relay.create({
       id,
@@ -192,7 +193,7 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
       ...shared,
       proof: stringify(proof),
       transactionId: msg.tx.hash,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
     }).save(),
     store.bulkUpdate("Relay", [{
       ...shared,
@@ -252,7 +253,7 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
     EventClaimSettled.create({
       ...shared,
       transactionId: event.tx?.hash,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       id: getEventId(event),
       proofRequirement,
     }).save(),
@@ -305,7 +306,7 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
       id: getEventId(event),
       expirationReason,
       transactionId: event.tx?.hash,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
     }).save(),
   ]);
 }
@@ -358,7 +359,7 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
       id: getEventId(event),
       relayId,
       transactionId: event.tx?.hash,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
     }).save(),
   ]);
 }
@@ -407,7 +408,7 @@ export async function handleEventProofUpdated(event: CosmosEvent): Promise<void>
       closestMerkleProof: proof ? stringify(proof.closest_merkle_proof) : undefined,
       relayId: id,
       transactionId: event.tx?.hash,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
     }).save(),
     store.bulkUpdate("Relay", [{
       ...shared,

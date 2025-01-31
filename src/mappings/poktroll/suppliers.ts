@@ -21,6 +21,7 @@ import {
   MsgUnstakeSupplier,
 } from "../../types/proto-interfaces/poktroll/supplier/tx";
 import {
+  getBlockId,
   getEventId,
   getMsgStakeServiceId,
   getStakeServiceId,
@@ -44,7 +45,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     ownerId: msg.msg.decodedMsg.ownerAddress,
     stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
     stakeDenom: msg.msg.decodedMsg.stake.denom,
-    blockId: msg.block.block.id,
+    blockId: getBlockId(msg.block),
     transactionId: msg.tx.hash,
     messageId: msgId,
   });
@@ -138,13 +139,13 @@ async function _handleUnstakeSupplierMsg(
     id: msgId,
     signerId: msg.msg.decodedMsg.signer,
     supplierId: msg.msg.decodedMsg.operatorAddress,
-    blockId: msg.block.block.id,
+    blockId: getBlockId(msg.block),
     transactionId: msg.tx.hash,
     messageId: msgId,
   });
 
   supplier.stakeStatus = StakeStatus.Unstaking;
-  supplier.unstakingBeginBlockId = msg.block.block.id;
+  supplier.unstakingBeginBlockId = getBlockId(msg.block);
 
   await Promise.all([
     supplier.save(),
@@ -186,7 +187,7 @@ async function _handleSupplierUnbondingBeginEvent(
     EventSupplierUnbondingBeginEntity.create({
       id: eventId,
       supplierId: msg.msg.decodedMsg.operatorAddress,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       transactionId: tx.hash,
       eventId,
     }).save(),
@@ -216,7 +217,7 @@ async function _handleSupplierUnbondingEndEvent(
     throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`);
   }
 
-  supplier.unstakingEndBlockId = event.block.block.id;
+  supplier.unstakingEndBlockId = getBlockId(event.block);
   supplier.stakeStatus = StakeStatus.Unstaked;
   // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
   const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, { limit: 100 }) || []).map(item => item.id);
@@ -227,7 +228,7 @@ async function _handleSupplierUnbondingEndEvent(
     EventSupplierUnbondingEndEntity.create({
       id: eventId,
       supplierId: supplierAddress,
-      blockId: event.block.block.id,
+      blockId: getBlockId(event.block),
       eventId,
     }).save(),
     supplier.save(),
