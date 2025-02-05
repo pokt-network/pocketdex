@@ -126,21 +126,14 @@ async function _handleGatewayUnstakeEvent(
   ]);
 }
 
-
-// TODO: update this to work with BatchMessage handler
-// handleGatewayMsgStake, referenced in project.ts
-export async function handleGatewayMsgStake(msg: CosmosMessage<MsgStakeGateway>): Promise<void> {
-  await _handleGatewayMsgStake(msg);
+export async function handleGatewayMsgStake(messages: Array<CosmosMessage<MsgStakeGateway>>): Promise<void> {
+  await Promise.all(messages.map(_handleGatewayMsgStake));
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleGatewayMsgStake, referenced in project.ts
-export async function handleGatewayMsgUnstake(msg: CosmosMessage<MsgUnstakeGateway>): Promise<void> {
-  await _handleGatewayMsgUnstake(msg);
+export async function handleGatewayMsgUnstake(messages: Array<CosmosMessage<MsgUnstakeGateway>>): Promise<void> {
+  await Promise.all(messages.map(_handleGatewayMsgUnstake));
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleGatewayMsgStake, referenced in project.ts
-export async function handleGatewayUnstakeEvent(event: CosmosEvent): Promise<void> {
-  await _handleGatewayUnstakeEvent(event);
+export async function handleGatewayUnstakeEvent(events: Array<CosmosEvent>): Promise<void> {
+  await Promise.all(events.map(_handleGatewayUnstakeEvent));
 }

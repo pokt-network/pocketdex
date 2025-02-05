@@ -1,12 +1,18 @@
 import { toBase64 } from "@cosmjs/encoding";
-import { CosmosMessage } from "@subql/types-cosmos";
+import {
+  CosmosEvent,
+  CosmosMessage,
+} from "@subql/types-cosmos";
 import type { MsgCreateValidator } from "cosmjs-types/cosmos/staking/v1beta1/tx";
 import { isNil } from "lodash";
+import { parseCoins } from "../../cosmjs/utils";
 import {
   StakeStatus,
   Validator,
 } from "../../types";
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
+import { ValidatorCommissionProps } from "../../types/models/ValidatorCommission";
+import { ValidatorRewardProps } from "../../types/models/ValidatorReward";
 import { enforceAccountExistence } from "../bank";
 import {
   PREFIX,
@@ -14,8 +20,10 @@ import {
 } from "../constants";
 import {
   getBlockId,
+  getEventId,
   messageId,
 } from "../utils/ids";
+import { stringify } from "../utils/json";
 import {
   Ed25519,
   pubKeyToAddress,
@@ -59,7 +67,8 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   });
 
   const validator = Validator.create({
-    id: msgCreateValidator.address,
+    id: msgCreateValidator.signerId,
+    ed25519_id: msgCreateValidator.address,
     signerId: msgCreateValidator.signerId,
     signerPoktPrefixId: poktSignerAddress,
     description: msgCreateValidator.description,
@@ -81,12 +90,42 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   ]);
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleValidatorMsgCreate, referenced in project.ts
 export async function handleValidatorMsgCreate(messages: Array<CosmosMessage<MsgCreateValidator>>): Promise<void> {
   await Promise.all(
     messages.map(
       (msg) => _handleValidatorMsgCreate(msg),
     ),
   );
+}
+
+function _handleValidatorRewardOrCommission(event: CosmosEvent): ValidatorRewardProps | ValidatorCommissionProps {
+  const validator = event.event.attributes.find(attribute => attribute.key === "validator")?.value as unknown as string;
+  if (!validator) {
+    throw new Error(`[handleValidatorReward] validator not provided in event`);
+  }
+
+  const eventId = getEventId(event);
+  const amount = (event.event.attributes.find(attribute => attribute.key === "amount")?.value ?? "0upokt") as unknown as string;
+  const coins = parseCoins(amount);
+  if (!coins.length) {
+    logger.error(`[handleValidatorReward] amount: ${amount} attributes: ${stringify(event.event.attributes, undefined, 2)}`);
+    throw new Error(`[handleValidatorReward] amount not provided in event`);
+  }
+
+  return {
+    id: `${eventId}-${validator}`,
+    blockId: getBlockId(event.block),
+    validatorId: validator,
+    eventId,
+    amount: BigInt(coins[0].amount),
+    denom: coins[0].denom,
+  };
+}
+
+export async function handleValidatorRewards(events: Array<CosmosEvent>): Promise<void> {
+  await store.bulkCreate("ValidatorReward", events.map(_handleValidatorRewardOrCommission));
+}
+
+export async function handleValidatorCommission(events: Array<CosmosEvent>): Promise<void> {
+  await store.bulkCreate("ValidatorCommission", events.map(_handleValidatorRewardOrCommission));
 }

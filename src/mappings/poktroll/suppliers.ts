@@ -236,34 +236,26 @@ async function _handleSupplierUnbondingEndEvent(
   ]);
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleSupplierStakeMsg, referenced in project.ts
 export async function handleSupplierStakeMsg(
-  msg: CosmosMessage<MsgStakeSupplier>,
+  messages: Array<CosmosMessage<MsgStakeSupplier>>,
 ): Promise<void> {
-  await _handleSupplierStakeMsg(msg);
+  await Promise.all(messages.map(_handleSupplierStakeMsg));
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleUnstakeSupplierMsg, referenced in project.ts
 export async function handleUnstakeSupplierMsg(
-  msg: CosmosMessage<MsgUnstakeSupplier>,
+  messages: Array<CosmosMessage<MsgUnstakeSupplier>>,
 ): Promise<void> {
-  await _handleUnstakeSupplierMsg(msg);
+  await Promise.all(messages.map(_handleUnstakeSupplierMsg));
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleSupplierUnbondingBeginEvent, referenced in project.ts
 export async function handleSupplierUnbondingBeginEvent(
-  event: CosmosEvent,
+  events: Array<CosmosEvent>,
 ): Promise<void> {
-  await _handleSupplierUnbondingBeginEvent(event);
+  await Promise.all(events.map(_handleSupplierUnbondingBeginEvent));
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleSupplierUnbondingEndEvent, referenced in project.ts
 export async function handleSupplierUnbondingEndEvent(
-  event: CosmosEvent,
+  events: Array<CosmosEvent>,
 ): Promise<void> {
-  await _handleSupplierUnbondingEndEvent(event);
+  await Promise.all(events.map(_handleSupplierUnbondingEndEvent));
 }

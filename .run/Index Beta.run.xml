@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
     <configuration default="false" name="Index Beta" type="NodeJSConfigurationType" singleton="false"
-                   application-parameters="--force-clean --db-schema=testnet_beta --unfinalized-blocks=true --timeout=120000 --store-cache-async=false --store-cache-upper-limit=30000 --store-cache-threshold=30000 --store-get-cache-size=30000 --store-flush-interval=120 --enable-cache=false --kyve-endpoint=false --query-limit=1000"
+                   application-parameters="--force-clean --db-schema=testnet_beta --unfinalized-blocks=true --timeout=120000 --store-cache-async=false --store-cache-upper-limit=30000 --store-cache-threshold=30000 --store-get-cache-size=30000 --store-flush-interval=120 --enable-cache=false --kyve-endpoint=false --query-limit=1000 --pg-pool-min=100 --pg-pool-max=300 --pg-pool-acquire=30000 --pg-pool-idle=120000 --pg-pool-evict=60000"
                    path-to-node="$USER_HOME$/.nvm/versions/node/v18.20.3/bin/node"
                    path-to-js-file="node_modules/@subql/node-cosmos/bin/run" typescript-loader="bundled"
                    working-dir="$PROJECT_DIR$">

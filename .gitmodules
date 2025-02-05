@@ -5,7 +5,7 @@
 [submodule "vendor/subql"]
 	path = vendor/subql
 	url = https://github.com/pokt-scan/subql.git
-	branch = fix/dbType-ts
+	branch = main
 [submodule "vendor/subql-cosmos"]
 	path = vendor/subql-cosmos
 	url = https://github.com/pokt-scan/subql-cosmos.git

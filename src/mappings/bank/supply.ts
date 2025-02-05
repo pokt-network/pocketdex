@@ -110,7 +110,7 @@ export async function handleSupply(block: CosmosBlock): Promise<void> {
   }
 
   // TODO: (@jorgecuesta) we should update supply handling with proper msg/event once it is implemented on poktroll
-  logger.info(`[handleSupply] (block.header.height=${block.header.height}) querying total supply...`);
+  logger.debug(`[handleSupply] (block.header.height=${block.header.height}) querying total supply...`);
   const totalSupply = await queryTotalSupply();
   if (totalSupply.length === 0) {
     logger.warn(`[handleSupply]: no total supply found`);

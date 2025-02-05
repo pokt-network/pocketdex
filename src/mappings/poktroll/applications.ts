@@ -69,7 +69,6 @@ async function _handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
 ): Promise<void> {
   // logger.debug(`[handleAppMsgStake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-
   const msgId = messageId(msg);
   const { address, stake } = msg.msg.decodedMsg;
 
@@ -428,7 +427,7 @@ async function _handleApplicationUnbondingBeginEvent(
 ) {
   const msg = event.msg as CosmosMessage<MsgUnstakeApplication>;
 
-  let unstakingEndHeight = BigInt(0), sessionEndHeight: bigint, reason: number;
+  let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason = 0;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
@@ -444,20 +443,14 @@ async function _handleApplicationUnbondingBeginEvent(
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
   if (unstakingEndHeight === BigInt(0)) {
     throw new Error(`[handleApplicationUnbondingBeginEvent] unbondingEndHeight not found in event`);
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  if (!sessionEndHeight) {
+  if (sessionEndHeight === BigInt(0)) {
     throw new Error(`[handleApplicationUnbondingBeginEvent] sessionEndHeight not found in event`);
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
   if (!reason) {
     throw new Error(`[handleApplicationUnbondingBeginEvent] reason not found in event`);
   }
@@ -491,8 +484,8 @@ async function _handleApplicationUnbondingBeginEvent(
 async function _handleApplicationUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  let unstakingEndHeight: bigint, sessionEndHeight: bigint, reason: number, applicationSdk: ApplicationSDKType;
-
+  let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason = 0,
+    applicationSdk: ApplicationSDKType | undefined;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
@@ -512,26 +505,18 @@ async function _handleApplicationUnbondingEndEvent(
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  if (!unstakingEndHeight) {
+  if (unstakingEndHeight === BigInt(0)) {
     throw new Error(`[handleApplicationUnbondingEndEvent] unbondingEndHeight not found in event`);
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  if (!sessionEndHeight) {
+  if (sessionEndHeight === BigInt(0)) {
     throw new Error(`[handleApplicationUnbondingEndEvent] sessionEndHeight not found in event`);
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
   if (!reason) {
     throw new Error(`[handleApplicationUnbondingEndEvent] reason not found in event`);
   }
 
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
   if (!applicationSdk) {
     throw new Error(`[handleApplicationUnbondingEndEvent] application not found in event`);
   }
@@ -565,82 +550,62 @@ async function _handleApplicationUnbondingEndEvent(
   ]);
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleAppMsgStake, referenced in project.ts
 export async function handleAppMsgStake(
-  msg: CosmosMessage<MsgStakeApplication>,
+  messages: Array<CosmosMessage<MsgStakeApplication>>,
 ): Promise<void> {
-  await _handleAppMsgStake(msg);
+  await Promise.all(messages.map(_handleAppMsgStake));
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleDelegateToGatewayMsg, referenced in project.ts
 export async function handleDelegateToGatewayMsg(
-  msg: CosmosMessage<MsgDelegateToGateway>,
+  messages: Array<CosmosMessage<MsgDelegateToGateway>>,
 ): Promise<void> {
-  await _handleDelegateToGatewayMsg(msg);
+  await Promise.all(messages.map(_handleDelegateToGatewayMsg));
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleUndelegateFromGatewayMsg, referenced in project.ts
 export async function handleUndelegateFromGatewayMsg(
-  msg: CosmosMessage<MsgUndelegateFromGateway>,
+  messages: Array<CosmosMessage<MsgUndelegateFromGateway>>,
 ): Promise<void> {
-  await _handleUndelegateFromGatewayMsg(msg);
+  await Promise.all(messages.map(_handleUndelegateFromGatewayMsg));
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleUnstakeApplicationMsg, referenced in project.ts
 export async function handleUnstakeApplicationMsg(
-  msg: CosmosMessage<MsgUnstakeApplication>,
+  messages: Array<CosmosMessage<MsgUnstakeApplication>>,
 ): Promise<void> {
-  await _handleUnstakeApplicationMsg(msg);
+  await Promise.all(messages.map(_handleUnstakeApplicationMsg));
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleTransferApplicationMsg, referenced in project.ts
 export async function handleTransferApplicationMsg(
-  msg: CosmosMessage<MsgTransferApplication>,
+  messages: Array<CosmosMessage<MsgTransferApplication>>,
 ): Promise<void> {
-  await _handleTransferApplicationMsg(msg);
+  await Promise.all(messages.map(_handleTransferApplicationMsg));
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleTransferApplicationBeginEvent, referenced in project.ts
 export async function handleTransferApplicationBeginEvent(
-  event: CosmosEvent,
+  events: Array<CosmosEvent>,
 ): Promise<void> {
-  await _handleTransferApplicationBeginEvent(event);
+  await Promise.all(events.map(_handleTransferApplicationBeginEvent));
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleTransferApplicationEndEvent, referenced in project.ts
 export async function handleTransferApplicationEndEvent(
-  event: CosmosEvent,
+  events: Array<CosmosEvent>,
 ): Promise<void> {
-  await _handleTransferApplicationEndEvent(event);
+  await Promise.all(events.map(_handleTransferApplicationEndEvent));
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleTransferApplicationErrorEvent, referenced in project.ts
 export async function handleTransferApplicationErrorEvent(
-  event: CosmosEvent,
+  events: Array<CosmosEvent>,
 ): Promise<void> {
-  await _handleTransferApplicationErrorEvent(event);
+  await Promise.all(events.map(_handleTransferApplicationErrorEvent));
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleApplicationUnbondingEndEvent, referenced in project.ts
 export async function handleApplicationUnbondingEndEvent(
-  event: CosmosEvent,
+  events: Array<CosmosEvent>,
 ): Promise<void> {
-  await _handleApplicationUnbondingEndEvent(event);
+  await Promise.all(events.map(_handleApplicationUnbondingEndEvent));
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleApplicationUnbondingBeginEvent, referenced in project.ts
 export async function handleApplicationUnbondingBeginEvent(
-  event: CosmosEvent,
+  events: Array<CosmosEvent>,
 ): Promise<void> {
-  await _handleApplicationUnbondingBeginEvent(event);
+  await Promise.all(events.map(_handleApplicationUnbondingBeginEvent));
 }

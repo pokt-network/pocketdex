@@ -1,5 +1,9 @@
 import { TextEncoder } from "util";
 import {
+  Commit,
+  CommitSignature,
+} from "@cosmjs/tendermint-rpc";
+import {
   CosmosBlock,
   Header,
   TxData,
@@ -45,7 +49,7 @@ function getHeaderSize(header: Header): number {
   size += getStringOrNumberSize(header.chainId);
   size += getStringOrNumberSize(header.height);
 
-  // Use ISO string format for the time field
+  // Use an ISO string format for the time field
   size += getStringOrNumberSize(header.time.toISOString());
 
   size += getStringOrNumberSize(header.version.block);
@@ -63,7 +67,7 @@ function getHeaderSize(header: Header): number {
 }
 
 // Utility function to get the byte size of a LastCommit
-function getLastCommitSize(lastCommit: any): number {
+function getLastCommitSize(lastCommit: Commit): number {
   let size = 0;
 
   size += getStringOrNumberSize(lastCommit.height);
@@ -72,11 +76,11 @@ function getLastCommitSize(lastCommit: any): number {
   size += getStringOrNumberSize(lastCommit.blockId.parts.total);
   size += getUint8ArraySize(lastCommit.blockId.parts.hash);
 
-  size += lastCommit.signatures.reduce((total: number, sig: any) => {
+  size += lastCommit.signatures.reduce((total: number, sig: CommitSignature) => {
     total += getStringOrNumberSize(sig.blockIdFlag);
     total += sig.validatorAddress ? getUint8ArraySize(sig.validatorAddress) : 0;
 
-    // Use ISO string format for the timestamp field
+    // Use an ISO string format for the timestamp field
     total += sig.timestamp ? getStringOrNumberSize(sig.timestamp.toISOString()) : 0;
 
     total += sig.signature ? getUint8ArraySize(sig.signature) : 0;
@@ -116,7 +120,7 @@ function getTxDataSize(txData: TxData): number {
 }
 
 // Utility function to get the byte size of an Evidence
-function getEvidenceSize(evidence: any): number {
+function getEvidenceSize(evidence: never): number {
   // Adjust as per actual evidence structure
   return new TextEncoder().encode(stringify(evidence).trim()).length;
 }
@@ -139,7 +143,7 @@ export function getBlockByteSize(block: CosmosBlock): number {
   // so due to the unknown on the structure, use stringify and calculate it is
   // the best for now.
   if (block.block.evidence) {
-    size += block.block.evidence.reduce((total, ev) => total + getEvidenceSize(ev), 0);
+    size += block.block.evidence.reduce((total, ev) => total + getEvidenceSize(ev as never), 0);
   }
 
   // Calculate the last commit size, including its nested structures

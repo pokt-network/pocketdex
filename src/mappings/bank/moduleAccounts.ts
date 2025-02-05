@@ -4,7 +4,6 @@ import { ModuleAccount } from "cosmjs-types/cosmos/auth/v1beta1/auth";
 import { Balance } from "../../types";
 import { ModuleAccountProps } from "../../types/models/ModuleAccount";
 import { Any } from "../../types/proto-interfaces/google/protobuf/any";
-import { CACHE_MODULE_ADDRESS } from "../constants";
 import {
   getBalanceId,
   getBlockId,
@@ -24,10 +23,6 @@ export function getModuleAccountProps(account: ModuleAccount): ModuleAccountProp
     sequence: account.baseAccount?.sequence as bigint,
     permissions: account.permissions,
   };
-}
-
-export async function getCacheModuleAccounts(): Promise<Set<string>> {
-  return new Set((await cache.get(CACHE_MODULE_ADDRESS)) ?? []);
 }
 
 export async function queryModuleAccounts(): Promise<Array<ExtendedAccount>> {
@@ -62,7 +57,7 @@ export async function queryModuleAccounts(): Promise<Array<ExtendedAccount>> {
   return extendedAccounts;
 }
 
-export async function handleModuleAccounts(block: CosmosBlock): Promise<void> {
+export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<string>> {
   const moduleAccountsSet: Set<string> = new Set();
   const moduleAccounts = await queryModuleAccounts();
 
@@ -102,5 +97,5 @@ export async function handleModuleAccounts(block: CosmosBlock): Promise<void> {
     }
   }
 
-  await cache.set(CACHE_MODULE_ADDRESS, Array.from(moduleAccountsSet));
+  return moduleAccountsSet;
 }

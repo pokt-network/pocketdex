@@ -1,4 +1,5 @@
 import type { BaseAccountSDKType } from "../../types/proto-interfaces/cosmos/auth/v1beta1/auth";
+import { GrantAuthorization } from "../../types/proto-interfaces/cosmos/authz/v1beta1/authz";
 import type { Balance } from "../../types/proto-interfaces/cosmos/bank/v1beta1/genesis";
 import type {
   Coin,
@@ -6,7 +7,6 @@ import type {
 } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 import type { GatewaySDKType } from "../../types/proto-interfaces/poktroll/gateway/types";
 import type { SupplierSDKType } from "../../types/proto-interfaces/poktroll/shared/supplier";
-import { GrantAuthorization } from "../../types/proto-interfaces/cosmos/authz/v1beta1/authz";
 
 type Supplier = Omit<SupplierSDKType, "stake"> & {stake: Required<CoinSDKType> }
 type Params = Record<string, unknown>

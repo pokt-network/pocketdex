@@ -37,8 +37,6 @@ async function _handleMsgAddService(
   ]);
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleMsgAddService, referenced in project.ts
-export async function handleMsgAddService(msg: CosmosMessage<MsgAddService>): Promise<void> {
-  await _handleMsgAddService(msg);
+export async function handleMsgAddService(messages: Array<CosmosMessage<MsgAddService>>): Promise<void> {
+  await Promise.all(messages.map(_handleMsgAddService));
 }

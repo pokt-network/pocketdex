@@ -41,7 +41,6 @@ function _handleNativeTransfer(msg: CosmosMessage<NativeTransferMsg>): NativeTra
   };
 }
 
-// handleNativeTransfer, referenced in project.ts, handles native transfer events
 export async function handleNativeTransfer(messages: CosmosMessage[]): Promise<void> {
   await store.bulkCreate("NativeTransfer", messages.map(_handleNativeTransfer));
 }

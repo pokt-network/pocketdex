@@ -16,38 +16,43 @@ vendors:
         - "tendermint-rpc"
         - "stargate"
 
-  - name: "@subql"
-    path: "vendor/subql"
-    install:
-      required: true
-      script: "yarn install"
-    build:
-      required: true
-      script: "yarn build"
-    dependencies:
-      - "@cosmjs"
-    pack:
-      include:
-        - "cli"
-        - "common"
-        - "node"
-        - "node-core"
-        - "query"
-        - "types"
-        - "types-core"
-        - "utils"
+########################################################################################################################
+# Uncomment the following lines if you need to use vendor forks to handle any fix/features not supported yet by
+# the Subquery team.
+########################################################################################################################
 
-  - name: "@subql-cosmos"
-    path: "vendor/subql-cosmos"
-    install:
-      required: true
-      script: "yarn install"
-    build:
-      required: true
-      script: "yarn build"
-    packageResolution:
-      "node-cosmos": "node"
-      "types-cosmos": "types"
-    dependencies:
-      - "@cosmjs"
-      - "@subql"
+#  - name: "@subql"
+#    path: "vendor/subql"
+#    install:
+#      required: true
+#      script: "yarn install"
+#    build:
+#      required: true
+#      script: "yarn build"
+#    dependencies:
+#      - "@cosmjs"
+#    pack:
+#      include:
+#        - "cli"
+#        - "common"
+#        - "node"
+#        - "node-core"
+#        - "query"
+#        - "types"
+#        - "types-core"
+#        - "utils"
+#
+#  - name: "@subql-cosmos"
+#    path: "vendor/subql-cosmos"
+#    install:
+#      required: true
+#      script: "yarn install"
+#    build:
+#      required: true
+#      script: "yarn build"
+#    packageResolution:
+#      "node-cosmos": "node"
+#      "types-cosmos": "types"
+#    dependencies:
+#      - "@cosmjs"
+#      - "@subql"

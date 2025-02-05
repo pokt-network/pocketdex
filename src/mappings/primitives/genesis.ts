@@ -185,12 +185,13 @@ async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void>
     const auth = authorization.authorization as unknown as Record<string, string>;
 
     authz.push({
-      id: `${authorization.granter}-${auth.msg as string}-${authorization.grantee}}`,
+      id: `${authorization.granter}:${auth.msg.replace("/", "") as string}-${authorization.grantee}`,
       granterId: authorization.granter,
       granteeId: authorization.grantee,
       expiration: authorization.expiration ? new Date(authorization.expiration) : undefined,
       msg: auth.msg,
       type: auth["@type"],
+      eventId: "genesis",
     });
   }
 
@@ -740,7 +741,8 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
         }
 
         validators.push({
-          id: validatorMsg.address,
+          id: validatorMsg.signerId,
+          ed25519_id: validatorMsg.address,
           signerId: validatorMsg.signerId,
           signerPoktPrefixId: validatorMsg.signerPoktPrefixId,
           description: validatorMsg.description,

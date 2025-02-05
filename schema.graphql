@@ -26,6 +26,7 @@ type Authz @entity {
   type: String! @index
   msg: String! @index
   expiration: Date
+  event: Event!
 }
 
 type EventAttribute @jsonField(indexed: false) {
@@ -262,7 +263,7 @@ type ValidatorDescription @jsonField(indexed: true) {
   details: String
 }
 
-type ValidatorCommission @jsonField {
+type ValidatorCommissionParams @jsonField {
   # commission block in plain format
   rate: String!
   maxRate: String!
@@ -282,7 +283,7 @@ type MsgCreateValidator @entity {
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   delegator: Account
   description: ValidatorDescription!
-  commission: ValidatorCommission!
+  commission: ValidatorCommissionParams!
   minSelfDelegation: Int!
   stakeDenom: String!
   stakeAmount: BigInt!
@@ -293,14 +294,16 @@ type MsgCreateValidator @entity {
 
 # What is a validator?: https://github.com/cosmos/cosmos/blob/master/VALIDATORS_FAQ.md
 type Validator @entity {
-  # ed25519 pubkey hex that is used on proposer_address and address at /validators endpoint of tendermint
+  # secp256k1 address
   id: ID!
+  # ed25519 pubkey hex that is used on proposer_address and address at /validators endpoint of tendermint
+  ed25519_id: String!
   # secp256k1 PubKey relation
   signer: Account!
   signerPoktPrefix: Account!
   delegator: Account
   description: ValidatorDescription!
-  commission: ValidatorCommission!
+  commission: ValidatorCommissionParams!
   minSelfDelegation: Int!
   # value block in plain format
   stakeDenom: String!
@@ -311,6 +314,32 @@ type Validator @entity {
   createMsg: MsgCreateValidator!
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   #updateMsg: [MsgEditValidator]!
+  commissions: [ValidatorCommission] @derivedFrom(field: "validator")
+  rewards: [ValidatorReward] @derivedFrom(field: "validator")
+}
+
+# Captures the cut taken by the validator before distributing the rest.
+# Based on the commission rate the validator sets.
+# Separates validator earnings from what’s passed on to delegators.
+type ValidatorCommission @entity {
+  id: ID!
+  validator: Validator!
+  amount: BigInt!
+  denom: String!
+  block: Block!
+  event: Event!
+}
+
+# Represents the total rewards earned from block rewards and transaction fees.
+# Includes both the validator’s share and the portion allocated to delegators.
+# Shows the full earnings before any deductions.
+type ValidatorReward @entity {
+  id: ID!
+  validator: Validator!
+  amount: BigInt!
+  denom: String!
+  block: Block!
+  event: Event!
 }
 
 type Service @entity {

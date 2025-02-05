@@ -3090,14 +3090,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@subql/cli@npm:^5.5.0":
-  version: 5.5.0
-  resolution: "@subql/cli@npm:5.5.0"
+"@subql/cli@npm:^5.5.1":
+  version: 5.5.1
+  resolution: "@subql/cli@npm:5.5.1"
   dependencies:
     "@inquirer/prompts": ^5.3.6
     "@oclif/core": ^2.16.0
-    "@subql/common": 5.3.0
-    "@subql/utils": 2.17.1
+    "@subql/common": 5.3.1
+    "@subql/utils": 2.17.2
     boxen: 5.1.2
     chalk: ^4
     ejs: ^3.1.10
@@ -3123,13 +3123,13 @@ __metadata:
     yaml-loader: ^0.8.1
   bin:
     subql: ./bin/run
-  checksum: d279cb219b9496054b3f96afe63932c9eb87f8c2a2073ec26d69bd23875af33da2d1e24f4cb39c390eb928c909b63327837e48d326bdc760ed0ee79892c27d87
+  checksum: 0e94a66386db8ceb4475aa71132d6d71104383949f0ff88805f444f539fc21359f8a2444da4897d449defd52cc500e54960e008bb7893f603704b7329cab8c4c
   languageName: node
   linkType: hard
 
-"@subql/common-cosmos@npm:5.1.1":
-  version: 5.1.1
-  resolution: "@subql/common-cosmos@npm:5.1.1"
+"@subql/common-cosmos@npm:5.1.2":
+  version: 5.1.2
+  resolution: "@subql/common-cosmos@npm:5.1.2"
   dependencies:
     "@cosmwasm/ts-codegen": ^1.11.1
     "@protobufs/cosmos": ^0.1.0
@@ -3139,8 +3139,8 @@ __metadata:
     "@protobufs/google": ^0.0.10
     "@protobufs/ibc": ^0.1.0
     "@protobufs/tendermint": ^0.0.10
-    "@subql/common": ^5.3.0
-    "@subql/types-cosmos": 4.0.1-0
+    "@subql/common": ^5.3.1
+    "@subql/types-cosmos": 4.0.1
     "@subql/x-cosmology-telescope": ^1.4.14
     fs-extra: ^11.1.1
     js-yaml: ^4.1.0
@@ -3149,15 +3149,15 @@ __metadata:
     class-transformer: "*"
     class-validator: "*"
     ejs: "*"
-  checksum: 042f2d29bab8bde5bb84f79dcfed1dd421d5e93939c5e8426f9db379240cc08e868127b07cdc1cabc5081dd08c59f46f2d09b8b2a5d479cbba808c251abf4348
+  checksum: 0b0153730e782a60d4ee0ff73a83d6aa5745a727aee46ab743b030e5283a4fd3cff75fe740f0f9a4292426034ed9c9f45d01c12ad6a5ec27c2424cc2dda42368
   languageName: node
   linkType: hard
 
-"@subql/common@npm:5.3.0, @subql/common@npm:^5.3.0":
-  version: 5.3.0
-  resolution: "@subql/common@npm:5.3.0"
+"@subql/common@npm:5.3.1, @subql/common@npm:^5.3.1":
+  version: 5.3.1
+  resolution: "@subql/common@npm:5.3.1"
   dependencies:
-    "@subql/types-core": 2.0.0
+    "@subql/types-core": 2.0.1
     axios: ^0.28.0
     class-transformer: ^0.5.1
     class-validator: ^0.14.1
@@ -3166,22 +3166,22 @@ __metadata:
     reflect-metadata: ^0.1.14
     semver: ^7.6.3
     update-notifier: ^5.1.0
-  checksum: 2f21993d5d0c841c5bb93c1493dcc04d1978383e18f705ed3642fdf8e3370f28f3acbabf8e81fc3d27b0878dc22845487a5cb3b3cd342502ec315a575f26dd8c
+  checksum: 7b667e57d26434f704e8e1575f7fea3f33bf10562d72aac6b07d818a617ea3c1707c5b475579c05bd4e2f1c0d3c7a28174d03f6137ec2d86a1e445098a0ae829
   languageName: node
   linkType: hard
 
-"@subql/node-core@npm:^16.2.0":
-  version: 16.2.0
-  resolution: "@subql/node-core@npm:16.2.0"
+"@subql/node-core@npm:^16.2.1":
+  version: 16.2.1
+  resolution: "@subql/node-core@npm:16.2.1"
   dependencies:
     "@apollo/client": ^3.11.2
     "@nestjs/common": ^9.4.0
     "@nestjs/event-emitter": ^2.0.0
     "@nestjs/schedule": ^3.0.1
-    "@subql/common": 5.3.0
-    "@subql/testing": 2.2.2
-    "@subql/types": 3.11.4
-    "@subql/utils": 2.17.1
+    "@subql/common": 5.3.1
+    "@subql/testing": 2.2.3
+    "@subql/types": 3.11.5
+    "@subql/utils": 2.17.2
     "@willsoto/nestjs-prometheus": ^5.4.0
     async-mutex: ^0.5.0
     cron-converter: ^2.0.1
@@ -3198,13 +3198,13 @@ __metadata:
     toposort-class: ^1.0.1
     vm2: ^3.9.19
     yargs: ^16.2.0
-  checksum: ca9a810103b7dc319d8daaa9d13778658c4b2c0774b701a008845f5c60d688e7cf11768c8e5c4e509e43a91f409a8d986fcf20364334d5a3fa478fb23708c2f4
+  checksum: ca6c62e0dda42314b02270c9941cfa1f6bc407aaf8521071da262204b359db2f7c6b01667091dd137496dc30c2afa570325b01934698dbb166fbb60ced3933e9
   languageName: node
   linkType: hard
 
-"@subql/node-cosmos@npm:^4.4.0":
-  version: 4.4.0
-  resolution: "@subql/node-cosmos@npm:4.4.0"
+"@subql/node-cosmos@npm:^4.4.1":
+  version: 4.4.1
+  resolution: "@subql/node-cosmos@npm:4.4.1"
   dependencies:
     "@cosmjs/cosmwasm-stargate": ^0.32.4
     "@cosmjs/proto-signing": ^0.32.4
@@ -3216,10 +3216,10 @@ __metadata:
     "@nestjs/event-emitter": ^2.0.0
     "@nestjs/platform-express": ^9.4.0
     "@nestjs/schedule": ^3.0.1
-    "@subql/common": ^5.3.0
-    "@subql/common-cosmos": 5.1.1
-    "@subql/node-core": ^16.2.0
-    "@subql/types-cosmos": 4.0.1-0
+    "@subql/common": ^5.3.1
+    "@subql/common-cosmos": 5.1.2
+    "@subql/node-core": ^16.2.1
+    "@subql/types-cosmos": 4.0.1
     lodash: ^4.17.21
     protobufjs: ^6.11.4
     reflect-metadata: ^0.1.13
@@ -3229,64 +3229,52 @@ __metadata:
     "@subql/utils": "*"
   bin:
     subql-node-cosmos: ./bin/run
-  checksum: ac5811496d167782e3bdabe0fe29ad733a51e29f50c29151b84050752a84db56562e9fa6e66aeb3593d1c3ec6b5d7066c2474b2b15bc88ead714eb6a1f57acef
+  checksum: a76f23f0f1243c277724836ced1c1118b18a5d0b005131e1c2adb29398b3e7def874ff4697e00684c6c5ee86ac9522367a1becfdec23ff3cc281d91c158008bf
   languageName: node
   linkType: hard
 
-"@subql/testing@npm:2.2.2, @subql/testing@npm:^2.2.2":
-  version: 2.2.2
-  resolution: "@subql/testing@npm:2.2.2"
+"@subql/testing@npm:2.2.3, @subql/testing@npm:^2.2.3":
+  version: 2.2.3
+  resolution: "@subql/testing@npm:2.2.3"
   dependencies:
-    "@subql/types-core": ^2.0.0
-  checksum: 0f720d9c3f791bd1ffa30d7040cbac8ef5efd41fb18ab3002a87067d92954ca8839b2634abc8cdbdcde67dd284d2ed0fb98fae7f81487ca51f9ee7d225a8fa39
+    "@subql/types-core": ^2.0.1
+  checksum: 4ac3676fb5ce3f17af2598b36dc9fcf74866817e9816d481b82aa5081bf062808383a65f11623b38c4ecc9e24d7a59fc8e4cbe6215512c3afa1dbada1f96ad7e
   languageName: node
   linkType: hard
 
-"@subql/types-core@npm:2.0.0, @subql/types-core@npm:^2.0.0":
-  version: 2.0.0
-  resolution: "@subql/types-core@npm:2.0.0"
-  checksum: cb32c8f1eed13eabee65fb9dd0b4b64435ca18e820f640bd29a3e3a0d4c58692df1163fbc66c2dd29b52faab60b4bd895518c5aad63ec81ade5c250bf580619c
+"@subql/types-core@npm:2.0.1, @subql/types-core@npm:^2.0.1":
+  version: 2.0.1
+  resolution: "@subql/types-core@npm:2.0.1"
+  checksum: e9727804c720bbb55f90afc220940da5ef31c2a3c659d22c3756b9dc6e48ed50bf54858c66e6e9a380a6996c26452f8cd3c055531d6af80fa23569df2fecfea0
   languageName: node
   linkType: hard
 
-"@subql/types-cosmos@npm:4.0.1-0":
-  version: 4.0.1-0
-  resolution: "@subql/types-cosmos@npm:4.0.1-0"
-  dependencies:
-    "@cosmjs/cosmwasm-stargate": ^0.32.4
-    "@cosmjs/proto-signing": ^0.32.4
-    "@cosmjs/stargate": ^0.32.4
-    "@subql/types-core": ^2.0.0
-  checksum: bd3b8f3b7125982b4eeb43561988232aee63de25d70dd05f8ff858fc817cc7d8e8495600e49eb1b06e93430f314af27e32ca50aaf8a6575903b890a18b9b4a13
-  languageName: node
-  linkType: hard
-
-"@subql/types-cosmos@npm:^4.0.0":
-  version: 4.0.0
-  resolution: "@subql/types-cosmos@npm:4.0.0"
+"@subql/types-cosmos@npm:4.0.1, @subql/types-cosmos@npm:^4.0.1":
+  version: 4.0.1
+  resolution: "@subql/types-cosmos@npm:4.0.1"
   dependencies:
     "@cosmjs/cosmwasm-stargate": ^0.32.4
     "@cosmjs/proto-signing": ^0.32.4
     "@cosmjs/stargate": ^0.32.4
-    "@subql/types-core": ^2.0.0
-  checksum: f8926c96aa050a4ec8cc337b3baaf66479cefbf70a43cbb462b09e39eaa1ba084ba5b0db5ea8db172ea370e7fb45fa84f1fa728c9623c4b3ac5f7af101e1ec8e
+    "@subql/types-core": ^2.0.1
+  checksum: 4df994c1dc57be066c1315762c3138d25322745bac4a9c2b6ec4a9847ef1ea89158d4deba8b2eefaed4e0c061bfdf1cad0aa50a58793d73a119d29d023649ce3
   languageName: node
   linkType: hard
 
-"@subql/types@npm:3.11.4":
-  version: 3.11.4
-  resolution: "@subql/types@npm:3.11.4"
+"@subql/types@npm:3.11.5":
+  version: 3.11.5
+  resolution: "@subql/types@npm:3.11.5"
   dependencies:
-    "@subql/types-core": 2.0.0
+    "@subql/types-core": 2.0.1
   peerDependencies:
     "@polkadot/api": ^14
-  checksum: 2186436d0ea14d9b4b76a89a0aa3267ae869aed066977706555a2fb83d9a8aa195e9e2a341461b3654fa83ca574c8ce616ce8b513c5dc738806d6b52cccdeb0d
+  checksum: 848f53d02b65499b851878094d9ff954d92f3cac41523e4d37495a57983ecab37e35db843a0ef066c39fa8dac8aa222bcb743f9c1b425ef1356cc22cddc9b3a5
   languageName: node
   linkType: hard
 
-"@subql/utils@npm:2.17.1, @subql/utils@npm:^2.17.1":
-  version: 2.17.1
-  resolution: "@subql/utils@npm:2.17.1"
+"@subql/utils@npm:2.17.2, @subql/utils@npm:^2.17.2":
+  version: 2.17.2
+  resolution: "@subql/utils@npm:2.17.2"
   dependencies:
     "@polkadot/util": ^13.2.3
     "@polkadot/util-crypto": ^13.2.3
@@ -3299,7 +3287,7 @@ __metadata:
     lodash: ^4.17.21
     pino: ^6.13.3
     rotating-file-stream: ^3.2.3
-  checksum: 450640c82eb6e2db4ec6a3f13b23707f4df045dfe2ee5ea6af05ffe04ff6683c80329926e88ace29eaecd1f525c9328d390ec362460755a217d9f5b4e98b3e68
+  checksum: 183af642dd512a264ee22a40703838fccb59c5eb39ac758e2f766fe03ecef958414b133240b88ea338b2021eaad0c54146d80698a6a513410f583e65f9118906
   languageName: node
   linkType: hard
 
@@ -9722,11 +9710,11 @@ __metadata:
   resolution: "pocketdex@workspace:."
   dependencies:
     "@bufbuild/protobuf": ^2.2.3
-    "@subql/cli": ^5.5.0
-    "@subql/node-cosmos": ^4.4.0
-    "@subql/testing": ^2.2.2
-    "@subql/types-cosmos": ^4.0.0
-    "@subql/utils": ^2.17.1
+    "@subql/cli": ^5.5.1
+    "@subql/node-cosmos": ^4.4.1
+    "@subql/testing": ^2.2.3
+    "@subql/types-cosmos": ^4.0.1
+    "@subql/utils": ^2.17.2
     "@types/json-bigint": ^1.0.4
     "@types/node": ^22.0.0
     "@typescript-eslint/eslint-plugin": ^5.10.2

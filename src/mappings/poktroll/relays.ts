@@ -5,16 +5,16 @@ import {
 import { claimExpirationReasonFromJSON } from "../../client/poktroll/tokenomics/event";
 import {
   ClaimExpirationReason,
-  EventClaimExpired,
-  EventClaimSettled,
-  EventClaimUpdated,
-  EventProofUpdated,
-  MsgCreateClaim as MsgCreateClaimEntity,
-  MsgSubmitProof as MsgSubmitProofEntity,
   ProofRequirementReason,
-  Relay,
   RelayStatus,
 } from "../../types";
+import { EventClaimExpiredProps } from "../../types/models/EventClaimExpired";
+import { EventClaimSettledProps } from "../../types/models/EventClaimSettled";
+import { EventClaimUpdatedProps } from "../../types/models/EventClaimUpdated";
+import { EventProofUpdatedProps } from "../../types/models/EventProofUpdated";
+import { MsgCreateClaimProps } from "../../types/models/MsgCreateClaim";
+import { MsgSubmitProofProps } from "../../types/models/MsgSubmitProof";
+import { RelayProps } from "../../types/models/Relay";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 import {
   MsgCreateClaim,
@@ -127,9 +127,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
   };
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleMsgCreateClaim, referenced in project.ts
-export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): Promise<void> {
+function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): [MsgCreateClaimProps, RelayProps] {
   const { rootHash, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
   const applicationId = sessionHeader?.applicationAddress || "";
   const serviceId = sessionHeader?.serviceId || "";
@@ -152,25 +150,23 @@ export async function handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): 
     rootHash: stringify(rootHash),
   };
 
-  await Promise.all([
-    MsgCreateClaimEntity.create({
+  return [
+    {
       id: messageId(msg),
       ...shared,
       transactionId: msg.tx.hash,
       blockId: getBlockId(msg.block),
-    }),
-    Relay.create({
+    },
+    {
       id,
       ...shared,
       status: RelayStatus.Pending,
       msgCreateClaimId: messageId(msg),
-    }).save(),
-  ]);
+    },
+  ];
 }
 
-// TODO: update this to work with BatchMessage handler
-// handleMsgSubmitProof, referenced in project.ts
-export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): Promise<void> {
+function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): [MsgSubmitProofProps, RelayProps] {
   const { proof, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
 
   const applicationId = sessionHeader?.applicationAddress || "";
@@ -187,15 +183,15 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
   };
 
-  await Promise.all([
-    MsgSubmitProofEntity.create({
+  return [
+    {
       id: msgId,
       ...shared,
       proof: stringify(proof),
       transactionId: msg.tx.hash,
       blockId: getBlockId(msg.block),
-    }).save(),
-    store.bulkUpdate("Relay", [{
+    },
+    {
       ...shared,
       id: getRelayId({
         applicationId,
@@ -205,13 +201,11 @@ export async function handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): 
       }),
       status: RelayStatus.Pending,
       msgSubmitProofId: msgId,
-    }] as Array<Relay>, [...Object.keys(shared), "id", "status", "msgSubmitProofId"]),
-  ]);
+    },
+  ];
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleEventClaimSettled, referenced in project.ts
-export async function handleEventClaimSettled(event: CosmosEvent): Promise<void> {
+function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, RelayProps] {
   const {
     claim,
     claimed,
@@ -238,8 +232,15 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
     claimedAmount: BigInt(claimed?.amount || "0"),
   } as const;
 
-  await Promise.all([
-    store.bulkUpdate("Relay", [{
+  return [
+    {
+      ...shared,
+      transactionId: event.tx?.hash,
+      blockId: getBlockId(event.block),
+      id: getEventId(event),
+      proofRequirement,
+    },
+    {
       ...shared,
       id: getRelayId({
         applicationId: session_header?.application_address || "",
@@ -249,20 +250,11 @@ export async function handleEventClaimSettled(event: CosmosEvent): Promise<void>
       }),
       status: RelayStatus.Success,
       eventClaimSettledId: getEventId(event),
-    }] as Array<Relay>, [...Object.keys(shared), "id", "status", "eventClaimSettledId"]),
-    EventClaimSettled.create({
-      ...shared,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-      id: getEventId(event),
-      proofRequirement,
-    }).save(),
-  ]);
+    },
+  ];
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleEventClaimExpired, referenced in project.ts
-export async function handleEventClaimExpired(event: CosmosEvent): Promise<void> {
+function _handleEventClaimExpired(event: CosmosEvent): [EventClaimExpiredProps, RelayProps] {
   const {
     claim,
     claimed,
@@ -289,8 +281,15 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
     claimedAmount: BigInt(claimed?.amount || "0"),
   } as const;
 
-  await Promise.all([
-    store.bulkUpdate("Relay", [{
+  return [
+    {
+      ...shared,
+      id: getEventId(event),
+      expirationReason,
+      transactionId: event.tx?.hash,
+      blockId: getBlockId(event.block),
+    },
+    {
       ...shared,
       id: getRelayId({
         applicationId: session_header?.application_address || "",
@@ -300,20 +299,11 @@ export async function handleEventClaimExpired(event: CosmosEvent): Promise<void>
       }),
       eventClaimExpiredId: getEventId(event),
       status: RelayStatus.Fail,
-    }] as Array<Relay>, [...Object.keys(shared), "id", "status", "eventClaimExpiredId"]),
-    EventClaimExpired.create({
-      ...shared,
-      id: getEventId(event),
-      expirationReason,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-    }).save(),
-  ]);
+    },
+  ];
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleEventClaimUpdated, referenced in project.ts
-export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void> {
+function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, RelayProps] {
   const {
     claim,
     claimed,
@@ -348,25 +338,23 @@ export async function handleEventClaimUpdated(event: CosmosEvent): Promise<void>
     claimedAmount: BigInt(claimed?.amount || "0"),
   } as const;
 
-  await Promise.all([
-    store.bulkUpdate("Relay", [{
-      ...shared,
-      id: relayId,
-      status: RelayStatus.Pending,
-    }] as Array<Relay>, [...Object.keys(shared), "id", "status"]),
-    EventClaimUpdated.create({
+  return [
+    {
       ...shared,
       id: getEventId(event),
       relayId,
       transactionId: event.tx?.hash,
       blockId: getBlockId(event.block),
-    }).save(),
-  ]);
+    },
+    {
+      ...shared,
+      id: relayId,
+      status: RelayStatus.Pending,
+    },
+  ];
 }
 
-// TODO: update this to work with BatchEvent handler
-// handleEventProofUpdated, referenced in project.ts
-export async function handleEventProofUpdated(event: CosmosEvent): Promise<void> {
+function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, RelayProps] {
   const {
     claim,
     claimed,
@@ -401,19 +389,115 @@ export async function handleEventProofUpdated(event: CosmosEvent): Promise<void>
     sessionId: session_header?.session_id || "",
   });
 
-  await Promise.all([
-    EventProofUpdated.create({
+  return [
+    {
       id: getEventId(event),
       ...shared,
       closestMerkleProof: proof ? stringify(proof.closest_merkle_proof) : undefined,
       relayId: id,
       transactionId: event.tx?.hash,
       blockId: getBlockId(event.block),
-    }).save(),
-    store.bulkUpdate("Relay", [{
+    },
+    {
       ...shared,
       id,
       status: RelayStatus.Pending,
-    }] as Array<Relay>, [...Object.keys(shared), "id", "status"]),
+    },
+  ];
+}
+
+export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
+  const claimMsgs = [];
+  const relays = [];
+
+  for (const msg of messages) {
+    const [claimMsg, relay] = _handleMsgCreateClaim(msg);
+    claimMsgs.push(claimMsg);
+    relays.push(relay);
+  }
+
+  await Promise.all([
+    store.bulkCreate("MsgCreateClaim", claimMsgs),
+    store.bulkCreate("Relay", relays),
+  ]);
+}
+
+export async function handleMsgSubmitProof(messages: Array<CosmosMessage<MsgSubmitProof>>): Promise<void> {
+  const proofMsgs = [];
+  const relays = [];
+
+  for (const msg of messages) {
+    const [proofMsg, relay] = _handleMsgSubmitProof(msg);
+    proofMsgs.push(proofMsg);
+    relays.push(relay);
+  }
+
+  await Promise.all([
+    store.bulkCreate("MsgSubmitProof", proofMsgs),
+    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+  ]);
+}
+
+export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promise<void> {
+  const eventsExpired = [];
+  const relays = [];
+
+  for (const event of events) {
+    const [eventExpired, relay] = _handleEventClaimExpired(event);
+    eventsExpired.push(eventExpired);
+    relays.push(relay);
+  }
+
+  await Promise.all([
+    store.bulkCreate("EventClaimExpired", eventsExpired),
+    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+  ]);
+}
+
+export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promise<void> {
+  const eventsSettled = [];
+  const relays = [];
+
+  for (const event of events) {
+    const [eventSettled, relay] = _handleEventClaimSettled(event);
+    eventsSettled.push(eventSettled);
+    relays.push(relay);
+  }
+
+  await Promise.all([
+    store.bulkCreate("EventClaimSettled", eventsSettled),
+    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+  ]);
+}
+
+export async function handleEventClaimUpdated(events: Array<CosmosEvent>): Promise<void> {
+  const eventsUpdated = [];
+  const relays = [];
+
+  for (const event of events) {
+    const [eventUpdated, relay] = _handleEventClaimUpdated(event);
+    eventsUpdated.push(eventUpdated);
+    relays.push(relay);
+  }
+
+  await Promise.all([
+    store.bulkCreate("EventClaimUpdated", eventsUpdated),
+    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+  ]);
+}
+
+export async function handleEventProofUpdated(events: Array<CosmosEvent>): Promise<void> {
+  const eventsUpdated = [];
+  const relays = [];
+
+  for (const event of events) {
+    const [eventUpdated, relay] = _handleEventProofUpdated(event);
+    eventsUpdated.push(eventUpdated);
+    relays.push(relay);
+  }
+
+  await Promise.all([
+    store.bulkCreate("EventProofUpdated", eventsUpdated),
+    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
   ]);
 }

@@ -23,7 +23,6 @@ import {
   hasValidAmountAttribute,
   isEventOfMessageKind,
 } from "../utils/primitives";
-import { getCacheModuleAccounts } from "./moduleAccounts";
 
 export async function enforceAccountExistence(address: string, chainId: string, module?: ModuleAccountProps): Promise<void> {
   const account = await Account.get(address);
@@ -82,7 +81,7 @@ export async function updateAccountBalance(address: string, denom: string, offse
 //   await saveNativeBalanceEvent(`${event.tx.hash}-fee`, signerAddress as string, feeAmount, feeDenom, event);
 // }
 
-function generateNativeBalanceChangeId(event: CosmosEvent): string {
+export function generateNativeBalanceChangeId(event: CosmosEvent): string {
   switch (event.kind) {
     case CosmosEventKind.Transaction:
       return `${event.tx?.hash}-event-${event.idx}`;
@@ -101,7 +100,6 @@ async function handleNativeBalanceChange(
   events: CosmosEvent[],
   key: string,
 ): Promise<void> {
-  const moduleAccounts = await getCacheModuleAccounts();
   const chainId = events[0].block.block.header.chainId;
   const blockId = getBlockId(events[0].block);
 
@@ -113,8 +111,6 @@ async function handleNativeBalanceChange(
       if (attribute.key !== key) continue;
 
       const address = attribute.value as string;
-
-      if (moduleAccounts.has(address)) continue;
 
       const amountStr = event.event.attributes[parseInt(i) + 1]?.value as string;
 
