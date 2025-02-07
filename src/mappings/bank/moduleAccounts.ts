@@ -9,7 +9,7 @@ import {
   getBlockId,
 } from "../utils/ids";
 import { stringify } from "../utils/json";
-import { enforceAccountExistence } from "./balanceChange";
+import { enforceAccountsExistence } from "./balanceChange";
 
 export type ExtendedAccount = ModuleAccount & {
   balances: Array<Coin>
@@ -58,20 +58,24 @@ export async function queryModuleAccounts(): Promise<Array<ExtendedAccount>> {
 }
 
 export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<string>> {
+  const blockId = getBlockId(block);
   const moduleAccountsSet: Set<string> = new Set();
   const moduleAccounts = await queryModuleAccounts();
+  const accounts = [];
 
   for (const moduleAccount of moduleAccounts) {
     const moduleAccountProps = getModuleAccountProps(moduleAccount);
     const address = moduleAccountProps.id;
-    moduleAccountsSet.add(address);
+    accounts.push({
+      account: {
+        id: address,
+        chainId: block.block.header.chainId,
+        firstBlockId: blockId
+      },
+      module: moduleAccountProps,
+    });
 
-    // ensure account and module account exists
-    await enforceAccountExistence(
-      moduleAccount.baseAccount?.address as string,
-      block.header.chainId,
-      moduleAccountProps,
-    );
+    moduleAccountsSet.add(address);
 
     // check the balances
     for (const { amount, denom } of moduleAccount.balances) {
@@ -85,17 +89,20 @@ export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<stri
           accountId: address,
           denom,
           amount: BigInt(amount),
-          lastUpdatedBlockId: getBlockId(block),
+          lastUpdatedBlockId: blockId,
         });
       } else {
         // if already exists, set the new amount
         balance.amount = BigInt(amount);
-        balance.lastUpdatedBlockId = getBlockId(block);
+        balance.lastUpdatedBlockId = blockId;
       }
 
       await balance.save();
     }
   }
+
+  // enforce accounts existence in bulk
+  await enforceAccountsExistence(accounts);
 
   return moduleAccountsSet;
 }

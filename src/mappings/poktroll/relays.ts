@@ -1,7 +1,9 @@
+import { toHex } from "@cosmjs/encoding";
 import {
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
+import { omit } from "lodash";
 import { claimExpirationReasonFromJSON } from "../../client/poktroll/tokenomics/event";
 import {
   ClaimExpirationReason,
@@ -147,7 +149,8 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): [MsgCreateCl
     sessionId,
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
-    rootHash: stringify(rootHash),
+    // todo: convert uint8array that come as uint8map to hex string
+    rootHash: toHex(rootHash),
   };
 
   return [
@@ -406,6 +409,28 @@ function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, 
   ];
 }
 
+// _updateRelays - we need to update relay documents without historical tracking get to involve.
+async function _updateRelays(relays: Array<RelayProps>): Promise<void> {
+  const promises: Promise<void>[] = [];
+  const RelayModel = store.modelProvider.getModel("Relay");
+  relays.forEach(relay => {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    promises.push(RelayModel.model.update(
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      omit(relay, "id"),
+      {
+        where: {
+          id: relay.id,
+        },
+        transaction: store.context.transaction,
+      },
+    ));
+  });
+  await Promise.all(promises);
+}
+
 export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
   const claimMsgs = [];
   const relays = [];
@@ -418,6 +443,7 @@ export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCrea
 
   await Promise.all([
     store.bulkCreate("MsgCreateClaim", claimMsgs),
+    // on msg claim is the first time a Relay entity record is created.
     store.bulkCreate("Relay", relays),
   ]);
 }
@@ -434,7 +460,7 @@ export async function handleMsgSubmitProof(messages: Array<CosmosMessage<MsgSubm
 
   await Promise.all([
     store.bulkCreate("MsgSubmitProof", proofMsgs),
-    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+    _updateRelays(relays),
   ]);
 }
 
@@ -450,7 +476,7 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
 
   await Promise.all([
     store.bulkCreate("EventClaimExpired", eventsExpired),
-    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+    _updateRelays(relays),
   ]);
 }
 
@@ -466,7 +492,7 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promi
 
   await Promise.all([
     store.bulkCreate("EventClaimSettled", eventsSettled),
-    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+    _updateRelays(relays),
   ]);
 }
 
@@ -482,7 +508,7 @@ export async function handleEventClaimUpdated(events: Array<CosmosEvent>): Promi
 
   await Promise.all([
     store.bulkCreate("EventClaimUpdated", eventsUpdated),
-    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+    _updateRelays(relays),
   ]);
 }
 
@@ -498,6 +524,6 @@ export async function handleEventProofUpdated(events: Array<CosmosEvent>): Promi
 
   await Promise.all([
     store.bulkCreate("EventProofUpdated", eventsUpdated),
-    store.bulkUpdate("Relay", relays, Object.keys(relays[0])),
+    _updateRelays(relays),
   ]);
 }

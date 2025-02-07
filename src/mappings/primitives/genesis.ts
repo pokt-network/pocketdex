@@ -20,7 +20,6 @@ import type { BalanceProps } from "../../types/models/Balance";
 import type { GatewayProps } from "../../types/models/Gateway";
 import type { GenesisBalanceProps } from "../../types/models/GenesisBalance";
 import { MessageProps } from "../../types/models/Message";
-import { ModuleAccountProps } from "../../types/models/ModuleAccount";
 import { MsgAddServiceProps } from "../../types/models/MsgAddService";
 import { MsgCreateValidatorProps } from "../../types/models/MsgCreateValidator";
 import { MsgDelegateToGatewayProps } from "../../types/models/MsgDelegateToGateway";
@@ -45,6 +44,9 @@ import {
 } from "../../types/proto-interfaces/poktroll/shared/service";
 import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/poktroll/supplier/tx";
 import {
+  EnforceAccountExistenceParams,
+  enforceAccountsExistence,
+  getModuleAccountProps,
   getSupplyRecord,
   queryModuleAccounts,
 } from "../bank";
@@ -114,8 +116,8 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
 async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
   const moduleAccounts = await queryModuleAccounts();
 
-  const accounts: Array<AccountProps> = [];
-  const mAccounts: Array<ModuleAccountProps> = [];
+  const accounts: Array<EnforceAccountExistenceParams> = [];
+  // const mAccounts: Array<ModuleAccountProps> = [];
   const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
   const genesisBalances: Array<GenesisBalanceProps> = [];
   const balances: Array<BalanceProps> = [];
@@ -123,18 +125,21 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
   moduleAccounts.forEach(mAccount => {
     const address = mAccount.baseAccount?.address as string;
     accounts.push({
-      id: address,
-      chainId: block.header.chainId,
-      moduleId: mAccount.baseAccount?.address,
+      account: {
+        id: address,
+        chainId: block.header.chainId,
+        moduleId: mAccount.baseAccount?.address,
+      },
+      module: getModuleAccountProps(mAccount),
     });
 
-    mAccounts.push({
-      id: address,
-      name: mAccount.name,
-      accountNumber: mAccount.baseAccount?.accountNumber as bigint,
-      sequence: mAccount.baseAccount?.sequence as bigint,
-      permissions: mAccount.permissions,
-    });
+    // mAccounts.push({
+    //   id: address,
+    //   name: mAccount.name,
+    //   accountNumber: mAccount.baseAccount?.accountNumber as bigint,
+    //   sequence: mAccount.baseAccount?.sequence as bigint,
+    //   permissions: mAccount.permissions,
+    // });
 
     for (const { amount, denom } of mAccount.balances) {
       const id = getBalanceId(address, denom);
@@ -166,8 +171,7 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
   });
 
   await Promise.all([
-    store.bulkCreate("Account", accounts),
-    store.bulkCreate("ModuleAccount", mAccounts),
+    enforceAccountsExistence(accounts),
     store.bulkCreate("GenesisBalance", genesisBalances),
     store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
@@ -192,13 +196,16 @@ async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void>
       msg: auth.msg,
       type: auth["@type"],
       eventId: "genesis",
+      blockId: getBlockId(block),
     });
   }
 
   await Promise.all([
-    store.bulkCreate("Account", Array.from(accounts.values()).map(address => ({
-      id: address,
-      chainId: block.block.header.chainId,
+    enforceAccountsExistence(Array.from(accounts.values()).map(address => ({
+      account: {
+        id: address,
+        chainId: block.block.header.chainId,
+      },
     }))),
     store.bulkCreate("Authz", authz),
   ]);
@@ -257,10 +264,14 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
     }
   }
   await Promise.all([
-    store.bulkCreate("Account", Array.from(accounts.values()).map(address => ({
-      id: address,
-      chainId: block.block.header.chainId,
-    }))),
+    enforceAccountsExistence(
+      Array.from(accounts.values()).map(address => ({
+        account: {
+          id: address,
+          chainId: block.block.header.chainId,
+        },
+      })),
+    ),
     store.bulkCreate("GenesisBalance", genesisBalances),
     store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
@@ -752,7 +763,6 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
           stakeAmount: validatorMsg.stakeAmount,
           stakeStatus: StakeStatus.Staked,
           transactionId: validatorMsg.transactionId,
-          blockId: getBlockId(block),
           createMsgId: validatorMsg.id,
         });
 
@@ -786,7 +796,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   }
 
   // upsert accounts
-  promises.push(store.bulkCreate("Account", accounts));
+  promises.push(enforceAccountsExistence(accounts.map(account => ({ account }))));
   // create txs, validators & messages
   promises.push(store.bulkCreate("Transaction", transactions));
   promises.push(store.bulkCreate("Validator", validators));

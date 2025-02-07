@@ -4,11 +4,20 @@ import {
   CosmosMessage,
 } from "@subql/types-cosmos";
 import {
+  findIndex,
   get,
   orderBy,
 } from "lodash";
+import { parseCoins } from "../cosmjs/utils";
+import { EventAttribute } from "../types";
+import { NativeBalanceChangeProps } from "../types/models/NativeBalanceChange";
 import {
+  CoinReceiveType,
+  CoinSpentType,
+  enforceAccountsExistence,
+  generateNativeBalanceChangeId,
   handleModuleAccounts,
+  handleNativeBalanceChangesForAddressAndDenom,
   handleSupply,
 } from "./bank";
 import { PREFIX } from "./constants";
@@ -27,8 +36,16 @@ import {
   EventByType,
   MessageByType,
 } from "./types/common";
+import {
+  getBlockId,
+  getEventId,
+  messageId,
+} from "./utils/ids";
 import { stringify } from "./utils/json";
-import { hasValidAmountAttribute } from "./utils/primitives";
+import {
+  hasValidAmountAttribute,
+  isEventOfMessageKind,
+} from "./utils/primitives";
 
 function handleByType(typeUrl: string | Array<string>, byTypeMap: MessageByType | EventByType, byTypeHandlers: typeof MsgHandlers | typeof EventHandlers): Array<Promise<void>> {
   const promises = [];
@@ -125,19 +142,80 @@ async function indexPrimitives(block: CosmosBlock, events: Array<CosmosEvent>) {
 }
 
 // anything that modifies balances
-async function indexBalances(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+async function indexBalances(block: CosmosBlock, msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+  // reconstruct account balances for non-module accounts
+  const uniqueAddressSet = new Set<string>();
+  const addressDenomMap: Record<string, Array<NativeBalanceChangeProps>> = {};
+  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
+  const balanceModificationEvents = [...eventByType[CoinReceiveType] ?? [], ...eventByType[CoinSpentType] ?? []];
+  const blockId = getBlockId(block);
+
+  balanceModificationEvents.forEach((event) => {
+    const keyIndex = findIndex((event.event.attributes as Array<EventAttribute>), (attr) => attr.key === "receiver" || attr.key === "spender");
+
+    if (keyIndex === -1) {
+      throw new Error(
+        `Event ${event.event.type} does not have a receiver or spender attribute`,
+      );
+    }
+
+    const attribute = event.event.attributes[keyIndex];
+
+    const address = attribute.value as string;
+
+    const amountStr = event.event.attributes[keyIndex + 1]?.value as string;
+
+    uniqueAddressSet.add(address);
+
+    const coin = parseCoins(amountStr)[0];
+    const coins = BigInt(coin.amount);
+    const amount = attribute.key === "spender" ? BigInt(0) - coins : coins;
+    const id = generateNativeBalanceChangeId(event);
+
+    const mapId = `${address}-${coin.denom}`;
+    if (!addressDenomMap[mapId]) addressDenomMap[mapId] = [];
+
+    const nativeBalanceChange = {
+      id,
+      balanceOffset: amount.valueOf(),
+      denom: coin.denom,
+      accountId: address,
+      eventId: getEventId(event),
+      blockId: blockId,
+      transactionId: event.tx?.hash || undefined,
+      messageId: isEventOfMessageKind(event) ? messageId(event.msg as CosmosMessage) : undefined,
+    };
+    nativeBalanceChanges.push(nativeBalanceChange);
+    addressDenomMap[mapId].push(nativeBalanceChange);
+  });
+
+  const promises: Array<Promise<void>> = [];
+
+  for (const [addressDenom, changes] of Object.entries(addressDenomMap)) {
+    const [address, denom] = addressDenom.split("-");
+    promises.push(handleNativeBalanceChangesForAddressAndDenom(address, denom, changes, blockId));
+  }
+
   const msgTypes = [
     "/cosmos.bank.v1beta1.MsgSend",
   ];
-  const eventTypes = [
-    "coin_received",
-    "coin_spent",
-  ];
 
-  await Promise.all([
+  promises.push(
+    // create a native transfer entity
     ...handleByType(msgTypes, msgByType, MsgHandlers),
-    ...handleByType(eventTypes, eventByType, EventHandlers),
-  ]);
+    // track native balance changes
+    store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
+    // ensure accounts exists in bulk
+    enforceAccountsExistence(Array.from(uniqueAddressSet).map(address => ({
+      account: {
+        id: address,
+        chainId,
+        firstBlockId: getBlockId(block),
+      },
+    }))),
+  );
+
+  await Promise.all(promises);
 }
 
 // any validator messages or events
@@ -163,11 +241,31 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
     "/poktroll.proof.MsgCreateClaim",
     "/poktroll.proof.MsgSubmitProof",
   ];
+  // {
+  // "type":"poktroll.tokenomics.EventClaimSettled",
+  // "attributes":[
+  // {
+  // "key":"claim",
+  // "value": "{
+  // \"supplier_operator_address\":\"pokt1l2glz2ptdlqp6p5jgr2jjvq72lj8lkckfyc05h\",
+  // \"session_header\":{
+  //   \"application_address\":\"pokt1uu0wqxnmlywzvctx83kv86awzgsu992vd6qmhx\",
+  //   \"service_id\":\"proto-anvil\",
+  //   \"session_id\":\"0006481aec235c313136702eb9870feb7b05a3debc87f9903948dda75b5f4e4d\",
+  //   \"session_start_block_height\":\"50121\",
+  //   \"session_end_block_height\":\"50130\"
+  //  },
+  //  \"root_hash\":\"A0JoronhJtrW2XLT7cQABtIyjL3x/PoLtYK40gyREfgAAAAAAAAABQAAAAAAAAAB\"
+  //  }",
+  // "index":true
+  // }
   const eventTypes = [
     "poktroll.tokenomics.EventClaimSettled",
     "poktroll.tokenomics.EventClaimExpired",
     "poktroll.proof.EventClaimUpdated",
     "poktroll.proof.EventProofUpdated",
+    // todo: handle this events
+    //  poktroll.tokenomics.EventApplicationReimbursementRequest
   ];
 
   await Promise.all([
@@ -280,8 +378,8 @@ async function generateReports(): Promise<void> {
 
 // indexingHandler, referenced in project.ts
 export async function indexingHandler(block: CosmosBlock): Promise<void> {
+  logger.info(`start indexing block=${block.block.header.height}`)
   const moduleAccounts = await handleModuleAccounts(block);
-
   // this prevents having to ask/validate for messy events on each handler.
   const isValidEvent = (evt: CosmosEvent): boolean => {
     // on any block
@@ -308,11 +406,10 @@ export async function indexingHandler(block: CosmosBlock): Promise<void> {
         (attr.value as string).startsWith(PREFIX) &&
         moduleAccounts.has(attr.value as string),
     );
-    const isCoinReceived = evt.event.type === "coin_received";
-    const isCoinSpent = evt.event.type === "coin_spent";
-    const isTransfer = evt.event.type === "transfer";
+    const isCoinReceived = evt.event.type === CoinReceiveType;
+    const isCoinSpent = evt.event.type === CoinSpentType;
     // we track module account balances on our own so we don't need them
-    return !(isModuleAccount && (isCoinReceived || isCoinSpent || isTransfer));
+    return !(isModuleAccount && (isCoinReceived || isCoinSpent));
   };
 
   // Apply the composed filter
@@ -331,7 +428,9 @@ export async function indexingHandler(block: CosmosBlock): Promise<void> {
 
   // generate events map by type base on the EventHandlers declared at src/mappings/handlers.ts
   const eventsByType: EventByType = {};
-  const eventHandlersSet = new Set(Object.keys(EventHandlers));
+  // "coin_received", "coin_spent" are special cases that we need to take care carefully in the most fast and accurate
+  // way
+  const eventHandlersSet = new Set([...Object.keys(EventHandlers), CoinReceiveType, CoinSpentType]);
   // ensure every key as an empty array
   eventHandlersSet.forEach((type) => eventsByType[type] = []);
   filteredEvents.forEach((event) => {
@@ -352,7 +451,7 @@ export async function indexingHandler(block: CosmosBlock): Promise<void> {
   await indexPrimitives(block, filteredEvents);
 
   await Promise.all([
-    indexBalances(msgsByType as MessageByType, eventsByType),
+    indexBalances(block, msgsByType as MessageByType, eventsByType),
     indexParams(msgsByType as MessageByType),
     indexService(msgsByType as MessageByType),
     indexValidators(msgsByType as MessageByType, eventsByType),

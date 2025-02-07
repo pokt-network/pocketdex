@@ -2,6 +2,32 @@
 # Add the `@index` or `@index(unique: true)` annotation after any non-key field
 # https://academy.subquery.network/build/graphql.html#indexing-by-non-primary-key-field
 
+# Allowed directives
+# export const directives = gql`
+#  directive @derivedFrom(field: String!) on FIELD_DEFINITION
+#  directive @entity on OBJECT
+#  directive @jsonField(indexed: Boolean) on OBJECT
+#  directive @index(unique: Boolean) on FIELD_DEFINITION
+#  directive @compositeIndexes(fields: [[String]]!) on OBJECT
+#  directive @fullText(fields: [String!], language: String) on OBJECT
+#  directive @dbType(type: String!) on FIELD_DEFINITION
+#`;
+
+### Rules:
+# 1. Place enums all together under ### ENUMS section
+# 2. Place @jsonField all together under ### JSON FIELDS section
+# 2.1 Specify indexed: true|false for @jsonFields
+# 3. Place entities (like Block, Account, Relays, etc) under ### ENTITIES section
+# 4. Sort properties in the following order:
+# 4.1. ID!
+# 4.2. Required
+# 4.3. Indexed (@index)
+# 4.4. Optional (without !)
+# 4.5. Relations with @deriveFrom
+# 5. Place a minimum comment above the entity to describe it and the relation with poktroll
+
+### ENUMS
+
 enum RelayStatus {
   Pending
   Success
@@ -19,24 +45,41 @@ enum TxStatus {
   Error
 }
 
-type Authz @entity {
-  id: ID!
-  granter: Account!
-  grantee: Account!
-  type: String! @index
-  msg: String! @index
-  expiration: Date
-  event: Event!
+enum EventKind {
+  # Hardcode non-blockchain kind just to be used on entities created by the genesis file
+  Genesis
+  # Events related to a msg using msg_index
+  Message
+  # Events produced on a transaction but not related to any msg, like fee or tip
+  Transaction
+  # Block events which are not related to transactions at all
+  BeginBlock
+  EndBlock
+  FinalizeBlock
 }
+
+enum ClaimExpirationReason {
+  EXPIRATION_REASON_UNSPECIFIED
+  PROOF_MISSING
+  PROOF_INVALID
+}
+
+enum ProofRequirementReason {
+  NOT_REQUIRED
+  PROBABILISTIC
+  THRESHOLD
+}
+
+### JSON FIELDS
 
 type EventAttribute @jsonField(indexed: false) {
   key: String!
   value: String!
 }
 
-type SupplyDenom @entity {
-  # ID is the supply coin denomination.
-  id: ID!
+type Coin @jsonField {
+  denom: String!
+  amount: String!
 }
 
 type BlockIdParts @jsonField(indexed: false) {
@@ -88,14 +131,34 @@ type BlockLastCommit @jsonField(indexed: false) {
   signatures: [BlockCommitSignature]!
 }
 
-# This handle all the information that is coming with the block but is not often used
-# but could help in some debug environment.
-type BlockMetadata @entity {
-  id: ID! @dbType(type: "BigInt")
-  blockId: BlockId!
-  header: BlockHeader!
-  # first block has this null on js
-  lastCommit: BlockLastCommit
+type PublicKey @jsonField {
+  type: String!
+  key: String!
+}
+
+type ValidatorDescription @jsonField(indexed: true) {
+  moniker: String!
+  identity: String
+  website: String
+  securityContract: String
+  details: String
+}
+
+type ValidatorCommissionParams @jsonField {
+  # commission block in plain format
+  rate: String!
+  maxRate: String!
+  maxChangeRate: String!
+}
+
+### ENTITIES
+
+# Represent the balance of an account at the genesis state (usually genesis file)
+type GenesisBalance @entity {
+  id: ID!
+  amount: BigInt!
+  denom: String! @index
+  account: Account!
 }
 
 type Block @entity {
@@ -141,6 +204,32 @@ type Block @entity {
   unstakedGatewaysTokens: BigInt
 }
 
+# This handle all the information that is coming with the block but is not often used
+# but could help in some debug environment.
+type BlockMetadata @entity {
+  id: ID! @dbType(type: "BigInt")
+  blockId: BlockId!
+  header: BlockHeader!
+  # first block has this null on js
+  lastCommit: BlockLastCommit
+}
+
+type Authz @entity {
+  id: ID!
+  granter: Account!
+  grantee: Account!
+  type: String! @index
+  msg: String! @index
+  expiration: Date
+  event: Event!
+  block: Block!
+}
+
+type SupplyDenom @entity {
+  # ID is the supply coin denomination.
+  id: ID!
+}
+
 type Transaction @entity {
   id: ID!
   block: Block!
@@ -168,19 +257,6 @@ type Message @entity {
   block: Block!
 }
 
-enum EventKind {
-  # Hardcode non-blockchain kind just to be used on entities created by the genesis file
-  Genesis
-  # Events related to a msg using msg_index
-  Message
-  # Events produced on a transaction but not related to any msg, like fee or tip
-  Transaction
-  # Block events which are not related to transactions at all
-  BeginBlock
-  EndBlock
-  FinalizeBlock
-}
-
 type Event @entity {
   id: ID!
   type: String! @index
@@ -189,11 +265,6 @@ type Event @entity {
   transaction: Transaction
   message: Message
   block: Block!
-}
-
-type Coin @jsonField {
-  denom: String!
-  amount: String!
 }
 
 type NativeTransfer @entity {
@@ -232,42 +303,15 @@ type Account @entity {
   services: [Service] @derivedFrom(field: "owner")
 }
 
-type GenesisBalance @entity {
-  id: ID!
-  amount: BigInt!
-  denom: String! @index
-  account: Account!
-}
-
 type NativeBalanceChange @entity {
   id: ID!
   balanceOffset: BigInt!
   denom: String! @index
   account: Account!
   event: Event!
+  block: Block!
   transaction: Transaction
   message: Message
-  block: Block!
-}
-
-type PublicKey @jsonField {
-  type: String!
-  key: String!
-}
-
-type ValidatorDescription @jsonField(indexed: true) {
-  moniker: String!
-  identity: String
-  website: String
-  securityContract: String
-  details: String
-}
-
-type ValidatorCommissionParams @jsonField {
-  # commission block in plain format
-  rate: String!
-  maxRate: String!
-  maxChangeRate: String!
 }
 
 # Msg Doc: https://docs.cosmos.network/main/build/modules/staking#msgcreatevalidator
@@ -310,7 +354,6 @@ type Validator @entity {
   stakeAmount: BigInt!
   stakeStatus: StakeStatus! @index
   transaction: Transaction!
-  block: Block!
   createMsg: MsgCreateValidator!
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   #updateMsg: [MsgEditValidator]!
@@ -342,6 +385,7 @@ type ValidatorReward @entity {
   event: Event!
 }
 
+# aka: chain
 type Service @entity {
   id: ID!
   name: String!
@@ -361,6 +405,7 @@ type MsgStakeApplication @entity {
   message: Message!
 }
 
+# Many to man
 type MsgStakeApplicationService @entity {
   id: ID!
   stakeMsg: MsgStakeApplication!
@@ -747,12 +792,6 @@ type EventClaimUpdated @entity {
   relay: Relay
 }
 
-enum ClaimExpirationReason {
-  EXPIRATION_REASON_UNSPECIFIED
-  PROOF_MISSING
-  PROOF_INVALID
-}
-
 type EventClaimExpired @entity {
   id: ID!
   supplier: Supplier!
@@ -771,13 +810,6 @@ type EventClaimExpired @entity {
   transaction: Transaction
   block: Block!
 }
-
-enum ProofRequirementReason {
-  NOT_REQUIRED
-  PROBABILISTIC
-  THRESHOLD
-}
-
 
 type EventClaimSettled @entity {
   id: ID!
@@ -806,6 +838,7 @@ type Relay @entity {
   sessionId: String!
   sessionStartHeight: BigInt!
   sessionEndHeight: BigInt!
+  status: RelayStatus!
   rootHash: String
   closestMerkleProof: String
   numRelays: BigInt
@@ -819,7 +852,6 @@ type Relay @entity {
   eventClaimExpired: EventClaimExpired
   eventClaimSettled: EventClaimSettled
   eventsProofUpdated: [EventProofUpdated] @derivedFrom(field: "relay")
-  status: RelayStatus!
   failedCodeSpace: String
   requiredProof: Boolean
   # this must be a value of the enums ClaimErrors or ProofErrors. We are using Int because we can't define enums with numbers.

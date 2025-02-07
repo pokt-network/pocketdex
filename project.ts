@@ -387,6 +387,7 @@ const project: CosmosProject = {
     {
       kind: CosmosDatasourceKind.Runtime,
       startBlock: 1,
+      // startBlock: 34123, // first set of claims
       mapping: {
         file: "./dist/index.js",
         handlers: [

@@ -1,7 +1,5 @@
 import { handleAuthzExec } from "./authz/exec";
 import {
-  handleNativeBalanceDecrement,
-  handleNativeBalanceIncrement,
   handleNativeTransfer,
 } from "./bank";
 import {
@@ -69,9 +67,6 @@ export const MsgHandlers = {
 };
 
 export const EventHandlers = {
-  // bank
-  "coin_received": handleNativeBalanceIncrement,
-  "coin_spent": handleNativeBalanceDecrement,
   // authz
   /*
   todo: handle this.

@@ -13,7 +13,7 @@ import {
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
 import { ValidatorCommissionProps } from "../../types/models/ValidatorCommission";
 import { ValidatorRewardProps } from "../../types/models/ValidatorReward";
-import { enforceAccountExistence } from "../bank";
+import { enforceAccountsExistence } from "../bank";
 import {
   PREFIX,
   VALIDATOR_PREFIX,
@@ -33,6 +33,7 @@ import {
 
 async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>): Promise<void> {
   const msgId = messageId(msg);
+  const blockId = getBlockId(msg.block);
   const createValMsg = msg.msg.decodedMsg;
   const signer = msg.tx.decodedTx.authInfo.signerInfos[0];
 
@@ -63,7 +64,7 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
     stakeAmount: BigInt(createValMsg.value.amount),
     messageId: msgId,
     transactionId: msg.tx.hash,
-    blockId: getBlockId(msg.block),
+    blockId,
   });
 
   const validator = Validator.create({
@@ -78,15 +79,17 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
     stakeAmount: msgCreateValidator.stakeAmount,
     stakeStatus: StakeStatus.Staked,
     transactionId: msgCreateValidator.transactionId,
-    blockId: msgCreateValidator.blockId,
     createMsgId: msgCreateValidator.id,
   });
 
   await Promise.all([
     validator.save(),
     msgCreateValidator.save(),
-    enforceAccountExistence(signerAddress, msg.block.header.chainId),
-    enforceAccountExistence(poktSignerAddress, msg.block.header.chainId),
+    // in bulk
+    enforceAccountsExistence([
+      { account: { id: signerAddress, chainId: msg.block.header.chainId } },
+      { account: { id: poktSignerAddress, chainId: msg.block.header.chainId } },
+    ]),
   ]);
 }
 
