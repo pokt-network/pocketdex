@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+    <configuration default="false" name="Vendor Builder" type="NodeJSConfigurationType"
+                   application-parameters="--dry-mode --debug" path-to-js-file="vendor-builder.js"
+                   working-dir="$PROJECT_DIR$">
+        <method v="2"/>
+    </configuration>
+</component>
