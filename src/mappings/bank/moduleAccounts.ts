@@ -9,7 +9,7 @@ import {
   getBlockId,
 } from "../utils/ids";
 import { stringify } from "../utils/json";
-import { enforceAccountsExistence } from "./balanceChange";
+import { enforceAccountsExists } from "./balanceChange";
 
 export type ExtendedAccount = ModuleAccount & {
   balances: Array<Coin>
@@ -80,29 +80,29 @@ export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<stri
     // check the balances
     for (const { amount, denom } of moduleAccount.balances) {
       const balanceId = getBalanceId(address, denom);
-      let balance = await Balance.get(balanceId);
+      const prevBalance = await Balance.get(balanceId);
 
-      if (!balance) {
+      if (!prevBalance) {
         // if it does not exist but now exists, create it
-        balance = Balance.create({
+        await Balance.create({
           id: balanceId,
           accountId: address,
           denom,
           amount: BigInt(amount),
           lastUpdatedBlockId: blockId,
-        });
-      } else {
+        }).save();
+      } else if (prevBalance.amount.toString() !== amount ){
         // if already exists, set the new amount
-        balance.amount = BigInt(amount);
-        balance.lastUpdatedBlockId = blockId;
-      }
+        prevBalance.amount = BigInt(amount);
+        prevBalance.lastUpdatedBlockId = blockId;
 
-      await balance.save();
+        await prevBalance.save();
+      }
     }
   }
 
   // enforce accounts existence in bulk
-  await enforceAccountsExistence(accounts);
+  await enforceAccountsExists(accounts);
 
   return moduleAccountsSet;
 }

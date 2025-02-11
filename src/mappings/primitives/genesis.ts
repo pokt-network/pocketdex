@@ -45,7 +45,7 @@ import {
 import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/poktroll/supplier/tx";
 import {
   EnforceAccountExistenceParams,
-  enforceAccountsExistence,
+  enforceAccountsExists,
   getModuleAccountProps,
   getSupplyRecord,
   queryModuleAccounts,
@@ -171,7 +171,7 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
   });
 
   await Promise.all([
-    enforceAccountsExistence(accounts),
+    enforceAccountsExists(accounts),
     store.bulkCreate("GenesisBalance", genesisBalances),
     store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
@@ -201,7 +201,7 @@ async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void>
   }
 
   await Promise.all([
-    enforceAccountsExistence(Array.from(accounts.values()).map(address => ({
+    enforceAccountsExists(Array.from(accounts.values()).map(address => ({
       account: {
         id: address,
         chainId: block.block.header.chainId,
@@ -264,7 +264,7 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
     }
   }
   await Promise.all([
-    enforceAccountsExistence(
+    enforceAccountsExists(
       Array.from(accounts.values()).map(address => ({
         account: {
           id: address,
@@ -311,7 +311,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [{ denom: "pokt", amount: "0" }],
+      fees: [{ denom: "upokt", amount: "0" }],
       codespace: "",
       memo: "",
       log: "",
@@ -367,7 +367,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       gasWanted: BigInt(0),
       status: TxStatus.Success,
       code: 0,
-      fees: [{ denom: "pokt", amount: "0" }],
+      fees: [{ denom: "upokt", amount: "0" }],
       codespace: "",
       memo: "",
       log: "",
@@ -492,7 +492,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [{ denom: "pokt", amount: "0" }],
+      fees: [{ denom: "upokt", amount: "0" }],
       codespace: "",
       memo: "",
       log: "",
@@ -606,7 +606,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [{ denom: "pokt", amount: "0" }],
+      fees: [{ denom: "upokt", amount: "0" }],
       codespace: "",
       memo: "",
       log: "",
@@ -786,7 +786,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
       signerAddress,
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [{ denom: "pokt", amount: "0" }],
+      fees: [{ denom: "upokt", amount: "0" }],
       codespace: "",
       memo: "",
       log: "",
@@ -796,7 +796,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   }
 
   // upsert accounts
-  promises.push(enforceAccountsExistence(accounts.map(account => ({ account }))));
+  promises.push(enforceAccountsExists(accounts.map(account => ({ account }))));
   // create txs, validators & messages
   promises.push(store.bulkCreate("Transaction", transactions));
   promises.push(store.bulkCreate("Validator", validators));

@@ -13,7 +13,7 @@ import {
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
 import { ValidatorCommissionProps } from "../../types/models/ValidatorCommission";
 import { ValidatorRewardProps } from "../../types/models/ValidatorReward";
-import { enforceAccountsExistence } from "../bank";
+import { enforceAccountsExists } from "../bank";
 import {
   PREFIX,
   VALIDATOR_PREFIX,
@@ -86,7 +86,7 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
     validator.save(),
     msgCreateValidator.save(),
     // in bulk
-    enforceAccountsExistence([
+    enforceAccountsExists([
       { account: { id: signerAddress, chainId: msg.block.header.chainId } },
       { account: { id: poktSignerAddress, chainId: msg.block.header.chainId } },
     ]),

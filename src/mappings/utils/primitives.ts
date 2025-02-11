@@ -1,6 +1,7 @@
 import {
   CosmosEvent,
   CosmosEventKind,
+  CosmosMessage,
   CosmosTransaction,
 } from "@subql/types-cosmos";
 import {
@@ -83,4 +84,42 @@ export function isMsgValidatorRelated(typeUrl: string): boolean {
 
 export function getTxStatus(tx: CosmosTransaction): TxStatus {
   return tx.tx.code === 0 ? TxStatus.Success : TxStatus.Error;
+}
+
+// Here we are filtering the events by the transaction code, including as success block events
+export function filterEventsByTxStatus(events: Array<CosmosEvent>): {
+  success: Array<CosmosEvent>;
+  error: Array<CosmosEvent>;
+} {
+  const success: Array<CosmosEvent> = [];
+  const error: Array<CosmosEvent> = [];
+
+  for (const event of events) {
+    if (!event.tx || event.tx.tx.code === 0) {
+      success.push(event);
+    } else {
+      error.push(event);
+    }
+  }
+
+  return { success, error };
+}
+
+// Here we are filtering the messages by the transaction code
+export function filterMsgByTxStatus(messages: Array<CosmosMessage>): {
+  success: Array<CosmosMessage>;
+  error: Array<CosmosMessage>;
+} {
+  const success: Array<CosmosMessage> = [];
+  const error: Array<CosmosMessage> = [];
+
+  for (const message of messages) {
+    if (message.tx.tx.code === 0) {
+      success.push(message);
+    } else {
+      error.push(message);
+    }
+  }
+
+  return { success, error };
 }

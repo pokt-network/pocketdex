@@ -40,6 +40,12 @@ import {
   handleValidatorRewards,
 } from "./poktroll/validator";
 
+export enum ByTxStatus {
+  All,
+  Success,
+  Error,
+}
+
 export const MsgHandlers = {
   // bank
   "/cosmos.bank.v1beta1.MsgSend": handleNativeTransfer,

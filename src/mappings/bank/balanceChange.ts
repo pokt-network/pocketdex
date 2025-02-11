@@ -4,15 +4,18 @@ import {
   CosmosEventKind,
   CosmosMessage,
 } from "@subql/types-cosmos";
-import { Balance } from "../../types";
+import { findIndex } from "lodash";
+import { parseCoins } from "../../cosmjs/utils";
+import { Balance, EventAttribute } from "../../types";
 import { AccountProps } from "../../types/models/Account";
 import { ModuleAccountProps } from "../../types/models/ModuleAccount";
 import { NativeBalanceChangeProps } from "../../types/models/NativeBalanceChange";
 import {
-  getBalanceId,
-  getBlockIdAsString,
+  getBalanceId, getBlockId,
+  getBlockIdAsString, getEventId,
   messageId,
 } from "../utils/ids";
+import { isEventOfMessageKind } from "../utils/primitives";
 
 export interface EnforceAccountExistenceParams {
   account: AccountProps,
@@ -72,7 +75,7 @@ function generateDeterministicUUID(name: string): string {
  * @param {Array<{account: AccountProps, module?: ModuleAccountProps}>} accounts - An array of objects including account information and optional module account information.
  * @return {Promise<void>} A promise that resolves when the operation is complete.
  */
-export async function enforceAccountsExistence(accounts: Array<EnforceAccountExistenceParams>): Promise<void> {
+export async function enforceAccountsExists(accounts: Array<EnforceAccountExistenceParams>): Promise<void> {
   if (accounts.length === 0) return;
 
   const AccountModel = store.modelProvider.getModel("Account");
@@ -187,7 +190,7 @@ export function generateNativeBalanceChangeId(event: CosmosEvent): string {
   }
 }
 
-export async function handleNativeBalanceChangesForAddressAndDenom(address: string, denom: string, changes: Array<NativeBalanceChangeProps>, blockId: bigint): Promise<void> {
+export async function handleNativeBalanceChangesForAddressAndDenom(address: string, denom: string, changes: Array<NativeBalanceChangeProps>, blockId: ReturnType<typeof getBlockId>): Promise<void> {
   const id = getBalanceId(address, denom);
   // get latest balance
   let balance = await Balance.get(id);
@@ -206,6 +209,77 @@ export async function handleNativeBalanceChangesForAddressAndDenom(address: stri
   }
   // save once per address-denom
   await balance.save();
+}
+
+
+export function getBalanceChanges(events: CosmosEvent[], blockId: ReturnType<typeof getBlockId>): {
+  nativeBalanceChanges: Array<NativeBalanceChangeProps>,
+  addressDenomMap: Record<string, Array<NativeBalanceChangeProps>>,
+  uniqueAddressSet: Set<string>,
+}  {
+  const addressDenomMap: Record<string, Array<NativeBalanceChangeProps>> = {};
+  const uniqueAddressSet = new Set<string>();
+  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
+
+  for (const event of events) {
+    // const isFailedTx = event.tx && event.tx.tx.code !== 0;
+    // let amountStr: string, address: string
+    //
+    // if (isFailedTx && event.event.type) {
+    //
+    // }
+
+    const keyIndex = findIndex((event.event.attributes as Array<EventAttribute>), (attr) => attr.key === "receiver" || attr.key === "spender");
+
+    if (keyIndex === -1) {
+      throw new Error(
+        `Event ${event.event.type} does not have a receiver or spender attribute`,
+      );
+    }
+
+    const attribute = event.event.attributes[keyIndex];
+
+    const address = attribute.value as string;
+
+    const amountIndex = findIndex((event.event.attributes as Array<EventAttribute>), (attr) => attr.key === "amount");
+
+    if (amountIndex === -1) {
+      throw new Error(
+        `Event ${event.event.type} does not have an amount attribute`,
+      );
+    }
+
+    const amountStr = event.event.attributes[keyIndex + 1]?.value as string;
+
+    uniqueAddressSet.add(address);
+
+    const coin = parseCoins(amountStr)[0];
+    const coins = BigInt(coin.amount);
+    const amount = attribute.key === "spender" ? BigInt(0) - coins : coins;
+    const id = generateNativeBalanceChangeId(event);
+
+    const mapId = `${address}-${coin.denom}`;
+    if (!addressDenomMap[mapId]) addressDenomMap[mapId] = [];
+
+    const nativeBalanceChange = {
+      id,
+      balanceOffset: amount.valueOf(),
+      denom: coin.denom,
+      accountId: address,
+      eventId: getEventId(event),
+      blockId: blockId,
+      transactionId: event.tx?.hash || undefined,
+      messageId: isEventOfMessageKind(event) ? messageId(event.msg as CosmosMessage) : undefined,
+    };
+    nativeBalanceChanges.push(nativeBalanceChange);
+    addressDenomMap[mapId].push(nativeBalanceChange);
+  }
+
+  return {
+    nativeBalanceChanges,
+    addressDenomMap,
+    uniqueAddressSet,
+  }
 }
 
 // async function handleNativeBalanceChange(

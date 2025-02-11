@@ -79,7 +79,7 @@ services:
       - ./src:/app/src
       - ignore_types:/app/src/types
     command:
-      - --subscriptions
+      - --subscription
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000/ready" ]
@@ -111,6 +111,7 @@ services:
       - --name=${DB_SCHEMA}
       - --indexer=http://indexer:3000
       - --playground
+      - --subscription
     networks:
       - pocketdex
 

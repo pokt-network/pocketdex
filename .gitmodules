@@ -9,7 +9,7 @@
 [submodule "vendor/subql-cosmos"]
 	path = vendor/subql-cosmos
 	url = https://github.com/pokt-scan/subql-cosmos.git
-	branch = main
+	branch = pocketdex
 [submodule "vendor/cosmjs"]
 	path = vendor/cosmjs
 	url = https://github.com/pokt-scan/x-cosmjs
