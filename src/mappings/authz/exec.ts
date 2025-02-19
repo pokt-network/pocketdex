@@ -25,7 +25,6 @@ type HandleAuthzExecResult = {
 }
 
 function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResult {
-  logger.info(`[handleAuthzExec] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
   const blockId = getBlockId(msg.block);
 
   const result: HandleAuthzExecResult = {

@@ -26,6 +26,7 @@ export const getSupplyRecord = function(supply: Coin, block: CosmosBlock): Suppl
 };
 
 export async function queryTotalSupply(): Promise<Coin[]> {
+  logger.info(`[handleSupply] querying total supply`);
   const finalSupply: Coin[] = [];
   let paginationKey: Uint8Array | undefined;
 
@@ -50,7 +51,7 @@ export async function queryTotalSupply(): Promise<Coin[]> {
     paginationKey = response.pagination?.nextKey;
   }
 
-  logger.debug(`[handleTotalSupply]: all_total_supply=${stringify(finalSupply, undefined, 2)}`);
+  logger.info(`[handleTotalSupply]: total supply query done!`);
 
   return finalSupply;
 }
@@ -68,7 +69,9 @@ export async function fetchAllSupplyDenom(): Promise<SupplyDenom[]> {
 
 // handleSupply, referenced in project.ts, handles supply information from block
 export async function handleSupply(block: CosmosBlock): Promise<void> {
+  logger.info(`[handleSupply] fetching supply denominations...`);
   const supplyDenoms = await fetchAllSupplyDenom();
+  logger.info(`[handleSupply] supply denominations loaded!`);
   const supplyIdHeight = block.header.height === 1 ? block.header.height : block.header.height - 1;
 
   const blockSuppliesMap: Map<string, BlockSupplyProps> = new Map();
@@ -118,8 +121,8 @@ export async function handleSupply(block: CosmosBlock): Promise<void> {
   }
 
   // TODO: (@jorgecuesta) we should update supply handling with proper msg/event once it is implemented on poktroll
-  logger.debug(`[handleSupply] (block.header.height=${block.header.height}) querying total supply...`);
   const totalSupply = await queryTotalSupply();
+
   if (totalSupply.length === 0) {
     throw new Error(`[handleSupply]: query.totalSupply returned 0 records, block.header.height=${block.header.height}`);
   }
@@ -152,6 +155,8 @@ export async function handleSupply(block: CosmosBlock): Promise<void> {
 
   promises.push(store.bulkCreate("BlockSupply", Array.from(blockSuppliesMap.values())));
 
+  logger.info(`[handleSupply] saving Supply and BlockSupply records...`);
   // until we refactor this to msg OR/AND an event, at least try to parallelize us as much as possible.
   await Promise.all(promises);
+  logger.info(`[handleSupply] Supply and BlockSupply records saved!`);
 }

@@ -4,13 +4,13 @@
 
 [submodule "vendor/subql"]
 	path = vendor/subql
-	url = https://github.com/pokt-scan/subql.git
-	branch = feature/expose-orm
+	url = git@github.com:pokt-shannon/subql.git
+	branch = pocketdex
 [submodule "vendor/subql-cosmos"]
 	path = vendor/subql-cosmos
-	url = https://github.com/pokt-scan/subql-cosmos.git
-	branch = pocketdex
+	url = git@github.com:pokt-shannon/subql-cosmos.git
+	branch = main
 [submodule "vendor/cosmjs"]
 	path = vendor/cosmjs
-	url = https://github.com/pokt-scan/x-cosmjs
-	branch = feature/add-module-accounts
+	url = git@github.com:pokt-shannon/x-cosmjs.git
+	branch = main

@@ -1,7 +1,6 @@
 import {
   CosmosEvent,
   CosmosMessage,
-  CosmosTransaction,
 } from "@subql/types-cosmos";
 import {
   EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
@@ -20,6 +19,7 @@ import {
   MsgStakeSupplier,
   MsgUnstakeSupplier,
 } from "../../types/proto-interfaces/poktroll/supplier/tx";
+import { optimizedBulkCreate } from "../utils/db";
 import {
   getBlockId,
   getEventId,
@@ -27,11 +27,9 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
-import { stringify } from "../utils/json";
+import { fetchAllSupplierServiceConfigBySupplier } from "./pagination";
 
 async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
-  // logger.debug(`[handleSupplierStakeMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-
   if (!msg.msg.decodedMsg.stake) {
     return logger.error(`[handleSupplierStakeMsg] stake not provided in msg`);
   }
@@ -113,7 +111,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
   const promises: Array<Promise<void>> = [
     supplierMsgStake.save(),
     supplier.save(),
-    store.bulkCreate("MsgStakeSupplierService", supplierMsgStakeServices),
+    optimizedBulkCreate("MsgStakeSupplierService", supplierMsgStakeServices),
     store.bulkCreate("SupplierServiceConfig", newSupplierServices),
   ];
 
@@ -156,26 +154,54 @@ async function _handleUnstakeSupplierMsg(
 async function _handleSupplierUnbondingBeginEvent(
   event: CosmosEvent,
 ) {
-  const msg = event.msg as CosmosMessage<MsgUnstakeSupplier>;
-  const tx = event.tx as CosmosTransaction;
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  const unbondingBeginEvent = event.tx.tx.events.find(item => item.type === "poktroll.supplier.EventSupplierUnbondingBegin");
-
-  if (!unbondingBeginEvent) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] unbondingBeginEvent not found`);
-  }
-
-  const unbondingHeight = unbondingBeginEvent.attributes.find(attribute => attribute.key === "unbonding_height")?.value;
+  /*
+  {
+  "type":"poktroll.supplier.EventSupplierUnbondingBegin",
+  "attributes":[
+  {
+  "key":"reason",
+  "value":"\"SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE\"",
+  "index":true
+  },
+  {
+  "key":"session_end_height",
+  "value":"\"55060\"",
+  "index":true
+  },
+  {
+  "key":"supplier",
+  "value":"{\"owner_address\":\"pokt1kfjlev8j9nml32rzln7nw6r9pynez30c5lpgx5\",\"operator_address\":\"pokt1kfjlev8j9nml32rzln7nw6r9pynez30c5lpgx5\",
+  \"stake\":{\"denom\":\"upokt\",\"amount\":\"0\"},\"services\":[{\"service_id\":\"proto-anvil\",\
+  "endpoints\":[{\"url\":\"https://beta-relayminer-4.us-nj.poktroll.com:443\",\"rpc_type\":\"JSON_RPC\",\
+  "configs\":[]}],\"rev_share\":[{\"address\":\"pokt1kfjlev8j9nml32rzln7nw6r9pynez30c5lpgx5\",
+  \"rev_share_percentage\":100}]},{\"service_id\":\"proto-static-ngx\",
+  \"endpoints\":[{\"url\":\"https://beta-relayminer-4.us-nj.poktroll.com:443\",\"rpc_type\":\"JSON_RPC\",\"configs\":[]}],
+  \"rev_share\":[{\"address\":\"pokt1kfjlev8j9nml32rzln7nw6r9pynez30c5lpgx5\",\"rev_share_percentage\":100}]}],\"unstake_session_end_height\":\"55060\",
+  \"services_activation_heights_map\":{\"proto-anvil\":\"31851\",\"proto-static-ngx\":\"31851\"}}","index":true
+  },
+  {
+  "key":"unbonding_end_height",
+  "value":"\"55070\"","index":true
+  },{"key":"mode","value":"EndBlock","index":true}]}
+   */
+  const unbondingHeight = event.event.attributes.find(attribute => attribute.key === "unbonding_end_height")?.value;
 
   if (!unbondingHeight) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] unbondingHeight not found`);
+    throw new Error(`[handleSupplierUnbondingEndEvent] unbonding_end_height not found`);
   }
 
-  const supplier = await Supplier.get(msg.msg.decodedMsg.operatorAddress);
+  const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string;
+
+  if (!supplierStringified) {
+    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not provided in event`);
+  }
+
+  const operatorAddress = JSON.parse(supplierStringified).operator_address;
+
+  const supplier = await Supplier.get(operatorAddress);
 
   if (!supplier) {
-    throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`);
+    throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not found for operator address ${operatorAddress}`);
   }
 
   supplier.unstakingEndHeight = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
@@ -186,9 +212,8 @@ async function _handleSupplierUnbondingBeginEvent(
     supplier.save(),
     EventSupplierUnbondingBeginEntity.create({
       id: eventId,
-      supplierId: msg.msg.decodedMsg.operatorAddress,
+      supplierId: operatorAddress,
       blockId: getBlockId(event.block),
-      transactionId: tx.hash,
       eventId,
     }).save(),
   ]);
@@ -197,7 +222,11 @@ async function _handleSupplierUnbondingBeginEvent(
 async function _handleSupplierUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  logger.info(`[handleSupplierUnbondingEndEvent] (event.event): ${stringify(event.event, undefined, 2)}`);
+  const unbondingHeight = event.event.attributes.find(attribute => attribute.key === "unbonding_end_height")?.value;
+
+  if (!unbondingHeight) {
+    throw new Error(`[handleSupplierUnbondingEndEvent] unbonding_end_height not found`);
+  }
 
   const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string;
 
@@ -217,10 +246,10 @@ async function _handleSupplierUnbondingEndEvent(
     throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`);
   }
 
-  supplier.unstakingEndBlockId = getBlockId(event.block);
+  supplier.unstakingEndBlockId = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
   supplier.stakeStatus = StakeStatus.Unstaked;
-  // TODO: ADD A WAY TO LOAD MORE (PAGINATION)
-  const supplierServices = (await SupplierServiceConfig.getBySupplierId(supplierAddress, { limit: 100 }) || []).map(item => item.id);
+
+  const supplierServices = (await fetchAllSupplierServiceConfigBySupplier(supplierAddress) || []).map(item => item.id);
 
   const eventId = getEventId(event);
 
@@ -232,6 +261,7 @@ async function _handleSupplierUnbondingEndEvent(
       eventId,
     }).save(),
     supplier.save(),
+    // todo: change this for an atomic operation
     store.bulkRemove("SupplierServiceConfig", supplierServices),
   ]);
 }

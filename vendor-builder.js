@@ -271,10 +271,16 @@ async function processVendors(vendors, tempDir, dependenciesResolution = {}) {
       const absolutePath = path.resolve(vendorPath);
 
       // Ensure we suppress logs during installation
-      try {
-        if (install.cleanCache) {
+      if (install.cleanCache) {
+        try {
           runCommand("yarn cache clean", absolutePath, true); // Suppress logs
+        } catch (error) {
+          log("ERROR", `Failed to clean cache dependencies for vendor "${name}": ${error.message}`);
+          throw error;
         }
+      }
+
+      try {
         runCommand(install.script || "yarn install", absolutePath, true); // Suppress logs
       } catch (error) {
         log("ERROR", `Failed to install dependencies for vendor "${name}": ${error.message}`);
@@ -308,7 +314,15 @@ async function processVendors(vendors, tempDir, dependenciesResolution = {}) {
         if (vendor.packageResolution && vendor.packageResolution[packageFolder]) {
           packageFolder = vendor.packageResolution[packageFolder];
         }
-        const packagePath = path.join(packagesDir, packageFolder);
+
+        let packagePath = "";
+
+        if (vendor.workspace) {
+          packagePath = path.join(packagesDir, packageFolder);
+        } else {
+          packagePath = absolutePath;
+        }
+
         const packageJsonPath = path.join(packagePath, "package.json");
 
         if (!fs.existsSync(packageJsonPath)) {
@@ -432,21 +446,35 @@ function parseVendorTargets(config) {
     const vendorName = vendor.name; // Strip "@"
     log("INFO", `Evaluating vendor targets: ${vendorName}`);
     const vendorBasePath = path.resolve(vendor.path);
-    const packagesDir = path.join(vendorBasePath, "packages");
-    // if we have pack.include, use that, otherwise read all from ${vendor.path}/packages
-    const packages = vendor.pack?.include ? vendor.pack?.include : fs.existsSync(packagesDir) ? fs.readdirSync(packagesDir) : [];
+
     const targets = new Set();
-    // fill the target packages that we need to evaluate as dependency on other vendors
-    for (const pkg of packages) {
-      const packagePath = path.join(packagesDir, pkg);
-      const packageJsonPath = path.join(packagePath, "package.json");
+
+    if (!vendor.workspace) {
+      const packageJsonPath = path.join(vendorBasePath, "package.json");
       if (!fs.existsSync(packageJsonPath)) {
         log("WARN", `Skipping ${pkg}: package.json not found`);
-        continue;
+        return;
       }
       const { name: pkgNameJson } = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
       targets.add(pkgNameJson);
+    } else {
+      const packagesDir = path.join(vendorBasePath, "packages");
+      // if we have pack.include, use that, otherwise read all from ${vendor.path}/packages
+      const packages = vendor.pack?.include ? vendor.pack?.include : fs.existsSync(packagesDir) ? fs.readdirSync(packagesDir) : [];
+      // fill the target packages that we need to evaluate as dependency on other vendors
+      for (const pkg of packages) {
+        const packagePath = path.join(packagesDir, pkg);
+        const packageJsonPath = path.join(packagePath, "package.json");
+        if (!fs.existsSync(packageJsonPath)) {
+          log("WARN", `Skipping ${pkg}: package.json not found`);
+          continue;
+        }
+        const { name: pkgNameJson } = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+        targets.add(pkgNameJson);
+      }
     }
+
+
     vendorTargets[vendorName] = targets;
   });
 }

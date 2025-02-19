@@ -18,6 +18,7 @@ import {
   PREFIX,
   VALIDATOR_PREFIX,
 } from "../constants";
+import { optimizedBulkCreate } from "../utils/db";
 import {
   getBlockId,
   getEventId,
@@ -126,9 +127,9 @@ function _handleValidatorRewardOrCommission(event: CosmosEvent): ValidatorReward
 }
 
 export async function handleValidatorRewards(events: Array<CosmosEvent>): Promise<void> {
-  await store.bulkCreate("ValidatorReward", events.map(_handleValidatorRewardOrCommission));
+  await optimizedBulkCreate("ValidatorReward", events, _handleValidatorRewardOrCommission);
 }
 
 export async function handleValidatorCommission(events: Array<CosmosEvent>): Promise<void> {
-  await store.bulkCreate("ValidatorCommission", events.map(_handleValidatorRewardOrCommission));
+  await optimizedBulkCreate("ValidatorCommission", events, _handleValidatorRewardOrCommission);
 }

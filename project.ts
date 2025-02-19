@@ -387,6 +387,7 @@ const project: CosmosProject = {
     {
       kind: CosmosDatasourceKind.Runtime,
       startBlock: 1,
+      // startBlock: 55330, // damn big block 176k events
       // startBlock: 34123, // first set of claims
       mapping: {
         file: "./dist/index.js",

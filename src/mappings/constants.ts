@@ -7,4 +7,4 @@ export const VALIDATOR_PREFIX = "poktvaloper";
 export const ApplicationUnbondingReason = {
   ...ApplicationUnbondingReasonEnum,
   TRANSFERRED: 2,
-} as const
+} as const;

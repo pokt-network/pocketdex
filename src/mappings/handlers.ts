@@ -1,7 +1,5 @@
 import { handleAuthzExec } from "./authz/exec";
-import {
-  handleNativeTransfer,
-} from "./bank";
+import { handleNativeTransfer } from "./bank";
 import {
   handleApplicationUnbondingBeginEvent,
   handleApplicationUnbondingEndEvent,
@@ -39,6 +37,10 @@ import {
   handleValidatorMsgCreate,
   handleValidatorRewards,
 } from "./poktroll/validator";
+
+const noOp = async function(): Promise<void> {
+  await Promise.resolve();
+};
 
 export enum ByTxStatus {
   All,
@@ -124,4 +126,12 @@ export const EventHandlers = {
   "poktroll.tokenomics.EventClaimExpired": handleEventClaimExpired,
   "poktroll.proof.EventClaimUpdated": handleEventClaimUpdated,
   "poktroll.proof.EventProofUpdated": handleEventProofUpdated,
+  // todo: implement this one
+  "mint": noOp,
+  "coinbase": noOp,
+  "transfer": noOp,
+  "burn": noOp,
+  "poktroll.tokenomics.EventSupplierSlashed": noOp,
+  "poktroll.service.EventRelayMiningDifficultyUpdated": noOp,
+  "poktroll.tokenomics.EventApplicationReimbursementRequest": noOp,
 };

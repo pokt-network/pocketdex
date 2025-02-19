@@ -7,21 +7,21 @@ import { applicationUnbondingReasonFromJSON } from "../../client/poktroll/applic
 import {
   Application,
   ApplicationGateway,
-  ApplicationService,
   EventApplicationUnbondingBegin as EventApplicationUnbondingBeginEntity,
   EventApplicationUnbondingEnd as EventApplicationUnbondingEndEntity,
   EventTransferBegin as EventTransferBeginEntity,
   EventTransferEnd as EventTransferEndEntity,
   EventTransferError as EventTransferErrorEntity,
   MsgDelegateToGateway as MsgDelegateToGatewayEntity,
-  MsgStakeApplication as MsgStakeApplicationEntity,
   MsgTransferApplication as MsgTransferApplicationEntity,
   MsgUndelegateFromGateway as MsgUndelegateFromGatewayEntity,
   MsgUnstakeApplication as MsgUnstakeApplicationEntity,
   StakeStatus,
 } from "../../types";
+import { ApplicationProps } from "../../types/models/Application";
 import { ApplicationGatewayProps } from "../../types/models/ApplicationGateway";
 import { ApplicationServiceProps } from "../../types/models/ApplicationService";
+import { MsgStakeApplicationProps } from "../../types/models/MsgStakeApplication";
 import { MsgStakeApplicationServiceProps } from "../../types/models/MsgStakeApplicationService";
 import { EventTransferBegin } from "../../types/proto-interfaces/poktroll/application/event";
 import {
@@ -33,7 +33,11 @@ import {
 } from "../../types/proto-interfaces/poktroll/application/tx";
 import { ApplicationSDKType } from "../../types/proto-interfaces/poktroll/application/types";
 import { ApplicationUnbondingReason } from "../constants";
-import { fetchPaginatedRecords } from "../utils/db";
+import {
+  getSequelize,
+  getStoreModel,
+  optimizedBulkCreate,
+} from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
   getBlockId,
@@ -42,40 +46,26 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import {
+  fetchAllApplicationGatewayByApplicationId,
+  fetchAllApplicationServiceByApplicationId,
+} from "./pagination";
 
-async function fetchAllApplicationServiceByApplicationId(applicationId: string): Promise<ApplicationService[]> {
-  return fetchPaginatedRecords({
-    fetchFn: (options) => ApplicationService.getByApplicationId(applicationId, options),
-    initialOptions: {
-      // add order and direction to speedup if there is a way
-      // orderBy: 'id', // Order results by ID
-      // orderDirection: 'ASC', // Ascending order
-    },
-  });
-}
-
-async function fetchAllApplicationGatewayByApplicationId(applicationId: string): Promise<ApplicationGateway[]> {
-  return fetchPaginatedRecords({
-    fetchFn: (options) => ApplicationGateway.getByApplicationId(applicationId, options),
-    initialOptions: {
-      // add order and direction to speedup if there is a way
-      // orderBy: 'id', // Order results by ID
-      // orderDirection: 'ASC', // Ascending order
-    },
-  });
-}
-
-async function _handleAppMsgStake(
+function _handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
-): Promise<void> {
-  // logger.debug(`[handleAppMsgStake] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
+): [
+  MsgStakeApplicationProps,
+  ApplicationProps,
+  Array<MsgStakeApplicationServiceProps>,
+  Array<ApplicationServiceProps>,
+] {
   const msgId = messageId(msg);
   const { address, stake } = msg.msg.decodedMsg;
 
   const stakeAmount = BigInt(stake?.amount || "0");
   const stakeDenom = stake?.denom || "";
 
-  const appMsgStake = MsgStakeApplicationEntity.create({
+  const appMsgStake = {
     id: msgId,
     transactionId: msg.tx.hash,
     blockId: getBlockId(msg.block),
@@ -83,25 +73,22 @@ async function _handleAppMsgStake(
     messageId: msgId,
     stakeAmount,
     stakeDenom,
-  });
+  };
 
-  const application = Application.create({
+  const application = {
     id: address,
     accountId: address,
     stakeAmount,
     stakeDenom,
     stakeStatus: StakeStatus.Staked,
-  });
+  };
 
-  const servicesId: Array<string> = [];
   // used to create the services that came in the stake message
   const appMsgStakeServices: Array<MsgStakeApplicationServiceProps> = [];
   // used to have the services that are currently configured for the application
   const newApplicationServices: Array<ApplicationServiceProps> = [];
 
   for (const { serviceId } of msg.msg.decodedMsg.services) {
-    servicesId.push(serviceId);
-
     appMsgStakeServices.push({
       id: getMsgStakeServiceId(msgId, serviceId),
       serviceId,
@@ -115,32 +102,12 @@ async function _handleAppMsgStake(
     });
   }
 
-  // FIXED-> TODO: ADD A WAY TO LOAD MORE (PAGINATION)
-  // const currentAppServices = await ApplicationService.getByApplicationId(address, { limit: 100 });
-  const currentAppServices = await fetchAllApplicationServiceByApplicationId(address);
-
-  const servicesToRemove: Array<string> = [];
-
-  if (currentAppServices && currentAppServices.length > 0) {
-    for (const service of currentAppServices) {
-      if (!servicesId.includes(service.serviceId)) {
-        servicesToRemove.push(service.id);
-      }
-    }
-  }
-
-  const promises: Array<Promise<void>> = [
-    appMsgStake.save(),
-    application.save(),
-    store.bulkCreate("MsgStakeApplicationService", appMsgStakeServices),
-    store.bulkCreate("ApplicationService", newApplicationServices),
+  return [
+    appMsgStake,
+    application,
+    appMsgStakeServices,
+    newApplicationServices,
   ];
-
-  if (servicesToRemove.length > 0) {
-    promises.push(store.bulkRemove("ApplicationService", servicesToRemove));
-  }
-
-  await Promise.all(promises);
 }
 
 async function _handleDelegateToGatewayMsg(
@@ -173,8 +140,6 @@ async function _handleDelegateToGatewayMsg(
 async function _handleUndelegateFromGatewayMsg(
   msg: CosmosMessage<MsgUndelegateFromGateway>,
 ) {
-  // logger.debug(`[handleUndelegateFromGatewayMsg] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-
   const msgId = messageId(msg);
 
   await Promise.all([
@@ -338,9 +303,7 @@ async function _handleTransferApplicationEndEvent(
     gatewayId: gateway,
   }));
 
-  // FIXED-> TODO: ADD A WAY TO LOAD MORE (PAGINATION)
   const sourceApplicationServices = await fetchAllApplicationServiceByApplicationId(sourceAddress);
-  // FIXED-> TODO: ADD A WAY TO LOAD MORE (PAGINATION)
   const sourceApplicationGateways = await fetchAllApplicationGatewayByApplicationId(sourceAddress);
   const newApplicationServices: Array<ApplicationServiceProps> = service_configs?.map(service => ({
     id: getStakeServiceId(destinationApp.address, service.service_id),
@@ -553,7 +516,70 @@ async function _handleApplicationUnbondingEndEvent(
 export async function handleAppMsgStake(
   messages: Array<CosmosMessage<MsgStakeApplication>>,
 ): Promise<void> {
-  await Promise.all(messages.map(_handleAppMsgStake));
+  const ApplicationServiceModel = getStoreModel("ApplicationService");
+  const sequelize = getSequelize("ApplicationService");
+  const blockHeight = store.context.getHistoricalUnit();
+  const stakeMsgs: Array<MsgStakeApplicationProps> = [];
+  const applications: Array<ApplicationProps> = [];
+  const stakeAppService: Array<MsgStakeApplicationServiceProps> = [];
+  const appService: Array<ApplicationServiceProps> = [];
+  const appServices = new Map<string, Set<string>>();
+  const markDeleteOr: Array<unknown> = [];
+
+  for (const msg of messages) {
+    // it needs to query db to know the current app <> service relations that need to remove
+    const r = _handleAppMsgStake(msg);
+    const address = msg.msg.decodedMsg.address;
+    msg.msg.decodedMsg.services.forEach(service => {
+      if (!appServices.has(address)) {
+        appServices.set(address, new Set(service.serviceId));
+      } else {
+        appServices.get(address)?.add(service.serviceId);
+      }
+    });
+
+    stakeMsgs.push(r[0]);
+    applications.push(r[1]);
+    stakeAppService.push(...r[2]);
+    appService.push(...r[3]);
+  }
+
+  for (const [address, services] of appServices) {
+    markDeleteOr.push({
+      [Symbol.for("and")]: [
+        // apps
+        { application_id: address },
+        // does not match the current stake services
+        { service_id: { [Symbol.for("notIn")]: Array.from(services) } },
+      ],
+    });
+  }
+
+  await Promise.all([
+    store.bulkCreate("Application", applications),
+    store.bulkCreate("ApplicationService", appService),
+    optimizedBulkCreate("MsgStakeApplication", stakeMsgs),
+    optimizedBulkCreate("MsgStakeApplicationService", stakeAppService),
+    ApplicationServiceModel.model.update(
+      // mark as deleted (close the block range)
+      {
+        __block_range: sequelize.fn(
+          "int8range",
+          sequelize.fn("lower", sequelize.col("_block_range")),
+          blockHeight,
+        ),
+      },
+      {
+        hooks: false,
+        where: {
+          [Symbol.for("or")]: markDeleteOr,
+          // in the range
+          __block_range: { [Symbol.for("contains")]: blockHeight },
+        },
+        transaction: store.context.transaction,
+      },
+    ),
+  ]);
 }
 
 export async function handleDelegateToGatewayMsg(

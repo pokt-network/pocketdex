@@ -29,6 +29,7 @@ import {
   ProofSDKType,
 } from "../../types/proto-interfaces/poktroll/proof/types";
 import { ClaimExpirationReasonSDKType } from "../../types/proto-interfaces/poktroll/tokenomics/event";
+import { optimizedBulkCreate } from "../utils/db";
 import {
   getBlockId,
   getEventId,
@@ -442,9 +443,9 @@ export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCrea
   }
 
   await Promise.all([
-    store.bulkCreate("MsgCreateClaim", claimMsgs),
+    optimizedBulkCreate("MsgCreateClaim", claimMsgs),
     // on msg claim is the first time a Relay entity record is created.
-    store.bulkCreate("Relay", relays),
+    optimizedBulkCreate("Relay", relays),
   ]);
 }
 
@@ -459,7 +460,7 @@ export async function handleMsgSubmitProof(messages: Array<CosmosMessage<MsgSubm
   }
 
   await Promise.all([
-    store.bulkCreate("MsgSubmitProof", proofMsgs),
+    optimizedBulkCreate("MsgSubmitProof", proofMsgs),
     _updateRelays(relays),
   ]);
 }
@@ -475,7 +476,7 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
   }
 
   await Promise.all([
-    store.bulkCreate("EventClaimExpired", eventsExpired),
+    optimizedBulkCreate("EventClaimExpired", eventsExpired),
     _updateRelays(relays),
   ]);
 }
@@ -491,7 +492,7 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promi
   }
 
   await Promise.all([
-    store.bulkCreate("EventClaimSettled", eventsSettled),
+    optimizedBulkCreate("EventClaimSettled", eventsSettled),
     _updateRelays(relays),
   ]);
 }
@@ -507,7 +508,7 @@ export async function handleEventClaimUpdated(events: Array<CosmosEvent>): Promi
   }
 
   await Promise.all([
-    store.bulkCreate("EventClaimUpdated", eventsUpdated),
+    optimizedBulkCreate("EventClaimUpdated", eventsUpdated),
     _updateRelays(relays),
   ]);
 }
@@ -523,7 +524,7 @@ export async function handleEventProofUpdated(events: Array<CosmosEvent>): Promi
   }
 
   await Promise.all([
-    store.bulkCreate("EventProofUpdated", eventsUpdated),
+    optimizedBulkCreate("EventProofUpdated", eventsUpdated),
     _updateRelays(relays),
   ]);
 }

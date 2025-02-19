@@ -1,5 +1,6 @@
 import { CosmosMessage } from "@subql/types-cosmos";
 import { MessageProps } from "../../types/models/Message";
+import { optimizedBulkCreate } from "../utils/db";
 import {
   getBlockId,
   messageId,
@@ -8,11 +9,10 @@ import { stringify } from "../utils/json";
 
 function _handleMessage(msg: CosmosMessage): MessageProps {
   delete msg.msg?.decodedMsg?.wasmByteCode;
-  const json = stringify(msg.msg.decodedMsg);
   return {
     id: messageId(msg),
     typeUrl: msg.msg.typeUrl,
-    json,
+    json: stringify(msg.msg.decodedMsg),
     transactionId: msg.tx.hash,
     blockId: getBlockId(msg.block),
   };
@@ -20,5 +20,6 @@ function _handleMessage(msg: CosmosMessage): MessageProps {
 
 // handleMessages, referenced in project.ts, handles messages and store as is in case we need to use them on a migration
 export async function handleMessages(msgs: CosmosMessage[]): Promise<void> {
-  await store.bulkCreate("Message", msgs.map(msg => _handleMessage(msg)));
+  // Process Messages using the _handleMessage function
+  await optimizedBulkCreate("Message", msgs, _handleMessage);
 }

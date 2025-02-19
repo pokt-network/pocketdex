@@ -12,10 +12,10 @@
             <env name="DB_PASS" value="postgres"/>
             <env name="DB_PORT" value="5432"/>
             <env name="DB_USER" value="postgres"/>
+            <env name="DEBUG_BLOCK" value="true"/>
             <env name="ENDPOINT" value="https://shannon-testnet-grove-rpc.beta.poktroll.com"/>
             <env name="NODE_ENV" value="development"/>
             <env name="TZ" value="utc"/>
-            <env name="DEBUG_BLOCK" value="true"/>
         </envs>
         <method v="2"/>
     </configuration>

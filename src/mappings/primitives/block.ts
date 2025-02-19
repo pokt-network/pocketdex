@@ -16,10 +16,6 @@ import { getBlockByteSize } from "../utils/block_size";
 import { getBlockId } from "../utils/ids";
 
 export async function handleBlock(block: CosmosBlock): Promise<void> {
-  logger.info(`[handleBlock] (block.header.height): indexing block ${block.block.header.height}`);
-  const start = Date.now();
-  await cache.set("startTime", start);
-
   const id = getBlockId(block);
   const { header: { chainId, time } } = block.block;
   const timestamp = new Date(time.getTime());

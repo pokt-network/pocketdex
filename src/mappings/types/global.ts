@@ -1,4 +1,7 @@
-import { IStoreModelProvider, Context } from "@subql/node-core";
+import {
+  Context,
+  IStoreModelProvider,
+} from "@subql/node-core";
 import type {
   Entity,
   GetOptions,

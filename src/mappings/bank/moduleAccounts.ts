@@ -70,7 +70,7 @@ export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<stri
       account: {
         id: address,
         chainId: block.block.header.chainId,
-        firstBlockId: blockId
+        firstBlockId: blockId,
       },
       module: moduleAccountProps,
     });
@@ -91,7 +91,7 @@ export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<stri
           amount: BigInt(amount),
           lastUpdatedBlockId: blockId,
         }).save();
-      } else if (prevBalance.amount.toString() !== amount ){
+      } else if (prevBalance.amount.toString() !== amount) {
         // if already exists, set the new amount
         prevBalance.amount = BigInt(amount);
         prevBalance.lastUpdatedBlockId = blockId;

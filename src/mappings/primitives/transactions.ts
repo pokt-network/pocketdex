@@ -8,6 +8,7 @@ import {
   PREFIX,
   VALIDATOR_PREFIX,
 } from "../constants";
+import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId } from "../utils/ids";
 import {
   getTxStatus,
@@ -34,7 +35,6 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
 
   return {
     id: tx.hash,
-    // timeline,
     blockId: getBlockId(tx.block),
     gasUsed: tx.tx.gasUsed,
     gasWanted: tx.tx.gasWanted,
@@ -51,5 +51,6 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
 
 // handleTransactions, referenced in project.ts, handles transactions and store as is in case we need to use them on a migration
 export async function handleTransactions(txs: CosmosTransaction[]): Promise<void> {
-  await store.bulkCreate("Transaction", txs.map(tx => _handleTransaction(tx)));
+  // Process Transactions using the _handleTransaction function
+  await optimizedBulkCreate("Transaction", txs, _handleTransaction);
 }

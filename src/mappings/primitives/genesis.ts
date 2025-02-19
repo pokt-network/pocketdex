@@ -58,6 +58,7 @@ import {
   Genesis,
   GenesisTransaction,
 } from "../types/genesis";
+import { optimizedBulkCreate } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
   getBalanceId,
@@ -133,14 +134,6 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
       module: getModuleAccountProps(mAccount),
     });
 
-    // mAccounts.push({
-    //   id: address,
-    //   name: mAccount.name,
-    //   accountNumber: mAccount.baseAccount?.accountNumber as bigint,
-    //   sequence: mAccount.baseAccount?.sequence as bigint,
-    //   permissions: mAccount.permissions,
-    // });
-
     for (const { amount, denom } of mAccount.balances) {
       const id = getBalanceId(address, denom);
 
@@ -172,8 +165,8 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
 
   await Promise.all([
     enforceAccountsExists(accounts),
-    store.bulkCreate("GenesisBalance", genesisBalances),
-    store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
+    optimizedBulkCreate("GenesisBalance", genesisBalances),
+    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
   ]);
 }
@@ -207,6 +200,7 @@ async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void>
         chainId: block.block.header.chainId,
       },
     }))),
+    // This is a sensitive actor, so I (@jorgecuesta) prefer to keep using subql historical
     store.bulkCreate("Authz", authz),
   ]);
 }
@@ -272,8 +266,8 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
         },
       })),
     ),
-    store.bulkCreate("GenesisBalance", genesisBalances),
-    store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
+    optimizedBulkCreate("GenesisBalance", genesisBalances),
+    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
   ]);
 }
@@ -341,9 +335,9 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
 
   await Promise.all([
     store.bulkCreate("Service", services),
-    store.bulkCreate("MsgAddService", addServiceMsgs),
-    store.bulkCreate("Transaction", transactions),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgAddService", addServiceMsgs),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("Message", msgs),
   ]);
 }
 
@@ -464,11 +458,11 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
   await Promise.all([
     store.bulkCreate("Supplier", suppliers),
-    store.bulkCreate("MsgStakeSupplier", supplierMsgStakes),
     store.bulkCreate("SupplierServiceConfig", supplierServices),
-    store.bulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes),
-    store.bulkCreate("Transaction", transactions),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeSupplier", supplierMsgStakes),
+    optimizedBulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("Message", msgs),
   ]);
 }
 
@@ -574,18 +568,15 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
   }
 
   const promises: Array<Promise<void>> = [
-    store.bulkCreate("MsgStakeApplication", appMsgStakes),
     store.bulkCreate("Application", applications),
-    store.bulkCreate("Transaction", transactions),
     store.bulkCreate("ApplicationService", appServices),
-    store.bulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes),
     store.bulkCreate("ApplicationGateway", appsDelegatedToGateways),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeApplication", appMsgStakes),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes),
+    optimizedBulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgDelegateToGateway", msgDelegateToGateways),
   ];
-
-  if (msgDelegateToGateways.length > 0) {
-    promises.push(store.bulkCreate("MsgDelegateToGateway", msgDelegateToGateways));
-  }
 
   await Promise.all(promises);
 }
@@ -652,9 +643,9 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
 
   await Promise.all([
     store.bulkCreate("Gateway", gateways),
-    store.bulkCreate("MsgStakeGateway", gatewayMsgStakes),
-    store.bulkCreate("Transaction", transactions),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeGateway", gatewayMsgStakes),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("Message", msgs),
   ]);
 }
 
@@ -798,15 +789,14 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   // upsert accounts
   promises.push(enforceAccountsExists(accounts.map(account => ({ account }))));
   // create txs, validators & messages
-  promises.push(store.bulkCreate("Transaction", transactions));
   promises.push(store.bulkCreate("Validator", validators));
-  promises.push(store.bulkCreate("Message", messages));
+  promises.push(optimizedBulkCreate("Transaction", transactions));
+  promises.push(optimizedBulkCreate("Message", messages));
 
   let entity: string;
   for (const [key, value] of typedMessages) {
     entity = key.split(".")?.at(-1) as string;
-    // logger.debug(`[handleGenesisGenTxs] creating ${value.length} documents of type: ${entity}`);
-    promises.push(store.bulkCreate(entity, value));
+    promises.push(optimizedBulkCreate(entity, value));
   }
 
   await Promise.all(promises);

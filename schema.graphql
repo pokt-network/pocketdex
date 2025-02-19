@@ -654,7 +654,6 @@ type EventSupplierUnbondingBegin @entity {
   id: ID!
   supplier: Supplier!
   block: Block!
-  transaction: Transaction!
   event: Event!
 }
 

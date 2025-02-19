@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import {
   CosmosBlock,
   CosmosEvent,
@@ -85,15 +86,61 @@ export function getStakeServiceId(entityStakedId: string, serviceId: string): st
 
 // Returns the id of the relay for claim and proof
 export function getRelayId({
-applicationId,
-serviceId,
-sessionId,
-supplierId
-}: {
+                             applicationId,
+                             serviceId,
+                             sessionId,
+                             supplierId,
+                           }: {
   serviceId: string,
   applicationId: string,
   supplierId: string,
   sessionId: string,
 }): string {
   return `${supplierId}-${applicationId}-${serviceId}-${sessionId}`;
+}
+
+// always the same to ensure we get consistent results
+const namespace = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
+/**
+ * Generates a deterministic UUID-like string using SHA-1.
+ * We need to generate deterministic uuid v4 based on bench32 address to set under the historical `__id` column to avoid
+ * historical duplicates for accounts.
+ * We are trying to ensure accounts' existence without duplicating them on each block
+ *
+ * @param {string} name - The input data to hash deterministically.
+ * @returns {string} - The generated UUID.
+ */
+export function generateDeterministicUUID(name: string): string {
+  // Validate namespace (must be 36 characters long)
+  if (!namespace || namespace.length !== 36) {
+    throw new Error("Namespace must be a valid UUID (36 characters long).");
+  }
+
+  // Remove dashes from the namespace UUID and convert to bytes
+  const namespaceBytes = Buffer.from(namespace.replace(/-/g, ""), "hex");
+
+  // Hash the namespace and name together using SHA-256 for deterministic behavior
+  const hash = crypto.createHash("sha256");
+  hash.update(namespaceBytes);
+  hash.update(name);
+  const hashedData = hash.digest();
+
+  // Use the first 16 bytes of the hash for the UUID
+  const randomBytes = hashedData.slice(0, 16);
+
+  // Set version to 4 (0100XXXX)
+  randomBytes[6] = (randomBytes[6] & 0x0f) | 0x40;
+
+  // Set variant to RFC 4122 (10XXXXXX)
+  randomBytes[8] = (randomBytes[8] & 0x3f) | 0x80;
+
+  // Format the bytes into UUID v4 string structure
+  return [
+    randomBytes.toString("hex", 0, 4),
+    randomBytes.toString("hex", 4, 6),
+    randomBytes.toString("hex", 6, 8),
+    randomBytes.toString("hex", 8, 10),
+    randomBytes.toString("hex", 10, 16),
+  ].join("-");
 }

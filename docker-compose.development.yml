@@ -2,7 +2,7 @@ services:
   postgres:
     build:
       context: .
-      dockerfile: ./docker/pg-Dockerfile
+      dockerfile: ./docker/postgres/pg-Dockerfile
       args:
         POSTGRES_VERSION: ${POSTGRES_VERSION}
     ports:
@@ -80,6 +80,21 @@ services:
       - ignore_types:/app/src/types
     command:
       - --subscription
+      - --unfinalized-blocks=true
+      - --timeout=120000
+      - --store-cache-async=false
+      - --store-cache-upper-limit=30000
+      - --store-cache-threshold=30000
+      - --store-get-cache-size=30000
+      - --store-flush-interval=120
+      - --enable-cache=false
+      - --kyve-endpoint=false
+      - --query-limit=1000
+      - --pg-pool-min=10
+      - --pg-pool-max=50
+      - --pg-pool-acquire=30000
+      - --pg-pool-idle=120000
+      - --pg-pool-evict=60000
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000/ready" ]

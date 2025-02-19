@@ -8,9 +8,9 @@ import type {
 import type { GatewaySDKType } from "../../types/proto-interfaces/poktroll/gateway/types";
 import type { SupplierSDKType } from "../../types/proto-interfaces/poktroll/shared/supplier";
 
-type Supplier = Omit<SupplierSDKType, "stake"> & {stake: Required<CoinSDKType> }
+type Supplier = Omit<SupplierSDKType, "stake"> & { stake: Required<CoinSDKType> }
 type Params = Record<string, unknown>
-type ObjectWithParams ={params: Params}
+type ObjectWithParams = { params: Params }
 
 export type FakeTxType = "app" | "supplier" | "gateway" | "service" | "validator"
 
@@ -119,8 +119,8 @@ export interface Genesis {
         address: string,
         delegatee_gateway_addresses: Array<string>,
         service_configs: Array<{
-            service_id: string
-          }>
+          service_id: string
+        }>
         stake: Coin
       }>
       params: Params
