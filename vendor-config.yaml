@@ -4,7 +4,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install --inline-builds"
+      script: "yarn install"
       cleanCache: true
     build:
       required: true
@@ -19,23 +19,20 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install --inline-builds"
+      script: "yarn install"
       cleanCache: true
     build:
       required: true
       script: "yarn build"
     dependencies:
       - "@cosmjs"
-  #    pack:
-  #      include:
-  #        - "node-core"
 
   - name: "@subql-cosmos"
     path: "vendor/subql-cosmos"
     workspace: true
     install:
       required: true
-      script: "yarn install --inline-builds"
+      script: "yarn install"
       cleanCache: true
     build:
       required: true
