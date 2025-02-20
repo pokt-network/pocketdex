@@ -2,9 +2,8 @@
 FROM node:18.20.3-slim
 
 # Set arguments and environment variables
-ARG GENESIS_FILENAME=testnet.json
 ARG NODE_ENV=production
-ARG ENDPOINT
+ARG ENDPOINT=http://localhost:26657
 ARG CHAIN_ID=poktroll
 
 ENV NODE_ENV=$NODE_ENV
@@ -63,7 +62,6 @@ RUN rm -rf /home/app/vendor
 COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /home/app/
 COPY src /home/app/src
 COPY proto /home/app/proto
-COPY genesis/${GENESIS_FILENAME} /home/app/genesis.json
 
 # Build pocketdex
 RUN yarn run build  \

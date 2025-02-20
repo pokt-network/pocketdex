@@ -1,4 +1,4 @@
-FROM node:18.20.3-slim
+FROM node:18.20.3-alpine3.20
 
 ARG CI=false
 ARG NODE_ENV=development
@@ -16,15 +16,14 @@ ENV TZ=utc
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies and tools required for the build and runtime
-RUN apt-get update && apt-get install -y \
-    tree jq postgresql-client tini curl \
-    # Required for building the Docker container on ARM64 (e.g., M1 chip).
-    make build-essential pkg-config python3 libusb-1.0-0-dev libudev-dev \
-    && npm install -g typescript \
-    && curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq && \
-    chmod +x /usr/bin/yq && \
-    rm -rf /var/lib/apt/lists/*
+# Install required system dependencies
+RUN apk add --no-cache \
+       linux-headers make gcc g++ build-base  \
+       python3 py3-pip py3-setuptools libusb-dev eudev-dev pkgconf \
+       tree jq postgresql-client tini curl  \
+       && npm install -g typescript \
+       && curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq \
+       && chmod +x /usr/bin/yq
 
 # Copy the scripts folder, which includes install-vendor.sh
 COPY scripts /app/scripts
@@ -54,21 +53,22 @@ COPY vendor /app/vendor
 #RUN cd /app/vendor/subql && yarn install --inline-builds && yarn build
 #RUN cd /app/vendor/subql-cosmos && yarn install --inline-builds && yarn build
 
+# Run vendors builder
 RUN yarn run vendors:build && \
-  # Once they are build we do not really need them there because they are moved to node_modules with packaging.
-  rm -rf /app/vendor && \
-  apt purge -y make build-essential pkg-config python3 libusb-1.0-0-dev libudev-dev && \
-  apt autoremove -y && \
-  apt clean && \
-  rm -rf /var/lib/apt/lists/* && \
-  rm -rf /root/.npm && rm -rf /root/.cache && rm -rf /root/.yarn && \
-  rm -rf yarn cache clean && \
-  # Cleanup temporary files to reduce layers and space
-  rm -rf /tmp/* /var/tmp/*
+    # Once they are built we do not really need them there because they are moved to node_modules with packaging.
+    rm -rf /app/vendor && \
+    # Remove vendor build dependencies.
+    apk del linux-headers make gcc g++ build-base python3 py3-pip py3-setuptools libusb-dev eudev-dev pkgconf && \
+    rm -rf /var/cache/apk/* && \
+    rm -rf /root/.npm && rm -rf /root/.cache && rm -rf /root/.yarn && \
+    rm -rf yarn cache clean && \
+    # Cleanup temporary files to reduce layers and space
+    rm -rf /tmp/* /var/tmp/*
 
 
 # -------------------------------------------
 # Source code step: Separate for better caching
+# Also this ones on development are mounted to handle hot reload, but needed for slim process.
 # -------------------------------------------
 COPY ./project.ts ./tsconfig.json ./.eslintrc.js ./.eslintignore ./nodemon.json /app/
 

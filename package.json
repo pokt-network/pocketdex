@@ -51,7 +51,7 @@
   "repository": "github:pokt-network/pocketdex",
   "packageManager": "yarn@3.8.0",
   "engines": {
-    "node": "^21"
+    "node": "18.x"
   },
   "files": [
     "dist",
@@ -87,6 +87,7 @@
     "dotenv": "16.4.7",
     "json-bigint": "1.0.0",
     "lodash": "4.17.21",
+    "node-fetch": "^3.3.2",
     "starknet": "6.11.0",
     "ts-proto": "^1.112.1",
     "tslib": "^2.3.1"

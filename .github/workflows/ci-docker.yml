@@ -31,9 +31,6 @@ jobs:
           cache-to: type=gha,mode=max
           # Added platforms to ensure this image will work on Linux and OSx with Mx processors
           platforms: linux/amd64,linux/arm64
-          build-args: |
-            NODE_ENV=production
-            CHAIN_ID=poktroll
 
       # development mode
       - name: Build Development
@@ -45,6 +42,3 @@ jobs:
           cache-to: type=gha,mode=max
           # Added platforms to ensure this image will work on Linux and OSx with Mx processors
           platforms: linux/amd64,linux/arm64
-          build-args: |
-            NODE_ENV=development
-            CHAIN_ID=poktroll

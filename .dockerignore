@@ -1,35 +1,53 @@
-# git
+# Ignore Git files
 .github
 .gitignore
 .gitmodules
 .git
 
-# root and vendor modules
-node_modules
-*/**/node_modules
+# Ignore IDE/editor configs
+.idea
+.vscode
+.run
 
-# generated code
+# Ignore `node_modules` at any level
+node_modules
+**/node_modules
+
+# Ignore Yarn cache
+.yarn/cache
+**/.yarn/cache
+
+# Ignore generated code and build artifacts
 dist
 src/types
 project.yaml
 
-# dotenv files
-.env.sample
-.env.development
-.env.production
-.env.test
+# Ignore all Docker Compose files
+docker-compose.*.yml
+*.dockerfile
 
-# not needed
+# Ignore dotenv and environment files
+.env*
+*.env
+
+# Ignore logs, temp files, backups
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Ignore assets and documentation
+*.{md,png,jpg}
+**/*.{md,png,jpg}
+
+# Ignore specific development and unused files
 docs
-.run
-*.md
-*/**/.md
-*/**/.png
-*/**/.jpg
-
-.yarn/cache
-*/**/.yarn/cache
-
 kubernetes
-
+tiltfiles
 .last_build
+
+# Ignore vendor-specific generated files or caches
+vendor/**/*.log
+vendor/**/packages/**/node_modules
+vendor/**/*.tmp
+vendor/**/*.cache

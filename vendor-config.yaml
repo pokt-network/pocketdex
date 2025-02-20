@@ -4,38 +4,38 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install"
+      script: "yarn install --inline-builds"
       cleanCache: true
     build:
       required: true
       script: "yarn build"
     pack:
-      includes:
+      include:
         - "stargate"
-        - "tendermint"
+        - "tendermint-rpc"
 
   - name: "@subql"
     path: "vendor/subql"
     workspace: true
     install:
       required: true
-      script: "yarn install"
+      script: "yarn install --inline-builds"
       cleanCache: true
     build:
       required: true
       script: "yarn build"
     dependencies:
       - "@cosmjs"
-    pack:
-      includes:
-        - "node-core"
+  #    pack:
+  #      include:
+  #        - "node-core"
 
   - name: "@subql-cosmos"
     path: "vendor/subql-cosmos"
     workspace: true
     install:
       required: true
-      script: "yarn install"
+      script: "yarn install --inline-builds"
       cleanCache: true
     build:
       required: true

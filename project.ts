@@ -23,11 +23,11 @@ const project: CosmosProject = {
   runner: {
     node: {
       name: "@subql/node-cosmos",
-      version: ">=4.3.0",
+      version: ">=4.5.1",
     },
     query: {
       name: "@subql/query",
-      version: ">=2.19.0",
+      version: ">=2.20.2",
     },
   },
   schema: {

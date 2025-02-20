@@ -2,9 +2,9 @@ services:
   postgres:
     build:
       context: .
-      dockerfile: ./docker/pg-Dockerfile
-      args:
-        POSTGRES_VERSION: ${POSTGRES_VERSION}
+      dockerfile: ./docker/postgres/pg.dockerfile
+    image: pocket-network/pocketdex-postgres:16-alpine
+    pull_policy: build
     ports:
       - 5432:5432
     volumes:
@@ -22,7 +22,7 @@ services:
       - pocketdex
 
   pgadmin:
-    image: dpage/pgadmin4:${PGADMIN_VERSION}
+    image: dpage/pgadmin4:${PGADMIN_VERSION:-latest}
     container_name: pgadmin
     restart: always
     environment:
@@ -42,37 +42,52 @@ services:
   indexer:
     build:
       context: .
-      dockerfile: ./docker/node.dockerfile
-      args:
-        GENESIS_FILENAME: ${GENESIS_FILENAME:-testnet.json}
-        NODE_ENV: ${ENV}
-        CHAIN_ID: ${CHAIN_ID}
-        ENDPOINT: ${ENDPOINT}
-    image: pocket-network/pocketdex:production
+      dockerfile: ./docker/node.alpine.dockerfile
+      platforms:
+        - ${PLATFORM}
+    image: pocket-network/pocketdex:production-alpine
     pull_policy: build
+    platform: ${PLATFORM}
     depends_on:
       "postgres":
         condition: service_healthy
+    ports:
+      - "3000:3000"
     restart: unless-stopped
     environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_USER: ${POSTGRES_USER}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_DATABASE: ${POSTGRES_DB}
-      DB_HOST: postgres
-      DB_PORT: 5432
-      NODE_ENV: ${ENV}
-      WORKERS: ${WORKERS}
+      NODE_OPTIONS: ${NODE_OPTIONS}
       BATCH_SIZE: ${BATCH_SIZE}
       DB_SCHEMA: ${DB_SCHEMA}
       START_BLOCK: ${START_BLOCK}
       ENDPOINT: ${ENDPOINT}
       CHAIN_ID: ${CHAIN_ID}
-    volumes:
-      - ./genesis/${GENESIS_FILENAME:-testnet.json}:/app/genesis.json
+      POCKETDEX_DB_BATCH_SIZE: ${POCKETDEX_DB_BATCH_SIZE:-5000}
+      POCKETDEX_DB_PAGE_LIMIT: ${POCKETDEX_DB_PAGE_LIMIT:-5000}
+      POCKETDEX_GENESIS: ${POCKETDEX_GENESIS:-/app/genesis.json}
+      # uncomment if you will use genesis with a file instead of url
+      #volumes:
+      #- ./genesis.json:/app/genesis.json
     command:
-      - --subscriptions
+      - --subscription
+      - --unfinalized-blocks=false
+      - --allow-schema-migration
+      - --timeout=60000
+      - --store-cache-async=false
+      - --store-flush-interval=10
+      - --enable-cache=false
+      - --kyve-endpoint=false
+      - --query-limit=5000
+      - --pg-pool-min=100
+      - --pg-pool-max=300
+      - --pg-pool-acquire=30000
+      - --pg-pool-idle=10000
+      - --pg-pool-evict=12000
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
-
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000/ready" ]
       interval: 3s
@@ -85,7 +100,7 @@ services:
   query:
     image: subquerynetwork/subql-query:${SUBQUERY_GRAPHQL_ENGINE_VERSION}
     ports:
-      - ${SUBQUERY_GRAPHQL_ENGINE_PORT}:3000
+      - ${SUBQUERY_GRAPHQL_ENGINE_PORT:-3001}:3000
     depends_on:
       "postgres":
         condition: service_healthy
@@ -93,17 +108,17 @@ services:
         condition: service_healthy
     restart: always
     environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_USER: ${POSTGRES_USER}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_DATABASE: ${POSTGRES_DB}
-      DB_HOST: postgres
-      DB_PORT: 5432
     command:
-      - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
       - --name=${DB_SCHEMA}
       - --indexer=http://indexer:3000
       - --playground
-      - --subscriptions
+      - --subscription
+      - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
     networks:
       - pocketdex
 

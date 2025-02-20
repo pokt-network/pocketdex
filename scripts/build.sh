@@ -6,8 +6,7 @@ set -e
 
 . scripts/shared.sh
 
-info_log "CHAIN: $CHAIN_ID"
-info_log "ENDPOINT: $ENDPOINT"
+info_log "NODE_ENV: $NODE_ENV - SCHEMA: $DB_SCHEMA - CHAIN: $CHAIN_ID - ENDPOINT: $ENDPOINT"
 
 info_log "Running 'subql' codegen"
 env CHAIN_ID=$CHAIN_ID ENDPOINT=$ENDPOINT yarn exec subql codegen # this is same of yarn exec subql codegen

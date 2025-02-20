@@ -1,5 +1,4 @@
-ARG POSTGRES_VERSION=16-alpine
-FROM postgres:$POSTGRES_VERSION
+FROM postgres:16-alpine
 
 # Variables needed at runtime to configure postgres and run the initdb scripts
 ENV POSTGRES_DB 'postgres'

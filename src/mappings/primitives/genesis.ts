@@ -1,9 +1,12 @@
+import fs from "fs/promises";
+import path from "path";
 import { fromBase64 } from "@cosmjs/encoding";
 import { CosmosBlock } from "@subql/types-cosmos";
 import {
   get,
   isNil,
 } from "lodash";
+import fetch from "node-fetch";
 import {
   Event,
   EventKind,
@@ -78,12 +81,81 @@ import {
   Secp256k1,
 } from "../utils/pub_key";
 
+let genesisFile: Genesis | null = null;
+
+export async function loadGenesisFile(): Promise<Genesis> {
+  if (!isNil(genesisFile)) {
+    return genesisFile; // Return a cached value if already loaded
+  }
+
+  const genesisSource = process.env.POCKETDEX_GENESIS || null;
+
+  if (!genesisSource) {
+    throw new Error("Environment variable POCKETDEX_GENESIS is not defined.");
+  }
+
+  // Check if the provided source is a URL
+  const isUrl = /^https?:\/\//i.test(genesisSource);
+
+  if (isUrl) {
+    // If it's a URL, use fetch to load the data
+    try {
+      const response = await fetch(genesisSource);
+
+      if (!response.ok) {
+        // noinspection ExceptionCaughtLocallyJS
+        throw new Error(`Failed to fetch from URL: ${genesisSource}. Status: ${response.status} ${response.statusText}`);
+      }
+
+      const json = await response.json();
+      genesisFile = json as Genesis; // Cache the result to avoid reloading
+      return json as Genesis;
+    } catch (error) {
+      // Handle errors strictly for TypeScript compatibility
+      if (error instanceof Error) {
+        throw new Error(`Failed to load genesis JSON from URL: ${error.message}`);
+      } else {
+        throw new Error("An unknown error occurred while loading from the URL.");
+      }
+    }
+  } else {
+    // If not a URL, validate if it's a valid file path
+    try {
+      const resolvedPath = path.isAbsolute(genesisSource)
+        ? genesisSource // Use as-is if already an absolute path
+        : path.resolve(process.cwd(), genesisSource); // Resolve to absolute if relative
+
+      // Check if the file exists using fs.stat (validates a proper file path)
+      const fileExists = await fs.stat(resolvedPath).then(() => true).catch(() => false);
+
+      if (!fileExists) {
+        // noinspection ExceptionCaughtLocallyJS
+        throw new Error(`File not found or invalid path: ${resolvedPath}`);
+      }
+
+      // Read the file contents and parse as JSON
+      const fileContents = await fs.readFile(resolvedPath, "utf-8");
+      const json = JSON.parse(fileContents); // Parse the JSON from the file
+      genesisFile = json as Genesis; // Cache the result
+      return json;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // Handle JSON parsing errors specifically
+        throw new Error(`Invalid JSON in the file: ${error.message}`);
+      } else if (error instanceof Error) {
+        // Handle other errors (e.g., file not found or access issues)
+        throw new Error(`Failed to load genesis JSON from file: ${error.message}`);
+      } else {
+        throw new Error("An unknown error occurred while loading from the file.");
+      }
+    }
+  }
+}
+
+
 // handleGenesis, referenced in project.ts, handle genesis file and all the base entities of the network derived from it
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
-  // TODO: Investigate a way to load this from network and cache, because otherwise it will be called on every block.
-  // we MUST load the JSON this way due to the sandboxed environment
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const genesis: Genesis = require("../../../genesis.json");
+  const genesis: Genesis = await loadGenesisFile();
 
   // IMPORTANT: Return early if this is not the genesis initial height as this is called for block indexed!
   if (block.block.header.height !== genesis.initial_height) {

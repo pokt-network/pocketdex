@@ -42,9 +42,10 @@ update_project() {
 get_params() {
     local params=""
 
-    if [ -n "$WORKERS" ]; then
-        params="--workers=$WORKERS"
-    fi
+# NOTE: this will keep disable until SubQuery team fix the performance issue with sandbox and workers if they does.
+#    if [ -n "$WORKERS" ]; then
+#        params="--workers=$WORKERS"
+#    fi
     if [ -n "$BATCH_SIZE" ]; then
         params="${params} --batch-size=$BATCH_SIZE"
     fi

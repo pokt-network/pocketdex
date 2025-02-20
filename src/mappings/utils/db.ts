@@ -131,6 +131,7 @@ export async function optimizedBulkCreate(modelName: string, docs: Array<any>, t
       const docIndex = batchStart + i;
       if (docIndex >= docs.length) break;
       const doc = transformer ? transformer(docs[docIndex]) : docs[docIndex];
+      if (!doc._block_range) doc._block_range = [store.context.getHistoricalUnit(), null];
       records.push(doc);
     }
 

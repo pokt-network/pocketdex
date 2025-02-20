@@ -2,9 +2,9 @@ services:
   postgres:
     build:
       context: .
-      dockerfile: ./docker/postgres/pg-Dockerfile
-      args:
-        POSTGRES_VERSION: ${POSTGRES_VERSION}
+      dockerfile: ./docker/postgres/pg.dockerfile
+    image: pocket-network/pocketdex-postgres:16-alpine
+    pull_policy: build
     ports:
       - 5432:5432
     volumes:
@@ -22,7 +22,7 @@ services:
       - pocketdex
 
   pgadmin:
-    image: dpage/pgadmin4:${PGADMIN_VERSION}
+    image: dpage/pgadmin4:${PGADMIN_VERSION:-latest}
     container_name: pgadmin
     restart: always
     environment:
@@ -42,17 +42,17 @@ services:
   indexer:
     build:
       context: .
-      dockerfile: ./docker/dev-node.dockerfile
-      args:
-        GENESIS_FILENAME: ${GENESIS_FILENAME:-testnet.json}
-        NODE_ENV: ${ENV}
-        CHAIN_ID: ${CHAIN_ID}
-        ENDPOINT: ${ENDPOINT}
-    image: pocket-network/pocketdex:development
+      dockerfile: ./docker/dev-node.alpine.dockerfile
+      platforms:
+        - ${PLATFORM}
+    image: pocket-network/pocketdex:development-alpine
     pull_policy: build
+    platform: ${PLATFORM}
     depends_on:
       "postgres":
         condition: service_healthy
+    ports:
+      - "3000:3000"
     restart: unless-stopped
     environment:
       DB_HOST: postgres
@@ -60,41 +60,42 @@ services:
       DB_USER: ${POSTGRES_USER}
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_DATABASE: ${POSTGRES_DB}
-      NODE_ENV: ${ENV}
       NODE_OPTIONS: ${NODE_OPTIONS}
-      WORKERS: ${WORKERS}
       BATCH_SIZE: ${BATCH_SIZE}
       DB_SCHEMA: ${DB_SCHEMA}
       START_BLOCK: ${START_BLOCK}
       ENDPOINT: ${ENDPOINT}
       CHAIN_ID: ${CHAIN_ID}
+      POCKETDEX_DB_BATCH_SIZE: ${POCKETDEX_DB_BATCH_SIZE:-5000}
+      POCKETDEX_DB_PAGE_LIMIT: ${POCKETDEX_DB_PAGE_LIMIT:-5000}
+      POCKETDEX_GENESIS: ${POCKETDEX_GENESIS:-/app/genesis.json}
     volumes:
       # Replaced ./:/app with individual tracked files to avoid the generated code go outside the container
-      - ./genesis/${GENESIS_FILENAME:-testnet.json}:/app/genesis.json
       - ./schema.graphql:/app/schema.graphql
       - ./project.ts:/app/project.ts
       - ./proto:/app/proto
-      # if you modify vendors/* you need to rebuild the image,
+      # if you modify vendors/*, you need to rebuild the image
       # because handle the rebuild of those everytime is too much time between builds.
       - ./src:/app/src
       - ignore_types:/app/src/types
+      - ignore_dist:/app/dist
+      # UNCOMMENT IF U WILL USE LOCALNET
+      # - ./genesis.json:/app/genesis.json
     command:
       - --subscription
-      - --unfinalized-blocks=true
-      - --timeout=120000
+      - --unfinalized-blocks=false
+      - --allow-schema-migration
+      - --timeout=60000
       - --store-cache-async=false
-      - --store-cache-upper-limit=30000
-      - --store-cache-threshold=30000
-      - --store-get-cache-size=30000
-      - --store-flush-interval=120
+      - --store-flush-interval=10
       - --enable-cache=false
       - --kyve-endpoint=false
-      - --query-limit=1000
-      - --pg-pool-min=10
-      - --pg-pool-max=50
+      - --query-limit=5000
+      - --pg-pool-min=100
+      - --pg-pool-max=300
       - --pg-pool-acquire=30000
-      - --pg-pool-idle=120000
-      - --pg-pool-evict=60000
+      - --pg-pool-idle=10000
+      - --pg-pool-evict=12000
       - ${SUBQUERY_NODE_EXTRA_PARAMS:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000/ready" ]
@@ -108,7 +109,7 @@ services:
   query:
     image: subquerynetwork/subql-query:${SUBQUERY_GRAPHQL_ENGINE_VERSION}
     ports:
-      - ${SUBQUERY_GRAPHQL_ENGINE_PORT}:3000
+      - ${SUBQUERY_GRAPHQL_ENGINE_PORT:-3001}:3000
     depends_on:
       "postgres":
         condition: service_healthy
@@ -122,11 +123,11 @@ services:
       DB_PASS: ${POSTGRES_PASSWORD}
       DB_DATABASE: ${POSTGRES_DB}
     command:
-      - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
       - --name=${DB_SCHEMA}
       - --indexer=http://indexer:3000
       - --playground
       - --subscription
+      - ${SUBQUERY_GRAPHQL_EXTRA_PARAMS:-}
     networks:
       - pocketdex
 
