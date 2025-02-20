@@ -137,11 +137,14 @@ export async function handleNativeBalanceChangesForAddressAndDenom(address: stri
       amount: BigInt(0),
       lastUpdatedBlockId: blockId,
     });
+  } else {
+    // apply all the changes on this block
+    for (const change of changes) {
+      balance.amount += BigInt(change.balanceOffset);
+    }
+    balance.lastUpdatedBlockId = blockId;
   }
-  // apply all the changes on this block
-  for (const change of changes) {
-    balance.amount += BigInt(change.balanceOffset);
-  }
+
   // save once per address-denom
   await balance.save();
 }
