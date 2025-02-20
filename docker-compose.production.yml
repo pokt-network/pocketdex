@@ -42,10 +42,10 @@ services:
   indexer:
     build:
       context: .
-      dockerfile: ./docker/node.alpine.dockerfile
+      dockerfile: ./docker/node.dockerfile
       platforms:
         - ${PLATFORM}
-    image: pocket-network/pocketdex:production-alpine
+    image: pocket-network/pocketdex:production
     pull_policy: build
     platform: ${PLATFORM}
     depends_on:
