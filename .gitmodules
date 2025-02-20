@@ -4,13 +4,13 @@
 
 [submodule "vendor/subql"]
 	path = vendor/subql
-	url = git@github.com:pokt-shannon/subql.git
+	url = https://github.com/pokt-shannon/subql.git
 	branch = pocketdex
 [submodule "vendor/subql-cosmos"]
 	path = vendor/subql-cosmos
-	url = git@github.com:pokt-shannon/subql-cosmos.git
+	url = https://github.com/pokt-shannon/subql-cosmos.git
 	branch = main
 [submodule "vendor/cosmjs"]
 	path = vendor/cosmjs
-	url = git@github.com:pokt-shannon/x-cosmjs.git
+	url = https://github.com/pokt-shannon/x-cosmjs.git
 	branch = main
