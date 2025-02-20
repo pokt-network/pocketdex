@@ -8,25 +8,28 @@ on:
         type: string
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     name: "CI"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
-          submodules: 'recursive'
-          lfs: true
+          ref: main
+          submodules: true
 
       - name: Docker Setup Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v3.9.0
 
       # TODO: add later in another PR the registry login and docker metadata base on commit sha
 
       # production mode
       - name: Build Production
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v6.14.0
         if: ${{ inputs.env == 'production' }}
         with:
           file: docker/node.dockerfile
@@ -36,7 +39,7 @@ jobs:
 
       # development mode
       - name: Build Development
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v6.14.0
         if: ${{ inputs.env != 'production' }}
         with:
           file: docker/dev-node.dockerfile

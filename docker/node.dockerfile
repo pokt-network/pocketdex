@@ -78,7 +78,6 @@ COPY proto /home/app/proto
 # Build pocketdex
 RUN yarn run build  \
     # Use `yarn workspaces focus` to reduce dependencies to only production-level requirements.
-    && yarn dedupe --strategy highest \
     && yarn workspaces focus --production \
     && rm -rf /home/app/src
 
