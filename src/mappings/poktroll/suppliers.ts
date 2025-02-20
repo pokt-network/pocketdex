@@ -186,9 +186,7 @@ async function _handleSupplierUnbondingBeginEvent(
    */
   const unbondingHeight = event.event.attributes.find(attribute => attribute.key === "unbonding_end_height")?.value;
 
-  if (!unbondingHeight) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] unbonding_end_height not found`);
-  }
+
 
   const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string;
 
@@ -204,7 +202,13 @@ async function _handleSupplierUnbondingBeginEvent(
     throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not found for operator address ${operatorAddress}`);
   }
 
-  supplier.unstakingEndHeight = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
+  if (!unbondingHeight) {
+    // todo: we should do this -> throw new Error(`[handleSupplierUnbondingBeginEvent] unbonding_end_height not found`);
+    //  but alpha has still events without this
+    logger.error(`[handleSupplierUnbondingBeginEvent] unbonding_end_height not found`);
+  } else {
+    supplier.unstakingEndHeight = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
+  }
 
   const eventId = getEventId(event);
 
@@ -224,10 +228,6 @@ async function _handleSupplierUnbondingEndEvent(
 ) {
   const unbondingHeight = event.event.attributes.find(attribute => attribute.key === "unbonding_end_height")?.value;
 
-  if (!unbondingHeight) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] unbonding_end_height not found`);
-  }
-
   const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string;
 
   if (!supplierStringified) {
@@ -246,7 +246,14 @@ async function _handleSupplierUnbondingEndEvent(
     throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`);
   }
 
-  supplier.unstakingEndBlockId = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
+  if (!unbondingHeight) {
+    // todo: we should do this -> throw new Error(`[handleSupplierUnbondingEndEvent] unbonding_end_height not found`);
+    //  but alpha has still events without this
+    logger.error(`[handleSupplierUnbondingEndEvent] unbonding_end_height not found`);
+  } else {
+    supplier.unstakingEndBlockId = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
+  }
+
   supplier.stakeStatus = StakeStatus.Unstaked;
 
   const supplierServices = (await fetchAllSupplierServiceConfigBySupplier(supplierAddress) || []).map(item => item.id);
