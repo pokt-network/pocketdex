@@ -13,6 +13,10 @@
       <env name="ENDPOINT" value="https://shannon-testnet-grove-rpc.beta.poktroll.com" />
       <env name="NODE_ENV" value="development" />
         <env name="NODE_OPTIONS" value="--max-old-space-size=8192"/>
+        <env name="POCKETDEX_DB_BATCH_SIZE" value="5000"/>
+        <env name="POCKETDEX_DB_PAGE_LIMIT" value="1000"/>
+        <env name="POCKETDEX_GENESIS"
+             value="https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/testnet-beta/genesis.json"/>
       <env name="TZ" value="utc" />
     </envs>
     <method v="2">

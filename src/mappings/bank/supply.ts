@@ -26,7 +26,7 @@ export const getSupplyRecord = function(supply: Coin, block: CosmosBlock): Suppl
 };
 
 export async function queryTotalSupply(): Promise<Coin[]> {
-  logger.info(`[handleSupply] querying total supply`);
+  logger.debug(`[handleSupply] querying total supply`);
   const finalSupply: Coin[] = [];
   let paginationKey: Uint8Array | undefined;
 
@@ -51,7 +51,7 @@ export async function queryTotalSupply(): Promise<Coin[]> {
     paginationKey = response.pagination?.nextKey;
   }
 
-  logger.info(`[handleTotalSupply]: total supply query done!`);
+  logger.debug(`[handleTotalSupply]: total supply query done!`);
 
   return finalSupply;
 }
@@ -69,9 +69,7 @@ export async function fetchAllSupplyDenom(): Promise<SupplyDenom[]> {
 
 // handleSupply, referenced in project.ts, handles supply information from block
 export async function handleSupply(block: CosmosBlock): Promise<void> {
-  logger.info(`[handleSupply] fetching supply denominations...`);
   const supplyDenoms = await fetchAllSupplyDenom();
-  logger.info(`[handleSupply] supply denominations loaded!`);
   const supplyIdHeight = block.header.height === 1 ? block.header.height : block.header.height - 1;
 
   const blockSuppliesMap: Map<string, BlockSupplyProps> = new Map();
@@ -155,8 +153,6 @@ export async function handleSupply(block: CosmosBlock): Promise<void> {
 
   promises.push(store.bulkCreate("BlockSupply", Array.from(blockSuppliesMap.values())));
 
-  logger.info(`[handleSupply] saving Supply and BlockSupply records...`);
   // until we refactor this to msg OR/AND an event, at least try to parallelize us as much as possible.
   await Promise.all(promises);
-  logger.info(`[handleSupply] Supply and BlockSupply records saved!`);
 }
