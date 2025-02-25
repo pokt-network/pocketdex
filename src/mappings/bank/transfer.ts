@@ -1,49 +1,46 @@
 import {
-  CosmosEvent,
   CosmosMessage,
+  CosmosTransaction,
 } from "@subql/types-cosmos";
-import { NativeTransfer } from "../../types";
+import { NativeTransferProps } from "../../types/models/NativeTransfer";
 import { NativeTransferMsg } from "../types";
 import {
-  attemptHandling,
-  unprocessedEventHandler,
-} from "../utils/handlers";
-import { messageId } from "../utils/ids";
-import { stringify } from "../utils/json";
+  getBlockId,
+  messageId,
+} from "../utils/ids";
+import { getTxStatus } from "../utils/primitives";
 
-export async function handleNativeTransfer(event: CosmosEvent): Promise<void> {
-  await attemptHandling(event, _handleNativeTransfer, unprocessedEventHandler);
-}
-
-async function _handleNativeTransfer(event: CosmosEvent): Promise<void> {
-  const msg: CosmosMessage<NativeTransferMsg> = event.msg;
-  logger.debug(`[handleNativeTransfer] (tx ${msg.tx.hash}): indexing message ${msg.idx + 1} / ${msg.tx.decodedTx.body.messages.length}`);
-  logger.debug(`[handleNativeTransfer] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-  // const timeline = getTimeline(event);
-
+function _handleNativeTransfer(msg: CosmosMessage<NativeTransferMsg>): NativeTransferProps {
+  const tx = msg.tx as CosmosTransaction;
   const fromAddress = msg.msg?.decodedMsg?.fromAddress;
   const toAddress = msg.msg?.decodedMsg?.toAddress;
   const amounts = msg.msg?.decodedMsg?.amount;
 
+  const id = messageId(msg);
+  const txHash = tx.hash;
+
   if (!fromAddress || !amounts || !toAddress) {
-    logger.warn(`[handleNativeTransfer] (tx ${event.tx.hash}): cannot index event (event.event): ${stringify(event.event, undefined, 2)}`);
-    return;
+    throw new Error(`[handleNativeTransfer] (block=${msg.block.header.height} tx=${tx.hash} msg=${id}): cannot index msg`);
   }
 
   // workaround: assuming one denomination per transfer message
   const denom = amounts[0].denom;
-  const id = messageId(msg);
-  const transferEntity = NativeTransfer.create({
+  return {
     id,
     senderId: toAddress,
     recipientId: fromAddress,
     amounts,
     denom,
-    // timeline,
-    messageId: id,
-    transactionId: msg.tx.hash,
-    blockId: msg.block.block.id,
-  });
+    status: getTxStatus(tx),
+    eventId: id,
+    // on event kind message the message is guaranteed
+    messageId: messageId(msg),
+    // on event kind message or transaction, the transaction is guaranteed
+    transactionId: txHash,
+    blockId: getBlockId(msg.block),
+  };
+}
 
-  await transferEntity.save();
+export async function handleNativeTransfer(messages: CosmosMessage[]): Promise<void> {
+  await store.bulkCreate("NativeTransfer", messages.map(_handleNativeTransfer));
 }

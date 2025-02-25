@@ -1,9 +1,0 @@
-<!-- This file help anyone that uses IntelliJ IDEs to been able to run the project locally -->
-<component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Localdev" type="NodeJSConfigurationType" application-parameters="-f=./ --db-schema=app --workers=4 --batch-size=30 --unfinalized-blocks=true" path-to-js-file="vendor/subql-cosmos/packages/node/bin/run" working-dir="$PROJECT_DIR$">
-    <envs>
-      <env name="NODE_ENV" value="develop" />
-    </envs>
-    <method v="2" />
-  </configuration>
-</component>

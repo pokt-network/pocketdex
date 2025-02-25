@@ -1,102 +1,92 @@
-FROM node:22.5-slim AS builder
+FROM node:18.20.3-alpine3.20
 
-ARG GENESIS_FILENAME=testnet.json
 ARG NODE_ENV=production
-ARG ENDPOINT
+ARG ENDPOINT=http://localhost:26657
 ARG CHAIN_ID=poktroll
 
-ENV NODE_ENV=$NODE_ENV
+ENV NODE_ENV=production
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
-
-# Typescript is added here because is wrongly used on some of the workspaces, just by the name
-# without the use of npm exec, yarn exec or any other to ensure they are looking into the node_modules
-RUN apt-get update && apt-get install -y tree \
-    # The following was necessary to install in order to add support for building
-    # the docker container on an M1 chip (i.e. ARM64)
-    make build-essential pkg-config python3 libusb-1.0-0-dev libudev-dev \
-    && npm i -g typescript
-
-WORKDIR /app
-
-# Copy the minimum required to run install and vendor:setup
-# preventing this step need to be re-build everytime due to change on dev files
-# but if for X reason you update a vendor package this step CACHE will be dropped
-# by docker and fully rebuild
-COPY package.json yarn.lock .yarnrc.yml /app/
-COPY scripts /app/scripts
-COPY .yarn /app/.yarn
-
-# Install dev dependencies
-RUN yarn install
-
-# Copy files
-COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /app/
-COPY src /app/src
-COPY proto /app/proto
-COPY genesis/${GENESIS_FILENAME} /app/genesis.json
-
-# Run codegen and Build pocketdex
-RUN yarn run build
-
-FROM node:22.5-alpine AS runner
-
-# add group "app" and user "app"
-RUN addgroup -g 1001 app && adduser -D -h /home/app -u 1001 -G app app
-
-# Set arg and env on this layer again
-ARG NODE_ENV=production
-ARG ENDPOINT
-ARG CHAIN_ID=poktroll
-
-ENV NODE_ENV=$NODE_ENV
-ENV ENDPOINT=$ENDPOINT
-ENV CHAIN_ID=$CHAIN_ID
-
-# Add system dependencies
-RUN apk update
-RUN apk add git postgresql14-client tini curl jq
-# The following was necessary to install in order to add support for building
-# the docker container on an M1 chip (i.e. ARM64)
-RUN apk add g++ make py3-pip
-# add specific version of yq because depending on the operative system it could get another implementation or version
-# than produce error on shell scripts later.
-RUN curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq &&\
-        chmod +x /usr/bin/yq
-
-# Switch to user "app"
-WORKDIR /home/app
-
-# Copy same files from context to allow docker start building both layers in parallel
-COPY package.json yarn.lock .yarnrc.yml /home/app/
-COPY .yarn /home/app/.yarn
-COPY scripts /home/app/scripts
-
-# Install dependencies for production
-# NOTE: in case a yarn install fail, please add --inline-build to produce a more verbose installation logs, that could
-# help you debugging what is going wrong.
-RUN yarn install \
-    # Starting from yarn 2.0, the --production flag is indeed deprecated.
-    # Yarn 2 introduced improvements to allow more precise installations.
-    # The install now is needed because there are some dependencies that need to be build and that is achieve on install \
-    # the with this command the dependencies are reduced to only leave production one.
-    && yarn workspaces focus --production
-
-# Add the dependencies
-COPY --from=builder /app/project.ts /app/schema.graphql /app/tsconfig.json /home/app/
-
-# Include build artefacts in final image
-COPY --from=builder /app/dist /home/app/dist
-COPY --from=builder /app/project.yaml /home/app/
-COPY --from=builder /app/proto /home/app/proto
-COPY --from=builder /app/scripts /home/app/scripts
-
-# Allow execution for every shell script at scripts folder
-RUN find /home/app/scripts -type f -name "*.sh" -exec chmod +x {} \;
-
-# Set user as app
-USER app
-# Required after this version https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
+ENV DOCKER_BUILD="true"
+# Required after this version: https://github.com/subquery/subql-cosmos/releases/tag/node-cosmos/4.0.0
 ENV TZ=utc
 
-ENTRYPOINT ["/sbin/tini", "--", "/home/app/scripts/node-entrypoint.sh"]
+RUN addgroup -g 1001 app && \
+    adduser -D -u 1001 -G app app
+
+# Set working directory
+WORKDIR /home/app
+
+# Install required system dependencies
+RUN apk add --no-cache \
+       linux-headers make gcc g++ build-base  \
+       python3 py3-pip py3-setuptools libusb-dev eudev-dev pkgconf \
+       tree jq postgresql-client tini curl  \
+       && npm install -g typescript \
+       && curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq \
+       && chmod +x /usr/bin/yq
+
+# Copy the scripts folder, which includes install-vendor.sh
+COPY scripts /home/app/scripts
+
+# Allow execution for every shell script in the `scripts` folder.
+RUN chmod +x /home/app/scripts/*.sh
+
+# -------------------------------------------
+# Dependencies step: Handles main and vendor
+# -------------------------------------------
+# Copy only dependency-related files to maximize cache and avoid unnecessary rebuilds.
+COPY package.json yarn.lock .yarnrc.yml vendor-builder.js vendor-config.yaml /home/app/
+COPY .yarn /home/app/.yarn
+
+# Install project dependencies
+RUN yarn install
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Vendor
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Copy the vendor workspace folder
+COPY vendor /home/app/vendor
+
+# In case yarn run vendors:build fail without an explanation, uncomment below to run install and build and debug it.
+#RUN cd /home/app/vendor/cosmjs && yarn install --inline-builds && yarn build
+#RUN cd /home/app/vendor/subql && yarn install --inline-builds && yarn build
+#RUN cd /home/app/vendor/subql-cosmos && yarn install --inline-builds && yarn build
+
+# Run vendors builder
+RUN yarn run vendors:build && \
+    # Once they are built we do not really need them there because they are moved to node_modules with packaging.
+    rm -rf /home/app/vendor && \
+    yarn cache clean && \
+    # Remove vendor build dependencies.
+    apk del linux-headers make gcc g++ build-base python3 py3-pip py3-setuptools libusb-dev eudev-dev pkgconf && \
+    rm -rf /var/cache/apk/* && \
+    rm -rf /root/.npm && rm -rf /root/.cache && rm -rf /root/.yarn && \
+    # Cleanup temporary files to reduce layers and space
+    rm -rf /tmp/* /var/tmp/*
+
+
+# -------------------------------------------
+# Source code step: Separate for better caching
+# Also this ones on development are mounted to handle hot reload, but needed for slim process.
+# -------------------------------------------
+COPY ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore /home/app/
+COPY src /home/app/src
+COPY proto /home/app/proto
+
+# Build pocketdex
+RUN yarn run build  \
+    # Use `yarn workspaces focus` to reduce dependencies to only production-level requirements.
+    && yarn workspaces focus --production \
+    && rm -rf /home/app/src
+
+# Switch to the non-root user created earlier
+USER app
+
+# port of indexer
+EXPOSE 3000
+
+ENV NODE_ENV=$NODE_ENV
+
+ENTRYPOINT ["tini", "--", "/home/app/scripts/node-entrypoint.sh"]

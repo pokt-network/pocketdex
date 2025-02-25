@@ -133,7 +133,7 @@ Filtering `NativeTransfer`s for a given sender address:
 
 ```graphql
 query nativeTransfersFromAddress {
-  nativeTransfers(first: 5, filter: {fromAddress: {equalTo: "fetch1t3qet68dr0qkmrjtq89lrx837qa2t05265qy6s"}}) {
+  nativeTransfers(first: 5, filter: {fromAddress: {equalTo: "pokt1t3qet68dr0qkmrjtq89lrx837qa2t05265qy6s"}}) {
     nodes {
       toAddress
       amounts
@@ -142,16 +142,16 @@ query nativeTransfersFromAddress {
 }
 ```
 
-Filtering for `Message`s from a given sender address:
+Filtering for `Transaction`s from a given sender address:
 
 ```graphql
-query messagesFromAddress {
-  messages(
+query transactionsFromAddress {
+  transactions(
     first: 5
     filter: {transaction: {signerAddress: {equalTo: "fetch1t3qet68dr0qkmrjtq89lrx837qa2t05265qy6s"}}}
   ) {
     nodes {
-      transaction {
+      transactions {
         signerAddress
       }
     }
@@ -188,43 +188,6 @@ query transferEventsDuring {
 
 Each entity, by default, can be sorted by any of its respective fields.
 Additional support for ordering by certain fields on related entities is facilitated by custom ordering plugins generated from `makeAddPgTableOrderByPlugin` (see: [postgraphile-docs](https://www.graphile.org/postgraphile/make-add-pg-table-order-by-plugin/)).
-
-#### Block height
-
-Any entity which relates to `Block` can be ordered by a related block's `height` field:
-
-```graphql
-query contractExecByBlockHeight {
-  contractExecutionMessage (orderBy: EXECUTE_CONTRACT_MESSAGES_BY_BLOCK_HEIGHT_ASC) {
-    nodes {
-      id,
-      ...
-      Block {
-        height
-      }
-    }
-  }
-}
-```
-
-#### Contract Code ID
-
-The `contract` entity can be sorted by `codeId` through the `storeMessage` and `instantiateMessage` relations.
-
-```graphql
-query contractsByRelatedCodeID {
-  contracts (orderBy: CONTRACTS_BY_STORE_CONTRACT_MESSAGES_CODE_ID_ASC) {
-    #  or CONTRACTS_BY_INSTANTIATE_CONTRACT_MESSAGES_CODE_ID_ASC
-    nodes {
-      id,
-      ...
-      storeMessage {
-        codeId
-      }
-    }
-  }
-}
-```
 
 #### Order direction
 

@@ -37,14 +37,14 @@ import {
   MsgUpdateParam as MsgUpdateTokenomicsParam,
   MsgUpdateParams as MsgUpdateTokenomicsParams,
 } from "../../client/poktroll/tokenomics/tx";
-import { AppParamProps } from "../../types/models/AppParam";
+import { ParamProps } from "../../types/models/Param";
 import { EncodedMsg } from "../types";
 import { getParamId } from "../utils/ids";
-import { stringify } from "../utils/json";
+import { sanitize } from "../utils/json";
 
 
 const msgUpdateParamsMap: Record<string, {
-  decode(bytes: BinaryReader | Uint8Array | any): unknown
+  decode(bytes: BinaryReader | Uint8Array | unknown): unknown
   toJSON(obj: unknown): unknown
 }> = {
   "/poktroll.application.MsgUpdateParam": MsgUpdateApplicationParam,
@@ -72,47 +72,18 @@ const msgUpdateParamsMap: Record<string, {
   "/cosmos.gov.v1.MsgUpdateParams": MsgUpdateGovParams,
 };
 
-const paramMapping: Record<string, string> = {
-  "/poktroll.application.MsgUpdateParams": "AppParam",
-  "/poktroll.application.MsgUpdateParam": "AppParam",
-  "/cosmos.auth.v1beta1.MsgUpdateParams": "AuthParam",
-  "/cosmos.bank.v1beta1.MsgUpdateParams": "BankParam",
-  "/cosmos.distribution.v1beta1.MsgUpdateParams": "DistributionParam",
-  "/poktroll.gateway.MsgUpdateParams": "GatewayParam",
-  "/poktroll.gateway.MsgUpdateParam": "GatewayParam",
-  "/cosmos.gov.v1.MsgUpdateParams": "GovParam",
-  "/cosmos.mint.v1beta1.MsgUpdateParams": "MintParam",
-  "/poktroll.proof.MsgUpdateParams": "ProofParam",
-  "/poktroll.proof.MsgUpdateParam": "ProofParam",
-  "/poktroll.service.MsgUpdateParams": "ServiceParam",
-  "/poktroll.service.MsgUpdateParam": "ServiceParam",
-  "/poktroll.session.MsgUpdateParams": "SessionParam",
-  "/poktroll.shared.MsgUpdateParams": "SharedParam",
-  "/poktroll.shared.MsgUpdateParam": "SharedParam",
-  "/cosmos.slashing.v1beta1.MsgUpdateParams": "SlashingParam",
-  "/cosmos.staking.v1beta1.MsgUpdateParams": "StakingParam",
-  "/poktroll.supplier.MsgUpdateParams": "SupplierParam",
-  "/poktroll.supplier.MsgUpdateParam": "SupplierParam",
-  "/poktroll.tokenomics.MsgUpdateParams": "TokenomicsParam",
-  "/poktroll.tokenomics.MsgUpdateParam": "TokenomicsParam",
-  "/cosmos.consensus.v1.MsgUpdateParams": "ConsensusParam",
-};
-
-function getEntityParamName(typeUrl: string): string {
-  if (typeUrl in paramMapping) {
-    return paramMapping[typeUrl];
-  } else {
-    throw new Error(`Unknown typeUrl: ${typeUrl}`);
-  }
+export type UpdateParamResult = {
+  decodedMsg: unknown
+  params: Array<ParamProps>
 }
 
-export async function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: string): Promise<unknown> {
+export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): UpdateParamResult | null {
   if (!(encodedMsg.typeUrl in msgUpdateParamsMap)) {
-    return;
+    // this will help us to identify other param types without ignore them
+    return null;
   }
 
-  const entityName = getEntityParamName(encodedMsg.typeUrl);
-  const entities: Array<AppParamProps> = [];
+  const params: Array<ParamProps> = [];
 
   const msgCodec = msgUpdateParamsMap[encodedMsg.typeUrl];
   const uintArray = new Uint8Array(Object.values(encodedMsg.value));
@@ -134,35 +105,43 @@ export async function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: string
     );
   }
 
-  const decodedJsonMsg = msgCodec.toJSON(decodedMsg) as any;
+  const decodedJsonMsg = msgCodec.toJSON(decodedMsg) as Record<string, unknown>;
+  const namespace: string = encodedMsg.typeUrl.split(".")[1];
+
+  const entity: Pick<ParamProps, "namespace" | "blockId"> = {
+    namespace,
+    blockId,
+  };
 
   if (encodedMsg.typeUrl.endsWith("MsgUpdateParams")) {
-    for (const [key, value] of Object.entries(decodedJsonMsg.params)) {
-      // we need to convert the key to snake case. Or shall we do save it in camel case?
+    for (const [key, value] of Object.entries(decodedJsonMsg.params as Record<string, unknown>)) {
       const snakeKey = snakeCase(key);
-      entities.push({
-        id: getParamId(snakeKey, blockId),
+      params.push({
+        id: getParamId(namespace, snakeKey, blockId),
+        // we handle the key as snake case because is the same way it is coming on the genesis file.
         key: snakeKey,
-        value: typeof value === "object" ? stringify(value) : (value || "").toString(),
-        blockId,
+        value: sanitize(value),
+        ...entity,
       });
     }
   } else {
     for (const key of Object.keys(decodedJsonMsg)) {
       const value = decodedJsonMsg[key];
       if (key.startsWith("as")) {
-        const snakeKey = snakeCase(decodedJsonMsg.name);
-        entities.push({
-          id: getParamId(snakeKey, blockId),
+        const snakeKey = snakeCase(decodedJsonMsg.name as string);
+        params.push({
+          id: getParamId(namespace, snakeKey, blockId),
+          // we handle the key as snake case because is the same way it is coming on the genesis file.
           key: snakeKey,
-          value: typeof value === "object" ? stringify(value) : (value || "").toString(),
-          blockId,
+          value: sanitize(value),
+          ...entity,
         });
       }
     }
   }
 
-  await store.bulkCreate(entityName, entities);
-
-  return decodedMsg;
+  return {
+    decodedMsg,
+    params,
+  };
 }

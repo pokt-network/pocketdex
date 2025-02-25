@@ -39,7 +39,7 @@ on how to use indexed data after you're fully set up.
 Connect to the postgres container, update the schema, and explore!
 
 ```bash
-docker exec -it pocketdex_development-postgres-1 psql -U postgres -d postgres
+yarn docker:compose development exec -it postgres -- psql -U postgres -d postgres
 SET SCHEMA "testnet";
 # OR, if indexing localnet:
 # SET SCHEMA "localnet";
@@ -49,10 +49,7 @@ SET search_path TO app;
 
 ### Explore via GraphQL
 
-The [poktscan](poktscan.com) team put together a playground to explore the testnet data.
-
-You can access at [shannon-testnet.poktscan.com](https://shannon-testnet.poktscan.com/) and use
-the sample query below to get started.
+Navigate to http://localhost:3000 or the port you specified in .env.development at `SUBQUERY_GRAPHQL_ENGINE_PORT` var.
 
 <details>
   <summary>Click to expand sample query</summary>
@@ -137,17 +134,37 @@ the sample query below to get started.
 
 ## Getting Started
 
-### tl;dr local development (if not your first time)
-
-Run the following:
+This is the bare minimum to be here.
 
 ```bash
 yarn install
 yarn run codegen
 docker context use default # Optional
+```
+
+### tl;dr local development (if not your first time)
+
+Localnet - Run the following:
+
+1. Modify `.env.development` to use localnet values (have a comment highlighting them)
+2. Run:
+
+```bash
 yarn run docker:build:development
-yarn poktroll:proxy:start
-yarn run docker:start:development
+# before this be sure you have localnet of poktroll running. 
+# Check https://dev.poktroll.com/develop/networks/localnet
+yarn poktroll:proxy:start 
+yarn run docker:start:development # Optionally add -d if u want to detach the terminal
+```
+
+Testnet (alpha or beta):
+
+1. For beta skip this. For alpha or any other first edit `.env.development`
+2. Run:
+
+```bash
+yarn run docker:build:development
+yarn run docker:start:development # Optionally add -d if u want to detach the terminal
 ```
 
 ### 1. Install dependencies
@@ -282,38 +299,114 @@ docker tag bryanchriswhite/pocketdex-subquery-node:latest pocketdex-subquery-nod
 
 ```yaml
 services:
-  subquery-node:
+  indexer:
     image: bryanchriswhite/pocketdex-subquery-node:latest
     ...
 ```
 
 #### 3b.3 Available Scripts breakdown
 
-* `preinstall` - Enforces the use of Yarn as the package manager.
-* `postinstall` - Executes the `env:prepare` script after the installation process.
-* `env:prepare` - Runs the `prepare-dotenv.sh` script. It prepares .env files for `development`, `test` and `production` environments using `.env.sample`.
-* `codegen` - Executes the SubQL Codegen.
-* `build` - Triggers a custom build script written in shell due to its complexity.
-* `watch:build` - Acts similar to the build script, but it also disables the linter for real-time coding with nodemon.
-* `lint` - Executes the source code linter.
-* `lint:fix` - Executes the linter with automatic fixing of solvable issues.
-* `format` - Applies Prettier to the code according to the rules defined in `.prettierrc`.
-* `format:ci` - Checks the code formatting with Prettier without modifying it.
-* `vendor:setup` - Runs the `vendor.sh` shell script to prepare, run, and build vendor packages.
-* `vendor:clean-cache` - Removes the `.yarn/cache` files from vendor packages that can potentially lead to errors.
-* `vendor:install` - Executes the `vendor.sh` shell script to install dependencies for each vendor package.
-* `vendor:build` - Executes the `vendor.sh` script to build each vendor package.
-* `vendor:lint` - Executes the `vendor.sh` script to lint each vendor package.
-* `vendor:clean` - Executes the `vendor.sh` script to recursively remove `node_modules` for each vendor package.
-* `docker:compose` - Runs the `docker-compose.sh` script, which forms the base for all other `docker:<action>:<environment>` scripts.
-* `poktroll:proxy:start` and `poktroll:proxy:stop` - Executes `proxy-tunnel.sh` starting and stopping the proxy tunnel to poktroll localnet validator, respectively.
-* `docker:check-env:<environment>` - Ensures the required `.env.<environment>` exists by running `dotenv-check.sh`.
-* `docker:build:<environment>` - Builds docker images for the specified environment.
-* `docker:build:no-cache:<environment>` - Builds docker images for the specified environment without using Docker's cache.
-* `docker:start:<environment>` - Starts all services for the specified environment.
-* `docker:ps:<environment>` - Shows the status of services for the specified environment.
-* `docker:stop:<environment>` - Stops all active services for the specified environment without removing them.
-* `docker:clean:<environment>` - Stops and removes all services, volumes, and networks for the specified environment.
+### General Scripts
+
+- **`preinstall`**  
+  Ensures that Yarn is used as the package manager by running `npx only-allow yarn`.
+
+- **`postinstall`**  
+  Runs the `env:prepare` script and prepares the `.env` files.  
+  Builds vendor packages and generates SubQL code.
+
+- **`clean:all`**  
+  Removes all `node_modules` folders by executing the `remove-all-node-modules.sh` script.
+
+- **`precommit`**  
+  Runs a script to handle operations before a commit is made.
+
+---
+
+### Build and Development Scripts
+
+- **`codegen`**  
+  Executes SubQL code generation using `subql codegen`.
+
+- **`build`**  
+  Executes a complex build script located at `scripts/build.sh`.
+
+- **`watch:build`**  
+  Similar to the `build` script but runs without the linter.  
+  Useful for real-time development with nodemon.
+
+- **`test`**  
+  Builds the project and runs tests with `subql-node-cosmos`.
+
+- **`test:ci`**  
+  Runs tests in a specific CI environment using the SubQL Cosmos package.
+
+---
+
+### Linting and Formatting
+
+- **`lint`**  
+  Runs ESLint on the `src` directory with a `.ts` extension.
+
+- **`lint:fix`**  
+  Runs ESLint on the same files as the `lint` script but also fixes auto-resolvable issues.
+
+- **`format`**  
+  Formats the code using Prettier based on the project-defined rules.
+
+- **`format:ci`**  
+  Checks code formatting using Prettier without applying changes.  
+  Intended for CI pipelines.
+
+---
+
+### Environment and Vendors Setup
+
+- **`env:prepare`**  
+  Prepares `.env` files for various environments (e.g., `development`, `test`, `production`) using a helper script.
+
+- **`vendors:build`**  
+  Builds vendor packages using `vendor-builder.js`.
+
+- **`vendors:reset`**  
+  Updates vendor submodules and rebuilds vendor packages.
+
+---
+
+### Docker Operations
+
+- **`docker:compose`**  
+  A general-purpose script that wraps commands or scripts to handle Docker operations.
+
+- **`docker:check-env:<environment>`**  
+  Ensures the required `.env.<environment>` files exist.  
+  This is available for `production`, `development`, and `test`.
+
+- **`docker:build:<environment>`**  
+  Builds Docker images for the specified environment.  
+  Optionally, a `no-cache` version is available via `docker:build:no-cache:<environment>`.
+
+- **`docker:start:<environment>`**  
+  Starts all services for a specified environment using Docker Compose.
+
+- **`docker:ps:<environment>`**  
+  Displays the status of services in the specified environment.
+
+- **`docker:stop:<environment>`**  
+  Stops all services for the specified environment (without removing them).
+
+- **`docker:clean:<environment>`**  
+  Stops and removes all services, along with associated volumes and networks, for the environment.
+
+---
+
+### Other Custom Scripts
+
+- **`poktroll:proxy:start`** and **`poktroll:proxy:stop`**  
+  Start and stop a proxy tunnel for interacting with the local validator via the `proxy-tunnel.sh` script.
+
+- **`poktroll:update-proto-files`**  
+  Executes the `copy-poktroll-files.sh` script to update protocol files for `poktroll`.
 
 ### 3c. Using k8s
 

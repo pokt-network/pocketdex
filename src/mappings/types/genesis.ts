@@ -1,4 +1,5 @@
 import type { BaseAccountSDKType } from "../../types/proto-interfaces/cosmos/auth/v1beta1/auth";
+import { GrantAuthorization } from "../../types/proto-interfaces/cosmos/authz/v1beta1/authz";
 import type { Balance } from "../../types/proto-interfaces/cosmos/bank/v1beta1/genesis";
 import type {
   Coin,
@@ -7,9 +8,9 @@ import type {
 import type { GatewaySDKType } from "../../types/proto-interfaces/poktroll/gateway/types";
 import type { SupplierSDKType } from "../../types/proto-interfaces/poktroll/shared/supplier";
 
-type Supplier = Omit<SupplierSDKType, "stake"> & {stake: Required<CoinSDKType> }
+type Supplier = Omit<SupplierSDKType, "stake"> & { stake: Required<CoinSDKType> }
 type Params = Record<string, unknown>
-type ObjectWithParams ={params: Params}
+type ObjectWithParams = { params: Params }
 
 export type FakeTxType = "app" | "supplier" | "gateway" | "service" | "validator"
 
@@ -118,8 +119,8 @@ export interface Genesis {
         address: string,
         delegatee_gateway_addresses: Array<string>,
         service_configs: Array<{
-            service_id: string
-          }>
+          service_id: string
+        }>
         stake: Coin
       }>
       params: Params
@@ -136,6 +137,9 @@ export interface Genesis {
       params: Params
       accounts: Array<BaseAccountSDKType>
     }
+    authz: {
+      authorization: Array<GrantAuthorization>
+    },
     bank: {
       params: Params
       balances: Array<Balance>

@@ -1,0 +1,60 @@
+# This docker compose file is intent to be used with: https://github.com/slimtoolkit/slim?tab=readme-ov-file
+# to compress us much as possible the docker image of production.
+# CLI Example:
+# slim build --compose-file docker-compose.slim.yml --target-compose-svc indexer --compose-env-file .env.production --dep-include-compose-svc postgres --exec "curl -f http://localhost:3000/ready" --http-probe-off --compose-svc-start-wait 60 --dep-include-target-compose-svc-deps --remove-file-artifacts --include-workdir --include-shell
+# This is anyway un under research feature. NOT DONE YET!
+services:
+  postgres:
+    image: pocket-network/pocketdex-postgres:16-alpine
+    ports:
+      - 5432:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pocketdex
+
+  indexer:
+    image: pocket-network/pocketdex:production
+    depends_on:
+      "postgres":
+        condition: service_healthy
+    ports:
+      - 3000:3000
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASS: postgres
+      DB_DATABASE: postgres
+      NODE_ENV: production
+      BATCH_SIZE: 1000
+      DB_SCHEMA: pocket-beta
+      START_BLOCK: 1
+      ENDPOINT: https://shannon-testnet-grove-rpc.beta.poktroll.com
+      CHAIN_ID: poktroll
+      POCKETDEX_GENESIS: https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/testnet-beta/genesis.json
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/ready" ]
+      interval: 3s
+      timeout: 5s
+      retries: 103
+    networks:
+      - pocketdex
+
+networks:
+  pocketdex:
+
+volumes:
+  postgres_data:
+    driver: local
+

@@ -2,16 +2,84 @@
 # Add the `@index` or `@index(unique: true)` annotation after any non-key field
 # https://academy.subquery.network/build/graphql.html#indexing-by-non-primary-key-field
 
-type EventAttribute @entity {
-  id: ID!
-  key: String!
-  value: String!
-  event: Event!
+# Allowed directives
+# export const directives = gql`
+#  directive @derivedFrom(field: String!) on FIELD_DEFINITION
+#  directive @entity on OBJECT
+#  directive @jsonField(indexed: Boolean) on OBJECT
+#  directive @index(unique: Boolean) on FIELD_DEFINITION
+#  directive @compositeIndexes(fields: [[String]]!) on OBJECT
+#  directive @fullText(fields: [String!], language: String) on OBJECT
+#  directive @dbType(type: String!) on FIELD_DEFINITION
+#`;
+
+### Rules:
+# 1. Place enums all together under ### ENUMS section
+# 2. Place @jsonField all together under ### JSON FIELDS section
+# 2.1 Specify indexed: true|false for @jsonFields
+# 3. Place entities (like Block, Account, Relays, etc) under ### ENTITIES section
+# 4. Sort properties in the following order:
+# 4.1. ID!
+# 4.2. Required
+# 4.3. Indexed (@index)
+# 4.4. Optional (without !)
+# 4.5. Relations with @deriveFrom
+# 5. Place a minimum comment above the entity to describe it and the relation with poktroll
+
+### ENUMS
+
+enum RelayStatus {
+  Pending
+  Success
+  Fail
 }
 
-type SupplyDenom @entity {
-  # ID is the supply coin denomination.
-  id: ID!
+enum StakeStatus {
+  Staked
+  Unstaking
+  Unstaked
+}
+
+enum TxStatus {
+  Success
+  Error
+}
+
+enum EventKind {
+  # Hardcode non-blockchain kind just to be used on entities created by the genesis file
+  Genesis
+  # Events related to a msg using msg_index
+  Message
+  # Events produced on a transaction but not related to any msg, like fee or tip
+  Transaction
+  # Block events which are not related to transactions at all
+  BeginBlock
+  EndBlock
+  FinalizeBlock
+}
+
+enum ClaimExpirationReason {
+  EXPIRATION_REASON_UNSPECIFIED
+  PROOF_MISSING
+  PROOF_INVALID
+}
+
+enum ProofRequirementReason {
+  NOT_REQUIRED
+  PROBABILISTIC
+  THRESHOLD
+}
+
+### JSON FIELDS
+
+type EventAttribute @jsonField(indexed: false) {
+  key: String!
+  value: String!
+}
+
+type Coin @jsonField {
+  denom: String!
+  amount: String!
 }
 
 type BlockIdParts @jsonField(indexed: false) {
@@ -63,22 +131,42 @@ type BlockLastCommit @jsonField(indexed: false) {
   signatures: [BlockCommitSignature]!
 }
 
-# This handle all the information that is coming with the block but is not often used
-# but could help in some debug environment.
-type BlockMetadata @entity {
+type PublicKey @jsonField {
+  type: String!
+  key: String!
+}
+
+type ValidatorDescription @jsonField(indexed: true) {
+  moniker: String!
+  identity: String
+  website: String
+  securityContract: String
+  details: String
+}
+
+type ValidatorCommissionParams @jsonField {
+  # commission block in plain format
+  rate: String!
+  maxRate: String!
+  maxChangeRate: String!
+}
+
+### ENTITIES
+
+# Represent the balance of an account at the genesis state (usually genesis file)
+type GenesisBalance @entity {
   id: ID!
-  blockId: BlockId!
-  header: BlockHeader!
-  # first block has this null on js
-  lastCommit: BlockLastCommit
+  amount: BigInt!
+  denom: String! @index
+  account: Account!
 }
 
 type Block @entity {
-  id: ID! # The block header hash
+  id: ID! @dbType(type: "BigInt")
   chainId: String! @index
-  height: BigInt! @index
+  hash: String! @index
   timestamp: Date! @index
-  proposerAddress: String!
+  proposerAddress: String! @index
   metadata: BlockMetadata!
   size: Int!
   # relations
@@ -88,22 +176,7 @@ type Block @entity {
   balancesOfAccountByDenom: [Balance] @derivedFrom(field: "lastUpdatedBlock")
   supplies: [BlockSupply]! @derivedFrom(field: "block")
   # PARAMS
-  appParams: [AppParam] @derivedFrom(field: "block")
-  authParams: [AuthParam] @derivedFrom(field: "block")
-  bankParams: [BankParam] @derivedFrom(field: "block")
-  distributionParams: [DistributionParam] @derivedFrom(field: "block")
-  gatewayParams: [GatewayParam] @derivedFrom(field: "block")
-  govParams: [GovParam] @derivedFrom(field: "block")
-  mintParams: [MintParam] @derivedFrom(field: "block")
-  proofParams: [ProofParam] @derivedFrom(field: "block")
-  serviceParams: [ServiceParam] @derivedFrom(field: "block")
-  sessionParams: [SessionParam] @derivedFrom(field: "block")
-  sharedParams: [SharedParam] @derivedFrom(field: "block")
-  slashingParams: [SlashingParam] @derivedFrom(field: "block")
-  stakingParams: [StakingParam] @derivedFrom(field: "block")
-  supplierParams: [SupplierParam] @derivedFrom(field: "block")
-  tokenomicsParams: [TokenomicsParam] @derivedFrom(field: "block")
-  consensusParams: [ConsensusParam] @derivedFrom(field: "block")
+  params: [Param] @derivedFrom(field: "block")
   # REPORTS
   totalComputedUnits: BigInt
   totalRelays: BigInt
@@ -131,6 +204,32 @@ type Block @entity {
   unstakedGatewaysTokens: BigInt
 }
 
+# This handle all the information that is coming with the block but is not often used
+# but could help in some debug environment.
+type BlockMetadata @entity {
+  id: ID! @dbType(type: "BigInt")
+  blockId: BlockId!
+  header: BlockHeader!
+  # first block has this null on js
+  lastCommit: BlockLastCommit
+}
+
+type Authz @entity {
+  id: ID!
+  granter: Account!
+  grantee: Account!
+  type: String! @index
+  msg: String! @index
+  expiration: Date
+  event: Event!
+  block: Block!
+}
+
+type SupplyDenom @entity {
+  # ID is the supply coin denomination.
+  id: ID!
+}
+
 type Transaction @entity {
   id: ID!
   block: Block!
@@ -138,8 +237,7 @@ type Transaction @entity {
   gasWanted: BigInt!
   fees: [Coin]!
   memo: String
-  # 0 = Success, 1 = Error
-  status: Int!
+  status: TxStatus! @index
   log: String
   code: Int!
   codespace: String
@@ -147,6 +245,7 @@ type Transaction @entity {
   # NB: only the first signer!
   signerAddress: String @index
   messages: [Message] @derivedFrom(field: "transaction")
+  events: [Event]@derivedFrom(field: "transaction")
 }
 
 type Message @entity {
@@ -154,20 +253,18 @@ type Message @entity {
   typeUrl: String! @index
   json: String
   transaction: Transaction!
+  events: [Event] @derivedFrom(field: "message")
   block: Block!
 }
 
 type Event @entity {
   id: ID!
   type: String! @index
-  attributes: [EventAttribute]! @derivedFrom(field: "event")
+  kind: EventKind!
+  attributes: [EventAttribute]!
   transaction: Transaction
+  message: Message
   block: Block!
-}
-
-type Coin @jsonField {
-  denom: String!
-  amount: String!
 }
 
 type NativeTransfer @entity {
@@ -176,26 +273,34 @@ type NativeTransfer @entity {
   sender: Account! @index
   amounts: [Coin]!
   denom: String! @index
+  status: TxStatus! @index
+  event: Event!
   message: Message!
   transaction: Transaction!
   block: Block!
+}
+
+type ModuleAccount @entity {
+  id: ID!
+  name: String! @index
+  # baseAccount.accountNumber
+  accountNumber: BigInt!
+  # baseAccount.sequence
+  sequence: BigInt!
+  permissions: [String]
 }
 
 type Account @entity {
   # id is the address
   id: ID!
   chainId: String! @index
+  # not always needed, but will be sometimes than an account is a module account and will be nice
+  # been able to load/filter by this probably
+  module: ModuleAccount
   nativeBalanceChanges: [NativeBalanceChange]! @derivedFrom(field: "account")
   genesisBalances: [GenesisBalance] @derivedFrom(field: "account")
   balances: [Balance] @derivedFrom(field: "account")
   services: [Service] @derivedFrom(field: "owner")
-}
-
-type GenesisBalance @entity {
-  id: ID!
-  amount: BigInt!
-  denom: String! @index
-  account: Account!
 }
 
 type NativeBalanceChange @entity {
@@ -204,28 +309,9 @@ type NativeBalanceChange @entity {
   denom: String! @index
   account: Account!
   event: Event!
-  transaction: Transaction
   block: Block!
-}
-
-type PublicKey @jsonField {
-  type: String!
-  key: String!
-}
-
-type ValidatorDescription @jsonField(indexed: true) {
-  moniker: String!
-  identity: String
-  website: String
-  securityContract: String
-  details: String
-}
-
-type ValidatorCommission @jsonField {
-  # commission block in plain format
-  rate: String!
-  maxRate: String!
-  maxChangeRate: String!
+  transaction: Transaction
+  message: Message
 }
 
 # Msg Doc: https://docs.cosmos.network/main/build/modules/staking#msgcreatevalidator
@@ -237,10 +323,11 @@ type MsgCreateValidator @entity {
   address: String!
   # secp256k1 account
   signer: Account!
+  signerPoktPrefix: Account!
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   delegator: Account
   description: ValidatorDescription!
-  commission: ValidatorCommission!
+  commission: ValidatorCommissionParams!
   minSelfDelegation: Int!
   stakeDenom: String!
   stakeAmount: BigInt!
@@ -251,35 +338,54 @@ type MsgCreateValidator @entity {
 
 # What is a validator?: https://github.com/cosmos/cosmos/blob/master/VALIDATORS_FAQ.md
 type Validator @entity {
-  # ed25519 pubkey hex that is used on proposer_address and address at /validators endpoint of tendermint
+  # secp256k1 address
   id: ID!
+  # ed25519 pubkey hex that is used on proposer_address and address at /validators endpoint of tendermint
+  ed25519_id: String!
   # secp256k1 PubKey relation
   signer: Account!
+  signerPoktPrefix: Account!
   delegator: Account
   description: ValidatorDescription!
-  commission: ValidatorCommission!
+  commission: ValidatorCommissionParams!
   minSelfDelegation: Int!
   # value block in plain format
   stakeDenom: String!
   stakeAmount: BigInt!
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   transaction: Transaction!
-  block: Block!
   createMsg: MsgCreateValidator!
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   #updateMsg: [MsgEditValidator]!
+  commissions: [ValidatorCommission] @derivedFrom(field: "validator")
+  rewards: [ValidatorReward] @derivedFrom(field: "validator")
 }
 
-type UnprocessedEntity @entity {
+# Captures the cut taken by the validator before distributing the rest.
+# Based on the commission rate the validator sets.
+# Separates validator earnings from what’s passed on to delegators.
+type ValidatorCommission @entity {
   id: ID!
-  error: String!
-  event: Event
-  message: Message
-  transaction: Transaction
-  block: Block
+  validator: Validator!
+  amount: BigInt!
+  denom: String!
+  block: Block!
+  event: Event!
 }
 
+# Represents the total rewards earned from block rewards and transaction fees.
+# Includes both the validator’s share and the portion allocated to delegators.
+# Shows the full earnings before any deductions.
+type ValidatorReward @entity {
+  id: ID!
+  validator: Validator!
+  amount: BigInt!
+  denom: String!
+  block: Block!
+  event: Event!
+}
+
+# aka: chain
 type Service @entity {
   id: ID!
   name: String!
@@ -299,6 +405,7 @@ type MsgStakeApplication @entity {
   message: Message!
 }
 
+# Many to man
 type MsgStakeApplicationService @entity {
   id: ID!
   stakeMsg: MsgStakeApplication!
@@ -347,8 +454,7 @@ type Application @entity {
   # we are not using Coin because we want to be able to query and sum by amount
   stakeAmount: BigInt!
   stakeDenom: String!
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   # Block where the msg to unstake the application was received
   unstakingBeginBlock: Block
   # Height of the block where the application is going to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
@@ -506,8 +612,7 @@ type Supplier @entity {
   unstakeMsgs: [MsgUnstakeSupplier] @derivedFrom(field: "supplier")
   unstakingBeginEvents: [EventSupplierUnbondingBegin] @derivedFrom(field: "supplier")
   unstakingEndEvents: [EventSupplierUnbondingEnd] @derivedFrom(field: "supplier")
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   # Block where MsgUnstakeSupplier was received
   unstakingBeginBlock: Block
   # Height of the block where the supplier is going to be unstaked/unbonded.
@@ -549,7 +654,6 @@ type EventSupplierUnbondingBegin @entity {
   id: ID!
   supplier: Supplier!
   block: Block!
-  transaction: Transaction!
   event: Event!
 }
 
@@ -580,8 +684,7 @@ type Gateway @entity {
   # we are not using Coin because we want to be able to query and sum by amount
   stakeAmount: BigInt!
   stakeDenom: String!
-  # 0 = Staked, 1 = Unstaking, 2 = Unstaked
-  stakeStatus: Int! @index
+  stakeStatus: StakeStatus! @index
   unstakingBeginBlock: Block
   unstakingEndBlock: Block
   stakeMsgs: [MsgStakeGateway] @derivedFrom(field: "gateway")
@@ -619,113 +722,9 @@ type EventGatewayUnstaked @entity {
 
 # PARAMS
 
-type AppParam @entity {
+type Param @entity {
   id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type AuthParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type BankParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type DistributionParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type GatewayParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type GovParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type MintParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type ProofParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type ServiceParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SessionParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SharedParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SlashingParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type StakingParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type SupplierParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type TokenomicsParam @entity {
-  id: ID!
-  key: String! @index
-  value: String!
-  block: Block!
-}
-
-type ConsensusParam @entity {
-  id: ID!
+  namespace: String! @index
   key: String! @index
   value: String!
   block: Block!
@@ -773,24 +772,6 @@ type MsgSubmitProof @entity {
   block: Block!
 }
 
-type EventClaimCreated @entity {
-  id: ID!
-  supplier: Supplier!
-  application: Application!
-  service: Service!
-  sessionId: String!
-  sessionStartHeight: BigInt!
-  sessionEndHeight: BigInt!
-  rootHash: String
-  numRelays: BigInt
-  numClaimedComputedUnits: BigInt
-  numEstimatedComputedUnits: BigInt
-  claimedAmount: BigInt
-  claimedDenom: String
-  transaction: Transaction
-  block: Block!
-}
-
 type EventClaimUpdated @entity {
   id: ID!
   supplier: Supplier!
@@ -808,12 +789,6 @@ type EventClaimUpdated @entity {
   transaction: Transaction
   block: Block!
   relay: Relay
-}
-
-enum ClaimExpirationReason {
-  EXPIRATION_REASON_UNSPECIFIED
-  PROOF_MISSING
-  PROOF_INVALID
 }
 
 type EventClaimExpired @entity {
@@ -834,13 +809,6 @@ type EventClaimExpired @entity {
   transaction: Transaction
   block: Block!
 }
-
-enum ProofRequirementReason {
-  NOT_REQUIRED
-  PROBABILISTIC
-  THRESHOLD
-}
-
 
 type EventClaimSettled @entity {
   id: ID!
@@ -869,6 +837,7 @@ type Relay @entity {
   sessionId: String!
   sessionStartHeight: BigInt!
   sessionEndHeight: BigInt!
+  status: RelayStatus!
   rootHash: String
   closestMerkleProof: String
   numRelays: BigInt
@@ -877,38 +846,15 @@ type Relay @entity {
   claimedAmount: BigInt
   claimedDenom: String
   msgCreateClaim: MsgCreateClaim
-  eventClaimCreated: EventClaimCreated
+  msgSubmitProof: MsgSubmitProof
   eventsClaimUpdated: [EventClaimUpdated] @derivedFrom(field: "relay")
   eventClaimExpired: EventClaimExpired
   eventClaimSettled: EventClaimSettled
-  eventProofSubmitted: EventProofSubmitted
-  msgSubmitProof: MsgSubmitProof
   eventsProofUpdated: [EventProofUpdated] @derivedFrom(field: "relay")
-  # 0 = PENDING, 1 = SUCCESSFUL, 2 = FAILED
-  status: Int!
   failedCodeSpace: String
   requiredProof: Boolean
   # this must be a value of the enums ClaimErrors or ProofErrors. We are using Int because we can't define enums with numbers.
   failedCode: Int
-}
-
-type EventProofSubmitted @entity {
-  id: ID!
-  supplier: Supplier!
-  application: Application!
-  service: Service!
-  sessionId: String!
-  sessionStartHeight: BigInt!
-  sessionEndHeight: BigInt!
-  rootHash: String
-  closestMerkleProof: String
-  numRelays: BigInt
-  numClaimedComputedUnits: BigInt
-  numEstimatedComputedUnits: BigInt
-  claimedAmount: BigInt
-  claimedDenom: String
-  transaction: Transaction
-  block: Block!
 }
 
 type EventProofUpdated @entity {

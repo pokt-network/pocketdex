@@ -5,23 +5,13 @@ import {
 } from "../../types";
 import { MsgAddService } from "../../types/proto-interfaces/poktroll/service/tx";
 import {
-  attemptHandling,
-  unprocessedMsgHandler,
-} from "../utils/handlers";
-import { messageId } from "../utils/ids";
-import { stringify } from "../utils/json";
-
-export async function handleMsgAddService(
-  msg: CosmosMessage<MsgAddService>,
-): Promise<void> {
-  await attemptHandling(msg, _handleMsgAddService, unprocessedMsgHandler);
-}
+  getBlockId,
+  messageId,
+} from "../utils/ids";
 
 async function _handleMsgAddService(
   msg: CosmosMessage<MsgAddService>,
 ) {
-  logger.debug(`[handleMsgAddService] (msg.msg): ${stringify(msg.msg, undefined, 2)}`);
-
   const { ownerAddress, service: { computeUnitsPerRelay, id, name } } = msg.msg.decodedMsg;
 
   const units = BigInt(computeUnitsPerRelay.toString());
@@ -40,9 +30,13 @@ async function _handleMsgAddService(
       ownerId: ownerAddress,
       serviceId: id,
       computeUnitsPerRelay: units,
-      blockId: msg.block.block.id,
+      blockId: getBlockId(msg.block),
       transactionId: msg.tx.hash,
       messageId: msgId,
     }).save(),
   ]);
+}
+
+export async function handleMsgAddService(messages: Array<CosmosMessage<MsgAddService>>): Promise<void> {
+  await Promise.all(messages.map(_handleMsgAddService));
 }

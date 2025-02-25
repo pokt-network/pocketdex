@@ -1,0 +1,39 @@
+<component name="ProjectRunConfigurationManager">
+    <configuration default="false" name="Reindex" type="NodeJSConfigurationType"
+                   application-parameters="reindex -f . --targetHeight=100 --db-schema=app --unfinalized-blocks=true --timeout=120000 --store-cache-async=false --store-cache-upper-limit=30000 --store-cache-threshold=30000 --store-get-cache-size=30000 --store-flush-interval=60 --enable-cache=false --kyve-endpoint=false --query-limit=1000 --profiler"
+                   path-to-node="$USER_HOME$/.nvm/versions/node/v18.20.3/bin/node"
+                   path-to-js-file="node_modules/@subql/node-cosmos/bin/run" typescript-loader="bundled"
+                   working-dir="$PROJECT_DIR$">
+        <envs>
+            <env name="CHAIN_ID" value="pocket-beta"/>
+            <env name="DB_HOST" value="localhost"/>
+            <env name="DB_PASS" value="postgres"/>
+            <env name="DB_PORT" value="5432"/>
+            <env name="DB_USER" value="postgres"/>
+            <env name="ENDPOINT" value="https://shannon-testnet-grove-rpc.beta.poktroll.com"/>
+            <env name="NODE_ENV" value="development"/>
+            <env name="TZ" value="utc"/>
+        </envs>
+        <method v="2">
+            <option name="NpmBeforeRunTask" enabled="true">
+                <package-json value="$PROJECT_DIR$/package.json"/>
+                <command value="run"/>
+                <scripts>
+                    <script value="build"/>
+                </scripts>
+                <node-interpreter value="project"/>
+                <envs>
+                    <env name="CHAIN_ID" value="pocket-beta"/>
+                    <env name="DB_HOST" value="localhost"/>
+                    <env name="DB_PASS" value="postgres"/>
+                    <env name="DB_PORT" value="5432"/>
+                    <env name="DB_USER" value="postgres"/>
+                    <env name="ENDPOINT" value="https://shannon-testnet-grove-rpc.beta.poktroll.com"/>
+                    <env name="NODE_ENV" value="development"/>
+                    <env name="TZ" value="utc"/>
+                    <env name="DEBUG_BLOCK" value="true"/>
+                </envs>
+            </option>
+        </method>
+    </configuration>
+</component>

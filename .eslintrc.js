@@ -68,7 +68,7 @@ module.exports = {
     eqeqeq: ['error', 'always'],
     'import/no-extraneous-dependencies': 'off',
     'import/order': [
-      'error',
+      "warn",
       {
         alphabetize: {
           order: 'asc' /* sort in ascending order. Options: ['ignore', 'asc', 'desc'] */,

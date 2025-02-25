@@ -1,186 +1,215 @@
-import { CosmosEvent } from "@subql/types-cosmos";
+import {
+  CosmosEvent,
+  CosmosEventKind,
+  CosmosMessage,
+} from "@subql/types-cosmos";
+import { findIndex } from "lodash";
 import { parseCoins } from "../../cosmjs/utils";
 import {
-  Account,
   Balance,
-  NativeBalanceChange,
-  Transaction,
+  EventAttribute,
 } from "../../types";
+import { AccountProps } from "../../types/models/Account";
+import { ModuleAccountProps } from "../../types/models/ModuleAccount";
+import { NativeBalanceChangeProps } from "../../types/models/NativeBalanceChange";
+import { optimizedBulkCreate } from "../utils/db";
 import {
-  attemptHandling,
-  unprocessedEventHandler,
-} from "../utils/handlers";
-import {
+  generateDeterministicUUID,
   getBalanceId,
+  getBlockId,
+  getBlockIdAsString,
   getEventId,
   messageId,
 } from "../utils/ids";
-import { stringify } from "../utils/json";
+import { isEventOfMessageKind } from "../utils/primitives";
 
-export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: string): Promise<void> {
-  let balance = await Balance.get(getBalanceId(address, denom));
+export interface EnforceAccountExistenceParams {
+  account: AccountProps,
+  module?: ModuleAccountProps
+}
 
+/**
+ * Ensures that the provided accounts and module accounts are persisted in the database
+ * without get duplicate records due to the Historical Tracking feature from SubQuery.
+ *
+ * @param {Array<{account: AccountProps, module?: ModuleAccountProps}>} accounts - An array of objects including account information and optional module account information.
+ * @return {Promise<void>} A promise that resolves when the operation is complete.
+ */
+export async function enforceAccountsExists(accounts: Array<EnforceAccountExistenceParams>): Promise<void> {
+  if (accounts.length === 0) return;
+
+  const moduleAccountRecords = accounts.filter(r => !!r.module);
+
+  await Promise.all([
+    optimizedBulkCreate("Account", accounts, r => {
+      return {
+        id: r.account.id,
+        chainId: r.account.chainId,
+        __id: generateDeterministicUUID(r.account.id),
+        __block_range: [store.context.getHistoricalUnit(), null],
+      };
+    }),
+    optimizedBulkCreate("ModuleAccount", moduleAccountRecords, r => ({
+      ...r.module as ModuleAccountProps,
+      __id: generateDeterministicUUID(r.account.id),
+      __block_range: [store.context.getHistoricalUnit(), null],
+    })),
+  ]);
+}
+
+// TODO: figure out a way to run a atomic update that modify the balance.amount without the need of load it.
+// export async function updateAccountBalance(address: string, denom: string, offset: bigint, blockId: bigint): Promise<void> {
+//   const id = getBalanceId(address, denom);
+//
+//   let balance = await Balance.get(id);
+//
+//   if (!balance) {
+//     balance = Balance.create({
+//       id: getBalanceId(address, denom),
+//       accountId: address,
+//       denom,
+//       amount: offset,
+//       lastUpdatedBlockId: blockId,
+//     });
+//   } else {
+//     balance.amount = balance.amount + offset;
+//     balance.lastUpdatedBlockId = blockId;
+//   }
+//
+//   await balance.save();
+// }
+
+// TODO: re-work fee handling because this does not look like the best way.
+// async function saveNativeFeesEvent(event: CosmosEvent) {
+//   if (!event.tx) {
+//     if (event.kind !== CosmosEventKind.Transaction && event.kind !== CosmosEventKind.Message) {
+//       return;
+//     }
+//     logger.warn(`[saveNativeFeesEvent] (block=${event.block.header.height} event=${event.idx}): transaction not found, but it should...`);
+//     return;
+//   }
+//   const transaction = await Transaction.get(event.tx.hash);
+//   if (!transaction) {
+//     logger.warn(`[saveNativeFeesEvent] (tx ${event.tx.hash}): transaction not found, but it should...`);
+//     return;
+//   }
+//
+//   const { fees, signerAddress } = transaction as Transaction;
+//   if (!signerAddress) {
+//     logger.warn(`[saveNativeFeesEvent] (block=${event.block.header.height} tx=${event.tx.hash} event=${event.idx} kind=${event.kind}): signerAddress not found, but it should...`);
+//     return;
+//   }
+//
+//   const fee = fees.length > 0 ? fees[0] : null;
+//   const feeAmountStr = fee ? fee.amount : 0;
+//   const feeAmount = BigInt(0) - BigInt(feeAmountStr);
+//   const feeDenom = fee ? fee.denom : "";
+//   await saveNativeBalanceEvent(`${event.tx.hash}-fee`, signerAddress as string, feeAmount, feeDenom, event);
+// }
+
+export const CoinReceiveType = "coin_received";
+export const CoinSpentType = "coin_spent";
+
+export function generateNativeBalanceChangeId(event: CosmosEvent): string {
+  switch (event.kind) {
+    case CosmosEventKind.Transaction:
+      return `${event.tx?.hash}-event-${event.idx}`;
+    case CosmosEventKind.Message:
+      return `${messageId(event.msg as CosmosMessage)}-event-${event.idx}`;
+    case CosmosEventKind.BeginBlock:
+    case CosmosEventKind.EndBlock:
+    case CosmosEventKind.FinalizeBlock:
+      return `${getBlockIdAsString(event.block)}-${event.idx}`;
+    default:
+      throw new Error(`Unknown event kind=${event.kind}`);
+  }
+}
+
+export async function handleNativeBalanceChangesForAddressAndDenom(address: string, denom: string, changes: Array<NativeBalanceChangeProps>, blockId: ReturnType<typeof getBlockId>): Promise<void> {
+  const id = getBalanceId(address, denom);
+  // get latest balance
+  let balance = await Balance.get(id);
   if (!balance) {
     balance = Balance.create({
       id: getBalanceId(address, denom),
       accountId: address,
       denom,
-      amount: offset,
+      amount: BigInt(0),
       lastUpdatedBlockId: blockId,
     });
   } else {
-    balance.amount = balance.amount + offset;
     balance.lastUpdatedBlockId = blockId;
   }
 
+  // apply all the changes on this block
+  for (const change of changes) {
+    balance.amount += BigInt(change.balanceOffset);
+  }
+
+  // save once per address-denom
   await balance.save();
-
-  logger.debug(`[updateAccountBalance] (address): ${address}, (denom): ${denom}, (offset): ${offset}, (newBalance): ${balance?.amount}`);
 }
 
-export async function checkBalancesAccount(address: string, chainId: string): Promise<void> {
-  let accountEntity = await Account.get(address);
-  if (typeof (accountEntity) === "undefined") {
-    accountEntity = Account.create({ id: address, chainId });
-    await accountEntity.save();
-  }
-}
 
-export async function saveNativeBalanceEvent(id: string, address: string, amount: bigint, denom: string, event: CosmosEvent): Promise<void> {
-  await checkBalancesAccount(address, event.block.block.header.chainId);
+export function getBalanceChanges(events: CosmosEvent[], blockId: ReturnType<typeof getBlockId>): {
+  nativeBalanceChanges: Array<NativeBalanceChangeProps>,
+  addressDenomMap: Record<string, Array<NativeBalanceChangeProps>>,
+  uniqueAddressSet: Set<string>,
+} {
+  const addressDenomMap: Record<string, Array<NativeBalanceChangeProps>> = {};
+  const uniqueAddressSet = new Set<string>();
+  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
 
-  const eventId = getEventId(event);
+  for (const event of events) {
+    const keyIndex = findIndex((event.event.attributes as Array<EventAttribute>), (attr) => attr.key === "receiver" || attr.key === "spender");
 
-  const nativeBalanceChangeEntity = NativeBalanceChange.create({
-    id,
-    balanceOffset: amount.valueOf(),
-    denom,
-    accountId: address,
-    eventId: eventId,
-    blockId: event.block.block.id,
-    transactionId: event.tx?.hash || undefined,
-  });
-
-  await nativeBalanceChangeEntity.save();
-  await updateAccountBalance(address, denom, amount.valueOf(), event.block.block.id);
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function saveNativeFeesEvent(event: CosmosEvent) {
-  const transaction = await Transaction.get(event.tx.hash);
-  if (!transaction) {
-    // TODO(@bryanchriswhite): add logging.
-    return;
-  }
-
-  const { fees, signerAddress } = transaction as Transaction;
-  if (!signerAddress) {
-    // TODO(@bryanchriswhite): add logging.
-    return;
-  }
-
-  const fee = fees.length > 0 ? fees[0] : null;
-  const feeAmountStr = fee ? fee.amount : 0;
-  const feeAmount = BigInt(0) - BigInt(feeAmountStr);
-  const feeDenom = fee ? fee.denom : "";
-  await saveNativeBalanceEvent(`${event.tx.hash}-fee`, signerAddress as string, feeAmount, feeDenom, event);
-}
-
-export async function handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> {
-  await attemptHandling(event, _handleNativeBalanceDecrement, unprocessedEventHandler);
-}
-
-export async function handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> {
-  await attemptHandling(event, _handleNativeBalanceIncrement, unprocessedEventHandler);
-}
-
-async function _handleNativeBalanceDecrement(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleNativeBalanceDecrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.event): ${stringify(event.event, undefined, 2)}`);
-  logger.debug(`[handleNativeBalanceDecrement] (event.log): ${stringify(event.log, undefined, 2)}`);
-
-  // sample event.event.attributes:
-  // [
-  //   {"key":"spender","value":"fetch1jv65s3grqf6v6jl3dp4t6c9t9rk99cd85zdctg"},
-  //   {"key":"amount","value":"75462013217046121atestfet"},
-  //   {"key":"spender","value":"fetch1wurz7uwmvchhc8x0yztc7220hxs9jxdjdsrqmn"},
-  //   {"key":"amount","value":"100atestfet"}
-  // ]
-  const spendEvents = [];
-  for (const [i, e] of Object.entries(event.event.attributes)) {
-    if (e.key !== "spender") {
-      continue;
+    if (keyIndex === -1) {
+      throw new Error(
+        `Event ${event.event.type} does not have a receiver or spender attribute`,
+      );
     }
-    const spender = e.value;
-    const amountStr = event.event.attributes[parseInt(i) + 1].value as string;
 
-    // NB: some events contain empty string amounts
-    if (amountStr === "") {
-      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
-      return;
+    const attribute = event.event.attributes[keyIndex];
+
+    const address = attribute.value as string;
+
+    const amountIndex = findIndex((event.event.attributes as Array<EventAttribute>), (attr) => attr.key === "amount");
+
+    if (amountIndex === -1) {
+      throw new Error(
+        `Event ${event.event.type} does not have an amount attribute`,
+      );
     }
+
+    const amountStr = event.event.attributes[keyIndex + 1]?.value as string;
+
+    uniqueAddressSet.add(address);
 
     const coin = parseCoins(amountStr)[0];
-    const amount = BigInt(0) - BigInt(coin.amount); // save a negative amount for a "spend" event
-    spendEvents.push({ spender: spender, amount: amount, denom: coin.denom });
+    const coins = BigInt(coin.amount);
+    const amount = attribute.key === "spender" ? BigInt(0) - coins : coins;
+    const id = generateNativeBalanceChangeId(event);
+
+    const mapId = `${address}-${coin.denom}`;
+    if (!addressDenomMap[mapId]) addressDenomMap[mapId] = [];
+
+    const nativeBalanceChange = {
+      id,
+      balanceOffset: amount.valueOf(),
+      denom: coin.denom,
+      accountId: address,
+      eventId: getEventId(event),
+      blockId: blockId,
+      transactionId: event.tx?.hash || undefined,
+      messageId: isEventOfMessageKind(event) ? messageId(event.msg as CosmosMessage) : undefined,
+    };
+    nativeBalanceChanges.push(nativeBalanceChange);
+    addressDenomMap[mapId].push(nativeBalanceChange);
   }
 
-
-  for (const [i, spendEvent] of Object.entries(spendEvents)) {
-    let id;
-    if (event.tx) {
-      id = `${messageId(event)}-receive-${i}`;
-    } else {
-      id = `${event.block.blockId}-${i}`;
-    }
-
-    await saveNativeBalanceEvent(id, spendEvent.spender, spendEvent.amount, spendEvent.denom, event);
-  }
-  // TODO(@bryanchriswhite): fix...
-  // await saveNativeFeesEvent(event);
-}
-
-async function _handleNativeBalanceIncrement(event: CosmosEvent): Promise<void> {
-  logger.debug(`[handleNativeBalanceIncrement] (tx ${event.tx?.hash}): indexing event ${event.idx + 1} / ${event.tx?.tx?.events?.length}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.event): ${stringify(event.event, undefined, 2)}`);
-  logger.debug(`[handleNativeBalanceIncrement] (event.log): ${stringify(event.log, undefined, 2)}`);
-
-  // sample event.event.attributes:
-  // [
-  //   {"key":"receiver","value":"fetch1jv65s3grqf6v6jl3dp4t6c9t9rk99cd85zdctg"},
-  //   {"key":"amount","value":"75462013217046121atestfet"},
-  //   {"key":"receiver","value":"fetch1wurz7uwmvchhc8x0yztc7220hxs9jxdjdsrqmn"},
-  //   {"key":"amount","value":"100atestfet"}
-  // ]
-  const receiveEvents = [];
-  for (const [i, e] of Object.entries(event.event.attributes)) {
-    if (e.key !== "receiver") {
-      continue;
-    }
-    const receiver = e.value;
-    const amountStr = event.event.attributes[parseInt(i) + 1].value as string;
-
-    // NB: some events contain empty string amounts
-    if (amountStr === "") {
-      logger.warn(`empty string amount; block: ${event.block.block.header.height}; event idx: ${event.idx}; message typeUrl: ${event.msg?.msg?.typeUrl}; event type: ${event.event.type}`);
-      return;
-    }
-
-    const coin = parseCoins(amountStr)[0];
-    const amount = BigInt(coin.amount);
-    receiveEvents.push({ receiver, amount, denom: coin.denom });
-  }
-
-  for (const [i, receiveEvent] of Object.entries(receiveEvents)) {
-    let id;
-    if (event.tx) {
-      id = `${messageId(event)}-receive-${i}`;
-    } else {
-      id = `${event.block.blockId}-${i}`;
-    }
-
-    await saveNativeBalanceEvent(id, receiveEvent.receiver, receiveEvent.amount, receiveEvent.denom, event);
-  }
-  // TODO(@bryanchriswhite): fix...
-  // await saveNativeFeesEvent(event);
+  return {
+    nativeBalanceChanges,
+    addressDenomMap,
+    uniqueAddressSet,
+  };
 }

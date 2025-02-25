@@ -5,9 +5,9 @@ import {
 } from "@subql/types-cosmos";
 
 import * as dotenv from "dotenv";
-import path from "path";
+import * as path from "path";
 
-const mode = process.env.NODE_ENV || 'production';
+const mode = process.env.NODE_ENV || "production";
 
 // Load the appropriate .env file
 const dotenvPath = path.resolve(__dirname, `.env.${mode}`);
@@ -23,11 +23,11 @@ const project: CosmosProject = {
   runner: {
     node: {
       name: "@subql/node-cosmos",
-      version: ">=4.0.0",
+      version: ">=4.5.1",
     },
     query: {
       name: "@subql/query",
-      version: "*",
+      version: ">=2.20.2",
     },
   },
   schema: {
@@ -36,15 +36,7 @@ const project: CosmosProject = {
   network: {
     /* The unique chainID of the Cosmos Zone */
     chainId: process.env.CHAIN_ID!,
-    /**
-     * These endpoint(s) should be public non-pruned archive node
-     * We recommend providing more than one endpoint for improved reliability, performance, and uptime
-     * Public nodes may be rate limited, which can affect indexing speed
-     * When developing your project we suggest getting a private API key
-     * If you use a rate limited endpoint, adjust the --batch-size and --workers parameters
-     * These settings can be found in your docker-compose.yaml, they will slow indexing but prevent your project being rate limited
-     */
-    endpoint: process.env.ENDPOINT!?.split(',') as string[] | string,
+    endpoint: process.env.ENDPOINT!?.split(",") as string[] | string,
     chaintypes: new Map([
       [
         "cosmos.slashing.v1beta1",
@@ -88,7 +80,7 @@ const project: CosmosProject = {
             "MsgDelegateToGateway",
             "MsgUndelegateFromGateway",
           ],
-        }
+        },
       ],
       [
         "poktroll.application_events",
@@ -114,7 +106,7 @@ const project: CosmosProject = {
             "Application",
             "UndelegatingGatewayList",
           ],
-        }
+        },
       ],
       [
         "poktroll.application_params",
@@ -123,7 +115,7 @@ const project: CosmosProject = {
           messages: [
             "Params",
           ],
-        }
+        },
       ],
       // --- Gateway
       [
@@ -393,266 +385,22 @@ const project: CosmosProject = {
   },
   dataSources: [
     {
-      kind: CosmosDatasourceKind.Runtime,
       startBlock: 1,
+      // startBlock: 349, // first set of txs
+      // startBlock: 34123, // first set of claims
+      // startBlock: 55330, // damn big block 176k events
+      // startBlock: 58120, // more than 570 mb in response
+      kind: CosmosDatasourceKind.Runtime,
       mapping: {
         file: "./dist/index.js",
         handlers: [
-          // handleGenesis is called before handleBlock, and it's reading the genesis file from ./src/mappings/genesis.json
           {
-            handler: "handleGenesis",
+            // See the definition in "src/mappings/indexer.manager.ts"
+            // This is the responsible to call all the other handlers using BlockHandler to maximize performance
+            // and parallel operations.
+            handler: "indexingHandler",
             kind: CosmosHandlerKind.Block,
-          },
-          // --- Primitives
-          {
-            handler: "handleBlock",
-            kind: CosmosHandlerKind.Block,
-          },
-          {
-            handler: "handleTransaction",
-            kind: CosmosHandlerKind.Transaction,
-          },
-          {
-            handler: "handleMessage",
-            kind: CosmosHandlerKind.Message,
-          },
-          {
-            handler: "handleEvent",
-            kind: CosmosHandlerKind.Event,
-          },
-          // --- Bank
-          {
-            handler: "handleNativeTransfer",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "transfer",
-              messageFilter: {
-                type: "/cosmos.bank.v1beta1.MsgSend"
-              }
-            }
-          },
-          {
-            handler: "handleNativeBalanceDecrement",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "coin_spent",
-            }
-          },
-          {
-            handler: "handleNativeBalanceIncrement",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "coin_received",
-            }
-          },
-          // --- Validator (@TODO: test it asap with @bryan)
-          {
-            handler: "handleValidatorMsgCreate",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/cosmos.staking.v1beta1.MsgCreateValidator",
-            },
-          },
-          // --- Applications
-          {
-            handler: "handleAppMsgStake",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgStakeApplication",
-            }
-          },
-          {
-            handler: "handleDelegateToGatewayMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgDelegateToGateway",
-            }
-          },
-          {
-            handler: "handleUndelegateFromGatewayMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgUndelegateFromGateway",
-            }
-          },
-          {
-            handler: "handleUnstakeApplicationMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgUnstakeApplication",
-            }
-          },
-          {
-            handler: "handleTransferApplicationMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.application.MsgTransferApplication",
-            }
-          },
-          {
-            handler: "handleTransferApplicationBeginEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventTransferBegin",
-            }
-          },
-          {
-            handler: "handleTransferApplicationEndEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventTransferEnd",
-            }
-          },
-          {
-            handler: "handleTransferApplicationErrorEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventTransferError",
-            }
-          },
-          {
-            handler: "handleApplicationUnbondingBeginEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventApplicationUnbondingBegin",
-            }
-          },
-          {
-            handler: "handleApplicationUnbondingEndEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.application.EventApplicationUnbondingEnd",
-            }
-          },
-          // --- Services
-          {
-            handler: "handleMsgAddService",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.service.MsgAddService",
-            }
-          },
-          // --- Suppliers
-          {
-            handler: "handleSupplierStakeMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.supplier.MsgStakeSupplier",
-            }
-          },
-          {
-            handler: "handleUnstakeSupplierMsg",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.supplier.MsgUnstakeSupplier",
-            }
-          },
-          {
-            handler: "handleSupplierUnbondingBeginEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.supplier.EventSupplierUnbondingBegin",
-            }
-          },
-          {
-            handler: "handleSupplierUnbondingEndEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.supplier.EventSupplierUnbondingEnd",
-            }
-          },
-          // --- Gateways
-          {
-            handler: "handleGatewayMsgStake",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.gateway.MsgStakeGateway",
-            }
-          },
-          {
-            handler: "handleGatewayMsgUnstake",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.gateway.MsgUnstakeGateway",
-            }
-          },
-          {
-            handler: "handleGatewayUnstakeEvent",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.gateway.EventGatewayUnstaked",
-            }
-          },
-          // --- Authz
-          {
-            handler: "handleAuthzExec",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/cosmos.authz.v1beta1.MsgExec",
-            }
-          },
-          // --- Relays
-          {
-            handler: "handleEventClaimSettled",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.tokenomics.EventClaimSettled",
-            }
-          },
-          {
-            handler: "handleEventClaimExpired",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.tokenomics.EventClaimExpired",
-            }
-          },
-          {
-            handler: "handleMsgCreateClaim",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.proof.MsgCreateClaim",
-            }
-          },
-          {
-            handler: "handleEventClaimUpdated",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventClaimUpdated",
-            }
-          },
-          {
-            handler: "handleEventProofUpdated",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventProofUpdated",
-            }
-          },
-          {
-            handler: "handleMsgSubmitProof",
-            kind: CosmosHandlerKind.Message,
-            filter: {
-              type: "/poktroll.proof.MsgSubmitProof",
-            }
-          },
-          {
-            handler: "handleEventClaimCreated",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventClaimCreated",
-            }
-          },
-          {
-            handler: "handleEventProofSubmitted",
-            kind: CosmosHandlerKind.Event,
-            filter: {
-              type: "poktroll.proof.EventProofSubmitted",
-            }
-          },
-          // --- Reports
-          {
-            handler: "handleAddBlockReports",
-            kind: CosmosHandlerKind.Block,
-          },
+          }
         ],
       },
     },

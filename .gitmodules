@@ -1,0 +1,16 @@
+# Syncs changes in .gitmodules
+# git submodule sync
+# git submodule update --init --recursive --remote
+
+[submodule "vendor/subql"]
+	path = vendor/subql
+	url = https://github.com/pokt-shannon/subql.git
+	branch = pocketdex
+[submodule "vendor/subql-cosmos"]
+	path = vendor/subql-cosmos
+	url = https://github.com/pokt-shannon/subql-cosmos.git
+	branch = pocketdex
+[submodule "vendor/cosmjs"]
+	path = vendor/cosmjs
+	url = https://github.com/pokt-shannon/x-cosmjs.git
+	branch = main

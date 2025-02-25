@@ -1,74 +1,161 @@
+import fs from "fs/promises";
+import path from "path";
 import { fromBase64 } from "@cosmjs/encoding";
 import { CosmosBlock } from "@subql/types-cosmos";
 import {
   get,
   isNil,
 } from "lodash";
+import fetch from "node-fetch";
 import {
   Event,
+  EventKind,
   GenesisFile as GenesisEntity,
-} from "../types";
-import type { AccountProps } from "../types/models/Account";
-import type { ApplicationProps } from "../types/models/Application";
-import { ApplicationGatewayProps } from "../types/models/ApplicationGateway";
-import type { ApplicationServiceProps } from "../types/models/ApplicationService";
-import type { AppParamProps } from "../types/models/AppParam";
-import type { BalanceProps } from "../types/models/Balance";
-import type { GatewayProps } from "../types/models/Gateway";
-import type { GenesisBalanceProps } from "../types/models/GenesisBalance";
-import { MessageProps } from "../types/models/Message";
-import { MsgAddServiceProps } from "../types/models/MsgAddService";
-import { MsgCreateValidatorProps } from "../types/models/MsgCreateValidator";
-import { MsgDelegateToGatewayProps } from "../types/models/MsgDelegateToGateway";
-import { MsgStakeApplicationProps } from "../types/models/MsgStakeApplication";
-import { MsgStakeApplicationServiceProps } from "../types/models/MsgStakeApplicationService";
-import { MsgStakeGatewayProps } from "../types/models/MsgStakeGateway";
-import { MsgStakeSupplierProps } from "../types/models/MsgStakeSupplier";
-import { MsgStakeSupplierServiceProps } from "../types/models/MsgStakeSupplierService";
-import type { NativeBalanceChangeProps } from "../types/models/NativeBalanceChange";
-import type { ServiceProps } from "../types/models/Service";
-import type { SupplierProps } from "../types/models/Supplier";
-import { SupplierServiceConfigProps } from "../types/models/SupplierServiceConfig";
-import type { TransactionProps } from "../types/models/Transaction";
-import { ValidatorProps } from "../types/models/Validator";
-import { MsgStakeApplication as MsgStakeApplicationType } from "../types/proto-interfaces/poktroll/application/tx";
-import { MsgStakeGateway as MsgStakeGatewayType } from "../types/proto-interfaces/poktroll/gateway/tx";
-import { MsgAddService as MsgAddServiceType } from "../types/proto-interfaces/poktroll/service/tx";
+  StakeStatus,
+  TxStatus,
+} from "../../types";
+import type { AccountProps } from "../../types/models/Account";
+import type { ApplicationProps } from "../../types/models/Application";
+import { ApplicationGatewayProps } from "../../types/models/ApplicationGateway";
+import type { ApplicationServiceProps } from "../../types/models/ApplicationService";
+import { AuthzProps } from "../../types/models/Authz";
+import type { BalanceProps } from "../../types/models/Balance";
+import type { GatewayProps } from "../../types/models/Gateway";
+import type { GenesisBalanceProps } from "../../types/models/GenesisBalance";
+import { MessageProps } from "../../types/models/Message";
+import { MsgAddServiceProps } from "../../types/models/MsgAddService";
+import { MsgCreateValidatorProps } from "../../types/models/MsgCreateValidator";
+import { MsgDelegateToGatewayProps } from "../../types/models/MsgDelegateToGateway";
+import { MsgStakeApplicationProps } from "../../types/models/MsgStakeApplication";
+import { MsgStakeApplicationServiceProps } from "../../types/models/MsgStakeApplicationService";
+import { MsgStakeGatewayProps } from "../../types/models/MsgStakeGateway";
+import { MsgStakeSupplierProps } from "../../types/models/MsgStakeSupplier";
+import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
+import type { NativeBalanceChangeProps } from "../../types/models/NativeBalanceChange";
+import type { ParamProps } from "../../types/models/Param";
+import type { ServiceProps } from "../../types/models/Service";
+import type { SupplierProps } from "../../types/models/Supplier";
+import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
+import type { TransactionProps } from "../../types/models/Transaction";
+import { ValidatorProps } from "../../types/models/Validator";
+import { MsgStakeApplication as MsgStakeApplicationType } from "../../types/proto-interfaces/poktroll/application/tx";
+import { MsgStakeGateway as MsgStakeGatewayType } from "../../types/proto-interfaces/poktroll/gateway/tx";
+import { MsgAddService as MsgAddServiceType } from "../../types/proto-interfaces/poktroll/service/tx";
 import {
   configOptionsFromJSON,
   rPCTypeFromJSON,
-} from "../types/proto-interfaces/poktroll/shared/service";
-import { MsgStakeSupplier as MsgStakeSupplierType } from "../types/proto-interfaces/poktroll/supplier/tx";
-import { checkBalancesAccount } from "./bank";
-import { getSupplyRecord } from "./bank/supply";
+} from "../../types/proto-interfaces/poktroll/shared/service";
+import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/poktroll/supplier/tx";
 import {
-  StakeStatus,
-  TxStatus,
+  EnforceAccountExistenceParams,
+  enforceAccountsExists,
+  getModuleAccountProps,
+  getSupplyRecord,
+  queryModuleAccounts,
+} from "../bank";
+import {
+  PREFIX,
   VALIDATOR_PREFIX,
-} from "./constants";
+} from "../constants";
 import {
   Genesis,
   GenesisTransaction,
-} from "./types/genesis";
+} from "../types/genesis";
+import { optimizedBulkCreate } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
   getBalanceId,
+  getBlockId,
   getGenesisFakeTxHash,
   getMsgStakeServiceId,
   getParamId,
   getStakeServiceId,
-} from "./utils/ids";
-import { stringify } from "./utils/json";
+} from "../utils/ids";
+import {
+  sanitize,
+  stringify,
+} from "../utils/json";
 import {
   Ed25519,
   pubKeyToAddress,
   Secp256k1,
-} from "./utils/pub_key";
+} from "../utils/pub_key";
 
+let genesisFile: Genesis | null = null;
+
+export async function loadGenesisFile(): Promise<Genesis> {
+  if (!isNil(genesisFile)) {
+    return genesisFile; // Return a cached value if already loaded
+  }
+
+  const genesisSource = process.env.POCKETDEX_GENESIS || null;
+
+  if (!genesisSource) {
+    throw new Error("Environment variable POCKETDEX_GENESIS is not defined.");
+  }
+
+  // Check if the provided source is a URL
+  const isUrl = /^https?:\/\//i.test(genesisSource);
+
+  if (isUrl) {
+    // If it's a URL, use fetch to load the data
+    try {
+      const response = await fetch(genesisSource);
+
+      if (!response.ok) {
+        // noinspection ExceptionCaughtLocallyJS
+        throw new Error(`Failed to fetch from URL: ${genesisSource}. Status: ${response.status} ${response.statusText}`);
+      }
+
+      const json = await response.json();
+      genesisFile = json as Genesis; // Cache the result to avoid reloading
+      return json as Genesis;
+    } catch (error) {
+      // Handle errors strictly for TypeScript compatibility
+      if (error instanceof Error) {
+        throw new Error(`Failed to load genesis JSON from URL: ${error.message}`);
+      } else {
+        throw new Error("An unknown error occurred while loading from the URL.");
+      }
+    }
+  } else {
+    // If not a URL, validate if it's a valid file path
+    try {
+      const resolvedPath = path.isAbsolute(genesisSource)
+        ? genesisSource // Use as-is if already an absolute path
+        : path.resolve(process.cwd(), genesisSource); // Resolve to absolute if relative
+
+      // Check if the file exists using fs.stat (validates a proper file path)
+      const fileExists = await fs.stat(resolvedPath).then(() => true).catch(() => false);
+
+      if (!fileExists) {
+        // noinspection ExceptionCaughtLocallyJS
+        throw new Error(`File not found or invalid path: ${resolvedPath}`);
+      }
+
+      // Read the file contents and parse as JSON
+      const fileContents = await fs.readFile(resolvedPath, "utf-8");
+      const json = JSON.parse(fileContents); // Parse the JSON from the file
+      genesisFile = json as Genesis; // Cache the result
+      return json;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // Handle JSON parsing errors specifically
+        throw new Error(`Invalid JSON in the file: ${error.message}`);
+      } else if (error instanceof Error) {
+        // Handle other errors (e.g., file not found or access issues)
+        throw new Error(`Failed to load genesis JSON from file: ${error.message}`);
+      } else {
+        throw new Error("An unknown error occurred while loading from the file.");
+      }
+    }
+  }
+}
+
+
+// handleGenesis, referenced in project.ts, handle genesis file and all the base entities of the network derived from it
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
-  // we MUST load the JSON this way due to the sandboxed environment
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const genesis: Genesis = require("../../genesis.json");
+  const genesis: Genesis = await loadGenesisFile();
 
   // IMPORTANT: Return early if this is not the genesis initial height as this is called for block indexed!
   if (block.block.header.height !== genesis.initial_height) {
@@ -79,6 +166,8 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
 
   // save records
   await Promise.all([
+    _handleModuleAccounts(block),
+    _handleAuthz(genesis, block),
     _handleGenesisSupplyDenom(genesis),
     _handleGenesisSupply(genesis, block),
     _handleGenesisEvent(block),
@@ -87,9 +176,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
     _handleGenesisGateways(genesis, block),
     _handleGenesisSuppliers(genesis, block),
     _handleGenesisApplications(genesis, block),
-    // PARAMS
     _handleGenesisParams(genesis, block),
-
     _handleGenesisGenTxs(genesis, block),
   ]);
 
@@ -99,32 +186,121 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   }).save();
 }
 
+async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
+  const moduleAccounts = await queryModuleAccounts();
+
+  const accounts: Array<EnforceAccountExistenceParams> = [];
+  // const mAccounts: Array<ModuleAccountProps> = [];
+  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
+  const genesisBalances: Array<GenesisBalanceProps> = [];
+  const balances: Array<BalanceProps> = [];
+
+  moduleAccounts.forEach(mAccount => {
+    const address = mAccount.baseAccount?.address as string;
+    accounts.push({
+      account: {
+        id: address,
+        chainId: block.header.chainId,
+        moduleId: mAccount.baseAccount?.address,
+      },
+      module: getModuleAccountProps(mAccount),
+    });
+
+    for (const { amount, denom } of mAccount.balances) {
+      const id = getBalanceId(address, denom);
+
+      nativeBalanceChanges.push({
+        id,
+        balanceOffset: BigInt(amount),
+        denom,
+        accountId: address,
+        eventId: "genesis",
+        blockId: getBlockId(block),
+      });
+
+      genesisBalances.push({
+        id,
+        amount: BigInt(amount),
+        denom,
+        accountId: address,
+      });
+
+      balances.push({
+        id,
+        amount: BigInt(amount),
+        denom,
+        accountId: address,
+        lastUpdatedBlockId: getBlockId(block),
+      });
+    }
+  });
+
+  await Promise.all([
+    enforceAccountsExists(accounts),
+    optimizedBulkCreate("GenesisBalance", genesisBalances),
+    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
+    store.bulkCreate("Balance", balances),
+  ]);
+}
+
+async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void> {
+  const accounts: Set<string> = new Set();
+  const authz: Array<AuthzProps> = [];
+
+  for (const authorization of genesis.app_state.authz.authorization) {
+    accounts.add(authorization.granter);
+    accounts.add(authorization.grantee);
+
+    const auth = authorization.authorization as unknown as Record<string, string>;
+
+    authz.push({
+      id: `${authorization.granter}:${auth.msg.replace("/", "") as string}-${authorization.grantee}`,
+      granterId: authorization.granter,
+      granteeId: authorization.grantee,
+      expiration: authorization.expiration ? new Date(authorization.expiration) : undefined,
+      msg: auth.msg,
+      type: auth["@type"],
+      eventId: "genesis",
+      blockId: getBlockId(block),
+    });
+  }
+
+  await Promise.all([
+    enforceAccountsExists(Array.from(accounts.values()).map(address => ({
+      account: {
+        id: address,
+        chainId: block.block.header.chainId,
+      },
+    }))),
+    // This is a sensitive actor, so I (@jorgecuesta) prefer to keep using subql historical
+    store.bulkCreate("Authz", authz),
+  ]);
+}
+
 // Creates an event for the entities that requires it. Doing this, we are still requiring the events in the schema.
 async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
   await Event.create({
     id: "genesis",
     type: "genesis",
-    blockId: block.block.id,
+    attributes: [],
+    blockId: getBlockId(block),
+    kind: EventKind.Genesis,
   }).save();
 }
 
 async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Promise<void> {
-  const accounts: Array<AccountProps> = [];
+  const accounts: Set<string> = new Set();
 
   for (const account of genesis.app_state.auth.accounts) {
-    accounts.push({
-      id: account.address,
-      chainId: block.block.header.chainId,
-    });
+    accounts.add(account.address);
   }
 
-  // get balances
   const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
   const genesisBalances: Array<GenesisBalanceProps> = [];
   const balances: Array<BalanceProps> = [];
 
-
   for (const balance of genesis.app_state.bank.balances) {
+    accounts.add(balance.address);
     for (const { amount, denom } of balance.coins) {
       const id = getBalanceId(balance.address, denom);
 
@@ -134,7 +310,7 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
         denom,
         accountId: balance.address,
         eventId: "genesis",
-        blockId: block.block.id,
+        blockId: getBlockId(block),
       });
 
       genesisBalances.push({
@@ -149,15 +325,21 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
         amount: BigInt(amount),
         denom,
         accountId: balance.address,
-        lastUpdatedBlockId: block.block.id,
+        lastUpdatedBlockId: getBlockId(block),
       });
     }
   }
-
   await Promise.all([
-    store.bulkCreate("Account", accounts),
-    store.bulkCreate("GenesisBalance", genesisBalances),
-    store.bulkCreate("NativeBalanceChange", nativeBalanceChanges),
+    enforceAccountsExists(
+      Array.from(accounts.values()).map(address => ({
+        account: {
+          id: address,
+          chainId: block.block.header.chainId,
+        },
+      })),
+    ),
+    optimizedBulkCreate("GenesisBalance", genesisBalances),
+    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
   ]);
 }
@@ -185,17 +367,20 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       name: service.name,
       computeUnitsPerRelay: BigInt(service.compute_units_per_relay),
       ownerId: service.owner_address,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       transactionId: getGenesisFakeTxHash("service", 0),
       messageId: msgId,
     });
 
     transactions.push({
       id: transactionHash,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [],
+      fees: [{ denom: "upokt", amount: "0" }],
+      codespace: "",
+      memo: "",
+      log: "",
       status: TxStatus.Success,
       code: 0,
     });
@@ -215,16 +400,16 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       id: msgId,
       typeUrl: "/poktroll.service.MsgAddService",
       json: stringify(msgAddService),
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
   }
 
   await Promise.all([
     store.bulkCreate("Service", services),
-    store.bulkCreate("MsgAddService", addServiceMsgs),
-    store.bulkCreate("Transaction", transactions),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgAddService", addServiceMsgs),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("Message", msgs),
   ]);
 }
 
@@ -243,17 +428,21 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
     transactions.push({
       id: transactionHash,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [],
       status: TxStatus.Success,
       code: 0,
+      fees: [{ denom: "upokt", amount: "0" }],
+      codespace: "",
+      memo: "",
+      log: "",
+      timeoutHeight: BigInt(0),
     });
 
     supplierMsgStakes.push({
       id: msgId,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       stakeAmount: BigInt(supplier.stake.amount),
       stakeDenom: supplier.stake.denom,
       transactionId: transactionHash,
@@ -302,7 +491,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       id: msgId,
       typeUrl: "/poktroll.supplier.MsgStakeSupplier",
       json: stringify(msgStakeSupplier),
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
 
@@ -341,11 +530,11 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
   await Promise.all([
     store.bulkCreate("Supplier", suppliers),
-    store.bulkCreate("MsgStakeSupplier", supplierMsgStakes),
     store.bulkCreate("SupplierServiceConfig", supplierServices),
-    store.bulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes),
-    store.bulkCreate("Transaction", transactions),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeSupplier", supplierMsgStakes),
+    optimizedBulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("Message", msgs),
   ]);
 }
 
@@ -366,10 +555,13 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
 
     transactions.push({
       id: transactionHash,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [],
+      fees: [{ denom: "upokt", amount: "0" }],
+      codespace: "",
+      memo: "",
+      log: "",
       status: TxStatus.Success,
       code: 0,
     });
@@ -381,7 +573,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
           id: msgId,
           applicationId: app.address,
           gatewayId: gatewayAddress,
-          blockId: block.block.id,
+          blockId: getBlockId(block),
           transactionId: transactionHash,
           messageId: msgId,
         });
@@ -398,7 +590,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       id: msgId,
       stakeAmount: BigInt(app.stake.amount),
       stakeDenom: app.stake.denom,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       applicationId: app.address,
       transactionId: transactionHash,
       messageId: msgId,
@@ -428,7 +620,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       id: msgId,
       typeUrl: "/poktroll.application.MsgStakeApplication",
       json: stringify(msgStakeApplication),
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
 
@@ -448,18 +640,15 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
   }
 
   const promises: Array<Promise<void>> = [
-    store.bulkCreate("MsgStakeApplication", appMsgStakes),
     store.bulkCreate("Application", applications),
-    store.bulkCreate("Transaction", transactions),
     store.bulkCreate("ApplicationService", appServices),
-    store.bulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes),
     store.bulkCreate("ApplicationGateway", appsDelegatedToGateways),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeApplication", appMsgStakes),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes),
+    optimizedBulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgDelegateToGateway", msgDelegateToGateways),
   ];
-
-  if (msgDelegateToGateways.length > 0) {
-    promises.push(store.bulkCreate("MsgDelegateToGateway", msgDelegateToGateways));
-  }
 
   await Promise.all(promises);
 }
@@ -477,10 +666,13 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
 
     transactions.push({
       id: transactionHash,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      fees: [],
+      fees: [{ denom: "upokt", amount: "0" }],
+      codespace: "",
+      memo: "",
+      log: "",
       status: TxStatus.Success,
       code: 0,
     });
@@ -489,7 +681,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       id: msgId,
       stakeAmount: BigInt(gateway.stake.amount),
       stakeDenom: gateway.stake.denom,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       gatewayId: gateway.address,
       transactionId: transactionHash,
       messageId: msgId,
@@ -516,58 +708,58 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       id: msgId,
       typeUrl: "/poktroll.gateway.MsgStakeGateway",
       json: stringify(msgStakeGateway),
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       transactionId: transactionHash,
     });
   }
 
   await Promise.all([
     store.bulkCreate("Gateway", gateways),
-    store.bulkCreate("MsgStakeGateway", gatewayMsgStakes),
-    store.bulkCreate("Transaction", transactions),
-    store.bulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeGateway", gatewayMsgStakes),
+    optimizedBulkCreate("Transaction", transactions),
+    optimizedBulkCreate("Message", msgs),
   ]);
 }
 
-async function saveParams(entityName: string, params: Record<string, unknown> | undefined, block: CosmosBlock): Promise<void> {
+function saveParams(namespace: string, params: Record<string, unknown> | undefined, block: CosmosBlock): Array<ParamProps> {
   const paramsEntries = Object.entries(params || {});
 
   if (!paramsEntries.length) {
-    return;
+    return [];
   }
 
-  const paramsToSave: Array<AppParamProps> = paramsEntries.map(([key, value]) => ({
-    id: getParamId(key, block.block.id),
+  return paramsEntries.map(([key, value]) => ({
+    id: getParamId(namespace, key, getBlockId(block)),
+    // we handle the key as is, which is snake case, so on the AuthzExec handler they will transform to snake too.
     key,
+    namespace,
     // just using stringify for objects because if a string is passed in, it will put it in quotes
-    value: typeof value === "object" ? stringify(value) : (value || "").toString(),
-    blockId: block.block.id,
+    value: sanitize(value),
+    blockId: getBlockId(block),
   }));
-
-  await store.bulkCreate(entityName, paramsToSave);
 }
 
 async function _handleGenesisParams(
   genesis: Genesis,
   block: CosmosBlock,
 ): Promise<void> {
-  await Promise.all([
-    saveParams("AppParam", genesis.app_state.application?.params, block),
-    saveParams("AuthParam", genesis.app_state.auth?.params, block),
-    saveParams("BankParam", genesis.app_state.bank?.params, block),
-    saveParams("DistributionParam", genesis.app_state.distribution?.params, block),
-    saveParams("GatewayParam", genesis.app_state.gateway?.params, block),
-    saveParams("GovParam", genesis.app_state.gov?.params, block),
-    saveParams("MintParam", genesis.app_state.mint?.params, block),
-    saveParams("ProofParam", genesis.app_state.proof?.params, block),
-    saveParams("ServiceParam", genesis.app_state.service?.params, block),
-    saveParams("SessionParam", genesis.app_state.session?.params, block),
-    saveParams("SharedParam", genesis.app_state.shared?.params, block),
-    saveParams("SlashingParam", genesis.app_state.slashing?.params, block),
-    saveParams("StakingParam", genesis.app_state.staking?.params, block),
-    saveParams("SupplierParam", genesis.app_state.supplier?.params, block),
-    saveParams("TokenomicsParam", genesis.app_state.tokenomics?.params, block),
-    saveParams("ConsensusParam", genesis.app_state.consensus?.params, block),
+  await store.bulkCreate("Param", [
+    ...saveParams("application", genesis.app_state.application?.params, block),
+    ...saveParams("auth", genesis.app_state.auth?.params, block),
+    ...saveParams("bank", genesis.app_state.bank?.params, block),
+    ...saveParams("distribution", genesis.app_state.distribution?.params, block),
+    ...saveParams("gateway", genesis.app_state.gateway?.params, block),
+    ...saveParams("gov", genesis.app_state.gov?.params, block),
+    ...saveParams("mint", genesis.app_state.mint?.params, block),
+    ...saveParams("proof", genesis.app_state.proof?.params, block),
+    ...saveParams("service", genesis.app_state.service?.params, block),
+    ...saveParams("session", genesis.app_state.session?.params, block),
+    ...saveParams("shared", genesis.app_state.shared?.params, block),
+    ...saveParams("slashing", genesis.app_state.slashing?.params, block),
+    ...saveParams("staking", genesis.app_state.staking?.params, block),
+    ...saveParams("supplier", genesis.app_state.supplier?.params, block),
+    ...saveParams("tokenomics", genesis.app_state.tokenomics?.params, block),
+    ...saveParams("consensus", genesis.app_state.consensus?.params, block),
   ]);
 }
 
@@ -590,8 +782,9 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   const typedMessages: Map<string, Array<MsgCreateValidatorProps>> = new Map<string, Array<MsgCreateValidatorProps>>();
   const validators: Array<ValidatorProps> = [];
   const messages: Array<MessageProps> = [];
+  const accounts: Array<AccountProps> = [];
 
-  logger.debug(`[handleGenesisGenTxs] Looping over gen_txs Transactions: ${genesis.app_state.genutil.gen_txs.length}`);
+  // logger.debug(`[handleGenesisGenTxs] Looping over gen_txs Transactions: ${genesis.app_state.genutil.gen_txs.length}`);
   for (let i = 0; i < genesis.app_state.genutil.gen_txs.length; i++) {
     const genTx = genesis.app_state.genutil.gen_txs[i];
     // assume that the first message type is the type of the transaction
@@ -612,7 +805,8 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
         signerAddress = validatorMsg.signerId;
 
         // ensure signer account exists
-        await checkBalancesAccount(validatorMsg.signerId, block.header.chainId);
+        accounts.push({ id: validatorMsg.signerId, chainId: block.header.chainId });
+        accounts.push({ id: validatorMsg.signerPoktPrefixId, chainId: block.header.chainId });
 
         if (typedMessages.has(type)) {
           typedMessages.get(type)?.push(validatorMsg);
@@ -621,16 +815,17 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
         }
 
         validators.push({
-          id: validatorMsg.address,
+          id: validatorMsg.signerId,
+          ed25519_id: validatorMsg.address,
           signerId: validatorMsg.signerId,
+          signerPoktPrefixId: validatorMsg.signerPoktPrefixId,
           description: validatorMsg.description,
           commission: validatorMsg.commission,
           minSelfDelegation: validatorMsg.minSelfDelegation,
           stakeDenom: validatorMsg.stakeDenom,
           stakeAmount: validatorMsg.stakeAmount,
-          stakeStatus: 0,
+          stakeStatus: StakeStatus.Staked,
           transactionId: validatorMsg.transactionId,
-          blockId: validatorMsg.blockId,
           createMsgId: validatorMsg.id,
         });
 
@@ -638,7 +833,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
           id: validatorMsg.id,
           typeUrl: type,
           json: stringify(genTx.body.messages[0]),
-          blockId: block.block.id,
+          blockId: getBlockId(block),
           transactionId: validatorMsg.transactionId,
         });
 
@@ -650,28 +845,30 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
 
     transactions.push({
       id: txHash,
-      blockId: block.block.id,
+      blockId: getBlockId(block),
       signerAddress,
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
-      // TODO: should it parse auth_info.fee?
-      fees: [],
+      fees: [{ denom: "upokt", amount: "0" }],
+      codespace: "",
+      memo: "",
+      log: "",
       status: TxStatus.Success,
       code: 0,
     });
   }
 
-  logger.debug(`[handleGenesisGenTxs] Saving Transactions: ${transactions.length}`);
-  logger.debug(`[handleGenesisGenTxs] Saving Validator: ${validators.length}`);
-  promises.push(store.bulkCreate("Transaction", transactions));
+  // upsert accounts
+  promises.push(enforceAccountsExists(accounts.map(account => ({ account }))));
+  // create txs, validators & messages
   promises.push(store.bulkCreate("Validator", validators));
-  promises.push(store.bulkCreate("Message", messages));
+  promises.push(optimizedBulkCreate("Transaction", transactions));
+  promises.push(optimizedBulkCreate("Message", messages));
 
   let entity: string;
   for (const [key, value] of typedMessages) {
     entity = key.split(".")?.at(-1) as string;
-    logger.debug(`[handleGenesisGenTxs] creating ${value.length} documents of type: ${entity}`);
-    promises.push(store.bulkCreate(entity, value));
+    promises.push(optimizedBulkCreate(entity, value));
   }
 
   await Promise.all(promises);
@@ -684,6 +881,7 @@ function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, blo
   const msg = genTx.body.messages[0];
   const signer = genTx.auth_info.signer_infos[0];
   const signerAddress = pubKeyToAddress(Secp256k1, fromBase64(signer.public_key.key), VALIDATOR_PREFIX);
+  const poktSignerAddress = pubKeyToAddress(Secp256k1, fromBase64(signer.public_key.key), PREFIX);
 
   return {
     id: `genesis-gen-txs-${index}-0`,
@@ -693,6 +891,7 @@ function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, blo
     },
     address: pubKeyToAddress(Ed25519, fromBase64(msg.pubkey.key)),
     signerId: signerAddress,
+    signerPoktPrefixId: poktSignerAddress,
     description: msg.description,
     commission: {
       rate: msg.commission.rate,
@@ -702,7 +901,7 @@ function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, blo
     minSelfDelegation: parseInt(msg.min_self_delegation, 10),
     stakeDenom: msg.value.denom,
     stakeAmount: BigInt(msg.value.amount),
-    blockId: block.block.id,
+    blockId: getBlockId(block),
     transactionId: txHash,
     messageId: `genesis-gen-txs-${index}-0`,
   };

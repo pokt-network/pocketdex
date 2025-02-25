@@ -1,0 +1,45 @@
+vendors:
+  - name: "@cosmjs"
+    path: "vendor/cosmjs"
+    workspace: true
+    install:
+      required: true
+      script: "yarn install"
+      cleanCache: true
+    build:
+      required: true
+      script: "yarn build"
+    pack:
+      include:
+        - "stargate"
+        - "tendermint-rpc"
+
+  - name: "@subql"
+    path: "vendor/subql"
+    workspace: true
+    install:
+      required: true
+      script: "yarn install"
+      cleanCache: true
+    build:
+      required: true
+      script: "yarn build"
+    dependencies:
+      - "@cosmjs"
+
+  - name: "@subql-cosmos"
+    path: "vendor/subql-cosmos"
+    workspace: true
+    install:
+      required: true
+      script: "yarn install"
+      cleanCache: true
+    build:
+      required: true
+      script: "yarn build"
+    packageResolution:
+      "node-cosmos": "node"
+      "types-cosmos": "types"
+    dependencies:
+      - "@cosmjs"
+      - "@subql"

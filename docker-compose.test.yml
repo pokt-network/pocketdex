@@ -3,19 +3,28 @@ services:
     build:
       context: .
       dockerfile: ./docker/dev-node.dockerfile
-      args:
-        GENESIS_FILENAME: ${GENESIS_FILENAME:-testnet.json}
-        NODE_ENV: ${ENV:-test}
-        CHAIN_ID: ${CHAIN_ID:-poktroll}
-        ENDPOINT: ${ENDPOINT}
+      platforms:
+        - ${PLATFORM}
     image: pocket-network/pocketdex:development
     pull_policy: build
+    platform: ${PLATFORM}
     restart: unless-stopped
     environment:
-      NODE_ENV: ${ENV:-test}
-      DB_SCHEMA: ${DB_SCHEMA:-poktroll}
-      ENDPOINT: ${ENDPOINT:-https://testnet-validated-validator-rpc.poktroll.com}
-      CHAIN_ID: ${CHAIN_ID:-poktroll}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_DATABASE: ${POSTGRES_DB}
+      NODE_ENV: test
+      NODE_OPTIONS: ${NODE_OPTIONS}
+      BATCH_SIZE: ${BATCH_SIZE}
+      DB_SCHEMA: ${DB_SCHEMA}
+      START_BLOCK: ${START_BLOCK}
+      ENDPOINT: ${ENDPOINT}
+      CHAIN_ID: ${CHAIN_ID}
+      POCKETDEX_DB_BATCH_SIZE: ${POCKETDEX_DB_BATCH_SIZE-5000}
+      POCKETDEX_DB_PAGE_LIMIT: ${POCKETDEX_DB_PAGE_LIMIT-5000}
+      POCKETDEX_GENESIS: ${POCKETDEX_GENESIS:-/app/genesis.json}
     volumes:
       # Replaced ./:/app with individual tracked files to avoid the generated code go outside the container
       - ./schema.graphql:/home/app/schema.graphql
@@ -23,6 +32,8 @@ services:
       - ./proto:/home/app/proto
       - ./src:/home/app/src
       - ignore_types:/home/app/src/types
+      # UNCOMMENT IF U WILL USE LOCALNET
+      # - ./genesis.json:/app/genesis.json
     command:
       - test
 

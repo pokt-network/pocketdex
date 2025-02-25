@@ -5,8 +5,8 @@
 #     https://www.atlassian.com/git/tutorials/saving-changes/gitignore
 
 # Node artifact files
-node_modules/
-dist/
+node_modules
+dist
 
 # lock files
 package-lock.json
@@ -74,3 +74,5 @@ Thumbs.db
 # Visual Studio
 .vscode
 
+# root genesis file required to run on host instead of docker. (debug purposes only)
+genesis.json
