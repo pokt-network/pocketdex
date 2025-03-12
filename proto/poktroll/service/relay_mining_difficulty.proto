@@ -6,7 +6,7 @@ option (gogoproto.stable_marshaler_all) = true;
 
 import "gogoproto/gogo.proto";
 
-// RelayMiningDifficulty is a message used to store the on-chain Relay Mining
+// RelayMiningDifficulty is a message used to store the onchain Relay Mining
 // difficulty associated with a specific service ID.
 // TODO_TECHDEBT: Embed this message in the Service message.
 message RelayMiningDifficulty {
@@ -27,7 +27,7 @@ message RelayMiningDifficulty {
     // 0b0000111... (until 32 bytes are filled up).
     bytes target_hash = 4;
 
-    // TODO_BETA(@Olshansk): Add a `hash_algorithm` field either in this
+    // TODO_MAINNET(@bryanchriswhite): Add a `hash_algorithm` field either in this
     // structure or elsewhere so we can support changing it over time. There should
     // be one source of truth, somewhere on chain, to stay in sync with the SMT
     // configuration.
