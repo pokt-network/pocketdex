@@ -1,12 +1,11 @@
+import { CosmosEvent, CosmosMessage, CosmosTransaction } from "@subql/types-cosmos";
 import {
-  CosmosEvent,
-  CosmosMessage,
-  CosmosTransaction,
-} from "@subql/types-cosmos";
-import { applicationUnbondingReasonFromJSON } from "../../client/poktroll/application/event";
+  ApplicationUnbondingReason as ApplicationUnbondingReasonSDKType,
+  applicationUnbondingReasonFromJSON,
+} from "../../client/poktroll/application/event";
 import {
   Application,
-  ApplicationGateway,
+  ApplicationGateway, ApplicationUnbondingReason,
   EventApplicationUnbondingBegin as EventApplicationUnbondingBeginEntity,
   EventApplicationUnbondingEnd as EventApplicationUnbondingEndEntity,
   EventTransferBegin as EventTransferBeginEntity,
@@ -32,12 +31,7 @@ import {
   MsgUnstakeApplication,
 } from "../../types/proto-interfaces/poktroll/application/tx";
 import { ApplicationSDKType } from "../../types/proto-interfaces/poktroll/application/types";
-import { ApplicationUnbondingReason } from "../constants";
-import {
-  getSequelize,
-  getStoreModel,
-  optimizedBulkCreate,
-} from "../utils/db";
+import { getSequelize, getStoreModel, optimizedBulkCreate } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
   getBlockId,
@@ -46,10 +40,24 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
-import {
-  fetchAllApplicationGatewayByApplicationId,
-  fetchAllApplicationServiceByApplicationId,
-} from "./pagination";
+import { fetchAllApplicationGatewayByApplicationId, fetchAllApplicationServiceByApplicationId } from "./pagination";
+
+function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
+  switch (item) {
+    case 0:
+    case ApplicationUnbondingReasonSDKType.APPLICATION_UNBONDING_REASON_ELECTIVE:
+    case "APPLICATION_UNBONDING_REASON_ELECTIVE":{
+      return ApplicationUnbondingReason.ELECTIVE
+    }
+    case 1:
+    case ApplicationUnbondingReasonSDKType.APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE:
+    case "APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE":{
+      return ApplicationUnbondingReason.BELOW_MINIMUM_STAKE
+    }
+    default:
+      throw new Error(`Unknown ApplicationUnbondingReason=${item}`)
+  }
+}
 
 function _handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
@@ -227,7 +235,7 @@ async function _handleTransferApplicationBeginEvent(
   const application = await Application.get(msg.msg.decodedMsg.sourceAddress);
 
   if (!application) {
-    throw new Error(`[handleTransferApplicationBeginEvent] application not found`);
+    throw new Error(`[handleTransferApplicationBeginEvent] application not found for address ${msg.msg.decodedMsg.sourceAddress}`);
   }
 
   application.transferEndHeight = BigInt((transferEndHeight as unknown as string).replaceAll("\"", ""));
@@ -265,11 +273,12 @@ async function _handleTransferApplicationEndEvent(
     throw new Error(`[handleTransferApplicationMsg] source application not found for address ${sourceAddress}`);
   }
 
+  const prevUnstakingEndBlockId = sourceApplication.unstakingEndBlockId?.valueOf();
   sourceApplication.transferringToId = undefined;
   sourceApplication.transferEndHeight = undefined;
   sourceApplication.transferEndBlockId = getBlockId(event.block);
   sourceApplication.stakeStatus = StakeStatus.Unstaked;
-  sourceApplication.unstakingReason = ApplicationUnbondingReason.TRANSFERRED;
+  sourceApplication.unstakingReason = ApplicationUnbondingReason.TRANSFER;
   sourceApplication.unstakingEndBlockId = getBlockId(event.block);
 
   const destinationAppStringified = event.event.attributes.find(attribute => attribute.key === "destination_application")?.value as string;
@@ -293,7 +302,7 @@ async function _handleTransferApplicationEndEvent(
     stakeStatus: StakeStatus.Staked,
     sourceApplicationId: sourceAddress,
     transferredFromAtId: getBlockId(event.block),
-    unstakingEndBlockId: sourceApplication.unstakingEndBlockId,
+    unstakingEndBlockId: prevUnstakingEndBlockId,
     unstakingBeginBlockId: sourceApplication.unstakingBeginBlockId,
   });
 
@@ -426,7 +435,7 @@ async function _handleApplicationUnbondingBeginEvent(
 
   application.unstakingEndHeight = unstakingEndHeight;
   // comes form the event and parsing it using applicationUnbondingReasonFromJSON function
-  application.unstakingReason = reason;
+  application.unstakingReason = getAppUnbondingReasonFromSDK(reason);
 
   const eventId = getEventId(event);
 
@@ -492,7 +501,7 @@ async function _handleApplicationUnbondingEndEvent(
 
   application.unstakingEndBlockId = getBlockId(event.block);
   application.stakeStatus = StakeStatus.Unstaked;
-  application.unstakingReason = reason;
+  application.unstakingReason = getAppUnbondingReasonFromSDK(reason);
 
   const applicationServices = (await fetchAllApplicationServiceByApplicationId(applicationSdk.address)).map(item => item.id);
 

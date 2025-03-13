@@ -134,7 +134,15 @@ const project: CosmosProject = {
         {
           file: "./proto/poktroll/gateway/event.proto",
           messages: [
+            "EventGatewayStaked",
+            /*
+              TODO(@Alann27): remove this event when we are sure beta and alpha are using
+                EventGatewayUnbondingBegin, EventGatewayUnbondingEnd and EventGatewayUnbondingCanceled
+            */
             "EventGatewayUnstaked",
+            "EventGatewayUnbondingBegin",
+            "EventGatewayUnbondingEnd",
+            "EventGatewayUnbondingCanceled",
           ],
         },
       ],
@@ -359,7 +367,9 @@ const project: CosmosProject = {
           messages: [
             "EventClaimExpired",
             "EventClaimSettled",
+            "EventSupplierSlashed",
             "EventApplicationOverserviced",
+            "EventApplicationReimbursementRequest",
           ],
         },
       ],

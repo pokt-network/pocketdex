@@ -17,6 +17,18 @@ message EventGatewayStaked {
   int64 session_end_height = 2 [(gogoproto.jsontag) = "session_end_height"];
 }
 
+/*
+  TODO(@Alann27): remove this event when we are sure beta and alpha are using
+    EventGatewayUnbondingBegin, EventGatewayUnbondingEnd and EventGatewayUnbondingCanceled
+*/
+// GatewayUnstaked defines the event emitted when a gateway has been unstaked.
+message EventGatewayUnstaked {
+  // The gateway that has been unstaked.
+  Gateway gateway = 1 [(gogoproto.jsontag) = "gateway"];
+  // The end height of the session in which gateway was unstaked.
+  int64 session_end_height = 2 [(gogoproto.jsontag) = "session_end_height"];
+}
+
 // EventGatewayUnbondingBegin is emitted when a gateway begins unbonding.
 // It is triggered by the commitment of an unstake gateway message.
 // This event signals that a gateway has begun unbonding.
