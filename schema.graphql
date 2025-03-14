@@ -102,7 +102,8 @@ enum SettlementOpReason {
   TLM_GLOBAL_MINT_INFLATION
 
   # Reward distribution
-  TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION
+  # This label was truncated because it is to large be handled by the subql/postgres
+  TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_RD # = TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION
   TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION
   TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION
   TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION
@@ -690,7 +691,9 @@ type SupplierEndpoint @jsonField {
 
 type SupplierRevShare @jsonField {
   address: String!
-  revSharePercentage: BigInt!
+  # revSharePercentage is a string because the type of the value in the proto files is uint64
+  # but we can't use BigInt in types with @jsonField
+  revSharePercentage: String!
 }
 
 type SupplierServiceConfig @entity {

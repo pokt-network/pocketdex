@@ -101,7 +101,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
 
     const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,
-      revSharePercentage: revShare.revSharePercentage,
+      revSharePercentage: revShare.revSharePercentage.toString(),
     }));
 
     supplierMsgStakeServices.push({
