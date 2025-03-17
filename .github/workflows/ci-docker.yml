@@ -35,7 +35,7 @@ jobs:
         with:
           file: docker/node.dockerfile
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
           platforms: ${{ inputs.platform }}
 
       # development mode
@@ -45,5 +45,5 @@ jobs:
         with:
           file: docker/dev-node.dockerfile
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
           platforms: ${{ inputs.platform }}
