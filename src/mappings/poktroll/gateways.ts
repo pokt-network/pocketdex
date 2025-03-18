@@ -1,10 +1,10 @@
 import {
   CosmosEvent,
   CosmosMessage,
-  CosmosTransaction,
 } from "@subql/types-cosmos";
 import {
-  EventGatewayUnstaked as EventGatewayUnstakedEntity,
+  EventGatewayUnbondingBegin,
+  EventGatewayUnbondingEnd, EventGatewayUnstaked,
   Gateway,
   MsgStakeGateway as MsgStakeGatewayEntity,
   MsgUnstakeGateway as MsgUnstakeGatewayEntity,
@@ -14,6 +14,7 @@ import {
   MsgStakeGateway,
   MsgUnstakeGateway,
 } from "../../types/proto-interfaces/poktroll/gateway/tx";
+import { GatewaySDKType } from "../../types/proto-interfaces/poktroll/gateway/types";
 import {
   getBlockId,
   getEventId,
@@ -85,12 +86,13 @@ async function _handleGatewayMsgUnstake(
   ]);
 }
 
-
+/*
+  TODO(@Alann27): remove this event handler when we are sure beta and alpha are using
+    EventGatewayUnbondingBegin, EventGatewayUnbondingEnd and EventGatewayUnbondingCanceled
+*/
 async function _handleGatewayUnstakeEvent(
   event: CosmosEvent,
 ) {
-  const tx = event.tx as CosmosTransaction;
-
   const gatewayStringified = event.event.attributes.find(attribute => attribute.key === "gateway")?.value as unknown as string;
 
   if (!gatewayStringified) {
@@ -115,11 +117,117 @@ async function _handleGatewayUnstakeEvent(
   const eventId = getEventId(event);
 
   await Promise.all([
-    EventGatewayUnstakedEntity.create({
+    EventGatewayUnstaked.create({
       id: eventId,
       gatewayId: gatewayAddress,
       blockId: getBlockId(event.block),
-      transactionId: tx.hash,
+      transactionId: event.tx.hash,
+      eventId,
+    }).save(),
+    gateway.save(),
+  ]);
+}
+
+async function _handleEventGatewayUnbondingBegin(event: CosmosEvent) {
+  let unstakingEndHeight: bigint | null = null, sessionEndHeight: bigint | null = null, gatewaySdk: GatewaySDKType | null = null;
+
+  for (const attribute of event.event.attributes) {
+    if (attribute.key === "unbonding_end_height") {
+      unstakingEndHeight = BigInt((attribute.value as unknown as string).replaceAll("\"", ""));
+    }
+
+    if (attribute.key === "session_end_height") {
+      sessionEndHeight = BigInt((attribute.value as unknown as string).replaceAll("\"", ""));
+    }
+
+    if (attribute.key === "gateway") {
+      gatewaySdk = JSON.parse(attribute.value as unknown as string);
+    }
+  }
+
+  if (!unstakingEndHeight) {
+    throw new Error(`[handleEventGatewayUnbondingBegin] unstakingEndHeight not found in event`);
+  }
+
+  if (!sessionEndHeight) {
+    throw new Error(`[handleEventGatewayUnbondingBegin] sessionEndHeight not found in event`);
+  }
+
+  if (!gatewaySdk) {
+    throw new Error(`[handleEventGatewayUnbondingBegin] gateway not found in event`);
+  }
+
+  const gateway = await Gateway.get(gatewaySdk.address);
+
+  if (!gateway) {
+    throw new Error(`[handleEventGatewayUnbondingBegin] gateway not found for address ${gatewaySdk.address}`);
+  }
+
+  gateway.unstakingEndHeight = unstakingEndHeight;
+
+  const eventId = getEventId(event);
+
+  await Promise.all([
+    EventGatewayUnbondingBegin.create({
+      id: eventId,
+      unbondingEndHeight: unstakingEndHeight,
+      sessionEndHeight,
+      gatewayId: gateway.id,
+      blockId: getBlockId(event.block),
+      eventId,
+      transactionId: event.tx.hash,
+    }).save(),
+    gateway.save(),
+  ]);
+}
+
+async function _handleEventGatewayUnbondingEnd(event: CosmosEvent) {
+  let unstakingEndHeight: bigint | null = null, sessionEndHeight: bigint | null = null, gatewaySdk: GatewaySDKType | null = null;
+
+  for (const attribute of event.event.attributes) {
+    if (attribute.key === "unbonding_end_height") {
+      unstakingEndHeight = BigInt((attribute.value as unknown as string).replaceAll("\"", ""));
+    }
+
+    if (attribute.key === "session_end_height") {
+      sessionEndHeight = BigInt((attribute.value as unknown as string).replaceAll("\"", ""));
+    }
+
+    if (attribute.key === "gateway") {
+      gatewaySdk = JSON.parse(attribute.value as unknown as string);
+    }
+  }
+
+  if (!unstakingEndHeight) {
+    throw new Error(`[handleEventGatewayUnbondingEnd] unstakingEndHeight not found in event`);
+  }
+
+  if (!sessionEndHeight) {
+    throw new Error(`[handleEventGatewayUnbondingEnd] sessionEndHeight not found in event`);
+  }
+
+  if (!gatewaySdk) {
+    throw new Error(`[handleEventGatewayUnbondingEnd] gateway not found in event`);
+  }
+
+  const gateway = await Gateway.get(gatewaySdk.address);
+
+  if (!gateway) {
+    throw new Error(`[handleEventGatewayUnbondingEnd] gateway not found for address ${gatewaySdk.address}`);
+  }
+
+  gateway.unstakingEndBlockId = unstakingEndHeight;
+  gateway.stakeStatus = StakeStatus.Unstaked;
+
+  const eventId = getEventId(event);
+
+  await Promise.all([
+    EventGatewayUnbondingEnd.create({
+      id: eventId,
+      unbondingEndHeight: unstakingEndHeight,
+      sessionEndHeight,
+      gatewayId: gateway.id,
+      blockId: getBlockId(event.block),
       eventId,
     }).save(),
     gateway.save(),
@@ -136,4 +244,12 @@ export async function handleGatewayMsgUnstake(messages: Array<CosmosMessage<MsgU
 
 export async function handleGatewayUnstakeEvent(events: Array<CosmosEvent>): Promise<void> {
   await Promise.all(events.map(_handleGatewayUnstakeEvent));
+}
+
+export async function handleEventGatewayUnbondingBegin(events: Array<CosmosEvent>): Promise<void> {
+  await Promise.all(events.map(_handleEventGatewayUnbondingBegin));
+}
+
+export async function handleEventGatewayUnbondingEnd(events: Array<CosmosEvent>): Promise<void> {
+  await Promise.all(events.map(_handleEventGatewayUnbondingEnd));
 }

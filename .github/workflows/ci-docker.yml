@@ -20,8 +20,9 @@ jobs:
         uses: actions/checkout@v4.2.2
         with:
           ref: ${{ github.sha }}
-          fetch-depth: '0'
-          submodules: true
+          fetch-depth: 0 # Ensures full history
+          submodules: recursive # Checks out submodules at the exact commit
+          set-safe-directory: true # Ensures Git commands run without permission issues
 
       - name: Docker Setup Buildx
         uses: docker/setup-buildx-action@v3.9.0
@@ -35,7 +36,7 @@ jobs:
         with:
           file: docker/node.dockerfile
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
           platforms: ${{ inputs.platform }}
 
       # development mode
@@ -45,5 +46,5 @@ jobs:
         with:
           file: docker/dev-node.dockerfile
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
           platforms: ${{ inputs.platform }}

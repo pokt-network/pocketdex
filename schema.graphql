@@ -64,10 +64,62 @@ enum ClaimExpirationReason {
   PROOF_INVALID
 }
 
+enum ClaimProofStatus {
+  PENDING_VALIDATION
+  VALIDATED
+  INVALID
+}
+
 enum ProofRequirementReason {
   NOT_REQUIRED
   PROBABILISTIC
   THRESHOLD
+}
+
+enum ApplicationUnbondingReason {
+  ELECTIVE
+  BELOW_MINIMUM_STAKE
+  TRANSFER
+}
+
+enum SupplierUnbondingReason {
+  UNSPECIFIED
+  VOLUNTARY
+  BELOW_MIN_STAKE
+}
+
+# SettlementOpReason is a distinct, tlm-specific causal reason for a given operation.
+enum SettlementOpReason {
+  # UNSPECIFIED is the default value for SettlementOpReason, it is used as a field
+  # type for objects which need to distinguish whether a SettlementOpReason has been specified it or not.
+  UNSPECIFIED
+
+  # Value transfer (credit/debit)
+  TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT
+  TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN
+
+  # Inflation
+  TLM_GLOBAL_MINT_INFLATION
+
+  # Reward distribution
+  # This label was truncated because it is to large be handled by the subql/postgres
+  TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_RD # = TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION
+  TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION
+  TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION
+  TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION
+  TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION
+  TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION
+
+  # Self-servicing mitigation
+  TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER
+
+  # Penalization
+  UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER
+  UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN
+
+  # Module accounting
+  TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER
+  TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER
 }
 
 ### JSON FIELDS
@@ -460,8 +512,7 @@ type Application @entity {
   # Height of the block where the application is going to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
   unstakingEndHeight: BigInt
   # Reason for the application to be unstaked/unbonded. Received with the EventApplicationUnbondingBegin event.
-  # 0 = ELECTIVE, 1 = BELOW_MIN_STAKE, 2 = TRANSFERRED
-  unstakingReason: Int
+  unstakingReason: ApplicationUnbondingReason
   # Block where the application was unstaked/unbonded. Received with the EventApplicationUnbondingEnd event.
   unstakingEndBlock: Block
   stakeMsgs: [MsgStakeApplication] @derivedFrom(field: "application")
@@ -615,6 +666,8 @@ type Supplier @entity {
   stakeStatus: StakeStatus! @index
   # Block where MsgUnstakeSupplier was received
   unstakingBeginBlock: Block
+  # Reason for the supplier to be unstaked/unbonded. Received with the EventSupplierUnbondingBegin event.
+  unstakingReason: SupplierUnbondingReason
   # Height of the block where the supplier is going to be unstaked/unbonded.
   # This is received with the EventSupplierUnbondingBegin event.
   unstakingEndHeight: BigInt
@@ -638,7 +691,9 @@ type SupplierEndpoint @jsonField {
 
 type SupplierRevShare @jsonField {
   address: String!
-  revSharePercentage: Float!
+  # revSharePercentage is a string because the type of the value in the proto files is uint64
+  # but we can't use BigInt in types with @jsonField
+  revSharePercentage: String!
 }
 
 type SupplierServiceConfig @entity {
@@ -653,6 +708,9 @@ type EventSupplierUnbondingBegin @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   supplier: Supplier!
+  reason: SupplierUnbondingReason!
+  unbondingEndHeight: BigInt!
+  sessionEndHeight: BigInt!
   block: Block!
   event: Event!
 }
@@ -661,6 +719,9 @@ type EventSupplierUnbondingEnd @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   supplier: Supplier!
+  reason: SupplierUnbondingReason!
+  unbondingEndHeight: BigInt!
+  sessionEndHeight: BigInt!
   block: Block!
   event: Event!
 }
@@ -686,10 +747,15 @@ type Gateway @entity {
   stakeDenom: String!
   stakeStatus: StakeStatus! @index
   unstakingBeginBlock: Block
+  # Height of the block where the gateway is going to be unstaked/unbonded.
+  # This is received with the EventGatewayUnbondingBegin event.
+  unstakingEndHeight: BigInt
   unstakingEndBlock: Block
   stakeMsgs: [MsgStakeGateway] @derivedFrom(field: "gateway")
   unstakeMsgs: [MsgUnstakeGateway] @derivedFrom(field: "gateway")
   unstakedEvents: [EventGatewayUnstaked] @derivedFrom(field: "gateway")
+  unstakingBeginEvents: [EventGatewayUnbondingBegin] @derivedFrom(field: "gateway")
+  unstakingEndEvents: [EventGatewayUnbondingEnd] @derivedFrom(field: "gateway")
 }
 
 type MsgStakeGateway @entity {
@@ -711,11 +777,34 @@ type MsgUnstakeGateway @entity {
   message: Message!
 }
 
+# TODO(@Alann27): remove this event when we are sure beta and alpha are using
+# EventGatewayUnbondingBegin, EventGatewayUnbondingEnd and EventGatewayUnbondingCanceled
 type EventGatewayUnstaked @entity {
   # The ID of the event result of getEventId(event)
   id: ID!
   gateway: Gateway!
   transaction: Transaction!
+  block: Block!
+  event: Event!
+}
+
+type EventGatewayUnbondingBegin @entity {
+  # The ID of the event result of getEventId(event)
+  id: ID!
+  gateway: Gateway!
+  unbondingEndHeight: BigInt!
+  sessionEndHeight: BigInt!
+  block: Block!
+  event: Event!
+  transaction: Transaction!
+}
+
+type EventGatewayUnbondingEnd @entity {
+  # The ID of the event result of getEventId(event)
+  id: ID!
+  gateway: Gateway!
+  unbondingEndHeight: BigInt!
+  sessionEndHeight: BigInt!
   block: Block!
   event: Event!
 }
@@ -801,6 +890,7 @@ type EventClaimExpired @entity {
   sessionEndHeight: BigInt!
   rootHash: String
   expirationReason: ClaimExpirationReason
+  proofValidationStatus: ClaimProofStatus
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
@@ -820,13 +910,47 @@ type EventClaimSettled @entity {
   sessionEndHeight: BigInt!
   rootHash: String
   proofRequirement: ProofRequirementReason
+  proofValidationStatus: ClaimProofStatus
   numRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
   claimedAmount: BigInt
   claimedDenom: String
   transaction: Transaction
+  mints: [MintBurnOp]!
+  burns: [MintBurnOp]!
+  modToModTransfers: [ModToModTransfer]!
+  modToAcctTransfers: [ModToAcctTransfer]! @derivedFrom(field: "eventClaimSettled")
   block: Block!
+}
+
+type MintBurnOp @jsonField(indexed: false) {
+  # It appears we can't use enums when using jsonField, so we are using Int instead.
+  opReason: Int!
+  destinationModule: String!
+  amount: BigInt!
+  denom: String!
+}
+
+type ModToModTransfer @jsonField(indexed: false) {
+  # It appears we can't use enums when using jsonField, so we are using Int instead.
+  opReason: Int!
+  senderModule: String!
+  recipientModule: String!
+  amount: BigInt!
+  denom: String!
+}
+
+type ModToAcctTransfer @entity {
+  id: ID!
+  eventClaimSettled: EventClaimSettled!
+  relay: Relay!
+  block: Block!
+  opReason: SettlementOpReason!
+  senderModule: String!
+  recipient: Account!
+  amount: BigInt!
+  denom: String!
 }
 
 type Relay @entity {
@@ -851,10 +975,12 @@ type Relay @entity {
   eventClaimExpired: EventClaimExpired
   eventClaimSettled: EventClaimSettled
   eventsProofUpdated: [EventProofUpdated] @derivedFrom(field: "relay")
+  modToAcctTransfers: [ModToAcctTransfer]! @derivedFrom(field: "relay")
   failedCodeSpace: String
   requiredProof: Boolean
   # this must be a value of the enums ClaimErrors or ProofErrors. We are using Int because we can't define enums with numbers.
   failedCode: Int
+  proofValidationStatus: ClaimProofStatus
 }
 
 type EventProofUpdated @entity {
@@ -875,6 +1001,61 @@ type EventProofUpdated @entity {
   transaction: Transaction
   block: Block!
   relay: Relay
+}
+
+type EventApplicationReimbursementRequest @entity {
+  id: ID!
+  application: Application!
+  supplier: Supplier!
+  service: Service!
+  sessionId: String!
+  amount: BigInt!
+  denom: String!
+  block: Block!
+  event: Event!
+}
+
+type EventApplicationOverserviced @entity {
+  id: ID!
+  application: Application!
+  supplier: Supplier!
+  expectedBurn: BigInt!
+  expectedBurnDenom: String!
+  effectiveBurn: BigInt!
+  effectiveBurnDenom: String!
+  block: Block!
+  event: Event!
+}
+
+type EventSupplierSlashed @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  proofValidationStatus: ClaimProofStatus
+  proofMissingPenalty: BigInt!
+  proofMissingPenaltyDenom: String!
+  previousStakeAmount: BigInt!
+  afterStakeAmount: BigInt!
+  block: Block!
+  event: Event!
+}
+
+type EventProofValidityChecked @entity {
+  id: ID!
+  supplier: Supplier!
+  application: Application!
+  service: Service!
+  sessionId: String!
+  sessionStartHeight: BigInt!
+  sessionEndHeight: BigInt!
+  proofValidationStatus: ClaimProofStatus!
+  failureReason: String
+  block: Block!
+  event: Event!
 }
 
 # Entity used to store summarized data related to relays by block and service

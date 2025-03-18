@@ -1,3 +1,4 @@
+import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import { handleAuthzExec } from "./authz/exec";
 import { handleNativeTransfer } from "./bank";
 import {
@@ -16,12 +17,18 @@ import {
   handleGatewayMsgStake,
   handleGatewayMsgUnstake,
   handleGatewayUnstakeEvent,
+  handleEventGatewayUnbondingBegin,
+  handleEventGatewayUnbondingEnd,
 } from "./poktroll/gateways";
 import {
+  handleEventApplicationOverserviced,
+  handleEventApplicationReimbursementRequest,
   handleEventClaimExpired,
   handleEventClaimSettled,
   handleEventClaimUpdated,
   handleEventProofUpdated,
+  handleEventProofValidityChecked,
+  handleEventSupplierSlashed,
   handleMsgCreateClaim,
   handleMsgSubmitProof,
 } from "./poktroll/relays";
@@ -48,7 +55,7 @@ export enum ByTxStatus {
   Error,
 }
 
-export const MsgHandlers = {
+export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Promise<void>> = {
   // bank
   "/cosmos.bank.v1beta1.MsgSend": handleNativeTransfer,
   // validator
@@ -74,7 +81,7 @@ export const MsgHandlers = {
   "/poktroll.proof.MsgSubmitProof": handleMsgSubmitProof,
 };
 
-export const EventHandlers = {
+export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promise<void>> = {
   // authz
   /*
   todo: handle this.
@@ -121,17 +128,21 @@ export const EventHandlers = {
   "poktroll.supplier.EventSupplierUnbondingEnd": handleSupplierUnbondingEndEvent,
   // gateway
   "poktroll.gateway.EventGatewayUnstaked": handleGatewayUnstakeEvent,
+  "poktroll.gateway.EventGatewayUnbondingBegin": handleEventGatewayUnbondingBegin,
+  "poktroll.gateway.EventGatewayUnbondingEnd": handleEventGatewayUnbondingEnd,
   // relay
   "poktroll.tokenomics.EventClaimSettled": handleEventClaimSettled,
   "poktroll.tokenomics.EventClaimExpired": handleEventClaimExpired,
+  "poktroll.tokenomics.EventSupplierSlashed": handleEventSupplierSlashed,
+  "poktroll.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
+  "poktroll.tokenomics.EventApplicationReimbursementRequest": handleEventApplicationReimbursementRequest,
   "poktroll.proof.EventClaimUpdated": handleEventClaimUpdated,
   "poktroll.proof.EventProofUpdated": handleEventProofUpdated,
+  "poktroll.proof.EventProofValidityChecked": handleEventProofValidityChecked,
   // todo: implement this one
   "mint": noOp,
   "coinbase": noOp,
   "transfer": noOp,
   "burn": noOp,
-  "poktroll.tokenomics.EventSupplierSlashed": noOp,
   "poktroll.service.EventRelayMiningDifficultyUpdated": noOp,
-  "poktroll.tokenomics.EventApplicationReimbursementRequest": noOp,
 };

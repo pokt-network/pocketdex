@@ -290,6 +290,8 @@ async function indexGateway(msgByType: MessageByType, eventByType: EventByType):
   ];
   const eventTypes = [
     "poktroll.gateway.EventGatewayUnstaked",
+    "poktroll.gateway.EventGatewayUnbondingBegin",
+    "poktroll.gateway.EventGatewayUnbondingEnd",
   ];
 
   await handleStakeMsgs(

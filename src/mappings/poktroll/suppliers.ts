@@ -12,9 +12,15 @@ import {
   SupplierEndpoint,
   SupplierRevShare,
   SupplierServiceConfig,
+  SupplierUnbondingReason,
 } from "../../types";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
 import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
+import { SupplierSDKType } from "../../types/proto-interfaces/poktroll/shared/supplier";
+import {
+  supplierUnbondingReasonFromJSON,
+  SupplierUnbondingReasonSDKType,
+} from "../../types/proto-interfaces/poktroll/supplier/event";
 import {
   MsgStakeSupplier,
   MsgUnstakeSupplier,
@@ -28,6 +34,25 @@ import {
   messageId,
 } from "../utils/ids";
 import { fetchAllSupplierServiceConfigBySupplier } from "./pagination";
+
+function getSupplierUnbondingReasonFromSDK(item: typeof SupplierUnbondingReasonSDKType | string | number): SupplierUnbondingReason {
+  switch (item) {
+    case 0:
+    case SupplierUnbondingReasonSDKType.SUPPLIER_UNBONDING_REASON_UNSPECIFIED:
+    case "SUPPLIER_UNBONDING_REASON_UNSPECIFIED":
+      return SupplierUnbondingReason.UNSPECIFIED
+    case 1:
+    case SupplierUnbondingReasonSDKType.SUPPLIER_UNBONDING_REASON_VOLUNTARY:
+    case "SUPPLIER_UNBONDING_REASON_VOLUNTARY":
+      return SupplierUnbondingReason.VOLUNTARY
+    case 2:
+    case SupplierUnbondingReasonSDKType.SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE:
+    case "SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE":
+      return SupplierUnbondingReason.BELOW_MIN_STAKE
+    default:
+      throw new Error(`Unknown SupplierUnbondingReason=${item}`)
+  }
+}
 
 async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
   if (!msg.msg.decodedMsg.stake) {
@@ -76,7 +101,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
 
     const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,
-      revSharePercentage: revShare.revSharePercentage,
+      revSharePercentage: revShare.revSharePercentage.toString(),
     }));
 
     supplierMsgStakeServices.push({
@@ -184,17 +209,34 @@ async function _handleSupplierUnbondingBeginEvent(
   "value":"\"55070\"","index":true
   },{"key":"mode","value":"EndBlock","index":true}]}
    */
-  const unbondingHeight = event.event.attributes.find(attribute => attribute.key === "unbonding_end_height")?.value;
+  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason = 0;
 
+  for (const attribute of event.event.attributes) {
+    if (attribute.key === "supplier") {
+      supplierSdk = JSON.parse(attribute.value as unknown as string);
+      continue
+    }
 
+    const parsedValue = (attribute.value as string).replaceAll('"', '');
 
-  const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string;
+    if (attribute.key === "unbonding_end_height") {
+      unbondingHeight = BigInt(parsedValue);
+    }
 
-  if (!supplierStringified) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not provided in event`);
+    if (attribute.key === "session_end_height") {
+      sessionEndHeight = BigInt(parsedValue);
+    }
+
+    if (attribute.key === "reason") {
+      reason = supplierUnbondingReasonFromJSON(parsedValue);
+    }
   }
 
-  const operatorAddress = JSON.parse(supplierStringified).operator_address;
+  if (!supplierSdk) {
+    throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not provided in event`);
+  }
+
+  const operatorAddress = supplierSdk.operator_address;
 
   const supplier = await Supplier.get(operatorAddress);
 
@@ -207,7 +249,15 @@ async function _handleSupplierUnbondingBeginEvent(
     //  but alpha has still events without this
     logger.error(`[handleSupplierUnbondingBeginEvent] unbonding_end_height not found`);
   } else {
-    supplier.unstakingEndHeight = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
+    supplier.unstakingEndHeight = unbondingHeight
+  }
+
+  if (!reason) {
+    // todo: we should do this -> throw new Error(`[handleSupplierUnbondingBeginEvent] reason not found in event`);
+    //  but alpha has still events without this
+    logger.error(`[handleSupplierUnbondingBeginEvent] reason not found in event`);
+  } else {
+    supplier.unstakingReason = getSupplierUnbondingReasonFromSDK(reason)
   }
 
   const eventId = getEventId(event);
@@ -216,8 +266,11 @@ async function _handleSupplierUnbondingBeginEvent(
     supplier.save(),
     EventSupplierUnbondingBeginEntity.create({
       id: eventId,
+      unbondingEndHeight: unbondingHeight || BigInt(0),
+      sessionEndHeight: sessionEndHeight || BigInt(0),
       supplierId: operatorAddress,
       blockId: getBlockId(event.block),
+      reason: reason ? getSupplierUnbondingReasonFromSDK(reason) : SupplierUnbondingReason.UNSPECIFIED,
       eventId,
     }).save(),
   ]);
@@ -226,24 +279,37 @@ async function _handleSupplierUnbondingBeginEvent(
 async function _handleSupplierUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  const unbondingHeight = event.event.attributes.find(attribute => attribute.key === "unbonding_end_height")?.value;
+  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason = 0;
 
-  const supplierStringified = event.event.attributes.find(attribute => attribute.key === "supplier")?.value as unknown as string;
+  for (const attribute of event.event.attributes) {
+    if (attribute.key === "supplier") {
+      supplierSdk = JSON.parse(attribute.value as unknown as string);
+      continue
+    }
 
-  if (!supplierStringified) {
+    const parsedValue = (attribute.value as string).replaceAll('"', '');
+
+    if (attribute.key === "unbonding_end_height") {
+      unbondingHeight = BigInt(parsedValue);
+    }
+
+    if (attribute.key === "session_end_height") {
+      sessionEndHeight = BigInt(parsedValue);
+    }
+
+    if (attribute.key === "reason") {
+      reason = supplierUnbondingReasonFromJSON(parsedValue);
+    }
+  }
+
+  if (!supplierSdk) {
     throw new Error(`[handleSupplierUnbondingEndEvent] supplier not provided in event`);
   }
 
-  const supplierAddress = JSON.parse(supplierStringified).operator_address;
-
-  if (!supplierAddress) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] operator_address not provided in supplier event`);
-  }
-
-  const supplier = await Supplier.get(supplierAddress);
+  const supplier = await Supplier.get(supplierSdk.operator_address);
 
   if (!supplier) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierAddress}`);
+    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierSdk.operator_address}`);
   }
 
   if (!unbondingHeight) {
@@ -254,17 +320,28 @@ async function _handleSupplierUnbondingEndEvent(
     supplier.unstakingEndBlockId = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
   }
 
+  if (!reason) {
+    // todo: we should do this -> throw new Error(`[handleSupplierUnbondingBeginEvent] reason not found in event`);
+    //  but alpha has still events without this
+    logger.error(`[handleSupplierUnbondingEndEvent] reason not found in event`);
+  } else {
+    supplier.unstakingReason = getSupplierUnbondingReasonFromSDK(reason)
+  }
+
   supplier.stakeStatus = StakeStatus.Unstaked;
 
-  const supplierServices = (await fetchAllSupplierServiceConfigBySupplier(supplierAddress) || []).map(item => item.id);
+  const supplierServices = (await fetchAllSupplierServiceConfigBySupplier(supplierSdk.operator_address) || []).map(item => item.id);
 
   const eventId = getEventId(event);
 
   await Promise.all([
     EventSupplierUnbondingEndEntity.create({
       id: eventId,
-      supplierId: supplierAddress,
+      unbondingEndHeight: unbondingHeight || BigInt(0),
+      sessionEndHeight: sessionEndHeight || BigInt(0),
+      reason: reason ? getSupplierUnbondingReasonFromSDK(reason) : SupplierUnbondingReason.UNSPECIFIED,
       blockId: getBlockId(event.block),
+      supplierId: supplierSdk.operator_address,
       eventId,
     }).save(),
     supplier.save(),

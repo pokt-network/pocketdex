@@ -507,7 +507,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
       const revShare = service.rev_share.map((revShare) => ({
         address: revShare.address,
-        revSharePercentage: revShare.rev_share_percentage,
+        revSharePercentage: revShare.rev_share_percentage.toString(),
       }));
 
       servicesAndSupplierMsgStakes.push({

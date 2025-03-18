@@ -4,7 +4,7 @@ ARG NODE_ENV=production
 ARG ENDPOINT=http://localhost:26657
 ARG CHAIN_ID=poktroll
 
-ENV NODE_ENV=production
+ENV NODE_ENV=development
 ENV ENDPOINT=$ENDPOINT
 ENV CHAIN_ID=$CHAIN_ID
 ENV DOCKER_BUILD="true"
@@ -76,9 +76,12 @@ COPY src /home/app/src
 COPY proto /home/app/proto
 
 # Build pocketdex
-RUN yarn run build  \
-    # Use `yarn workspaces focus` to reduce dependencies to only production-level requirements.
-    && yarn workspaces focus --production \
+RUN yarn run build
+
+ENV NODE_ENV=$NODE_ENV
+
+# Use `yarn workspaces focus` to reduce dependencies to only production-level requirements.
+RUN yarn workspaces focus --production \
     && rm -rf /home/app/src
 
 # Switch to the non-root user created earlier
@@ -86,7 +89,5 @@ USER app
 
 # port of indexer
 EXPOSE 3000
-
-ENV NODE_ENV=$NODE_ENV
 
 ENTRYPOINT ["tini", "--", "/home/app/scripts/node-entrypoint.sh"]

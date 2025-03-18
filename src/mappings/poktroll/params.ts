@@ -24,7 +24,10 @@ import {
   MsgUpdateParam as MsgUpdateServiceParam,
   MsgUpdateParams as MsgUpdateServiceParams,
 } from "../../client/poktroll/service/tx";
-import { MsgUpdateParams as MsgUpdateSessionParams } from "../../client/poktroll/session/tx";
+import {
+  MsgUpdateParam as MsgUpdateSessionParam,
+  MsgUpdateParams as MsgUpdateSessionParams,
+} from "../../client/poktroll/session/tx";
 import {
   MsgUpdateParam as MsgUpdateSharedParam,
   MsgUpdateParams as MsgUpdateSharedParams,
@@ -61,6 +64,7 @@ const msgUpdateParamsMap: Record<string, {
   "/poktroll.shared.MsgUpdateParams": MsgUpdateSharedParams,
   "/poktroll.tokenomics.MsgUpdateParam": MsgUpdateTokenomicsParam,
   "/poktroll.tokenomics.MsgUpdateParams": MsgUpdateTokenomicsParams,
+  "/poktroll.session.MsgUpdateParam": MsgUpdateSessionParam,
   "/poktroll.session.MsgUpdateParams": MsgUpdateSessionParams,
   "/cosmos.auth.v1beta1.MsgUpdateParams": MsgUpdateAuthParams,
   "/cosmos.bank.v1beta1.MsgUpdateParams": MsgUpdateBankParams,
