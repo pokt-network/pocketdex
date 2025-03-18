@@ -8,14 +8,19 @@ if [ "$DOCKER_BUILD" = "true" ]; then
   exit 0
 fi
 
-# Warning about cleaning all submodules
-warning_log "WARNING: This script will reset and clean ALL submodule directories."
-warning_log "This will remove ALL untracked files and changes in submodules."
-read -p "Do you want to proceed and clean all submodules? (yes/no): " user_confirmation
+# Check if the SKIP_CONFIRMATION flag is set
+if [[ "$SKIP_CONFIRMATION" = "true" ]]; then
+  info_log "Skipping user confirmation: SKIP_CONFIRMATION is set to 'true'."
+else
+  # Warning about cleaning all submodules
+  warning_log "WARNING: This script will reset and clean ALL submodule directories."
+  warning_log "This will remove ALL untracked files and changes in submodules."
+  read -p "Do you want to proceed and clean all submodules? (yes/no): " user_confirmation
 
-if [[ "$user_confirmation" != "yes" ]]; then
-  info_log "Operation canceled by the user."
-  exit 0
+  if [[ "$user_confirmation" != "yes" ]]; then
+    info_log "Operation canceled by the user."
+    exit 0
+  fi
 fi
 
 # Prepare for updating submodules
