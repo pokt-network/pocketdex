@@ -156,8 +156,9 @@ export async function optimizedBulkCreate(modelName: string, docs: Array<any>, t
       });
 
       await transaction.commit()
-    } catch {
+    } catch (e) {
       await transaction.rollback()
+      throw e
     }
 
     // Update and log progress after successful batch creation

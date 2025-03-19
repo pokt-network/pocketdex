@@ -758,14 +758,6 @@ type EventRelayMiningDifficultyUpdated @entity {
   event: Event!
 }
 
-#message EventRelayMiningDifficultyUpdated {
-#    string service_id = 1;
-#    string prev_target_hash_hex_encoded = 2;
-#    string new_target_hash_hex_encoded = 3;
-#    uint64 prev_num_relays_ema = 4;
-#    uint64 new_num_relays_ema = 5;
-#}
-
 type Gateway @entity {
   # id is the address of the gateway
   id: ID!

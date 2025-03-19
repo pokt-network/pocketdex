@@ -35,6 +35,7 @@ import {
   EventByType,
   MessageByType,
 } from "./types/common";
+import { GetIdFromEventAttribute, RecordGetId } from "./types/stake";
 import { optimizedBulkCreate } from "./utils/db";
 import { getBlockId } from "./utils/ids";
 import { stringify } from "./utils/json";
@@ -366,7 +367,6 @@ function groupConnectedComponents(arrays: string[][]): string[][] {
   return result;
 }
 
-type GetIdFromEventAttribute = (attributes: CosmosEvent["event"]["attributes"]) => string | Array<string>;
 
 /*
 This function is used to call handlers in order to avoid updating the same entity twice or more at the same time
@@ -375,7 +375,7 @@ This function is used to call handlers in order to avoid updating the same entit
     for messages it is the path of the decodedMsg to get the entity id
     for events it is a function that receives the attributes and returns the entity id
 */
-async function indexStakeEntity(data: Array<CosmosEvent | CosmosMessage>, getEntityIdArg: Record<string, string | GetIdFromEventAttribute>) {
+async function indexStakeEntity(data: Array<CosmosEvent | CosmosMessage>, getEntityIdArg: RecordGetId) {
   // this is to handle events where more than one stake entity is updated
   // like in _handleTransferApplicationEndEvent handler
   const entitiesUpdatedAtSameDatum: Array<Array<string>> = [];
