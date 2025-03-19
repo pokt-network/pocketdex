@@ -56,7 +56,7 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
     getUnstakedAppsData(blockHeight),
     getStakedGatewaysData(),
     getUnstakedGatewaysData(blockHeight),
-  ] as const);
+  ]);
 
   blockEntity.totalComputedUnits = computedUnits;
   blockEntity.totalRelays = relays;

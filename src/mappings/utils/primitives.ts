@@ -53,7 +53,11 @@ export function isEventOfMessageOrTransactionKind(event: CosmosEvent): boolean {
 }
 
 export function isEventOfBlockKind(event: CosmosEvent): boolean {
-  return event.kind === CosmosEventKind.BeginBlock || event.kind === CosmosEventKind.EndBlock || event.kind === CosmosEventKind.FinalizeBlock;
+  return event.kind === CosmosEventKind.BeginBlock || event.kind === CosmosEventKind.EndBlock || isEventOfFinalizedBlockKind(event);
+}
+
+export function isEventOfFinalizedBlockKind(event: CosmosEvent): boolean {
+  return event.kind === CosmosEventKind.FinalizeBlock;
 }
 
 // on block 1, all the events at finalizeBlock, for example,

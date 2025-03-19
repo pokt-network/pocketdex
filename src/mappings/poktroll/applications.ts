@@ -59,14 +59,18 @@ function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | 
   }
 }
 
-function _handleAppMsgStake(
+async function _handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
-): [
+): Promise<[
   MsgStakeApplicationProps,
   ApplicationProps,
   Array<MsgStakeApplicationServiceProps>,
   Array<ApplicationServiceProps>,
-] {
+]> {
+  // we need to get application already saved in case it is being transferred
+  // because if we overwrite the application, we will lose the transfer information
+  const prevApp = await Application.get(msg.msg.decodedMsg.address);
+
   const msgId = messageId(msg);
   const { address, stake } = msg.msg.decodedMsg;
 
@@ -83,12 +87,14 @@ function _handleAppMsgStake(
     stakeDenom,
   };
 
-  const application = {
+  const application: ApplicationProps = {
     id: address,
     accountId: address,
     stakeAmount,
     stakeDenom,
     stakeStatus: StakeStatus.Staked,
+    transferringToId: prevApp?.transferringToId,
+    transferEndHeight: prevApp?.transferEndHeight,
   };
 
   // used to create the services that came in the stake message
@@ -537,7 +543,7 @@ export async function handleAppMsgStake(
 
   for (const msg of messages) {
     // it needs to query db to know the current app <> service relations that need to remove
-    const r = _handleAppMsgStake(msg);
+    const r = await _handleAppMsgStake(msg);
     const address = msg.msg.decodedMsg.address;
     msg.msg.decodedMsg.services.forEach(service => {
       if (!appServices.has(address)) {

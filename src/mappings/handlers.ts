@@ -32,7 +32,7 @@ import {
   handleMsgCreateClaim,
   handleMsgSubmitProof,
 } from "./poktroll/relays";
-import { handleMsgAddService } from "./poktroll/services";
+import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./poktroll/services";
 import {
   handleSupplierStakeMsg,
   handleSupplierUnbondingBeginEvent,
@@ -126,6 +126,8 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   // supplier
   "poktroll.supplier.EventSupplierUnbondingBegin": handleSupplierUnbondingBeginEvent,
   "poktroll.supplier.EventSupplierUnbondingEnd": handleSupplierUnbondingEndEvent,
+  // service
+  "poktroll.service.EventRelayMiningDifficultyUpdated": handleEventRelayMiningDifficultyUpdated,
   // gateway
   "poktroll.gateway.EventGatewayUnstaked": handleGatewayUnstakeEvent,
   "poktroll.gateway.EventGatewayUnbondingBegin": handleEventGatewayUnbondingBegin,
@@ -144,5 +146,4 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "coinbase": noOp,
   "transfer": noOp,
   "burn": noOp,
-  "poktroll.service.EventRelayMiningDifficultyUpdated": noOp,
 };

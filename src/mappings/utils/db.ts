@@ -124,6 +124,8 @@ export async function optimizedBulkCreate(modelName: string, docs: Array<any>, t
 
   let totalSaved = 0;
 
+  const model = store.modelProvider.getModel(modelName).model
+
   for (let batchStart = 0; batchStart < docs.length; batchStart += BATCH_SIZE) {
     const records: Array<EventProps> = [];
 
@@ -140,12 +142,23 @@ export async function optimizedBulkCreate(modelName: string, docs: Array<any>, t
       `[optimizedBulkCreate] Processing batch: Start index = ${batchStart}, Records in batch = ${records.length}, Remaining records = ${docs.length - batchStart - records.length}.`,
     );
 
-    // Perform the bulk creation
-    await store.modelProvider.getModel(modelName).model.bulkCreate(records, {
-      transaction: store.context.transaction,
-      ignoreDuplicates: true,
-      ...bulkCreateOpts,
-    });
+    // TODO(@Alann27): Instead of creating a transaction for each batch, we should create a transaction for multiple bashes
+    const transaction = await model.sequelize!.transaction({
+      logging: false
+    })
+
+    try {
+      // Perform the bulk creation
+      await model.bulkCreate(records, {
+        transaction,
+        ignoreDuplicates: true,
+        ...bulkCreateOpts,
+      });
+
+      await transaction.commit()
+    } catch {
+      await transaction.rollback()
+    }
 
     // Update and log progress after successful batch creation
     totalSaved += records.length;

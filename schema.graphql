@@ -292,6 +292,7 @@ type Transaction @entity {
   status: TxStatus! @index
   log: String
   code: Int!
+  idx: Int!
   codespace: String
   timeoutHeight: BigInt @index
   # NB: only the first signer!
@@ -302,6 +303,7 @@ type Transaction @entity {
 
 type Message @entity {
   id: ID!
+  idx: Int!
   typeUrl: String! @index
   json: String
   transaction: Transaction!
@@ -311,6 +313,7 @@ type Message @entity {
 
 type Event @entity {
   id: ID!
+  idx: Int!
   type: String! @index
   kind: EventKind!
   attributes: [EventAttribute]!
@@ -444,6 +447,12 @@ type Service @entity {
   computeUnitsPerRelay: BigInt!
   owner: Account!
   addServiceMsgs: [MsgAddService] @derivedFrom(field: "service")
+  relayMiningDifficultyUpdatedEvents: [EventRelayMiningDifficultyUpdated] @derivedFrom(field: "service")
+  # data from the last EventRelayMiningDifficultyUpdated event
+  prevTargetHashHexEncoded: String
+  newTargetHashHexEncoded: String
+  prevNumRelaysEma: BigInt
+  newNumRelaysEma: BigInt
 }
 
 type MsgStakeApplication @entity {
@@ -737,6 +746,25 @@ type MsgAddService @entity {
   transaction: Transaction!
   message: Message!
 }
+
+type EventRelayMiningDifficultyUpdated @entity {
+  id: ID!
+  service: Service!
+  prevTargetHashHexEncoded: String!
+  newTargetHashHexEncoded: String!
+  prevNumRelaysEma: BigInt!
+  newNumRelaysEma: BigInt!
+  block: Block!
+  event: Event!
+}
+
+#message EventRelayMiningDifficultyUpdated {
+#    string service_id = 1;
+#    string prev_target_hash_hex_encoded = 2;
+#    string new_target_hash_hex_encoded = 3;
+#    uint64 prev_num_relays_ema = 4;
+#    uint64 new_num_relays_ema = 5;
+#}
 
 type Gateway @entity {
   # id is the address of the gateway

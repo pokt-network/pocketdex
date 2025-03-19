@@ -168,15 +168,15 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
       numRelays = BigInt(parseAttribute(attribute.value));
     }
 
-    if (attribute.key === "num_claimed_computed_units") {
+    if (attribute.key === "num_claimed_compute_units") {
       numClaimedComputedUnits = BigInt(parseAttribute(attribute.value));
     }
 
-    if (attribute.key === "num_estimated_computed_units") {
+    if (attribute.key === "num_estimated_compute_units") {
       numEstimatedComputedUnits = BigInt(parseAttribute(attribute.value));
     }
 
-    if (attribute.key === "claimed") {
+    if (attribute.key === "claimed_upokt") {
       claimed = JSON.parse(attribute.value as string);
     }
 
