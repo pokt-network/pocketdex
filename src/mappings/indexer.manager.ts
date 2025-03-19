@@ -35,6 +35,7 @@ import {
   EventByType,
   MessageByType,
 } from "./types/common";
+import { GetIdFromEventAttribute, RecordGetId } from "./types/stake";
 import { optimizedBulkCreate } from "./utils/db";
 import { getBlockId } from "./utils/ids";
 import { stringify } from "./utils/json";
@@ -43,6 +44,7 @@ import {
   filterEventsByTxStatus,
   filterMsgByTxStatus,
   hasValidAmountAttribute,
+  isEventOfFinalizedBlockKind,
 } from "./utils/primitives";
 
 function handleByType(typeUrl: string | Array<string>, byTypeMap: MessageByType | EventByType, byTypeHandlers: typeof MsgHandlers | typeof EventHandlers, byTxStatus: ByTxStatus): Array<Promise<void>> {
@@ -78,57 +80,6 @@ function handleByType(typeUrl: string | Array<string>, byTypeMap: MessageByType 
   }
 
   return promises;
-}
-
-async function handleStakeMsgs(typeUrl: string, identityProperty: string, msgByType: MessageByType) {
-  const { success: msgs } = filterMsgByTxStatus(msgByType[typeUrl]);
-  const addressMsgMap: Record<string, Array<CosmosMessage>> = {};
-
-  if (msgs.length === 0) {
-    return;
-  }
-
-  msgs.forEach((msg) => {
-    const identity = get(msg.msg.decodedMsg, identityProperty) as string;
-    if (!addressMsgMap[identity]) addressMsgMap[identity] = [];
-    addressMsgMap[identity].push(msg);
-  });
-
-  const nonRepeatedStake = [];
-  const repeatedStakeAddresses = new Set<string>();
-  for (const [identity, msgs] of Object.entries(addressMsgMap)) {
-    if (msgs.length === 1) {
-      nonRepeatedStake.push(...msgs);
-    } else {
-      repeatedStakeAddresses.add(identity);
-    }
-  }
-
-  const promises: Array<Promise<void>> = [
-    // call in parallel application stake handler for all non-repeated stake messages
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    MsgHandlers[typeUrl](nonRepeatedStake),
-  ];
-
-  for (const identity of repeatedStakeAddresses.values()) {
-    const msgs = addressMsgMap[identity];
-    msgs[0].tx.idx;
-    msgs[0].idx;
-    const sortedMsg = orderBy(msgs, ["tx.idx", "idx"], ["asc", "asc"]);
-    promises.push(async function(msgs) {
-      for (const msg of msgs) {
-        // force pass one by one because they are at the same block and the same address,
-        // so we need to enforce tx.idx + tx.msg.idx
-        // otherwise the resultant state of Application entity could not reflect the right state on the network.
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        await MsgHandlers[typeUrl]([msg]);
-      }
-    }(sortedMsg));
-  }
-
-  await Promise.all(promises);
 }
 
 // anything primitive types
@@ -230,8 +181,9 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
     "poktroll.tokenomics.EventClaimExpired",
     "poktroll.proof.EventClaimUpdated",
     "poktroll.proof.EventProofUpdated",
-    // todo: handle this events
-    //  poktroll.tokenomics.EventApplicationReimbursementRequest
+    "poktroll.proof.EventProofValidityChecked",
+    "poktroll.tokenomics.EventApplicationOverserviced",
+    "poktroll.tokenomics.EventApplicationReimbursementRequest"
   ];
 
   await Promise.all([
@@ -248,10 +200,29 @@ async function indexParams(msgByType: MessageByType): Promise<void> {
 }
 
 // any service msg or event
-async function indexService(msgByType: MessageByType): Promise<void> {
-  await Promise.all(
-    handleByType("/poktroll.service.MsgAddService", msgByType, MsgHandlers, ByTxStatus.Success),
-  );
+async function indexService(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+  const eventTypes = [
+    "poktroll.service.EventRelayMiningDifficultyUpdated",
+  ];
+  const msgTypes = [
+    "/poktroll.service.MsgAddService",
+  ];
+
+  await indexStakeEntity([
+    ...msgTypes.map(type => msgByType[type]).flat(),
+    ...eventTypes.map(type => eventByType[type]).flat()
+  ], {
+    "/poktroll.service.MsgAddService": "service.id",
+    "poktroll.service.EventRelayMiningDifficultyUpdated": (attributes) => {
+      for (const attribute of attributes) {
+        if (attribute.key === "service_id") {
+          return JSON.parse(attribute.value as string).service_id
+        }
+      }
+
+      return null
+    }
+  })
 }
 
 // any application msg or event
@@ -260,6 +231,7 @@ async function indexApplications(msgByType: MessageByType, eventByType: EventByT
     "/poktroll.application.MsgDelegateToGateway",
     "/poktroll.application.MsgUndelegateFromGateway",
     "/poktroll.application.MsgUnstakeApplication",
+    "/poktroll.application.MsgStakeApplication",
     "/poktroll.application.MsgTransferApplication",
   ];
   const eventTypes = [
@@ -270,23 +242,58 @@ async function indexApplications(msgByType: MessageByType, eventByType: EventByT
     "poktroll.application.EventApplicationUnbondingEnd",
   ];
 
-  await Promise.all([
-    handleStakeMsgs(
-      "/poktroll.application.MsgStakeApplication",
-      "address",
-      msgByType,
-    ),
-    // handle possible edge case where same entity receive on same block multiple stake msgs
-    ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
-    // any other non-stake msgs/events
-    ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
-  ]);
+  const getIdOfTransferEvents = (attributes: CosmosEvent['event']["attributes"]) => {
+    return attributes.find(({key}) => key === "source_address")?.value as string
+  }
+
+  const getIdOfBondingEvents = (attributes: CosmosEvent['event']["attributes"]) => {
+    for (const {key, value} of attributes) {
+      if (key !== "application") continue
+
+      return JSON.parse(value as string).address
+    }
+
+    return null
+  }
+
+  await indexStakeEntity([
+    ...msgTypes.map(type => msgByType[type]).flat(),
+    ...eventTypes.map(type => eventByType[type]).flat()
+  ],
+  {
+    "/poktroll.application.MsgDelegateToGateway": "appAddress",
+    "/poktroll.application.MsgUndelegateFromGateway": "appAddress",
+    "/poktroll.application.MsgUnstakeApplication": "address",
+    "/poktroll.application.MsgStakeApplication": "address",
+    "/poktroll.application.MsgTransferApplication": "sourceAddress",
+    "poktroll.application.EventTransferBegin": getIdOfTransferEvents,
+    "poktroll.application.EventTransferEnd": (attributes) => {
+      // here we need to return two ids (id of the source and id of the destination app)
+      // to group the data of those two apps
+      const ids: Array<string> = []
+
+      for (const {key, value} of attributes) {
+        if (key === 'source_address' || key === 'destination_address') {
+          // the source address is surrounded by quotes
+          ids.push((value as string).replaceAll("\"", ""))
+        }
+
+        if (ids.length === 2) break
+      }
+
+      return ids
+    },
+    "poktroll.application.EventTransferError": getIdOfTransferEvents,
+    "poktroll.application.EventApplicationUnbondingBegin": getIdOfBondingEvents,
+    "poktroll.application.EventApplicationUnbondingEnd": getIdOfBondingEvents,
+  })
 }
 
 // any gateway msg or event
 async function indexGateway(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
     "/poktroll.gateway.MsgUnstakeGateway",
+    "/poktroll.gateway.MsgStakeGateway",
   ];
   const eventTypes = [
     "poktroll.gateway.EventGatewayUnstaked",
@@ -294,41 +301,229 @@ async function indexGateway(msgByType: MessageByType, eventByType: EventByType):
     "poktroll.gateway.EventGatewayUnbondingEnd",
   ];
 
-  await handleStakeMsgs(
-    "/poktroll.gateway.MsgStakeGateway",
-    "address",
-    msgByType,
-  );
+  const getIdOfUnbondingEvents = (attributes: CosmosEvent["event"]["attributes"]) => {
+    for (const {key, value} of attributes) {
+      if (key !== "gateway") continue
+      return JSON.parse(value as string).address
+    }
+    return null
+  }
 
-  await Promise.all([
-    // handle possible edge case where same entity receive on same block multiple stake msgs
-    ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
-    // any other non-stake msgs/events
-    ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
-  ]);
+  await indexStakeEntity([
+    ...msgTypes.map(type => msgByType[type]).flat(),
+    ...eventTypes.map(type => eventByType[type]).flat()
+  ],
+  {
+    "/poktroll.gateway.MsgStakeGateway": "address",
+    "/poktroll.gateway.MsgUnstakeGateway": "address",
+    "poktroll.gateway.EventGatewayUnstaked": getIdOfUnbondingEvents,
+    "poktroll.gateway.EventGatewayUnbondingBegin": getIdOfUnbondingEvents,
+    "poktroll.gateway.EventGatewayUnbondingEnd": getIdOfUnbondingEvents,
+
+  })
+}
+
+// this is used to group more than one entity that are updated in the same handler
+// for example, when a EventTransferEnd is emitted, two appliations are updated
+function groupConnectedComponents(arrays: string[][]): string[][] {
+  const adjacencyList = new Map<string, Set<string>>();
+
+  // Build adjacency list
+  for (const group of arrays) {
+    for (const item of group) {
+      if (!adjacencyList.has(item)) {
+        adjacencyList.set(item, new Set());
+      }
+      for (const other of group) {
+        if (item !== other) {
+          adjacencyList.get(item)!.add(other);
+        }
+      }
+    }
+  }
+
+  const visited = new Set<string>();
+  const result: string[][] = [];
+
+  // DFS function to traverse components
+  function dfs(node: string, component: string[]) {
+    if (visited.has(node)) return;
+    visited.add(node);
+    component.push(node);
+    for (const neighbor of adjacencyList.get(node) || []) {
+      dfs(neighbor, component);
+    }
+  }
+
+  // Find all connected components
+  for (const node of adjacencyList.keys()) {
+    if (!visited.has(node)) {
+      const component: string[] = [];
+      dfs(node, component);
+      result.push(component.sort()); // Sort for consistency
+    }
+  }
+
+  return result;
+}
+
+
+/*
+This function is used to call handlers in order to avoid updating the same entity twice or more at the same time
+  data is an array of cosmos events or messages
+  getEntityIdArg is a record of string or function that returns a string,
+    for messages it is the path of the decodedMsg to get the entity id
+    for events it is a function that receives the attributes and returns the entity id
+*/
+async function indexStakeEntity(data: Array<CosmosEvent | CosmosMessage>, getEntityIdArg: RecordGetId) {
+  // this is to handle events where more than one stake entity is updated
+  // like in _handleTransferApplicationEndEvent handler
+  const entitiesUpdatedAtSameDatum: Array<Array<string>> = [];
+  const dataByEntityId: Record<string, {
+    finalizedEvents: Array<CosmosEvent>,
+    // rank here is used to mark messages as 0 and events as 1 to sort ascending
+    // prioritizing messages over events (that are not finalized events)
+    nonFinalizedData: Array<(CosmosEvent | CosmosMessage) & {rank: 1 | 0}>
+  }> = {}
+
+
+  for (const datum of data) {
+    // if event in datum them is a cosmos event
+    if ('event' in datum) {
+      const getEntityId = getEntityIdArg[datum.event.type] as GetIdFromEventAttribute
+
+      if (!getEntityId) throw new Error(`getIdFromEventAttribute not found for event type ${datum.event.type}`)
+      let entityId = getEntityId(datum.event.attributes)
+
+      if (Array.isArray(entityId)) {
+        entitiesUpdatedAtSameDatum.push(entityId)
+        // we are only taking the first one because later we will get the data for every entity in this group
+        // it is redundant to save the data for every entity in this group
+        entityId = entityId.at(0)!
+      }
+
+      // some events have their attributes values in double quotes
+      // so we need to remove them, it is better to remove them here instead of in the handler
+      entityId = entityId.replaceAll('"', '')
+
+      if (!dataByEntityId[entityId]) {
+        dataByEntityId[entityId] = {
+          finalizedEvents: [],
+          nonFinalizedData: [],
+        }
+      }
+
+      const isFinalizedBlockEvent = isEventOfFinalizedBlockKind(datum)
+
+      dataByEntityId[entityId][isFinalizedBlockEvent ? 'finalizedEvents' : 'nonFinalizedData'].push({
+        ...datum,
+          rank: 1,
+      })
+    } else {
+      const entityIdPath = getEntityIdArg[datum.msg.typeUrl] as string
+      if (!entityIdPath) throw new Error(`getIdFromEventAttribute not found for msg type ${datum.msg.typeUrl}`)
+
+      const entityId = get(datum.msg.decodedMsg, entityIdPath)
+
+      if (!dataByEntityId[entityId]) {
+        dataByEntityId[entityId] = {
+          finalizedEvents: [],
+          nonFinalizedData: [],
+        }
+      }
+
+      dataByEntityId[entityId].nonFinalizedData.push({
+        ...datum,
+        rank: 0
+      })
+    }
+  }
+
+  // this is to group entities that were updated in the same event/msg
+  for (const groupedConnectedEntities of groupConnectedComponents(entitiesUpdatedAtSameDatum)) {
+    const id = groupedConnectedEntities.join('-')
+
+    const finalizedEvents: Array<CosmosEvent> = []
+    const nonFinalizedData: Array<(CosmosEvent | CosmosMessage) & {rank: 1|0}> = []
+
+    for (const entity of groupedConnectedEntities) {
+      const data = dataByEntityId[entity]
+      if (!data) continue
+
+      finalizedEvents.push(...data.finalizedEvents)
+      nonFinalizedData.push(...data.nonFinalizedData)
+      delete dataByEntityId[entity]
+    }
+
+    dataByEntityId[id] = {
+      finalizedEvents,
+      nonFinalizedData
+    }
+  }
+
+  await Promise.all(
+    Object.entries(dataByEntityId).map(async ([id,data]) => {
+      const finalizedEvents = orderBy(data.finalizedEvents, ['idx'], ['asc'])
+      const nonFinalizedData = orderBy(data.nonFinalizedData, ['tx.idx', 'rank', 'idx'], ['asc', 'asc', 'asc'])
+
+      for (const nonFinalizedDatum of nonFinalizedData) {
+        if ('event' in nonFinalizedDatum) {
+          await EventHandlers[nonFinalizedDatum.event.type]([nonFinalizedDatum])
+        } else {
+          await MsgHandlers[nonFinalizedDatum.msg.typeUrl]([nonFinalizedDatum])
+        }
+      }
+
+      for (const finalizedEvent of finalizedEvents) {
+        await EventHandlers[finalizedEvent.event.type]([finalizedEvent])
+      }
+    })
+  )
 }
 
 // any supplier msg or event
 async function indexSupplier(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
     "/poktroll.supplier.MsgUnstakeSupplier",
+    "/poktroll.supplier.MsgStakeSupplier",
   ];
   const eventTypes = [
     "poktroll.supplier.EventSupplierUnbondingBegin",
     "poktroll.supplier.EventSupplierUnbondingEnd",
+    // this is here because it modifies the staked tokens of the supplier
+    "poktroll.tokenomics.EventSupplierSlashed"
   ];
 
-  // handle possible edge case where same entity receive on same block multiple stake msgs
-  await handleStakeMsgs(
-    "/poktroll.supplier.MsgStakeSupplier",
-    "operatorAddress",
-    msgByType,
-  );
 
-  await Promise.all([
-    ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
-    ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
-  ]);
+  const eventGetId = (attributes: CosmosEvent["event"]["attributes"]) => {
+    for (const attribute of attributes) {
+      if (attribute.key !== "supplier") continue
+      return JSON.parse(attribute.value as string).operator_address
+    }
+
+    return null
+  }
+
+  await indexStakeEntity(
+    [
+      ...msgTypes.map(type => msgByType[type]).flat(),
+      ...eventTypes.map(type => eventByType[type]).flat()
+    ],
+  {
+    "/poktroll.supplier.MsgUnstakeSupplier": "operatorAddress",
+    "/poktroll.supplier.MsgStakeSupplier": "operatorAddress",
+    "poktroll.supplier.EventSupplierUnbondingBegin": eventGetId,
+    "poktroll.supplier.EventSupplierUnbondingEnd": eventGetId,
+    "poktroll.tokenomics.EventSupplierSlashed": (attributes) => {
+      for (const attribute of attributes) {
+        if (attribute.key === "claim") {
+          return JSON.parse(attribute.value as string).supplier_operator_address
+        }
+      }
+
+      return null
+    }
+  })
 }
 
 // any message or event related to stake (supplier, gateway, application, service)
@@ -450,7 +645,7 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   await Promise.all([
     profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType),
-    profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType),
+    profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),

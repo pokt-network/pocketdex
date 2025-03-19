@@ -28,6 +28,7 @@ function _handleEvent(event: CosmosEvent): EventProps {
   const blockId = getBlockId(event.block);
   return {
     id,
+    idx: event.idx,
     type: event.event.type,
     kind: kind,
     attributes: attributes,

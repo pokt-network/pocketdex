@@ -20,6 +20,7 @@ import {
   getEventId,
   messageId,
 } from "../utils/ids";
+import { fetchAllApplicationGatewayByGatewayId } from "./pagination";
 
 
 async function _handleGatewayMsgStake(
@@ -58,6 +59,14 @@ async function _handleGatewayMsgStake(
     }).save(),
     gateway.save(),
   ]);
+}
+
+// This is being used to get the ApplicationGateway IDs by the Gateway ID
+// that is being unstaked to remove those ApplicationGateway records
+async function getUndelegatesForUnstakedGateway(gatewayId: string): Promise<Array<string>> {
+  const applicationGateways = await fetchAllApplicationGatewayByGatewayId(gatewayId);
+
+  return applicationGateways.map(applicationGateway => applicationGateway.id);
 }
 
 async function _handleGatewayMsgUnstake(
@@ -105,7 +114,10 @@ async function _handleGatewayUnstakeEvent(
     throw new Error(`[handleGatewayUnstakeEvent] address not provided in gateway event`);
   }
 
-  const gateway = await Gateway.get(gatewayAddress);
+  const [gateway, undelegates] = await Promise.all([
+    Gateway.get(gatewayAddress),
+    getUndelegatesForUnstakedGateway(gatewayAddress)
+  ]);
 
   if (!gateway) {
     throw new Error(`[handleGatewayMsgUnstake] gateway not found with address: ${gatewayAddress}`);
@@ -116,6 +128,7 @@ async function _handleGatewayUnstakeEvent(
 
   const eventId = getEventId(event);
 
+
   await Promise.all([
     EventGatewayUnstaked.create({
       id: eventId,
@@ -125,6 +138,7 @@ async function _handleGatewayUnstakeEvent(
       eventId,
     }).save(),
     gateway.save(),
+    store.bulkRemove("ApplicationGateway", undelegates),
   ]);
 }
 
@@ -210,7 +224,10 @@ async function _handleEventGatewayUnbondingEnd(event: CosmosEvent) {
     throw new Error(`[handleEventGatewayUnbondingEnd] gateway not found in event`);
   }
 
-  const gateway = await Gateway.get(gatewaySdk.address);
+  const [gateway, undelegates] = await Promise.all([
+    Gateway.get(gatewaySdk.address),
+    getUndelegatesForUnstakedGateway(gatewaySdk.address)
+  ]);
 
   if (!gateway) {
     throw new Error(`[handleEventGatewayUnbondingEnd] gateway not found for address ${gatewaySdk.address}`);
@@ -231,6 +248,7 @@ async function _handleEventGatewayUnbondingEnd(event: CosmosEvent) {
       eventId,
     }).save(),
     gateway.save(),
+    store.bulkRemove("ApplicationGateway", undelegates),
   ]);
 }
 

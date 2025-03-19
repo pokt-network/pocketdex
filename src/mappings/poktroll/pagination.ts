@@ -129,6 +129,19 @@ export async function fetchAllGatewayByUnstakingEndBlockId(blockId: bigint): Pro
   });
 }
 
+
+export async function fetchAllApplicationGatewayByGatewayId(gatewayId: string): Promise<ApplicationGateway[]> {
+  return fetchPaginatedRecords({
+    fetchFn: (options) => ApplicationGateway.getByGatewayId(gatewayId, options),
+    initialOptions: {
+      // add order and direction to speedup if there is a way
+      // orderBy: 'id', // Order results by ID
+      // orderDirection: 'ASC', // Ascending order
+    },
+  });
+}
+
+
 // relays
 
 export async function fetchAllEventClaimSettled(blockId: bigint): Promise<EventClaimSettled[]> {

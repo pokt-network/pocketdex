@@ -281,6 +281,7 @@ async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void>
 async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
   await Event.create({
     id: "genesis",
+    idx: 0,
     type: "genesis",
     attributes: [],
     blockId: getBlockId(block),
@@ -374,6 +375,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
 
     transactions.push({
       id: transactionHash,
+      idx: 0,
       blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
@@ -398,6 +400,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
 
     msgs.push({
       id: msgId,
+      idx: 0,
       typeUrl: "/poktroll.service.MsgAddService",
       json: stringify(msgAddService),
       blockId: getBlockId(block),
@@ -428,6 +431,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
     transactions.push({
       id: transactionHash,
+      idx: 0,
       blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
@@ -489,6 +493,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
 
     msgs.push({
       id: msgId,
+      idx: 0,
       typeUrl: "/poktroll.supplier.MsgStakeSupplier",
       json: stringify(msgStakeSupplier),
       blockId: getBlockId(block),
@@ -555,6 +560,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
 
     transactions.push({
       id: transactionHash,
+      idx: 0,
       blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
@@ -618,6 +624,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
 
     msgs.push({
       id: msgId,
+      idx: 0,
       typeUrl: "/poktroll.application.MsgStakeApplication",
       json: stringify(msgStakeApplication),
       blockId: getBlockId(block),
@@ -666,6 +673,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
 
     transactions.push({
       id: transactionHash,
+      idx: 0,
       blockId: getBlockId(block),
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
@@ -706,6 +714,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
 
     msgs.push({
       id: msgId,
+      idx: 0,
       typeUrl: "/poktroll.gateway.MsgStakeGateway",
       json: stringify(msgStakeGateway),
       blockId: getBlockId(block),
@@ -831,6 +840,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
 
         messages.push({
           id: validatorMsg.id,
+          idx: 0,
           typeUrl: type,
           json: stringify(genTx.body.messages[0]),
           blockId: getBlockId(block),
@@ -845,6 +855,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
 
     transactions.push({
       id: txHash,
+      idx: 0,
       blockId: getBlockId(block),
       signerAddress,
       gasUsed: BigInt(0),

@@ -11,6 +11,7 @@ function _handleMessage(msg: CosmosMessage): MessageProps {
   delete msg.msg?.decodedMsg?.wasmByteCode;
   return {
     id: messageId(msg),
+    idx: msg.idx,
     typeUrl: msg.msg.typeUrl,
     json: stringify(msg.msg.decodedMsg),
     transactionId: msg.tx.hash,

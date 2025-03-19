@@ -42,6 +42,7 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
 
   result.messages.push({
     id: authzExecId,
+    idx: msg.idx,
     typeUrl,
     json: stringify(msg.msg.decodedMsg),
     transactionId: msg.tx.hash,
@@ -85,6 +86,7 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
       // Create a primitive message entity for a sub-message
       result.messages.push({
         id: subMsgId,
+        idx: msg.idx,
         typeUrl,
         json: stringify(decodedMsg),
         transactionId: msg.tx.hash,

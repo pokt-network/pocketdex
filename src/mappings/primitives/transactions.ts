@@ -35,6 +35,7 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
 
   return {
     id: tx.hash,
+    idx: tx.idx,
     blockId: getBlockId(tx.block),
     gasUsed: tx.tx.gasUsed,
     gasWanted: tx.tx.gasWanted,
