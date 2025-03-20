@@ -42,7 +42,9 @@ import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId, getEventId, getRelayId, messageId } from "../utils/ids";
 import { parseJson, stringify } from "../utils/json";
 
-function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus {
+function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
+  if (!item) return undefined;
+
   switch (item) {
     case 0:
     case ClaimProofStatusSDKType.PENDING_VALIDATION:
@@ -149,7 +151,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     // @ts-ignore
     claimed: CoinSDKType = {},
     failureReason = '',
-    proofValidationStatus: ClaimProofStatus | null = null,
+    proofValidationStatus: ClaimProofStatus | undefined,
     settlementResult: ClaimSettlementResultSDKType | null = null,
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
@@ -574,11 +576,11 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
   let expectedBurn: Coin | null = null, effectiveBurn: Coin | null = null, applicationAddress = '', supplierAddress = '';
 
   for (const attribute of event.event.attributes) {
-    if (attribute.key === "application") {
+    if (attribute.key === "application_addr") {
       applicationAddress = (attribute.value as string).replaceAll('"', '');
     }
 
-    if (attribute.key === "supplier") {
+    if (attribute.key === "supplier_operator_addr") {
       supplierAddress = (attribute.value as string).replaceAll('"', '');
     }
 
@@ -592,6 +594,7 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
   }
 
   if (!applicationAddress) {
+    logger.info(`[handleEventApplicationOverserviced] attributes=${stringify(event.event.attributes, undefined, 2)}`);
     throw new Error(`[handleEventApplicationOverserviced] applicationAddress not found in event`);
   }
 
