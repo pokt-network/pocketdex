@@ -595,7 +595,6 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
   }
 
   if (!applicationAddress) {
-    logger.info(`[handleEventApplicationOverserviced] attributes=${stringify(event.event.attributes, undefined, 2)}`);
     throw new Error(`[handleEventApplicationOverserviced] applicationAddress not found in event`);
   }
 
