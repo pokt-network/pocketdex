@@ -42,6 +42,7 @@ import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId, getEventId, getRelayId, messageId } from "../utils/ids";
 import { parseJson, stringify } from "../utils/json";
 
+// this can return undefined because older events do not have this attribute
 function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
   if (!item) return undefined;
 
