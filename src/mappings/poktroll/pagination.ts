@@ -8,6 +8,7 @@ import {
   Supplier,
   SupplierServiceConfig,
   Transaction,
+  Validator,
 } from "../../types";
 import { fetchPaginatedRecords } from "../utils/db";
 
@@ -97,6 +98,19 @@ export async function fetchAllSupplierServiceConfigBySupplier(supplier: string):
 export async function fetchAllSupplierByUnstakingEndBlockId(blockId: bigint): Promise<Supplier[]> {
   return fetchPaginatedRecords({
     fetchFn: (options) => Supplier.getByUnstakingEndBlockId(blockId, options),
+    initialOptions: {
+      // add order and direction to speedup if there is a way
+      // orderBy: 'id', // Order results by ID
+      // orderDirection: 'ASC', // Ascending order
+    },
+  });
+}
+
+// validator
+
+export async function fetchAllValidatorByStatus(status: StakeStatus): Promise<Validator[]> {
+  return fetchPaginatedRecords({
+    fetchFn: (options) => Validator.getByStakeStatus(status, options),
     initialOptions: {
       // add order and direction to speedup if there is a way
       // orderBy: 'id', // Order results by ID

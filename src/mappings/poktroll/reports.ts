@@ -21,6 +21,7 @@ import {
   fetchAllSupplierByUnstakingEndBlockId,
   fetchAllSupplierServiceConfigBySupplier,
   fetchAllTransactions,
+  fetchAllValidatorByStatus,
 } from "./pagination";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
@@ -44,6 +45,8 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
     { unstakedApps, unstakedTokensByApp },
     { stakedGateways, stakedTokensByGateway },
     { unstakedGateways, unstakedTokensByGateway },
+    { stakedTokensByValidators, stakedValidators },
+    { unstakingTokensByValidators, unstakingValidators }
   ] = await Promise.all([
     getRelaysData(blockHeight),
     getTransactionsData(blockHeight),
@@ -56,6 +59,8 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
     getUnstakedAppsData(blockHeight),
     getStakedGatewaysData(),
     getUnstakedGatewaysData(blockHeight),
+    getStakedValidatorsData(),
+    getUnstakingValidatorsData(),
   ]);
 
   blockEntity.totalComputedUnits = computedUnits;
@@ -80,6 +85,10 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   blockEntity.stakedGatewaysTokens = stakedTokensByGateway;
   blockEntity.unstakedGateways = unstakedGateways;
   blockEntity.unstakedGatewaysTokens = unstakedTokensByGateway;
+  blockEntity.stakedValidators = stakedValidators;
+  blockEntity.stakedValidatorsTokens = stakedTokensByValidators;
+  blockEntity.unstakingValidators = unstakingValidators;
+  blockEntity.unstakingValidatorsTokens = unstakingTokensByValidators;
 
   await Promise.all([
     blockEntity.save(),
@@ -227,6 +236,26 @@ async function getUnstakingSuppliersData() {
   return {
     unstakingSuppliers: unstakingSuppliers.length,
     unstakingTokensBySupplier,
+  };
+}
+
+async function getStakedValidatorsData() {
+  const stakedValidators = await fetchAllValidatorByStatus(StakeStatus.Staked);
+  const stakedTokensByValidators = stakedValidators.reduce((acc, validator) => acc + BigInt(validator.stakeAmount), BigInt(0));
+
+  return {
+    stakedValidators: stakedValidators.length,
+    stakedTokensByValidators: stakedTokensByValidators,
+  };
+}
+
+async function getUnstakingValidatorsData() {
+  const unstakingValidators = await fetchAllValidatorByStatus(StakeStatus.Unstaking);
+  const unstakingTokensByValidators = unstakingValidators.reduce((acc, validator) => acc + BigInt(validator.stakeAmount), BigInt(0));
+
+  return {
+    unstakingValidators: unstakingValidators.length,
+    unstakingTokensByValidators,
   };
 }
 
