@@ -254,6 +254,10 @@ type Block @entity {
   stakedGatewaysTokens: BigInt
   unstakedGateways: Int
   unstakedGatewaysTokens: BigInt
+  stakedValidators: Int
+  stakedValidatorsTokens: BigInt
+  unstakingValidators: Int
+  unstakingValidatorsTokens: BigInt
 }
 
 # This handle all the information that is coming with the block but is not often used
