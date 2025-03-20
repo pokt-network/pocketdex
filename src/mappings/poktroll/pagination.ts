@@ -7,7 +7,8 @@ import {
   StakeStatus,
   Supplier,
   SupplierServiceConfig,
-  Transaction, Validator,
+  Transaction,
+  Validator,
 } from "../../types";
 import { fetchPaginatedRecords } from "../utils/db";
 

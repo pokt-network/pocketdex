@@ -20,7 +20,8 @@ import {
   fetchAllSupplierByStatus,
   fetchAllSupplierByUnstakingEndBlockId,
   fetchAllSupplierServiceConfigBySupplier,
-  fetchAllTransactions, fetchAllValidatorByStatus,
+  fetchAllTransactions,
+  fetchAllValidatorByStatus,
 } from "./pagination";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
