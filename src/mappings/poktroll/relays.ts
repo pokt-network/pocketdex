@@ -172,6 +172,10 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
       numRelays = BigInt(parseAttribute(attribute.value));
     }
 
+    if (attribute.key === "num_compute_units") {
+      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value));
+    }
+
     if (attribute.key === "num_claimed_compute_units") {
       numClaimedComputedUnits = BigInt(parseAttribute(attribute.value));
     }
