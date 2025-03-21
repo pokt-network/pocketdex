@@ -136,6 +136,7 @@ function parseAttribute(attribute: unknown): string {
     return (attribute as string).replaceAll("\"", "");
 }
 
+// eslint-disable-next-line complexity
 function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -172,6 +173,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
       numRelays = BigInt(parseAttribute(attribute.value));
     }
 
+    // in older versions this is the key to get the number of claimed compute units
     if (attribute.key === "num_compute_units") {
       numClaimedComputedUnits = BigInt(parseAttribute(attribute.value));
     }
