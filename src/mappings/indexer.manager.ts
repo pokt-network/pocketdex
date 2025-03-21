@@ -214,13 +214,7 @@ async function indexService(msgByType: MessageByType, eventByType: EventByType):
   ], {
     "/poktroll.service.MsgAddService": "service.id",
     "poktroll.service.EventRelayMiningDifficultyUpdated": (attributes) => {
-      for (const attribute of attributes) {
-        if (attribute.key === "service_id") {
-          return JSON.parse(attribute.value as string).service_id
-        }
-      }
-
-      return null
+      return attributes.find(({key}) => key === "service_id")?.value as string
     }
   })
 }
@@ -319,7 +313,6 @@ async function indexGateway(msgByType: MessageByType, eventByType: EventByType):
     "poktroll.gateway.EventGatewayUnstaked": getIdOfUnbondingEvents,
     "poktroll.gateway.EventGatewayUnbondingBegin": getIdOfUnbondingEvents,
     "poktroll.gateway.EventGatewayUnbondingEnd": getIdOfUnbondingEvents,
-
   })
 }
 
@@ -394,6 +387,8 @@ async function indexStakeEntity(data: Array<CosmosEvent | CosmosMessage>, getEnt
 
       if (!getEntityId) throw new Error(`getIdFromEventAttribute not found for event type ${datum.event.type}`)
       let entityId = getEntityId(datum.event.attributes)
+
+      if (!entityId) throw new Error(`entityId not found for event type ${datum.event.type}`)
 
       if (Array.isArray(entityId)) {
         entitiesUpdatedAtSameDatum.push(entityId)
@@ -516,6 +511,11 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
     "poktroll.supplier.EventSupplierUnbondingEnd": eventGetId,
     "poktroll.tokenomics.EventSupplierSlashed": (attributes) => {
       for (const attribute of attributes) {
+        // in the previous version of this event this is the key to get the supplierId
+        if (attribute.key === "supplier_operator_addr") {
+          return attribute.value as string
+        }
+
         if (attribute.key === "claim") {
           return JSON.parse(attribute.value as string).supplier_operator_address
         }

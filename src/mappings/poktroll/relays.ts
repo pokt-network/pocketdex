@@ -133,10 +133,12 @@ function getSettlementOpReasonFromSDK(item: typeof SettlementOpReasonSDKType | n
 }
 
 function parseAttribute(attribute: unknown): string {
-  return (attribute as string).replaceAll("\"", "");
+    return (attribute as string).replaceAll("\"", "");
 }
 
+// eslint-disable-next-line complexity
 function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
+
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
   let proof: ProofSDKType = {},
@@ -169,6 +171,11 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
 
     if (attribute.key === "num_relays") {
       numRelays = BigInt(parseAttribute(attribute.value));
+    }
+
+    // in older versions this is the key to get the number of claimed compute units
+    if (attribute.key === "num_compute_units") {
+      numClaimedComputedUnits = BigInt(parseAttribute(attribute.value));
     }
 
     if (attribute.key === "num_claimed_compute_units") {
@@ -578,11 +585,11 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "application_addr") {
-      applicationAddress = (attribute.value as string).replaceAll('"', '');
+      applicationAddress = parseAttribute(attribute.value)
     }
 
     if (attribute.key === "supplier_operator_addr") {
-      supplierAddress = (attribute.value as string).replaceAll('"', '');
+      supplierAddress = parseAttribute(attribute.value as string)
     }
 
     if (attribute.key === "expected_burn") {
@@ -668,6 +675,56 @@ function _handleEventApplicationReimbursementRequest(event: CosmosEvent): EventA
   }
 }
 
+async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
+  let slashingCoin: CoinSDKType | null = null, operatorAddress = '';
+
+  for (const attribute of event.event.attributes) {
+    if (attribute.key === "slashing_amount") {
+      slashingCoin = JSON.parse(attribute.value as string);
+    }
+
+    if (attribute.key === "supplier_operator_addr") {
+      operatorAddress = parseAttribute(attribute.value);
+    }
+  }
+
+  if (!slashingCoin) {
+    throw new Error(`[handleEventSupplierSlashed] slashingCoin not found in event`);
+  }
+
+  if (!operatorAddress) {
+    throw new Error(`[handleEventSupplierSlashed] operatorAddress not found in event`);
+  }
+
+  const supplier = await Supplier.get(operatorAddress)
+
+  if (!supplier) {
+    throw new Error(`[handleEventSupplierSlashed] supplier not found for operator address ${operatorAddress}`)
+  }
+
+  supplier.stakeAmount -= BigInt(slashingCoin.amount)
+
+  await Promise.all([
+    supplier.save(),
+    EventSupplierSlashed.create({
+      id: getEventId(event),
+      supplierId: operatorAddress,
+      blockId: getBlockId(event.block),
+      eventId: getEventId(event),
+      proofMissingPenalty: BigInt(slashingCoin.amount),
+      proofMissingPenaltyDenom: slashingCoin.denom,
+      previousStakeAmount: supplier.stakeAmount,
+      afterStakeAmount: supplier.stakeAmount,
+      // in alpha this event does not have the values below, so we are setting them to empty values for now
+      applicationId: '',
+      serviceId: '',
+      sessionId: '',
+      sessionStartHeight: BigInt(0),
+      sessionEndHeight: BigInt(0),
+    }).save(),
+  ])
+}
+
 async function _handleEventSupplierSlashed(event: CosmosEvent) {
   const {
     claim,
@@ -675,11 +732,15 @@ async function _handleEventSupplierSlashed(event: CosmosEvent) {
   } = getAttributes(event.event.attributes);
 
   if (!claim) {
-    throw new Error(`[handleEventSupplierSlashed] claim not found in event`);
+    logger.warn(`[handleEventSupplierSlashed] claim not found in event, trying to handle with previous version`);
+    await _handleOldEventSupplierSlashed(event)
+    return
   }
 
   if (!claim.session_header) {
-    throw new Error(`[handleEventSupplierSlashed] session_header not found in event`);
+    logger.warn(`[handleEventSupplierSlashed] session_header not found in event, trying to handle with previous version`);
+    await _handleOldEventSupplierSlashed(event)
+    return
   }
 
   const supplier = await Supplier.get(claim.supplier_operator_address)
