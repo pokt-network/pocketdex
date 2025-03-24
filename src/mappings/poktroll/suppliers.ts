@@ -317,7 +317,7 @@ async function _handleSupplierUnbondingEndEvent(
     //  but alpha has still events without this
     logger.error(`[handleSupplierUnbondingEndEvent] unbonding_end_height not found`);
   } else {
-    supplier.unstakingEndBlockId = BigInt((unbondingHeight as unknown as string).replaceAll("\"", ""));
+    supplier.unstakingEndBlockId = unbondingHeight
   }
 
   if (!reason) {
