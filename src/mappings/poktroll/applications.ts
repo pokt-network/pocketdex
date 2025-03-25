@@ -405,7 +405,7 @@ async function _handleApplicationUnbondingBeginEvent(
 ) {
   const msg = event.msg as CosmosMessage<MsgUnstakeApplication>;
 
-  let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason = 0;
+  let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason: number | null = null;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
@@ -429,7 +429,7 @@ async function _handleApplicationUnbondingBeginEvent(
     throw new Error(`[handleApplicationUnbondingBeginEvent] sessionEndHeight not found in event`);
   }
 
-  if (!reason) {
+  if (reason === null) {
     throw new Error(`[handleApplicationUnbondingBeginEvent] reason not found in event`);
   }
 
@@ -462,7 +462,7 @@ async function _handleApplicationUnbondingBeginEvent(
 async function _handleApplicationUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason = 0,
+  let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason: number | null = null,
     applicationSdk: ApplicationSDKType | undefined;
 
   for (const attribute of event.event.attributes) {
@@ -491,7 +491,7 @@ async function _handleApplicationUnbondingEndEvent(
     throw new Error(`[handleApplicationUnbondingEndEvent] sessionEndHeight not found in event`);
   }
 
-  if (!reason) {
+  if (reason === null) {
     throw new Error(`[handleApplicationUnbondingEndEvent] reason not found in event`);
   }
 

@@ -209,7 +209,7 @@ async function _handleSupplierUnbondingBeginEvent(
   "value":"\"55070\"","index":true
   },{"key":"mode","value":"EndBlock","index":true}]}
    */
-  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason = 0;
+  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason: null | number = null;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "supplier") {
@@ -252,7 +252,7 @@ async function _handleSupplierUnbondingBeginEvent(
     supplier.unstakingEndHeight = unbondingHeight
   }
 
-  if (!reason) {
+  if (reason === null) {
     // todo: we should do this -> throw new Error(`[handleSupplierUnbondingBeginEvent] reason not found in event`);
     //  but alpha has still events without this
     logger.error(`[handleSupplierUnbondingBeginEvent] reason not found in event`);
@@ -270,7 +270,7 @@ async function _handleSupplierUnbondingBeginEvent(
       sessionEndHeight: sessionEndHeight || BigInt(0),
       supplierId: operatorAddress,
       blockId: getBlockId(event.block),
-      reason: reason ? getSupplierUnbondingReasonFromSDK(reason) : SupplierUnbondingReason.UNSPECIFIED,
+      reason: reason !== null ? getSupplierUnbondingReasonFromSDK(reason) : SupplierUnbondingReason.UNSPECIFIED,
       eventId,
     }).save(),
   ]);
@@ -279,7 +279,7 @@ async function _handleSupplierUnbondingBeginEvent(
 async function _handleSupplierUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason = 0;
+  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason: null | number = null;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "supplier") {
@@ -320,7 +320,7 @@ async function _handleSupplierUnbondingEndEvent(
     supplier.unstakingEndBlockId = unbondingHeight
   }
 
-  if (!reason) {
+  if (reason === null) {
     // todo: we should do this -> throw new Error(`[handleSupplierUnbondingBeginEvent] reason not found in event`);
     //  but alpha has still events without this
     logger.error(`[handleSupplierUnbondingEndEvent] reason not found in event`);
@@ -339,7 +339,7 @@ async function _handleSupplierUnbondingEndEvent(
       id: eventId,
       unbondingEndHeight: unbondingHeight || BigInt(0),
       sessionEndHeight: sessionEndHeight || BigInt(0),
-      reason: reason ? getSupplierUnbondingReasonFromSDK(reason) : SupplierUnbondingReason.UNSPECIFIED,
+      reason: reason !== null ? getSupplierUnbondingReasonFromSDK(reason) : SupplierUnbondingReason.UNSPECIFIED,
       blockId: getBlockId(event.block),
       supplierId: supplierSdk.operator_address,
       eventId,
