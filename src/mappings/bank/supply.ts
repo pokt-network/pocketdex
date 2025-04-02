@@ -118,7 +118,7 @@ export async function handleSupply(block: CosmosBlock): Promise<void> {
     });
   }
 
-  // TODO: (@jorgecuesta) we should update supply handling with proper msg/event once it is implemented on poktroll
+  // TODO: (@jorgecuesta) we should update supply handling with proper msg/event once it is implemented on pocket
   const totalSupply = await queryTotalSupply();
 
   if (totalSupply.length === 0) {

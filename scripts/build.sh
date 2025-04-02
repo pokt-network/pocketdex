@@ -14,7 +14,7 @@ env CHAIN_ID=$CHAIN_ID ENDPOINT=$ENDPOINT yarn exec subql codegen # this is same
 # poktroll has some entities that use bigint as keys which is not supported in typescript so to avoid that issue
 # it will find and replace with a number instead.
 info_log "Applying proto-interfaces replace from 'key: bigint' to 'key: number' due to typescript issues."
-find ./src/types/proto-interfaces/poktroll -type f -name '*.ts' -exec sed -i 's/\[key: bigint\]/\[key: number\]/g' {} \;
+find ./src/types/proto-interfaces/pocket -type f -name '*.ts' -exec sed -i 's/\[key: bigint\]/\[key: number\]/g' {} \;
 
 if [ "$1" != "no-lint" ]
 then

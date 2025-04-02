@@ -5,7 +5,7 @@ import { AuthzExecProps } from "../../types/models/AuthzExec";
 import { AuthzMsgExecProps } from "../../types/models/AuthzMsgExec";
 import { MessageProps } from "../../types/models/Message";
 import { ParamProps } from "../../types/models/Param";
-import { _handleUpdateParam } from "../poktroll/params";
+import { _handleUpdateParam } from "../pocket/params";
 import { AuthzExecMsg } from "../types";
 import {
   getBlockId,

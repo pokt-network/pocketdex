@@ -38,14 +38,14 @@ import type { SupplierProps } from "../../types/models/Supplier";
 import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
 import type { TransactionProps } from "../../types/models/Transaction";
 import { ValidatorProps } from "../../types/models/Validator";
-import { MsgStakeApplication as MsgStakeApplicationType } from "../../types/proto-interfaces/poktroll/application/tx";
-import { MsgStakeGateway as MsgStakeGatewayType } from "../../types/proto-interfaces/poktroll/gateway/tx";
-import { MsgAddService as MsgAddServiceType } from "../../types/proto-interfaces/poktroll/service/tx";
+import { MsgStakeApplication as MsgStakeApplicationType } from "../../types/proto-interfaces/pocket/application/tx";
+import { MsgStakeGateway as MsgStakeGatewayType } from "../../types/proto-interfaces/pocket/gateway/tx";
+import { MsgAddService as MsgAddServiceType } from "../../types/proto-interfaces/pocket/service/tx";
 import {
   configOptionsFromJSON,
   rPCTypeFromJSON,
-} from "../../types/proto-interfaces/poktroll/shared/service";
-import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/poktroll/supplier/tx";
+} from "../../types/proto-interfaces/pocket/shared/service";
+import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/pocket/supplier/tx";
 import {
   EnforceAccountExistenceParams,
   enforceAccountsExists,
@@ -401,7 +401,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
     msgs.push({
       id: msgId,
       idx: 0,
-      typeUrl: "/poktroll.service.MsgAddService",
+      typeUrl: "/pocket.service.MsgAddService",
       json: stringify(msgAddService),
       blockId: getBlockId(block),
       transactionId: transactionHash,
@@ -494,7 +494,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
     msgs.push({
       id: msgId,
       idx: 0,
-      typeUrl: "/poktroll.supplier.MsgStakeSupplier",
+      typeUrl: "/pocket.supplier.MsgStakeSupplier",
       json: stringify(msgStakeSupplier),
       blockId: getBlockId(block),
       transactionId: transactionHash,
@@ -625,7 +625,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
     msgs.push({
       id: msgId,
       idx: 0,
-      typeUrl: "/poktroll.application.MsgStakeApplication",
+      typeUrl: "/pocket.application.MsgStakeApplication",
       json: stringify(msgStakeApplication),
       blockId: getBlockId(block),
       transactionId: transactionHash,
@@ -715,7 +715,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
     msgs.push({
       id: msgId,
       idx: 0,
-      typeUrl: "/poktroll.gateway.MsgStakeGateway",
+      typeUrl: "/pocket.gateway.MsgStakeGateway",
       json: stringify(msgStakeGateway),
       blockId: getBlockId(block),
       transactionId: transactionHash,

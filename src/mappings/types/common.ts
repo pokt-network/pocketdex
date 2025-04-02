@@ -3,23 +3,23 @@ import {
   CosmosMessage,
 } from "@subql/types-cosmos";
 import type { MsgCreateValidator } from "cosmjs-types/cosmos/staking/v1beta1/tx";
-import { MsgAddService } from "../../client/poktroll/service/tx";
+import { MsgAddService } from "../../client/pocket/service/tx";
 import {
   MsgDelegateToGateway,
   MsgStakeApplication,
   MsgTransferApplication,
   MsgUndelegateFromGateway,
   MsgUnstakeApplication,
-} from "../../types/proto-interfaces/poktroll/application/tx";
+} from "../../types/proto-interfaces/pocket/application/tx";
 import {
   MsgStakeGateway,
   MsgUnstakeGateway,
-} from "../../types/proto-interfaces/poktroll/gateway/tx";
+} from "../../types/proto-interfaces/pocket/gateway/tx";
 import {
   MsgCreateClaim,
   MsgSubmitProof,
-} from "../../types/proto-interfaces/poktroll/proof/tx";
-import { MsgUnstakeSupplier } from "../../types/proto-interfaces/poktroll/supplier/tx";
+} from "../../types/proto-interfaces/pocket/proof/tx";
+import { MsgUnstakeSupplier } from "../../types/proto-interfaces/pocket/supplier/tx";
 import {
   AuthzExecMsg,
   NativeTransferMsg,
@@ -38,21 +38,21 @@ export type MessageByType = Record<string, Array<CosmosMessage>> & {
   // params
   "/cosmos.authz.v1beta1.MsgExec": Array<CosmosMessage<AuthzExecMsg>>
   // application
-  "/poktroll.application.MsgStakeApplication": Array<CosmosMessage<MsgStakeApplication>>
-  "/poktroll.application.MsgDelegateToGateway": Array<CosmosMessage<MsgDelegateToGateway>>
-  "/poktroll.application.MsgUndelegateFromGateway": Array<CosmosMessage<MsgUndelegateFromGateway>>
-  "/poktroll.application.MsgUnstakeApplication": Array<CosmosMessage<MsgUnstakeApplication>>
-  "/poktroll.application.MsgTransferApplication": Array<CosmosMessage<MsgTransferApplication>>
+  "/pocket.application.MsgStakeApplication": Array<CosmosMessage<MsgStakeApplication>>
+  "/pocket.application.MsgDelegateToGateway": Array<CosmosMessage<MsgDelegateToGateway>>
+  "/pocket.application.MsgUndelegateFromGateway": Array<CosmosMessage<MsgUndelegateFromGateway>>
+  "/pocket.application.MsgUnstakeApplication": Array<CosmosMessage<MsgUnstakeApplication>>
+  "/pocket.application.MsgTransferApplication": Array<CosmosMessage<MsgTransferApplication>>
   // service
-  "/poktroll.service.MsgAddService": Array<CosmosMessage<MsgAddService>>
+  "/pocket.service.MsgAddService": Array<CosmosMessage<MsgAddService>>
   // supplier
-  "/poktroll.supplier.MsgUnstakeSupplier": Array<CosmosMessage<MsgUnstakeSupplier>>
+  "/pocket.supplier.MsgUnstakeSupplier": Array<CosmosMessage<MsgUnstakeSupplier>>
   // gateway
-  "/poktroll.gateway.MsgStakeGateway": Array<CosmosMessage<MsgStakeGateway>>
-  "/poktroll.gateway.MsgUnstakeGateway": Array<CosmosMessage<MsgUnstakeGateway>>
+  "/pocket.gateway.MsgStakeGateway": Array<CosmosMessage<MsgStakeGateway>>
+  "/pocket.gateway.MsgUnstakeGateway": Array<CosmosMessage<MsgUnstakeGateway>>
   // proof
-  "/poktroll.proof.MsgCreateClaim": Array<CosmosMessage<MsgCreateClaim>>
-  "/poktroll.proof.MsgSubmitProof": Array<CosmosMessage<MsgSubmitProof>>
+  "/pocket.proof.MsgCreateClaim": Array<CosmosMessage<MsgCreateClaim>>
+  "/pocket.proof.MsgSubmitProof": Array<CosmosMessage<MsgSubmitProof>>
 };
 
 // no mater the type the events are always the same structure.

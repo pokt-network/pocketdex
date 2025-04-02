@@ -5,8 +5,8 @@ import type {
   Coin,
   CoinSDKType,
 } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
-import type { GatewaySDKType } from "../../types/proto-interfaces/poktroll/gateway/types";
-import type { SupplierSDKType } from "../../types/proto-interfaces/poktroll/shared/supplier";
+import type { GatewaySDKType } from "../../types/proto-interfaces/pocket/gateway/types";
+import type { SupplierSDKType } from "../../types/proto-interfaces/pocket/shared/supplier";
 
 type Supplier = Omit<SupplierSDKType, "stake"> & { stake: Required<CoinSDKType> }
 type Params = Record<string, unknown>

@@ -68,9 +68,9 @@ const project: CosmosProject = {
       ],
       // --- Application
       [
-        "poktroll.application_tx",
+        "pocket.application_tx",
         {
-          file: "./proto/poktroll/application/tx.proto",
+          file: "./proto/pocket/application/tx.proto",
           messages: [
             "MsgUpdateParam",
             "MsgUpdateParams",
@@ -83,9 +83,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.application_events",
+        "pocket.application_events",
         {
-          file: "./proto/poktroll/application/event.proto",
+          file: "./proto/pocket/application/event.proto",
           messages: [
             "EventRedelegation",
             "EventTransferBegin",
@@ -99,9 +99,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.application_types",
+        "pocket.application_types",
         {
-          file: "./proto/poktroll/application/types.proto",
+          file: "./proto/pocket/application/types.proto",
           messages: [
             "Application",
             "UndelegatingGatewayList",
@@ -109,9 +109,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.application_params",
+        "pocket.application_params",
         {
-          file: "./proto/poktroll/application/params.proto",
+          file: "./proto/pocket/application/params.proto",
           messages: [
             "Params",
           ],
@@ -119,9 +119,9 @@ const project: CosmosProject = {
       ],
       // --- Gateway
       [
-        "poktroll.gateway_tx",
+        "pocket.gateway_tx",
         {
-          file: "./proto/poktroll/gateway/tx.proto",
+          file: "./proto/pocket/gateway/tx.proto",
           messages: [
             "MsgUpdateParams",
             "MsgStakeGateway",
@@ -130,16 +130,11 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.gateway_events",
+        "pocket.gateway_events",
         {
-          file: "./proto/poktroll/gateway/event.proto",
+          file: "./proto/pocket/gateway/event.proto",
           messages: [
             "EventGatewayStaked",
-            /*
-              TODO(@Alann27): remove this event when we are sure beta and alpha are using
-                EventGatewayUnbondingBegin, EventGatewayUnbondingEnd and EventGatewayUnbondingCanceled
-            */
-            "EventGatewayUnstaked",
             "EventGatewayUnbondingBegin",
             "EventGatewayUnbondingEnd",
             "EventGatewayUnbondingCanceled",
@@ -147,18 +142,18 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.gateway_types",
+        "pocket.gateway_types",
         {
-          file: "./proto/poktroll/gateway/types.proto",
+          file: "./proto/pocket/gateway/types.proto",
           messages: [
             "Gateway",
           ],
         },
       ],
       [
-        "poktroll.gateway_params",
+        "pocket.gateway_params",
         {
-          file: "./proto/poktroll/gateway/params.proto",
+          file: "./proto/pocket/gateway/params.proto",
           messages: [
             "Params",
           ],
@@ -166,9 +161,9 @@ const project: CosmosProject = {
       ],
       // --- Proof
       [
-        "poktroll.proof_tx",
+        "pocket.proof_tx",
         {
-          file: "./proto/poktroll/proof/tx.proto",
+          file: "./proto/pocket/proof/tx.proto",
           messages: [
             "MsgUpdateParams",
             "MsgUpdateParam",
@@ -178,9 +173,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.proof_events",
+        "pocket.proof_events",
         {
-          file: "./proto/poktroll/proof/event.proto",
+          file: "./proto/pocket/proof/event.proto",
           messages: [
             "EventClaimCreated",
             "EventClaimUpdated",
@@ -190,9 +185,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.proof_types",
+        "pocket.proof_types",
         {
-          file: "./proto/poktroll/proof/types.proto",
+          file: "./proto/pocket/proof/types.proto",
           messages: [
             "Proof",
             "Claim",
@@ -202,9 +197,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.proof_params",
+        "pocket.proof_params",
         {
-          file: "./proto/poktroll/proof/params.proto",
+          file: "./proto/pocket/proof/params.proto",
           messages: [
             "Params",
           ],
@@ -212,9 +207,9 @@ const project: CosmosProject = {
       ],
       // --- Service
       [
-        "poktroll.service_tx",
+        "pocket.service_tx",
         {
-          file: "./proto/poktroll/service/tx.proto",
+          file: "./proto/pocket/service/tx.proto",
           messages: [
             "MsgUpdateParams",
             "MsgAddService",
@@ -224,9 +219,9 @@ const project: CosmosProject = {
       [
         // TODO: We need this here?
         //  more does not hurt at this point, but we may want to clean it up in the future if not needed
-        "poktroll.service_relay",
+        "pocket.service_relay",
         {
-          file: "./proto/poktroll/service/relay.proto",
+          file: "./proto/pocket/service/relay.proto",
           messages: [
             "Relay",
             "RelayRequestMetadata",
@@ -237,9 +232,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.service_params",
+        "pocket.service_params",
         {
-          file: "./proto/poktroll/service/params.proto",
+          file: "./proto/pocket/service/params.proto",
           messages: [
             "Params",
           ],
@@ -247,18 +242,18 @@ const project: CosmosProject = {
       ],
       // --- Session
       [
-        "poktroll.session_tx",
+        "pocket.session_tx",
         {
-          file: "./proto/poktroll/session/tx.proto",
+          file: "./proto/pocket/session/tx.proto",
           messages: [
             "MsgUpdateParams",
           ],
         },
       ],
       [
-        "poktroll.session_types",
+        "pocket.session_types",
         {
-          file: "./proto/poktroll/session/types.proto",
+          file: "./proto/pocket/session/types.proto",
           messages: [
             "SessionHeader",
             "Session",
@@ -266,9 +261,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.session_params",
+        "pocket.session_params",
         {
-          file: "./proto/poktroll/session/params.proto",
+          file: "./proto/pocket/session/params.proto",
           messages: [
             "Params",
           ],
@@ -276,9 +271,9 @@ const project: CosmosProject = {
       ],
       // --- Shared
       [
-        "poktroll.shared_tx",
+        "pocket.shared_tx",
         {
-          file: "./proto/poktroll/shared/tx.proto",
+          file: "./proto/pocket/shared/tx.proto",
           messages: [
             "MsgUpdateParams",
             "MsgUpdateParam",
@@ -286,18 +281,18 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.shared_supplier",
+        "pocket.shared_supplier",
         {
-          file: "./proto/poktroll/shared/supplier.proto",
+          file: "./proto/pocket/shared/supplier.proto",
           messages: [
             "Supplier",
           ],
         },
       ],
       [
-        "poktroll.shared_service",
+        "pocket.shared_service",
         {
-          file: "./proto/poktroll/shared/service.proto",
+          file: "./proto/pocket/shared/service.proto",
           messages: [
             "Service",
             "ApplicationServiceConfig",
@@ -309,9 +304,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.shared_params",
+        "pocket.shared_params",
         {
-          file: "./proto/poktroll/shared/params.proto",
+          file: "./proto/pocket/shared/params.proto",
           messages: [
             "Params",
           ],
@@ -319,9 +314,9 @@ const project: CosmosProject = {
       ],
       // --- Supplier
       [
-        "poktroll.supplier_tx",
+        "pocket.supplier_tx",
         {
-          file: "./proto/poktroll/supplier/tx.proto",
+          file: "./proto/pocket/supplier/tx.proto",
           messages: [
             "MsgUpdateParams",
             "MsgStakeSupplier",
@@ -330,9 +325,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.supplier_events",
+        "pocket.supplier_events",
         {
-          file: "./proto/poktroll/supplier/event.proto",
+          file: "./proto/pocket/supplier/event.proto",
           messages: [
             "EventSupplierStaked",
             "EventSupplierUnbondingBegin",
@@ -341,9 +336,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.supplier_params",
+        "pocket.supplier_params",
         {
-          file: "./proto/poktroll/supplier/params.proto",
+          file: "./proto/pocket/supplier/params.proto",
           messages: [
             "Params",
           ],
@@ -351,9 +346,9 @@ const project: CosmosProject = {
       ],
       // --- Tokenomics
       [
-        "poktroll.tokenomics_tx",
+        "pocket.tokenomics_tx",
         {
-          file: "./proto/poktroll/tokenomics/tx.proto",
+          file: "./proto/pocket/tokenomics/tx.proto",
           messages: [
             "MsgUpdateParams",
             "MsgUpdateParam",
@@ -361,9 +356,9 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.tokenomics_events",
+        "pocket.tokenomics_events",
         {
-          file: "./proto/poktroll/tokenomics/event.proto",
+          file: "./proto/pocket/tokenomics/event.proto",
           messages: [
             "EventClaimExpired",
             "EventClaimSettled",
@@ -374,18 +369,18 @@ const project: CosmosProject = {
         },
       ],
       [
-        "poktroll.tokenomics_params",
+        "pocket.tokenomics_params",
         {
-          file: "./proto/poktroll/tokenomics/params.proto",
+          file: "./proto/pocket/tokenomics/params.proto",
           messages: [
             "Params",
           ],
         },
       ],
       [
-        "poktroll.tokenomics_relay_mining_difficulty",
+        "pocket.tokenomics_relay_mining_difficulty",
         {
-          file: "./proto/poktroll/service/relay_mining_difficulty.proto",
+          file: "./proto/pocket/service/relay_mining_difficulty.proto",
           messages: [
             "RelayMiningDifficulty",
           ],
