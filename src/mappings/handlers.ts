@@ -12,14 +12,14 @@ import {
   handleTransferApplicationMsg,
   handleUndelegateFromGatewayMsg,
   handleUnstakeApplicationMsg,
-} from "./poktroll/applications";
+} from "./pocket/applications";
 import {
   handleGatewayMsgStake,
   handleGatewayMsgUnstake,
   handleGatewayUnstakeEvent,
   handleEventGatewayUnbondingBegin,
   handleEventGatewayUnbondingEnd,
-} from "./poktroll/gateways";
+} from "./pocket/gateways";
 import {
   handleEventApplicationOverserviced,
   handleEventApplicationReimbursementRequest,
@@ -31,19 +31,19 @@ import {
   handleEventSupplierSlashed,
   handleMsgCreateClaim,
   handleMsgSubmitProof,
-} from "./poktroll/relays";
-import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./poktroll/services";
+} from "./pocket/relays";
+import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./pocket/services";
 import {
   handleSupplierStakeMsg,
   handleSupplierUnbondingBeginEvent,
   handleSupplierUnbondingEndEvent,
   handleUnstakeSupplierMsg,
-} from "./poktroll/suppliers";
+} from "./pocket/suppliers";
 import {
   handleValidatorCommission,
   handleValidatorMsgCreate,
   handleValidatorRewards,
-} from "./poktroll/validator";
+} from "./pocket/validator";
 
 const noOp = async function(): Promise<void> {
   await Promise.resolve();
@@ -63,22 +63,22 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   // params
   "/cosmos.authz.v1beta1.MsgExec": handleAuthzExec,
   // application
-  "/poktroll.application.MsgStakeApplication": handleAppMsgStake,
-  "/poktroll.application.MsgDelegateToGateway": handleDelegateToGatewayMsg,
-  "/poktroll.application.MsgUndelegateFromGateway": handleUndelegateFromGatewayMsg,
-  "/poktroll.application.MsgUnstakeApplication": handleUnstakeApplicationMsg,
-  "/poktroll.application.MsgTransferApplication": handleTransferApplicationMsg,
+  "/pocket.application.MsgStakeApplication": handleAppMsgStake,
+  "/pocket.application.MsgDelegateToGateway": handleDelegateToGatewayMsg,
+  "/pocket.application.MsgUndelegateFromGateway": handleUndelegateFromGatewayMsg,
+  "/pocket.application.MsgUnstakeApplication": handleUnstakeApplicationMsg,
+  "/pocket.application.MsgTransferApplication": handleTransferApplicationMsg,
   // service
-  "/poktroll.service.MsgAddService": handleMsgAddService,
+  "/pocket.service.MsgAddService": handleMsgAddService,
   // supplier
-  "/poktroll.supplier.MsgStakeSupplier": handleSupplierStakeMsg,
-  "/poktroll.supplier.MsgUnstakeSupplier": handleUnstakeSupplierMsg,
+  "/pocket.supplier.MsgStakeSupplier": handleSupplierStakeMsg,
+  "/pocket.supplier.MsgUnstakeSupplier": handleUnstakeSupplierMsg,
   // gateway
-  "/poktroll.gateway.MsgStakeGateway": handleGatewayMsgStake,
-  "/poktroll.gateway.MsgUnstakeGateway": handleGatewayMsgUnstake,
+  "/pocket.gateway.MsgStakeGateway": handleGatewayMsgStake,
+  "/pocket.gateway.MsgUnstakeGateway": handleGatewayMsgUnstake,
   // relays
-  "/poktroll.proof.MsgCreateClaim": handleMsgCreateClaim,
-  "/poktroll.proof.MsgSubmitProof": handleMsgSubmitProof,
+  "/pocket.proof.MsgCreateClaim": handleMsgCreateClaim,
+  "/pocket.proof.MsgSubmitProof": handleMsgSubmitProof,
 };
 
 export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promise<void>> = {
@@ -97,7 +97,7 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
       },
       {
         "key": "msg_type_url",
-        "value": "\"/poktroll.service.MsgUpdateParams\""
+        "value": "\"/pocket.service.MsgUpdateParams\""
       }
     ]
     "cosmos.authz.v1beta1.EventGrant": async () => Promise.resolve(),
@@ -118,29 +118,29 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   //  It happens when they trigger a manual withdrawal, moving rewards from the staking module to their balance.
   //  This is the moment where rewards are actually turned into spendable tokens.
   // application
-  "poktroll.application.EventTransferBegin": handleTransferApplicationBeginEvent,
-  "poktroll.application.EventTransferEnd": handleTransferApplicationEndEvent,
-  "poktroll.application.EventTransferError": handleTransferApplicationErrorEvent,
-  "poktroll.application.EventApplicationUnbondingBegin": handleApplicationUnbondingBeginEvent,
-  "poktroll.application.EventApplicationUnbondingEnd": handleApplicationUnbondingEndEvent,
+  "pocket.application.EventTransferBegin": handleTransferApplicationBeginEvent,
+  "pocket.application.EventTransferEnd": handleTransferApplicationEndEvent,
+  "pocket.application.EventTransferError": handleTransferApplicationErrorEvent,
+  "pocket.application.EventApplicationUnbondingBegin": handleApplicationUnbondingBeginEvent,
+  "pocket.application.EventApplicationUnbondingEnd": handleApplicationUnbondingEndEvent,
   // supplier
-  "poktroll.supplier.EventSupplierUnbondingBegin": handleSupplierUnbondingBeginEvent,
-  "poktroll.supplier.EventSupplierUnbondingEnd": handleSupplierUnbondingEndEvent,
+  "pocket.supplier.EventSupplierUnbondingBegin": handleSupplierUnbondingBeginEvent,
+  "pocket.supplier.EventSupplierUnbondingEnd": handleSupplierUnbondingEndEvent,
   // service
-  "poktroll.service.EventRelayMiningDifficultyUpdated": handleEventRelayMiningDifficultyUpdated,
+  "pocket.service.EventRelayMiningDifficultyUpdated": handleEventRelayMiningDifficultyUpdated,
   // gateway
-  "poktroll.gateway.EventGatewayUnstaked": handleGatewayUnstakeEvent,
-  "poktroll.gateway.EventGatewayUnbondingBegin": handleEventGatewayUnbondingBegin,
-  "poktroll.gateway.EventGatewayUnbondingEnd": handleEventGatewayUnbondingEnd,
+  "pocket.gateway.EventGatewayUnstaked": handleGatewayUnstakeEvent,
+  "pocket.gateway.EventGatewayUnbondingBegin": handleEventGatewayUnbondingBegin,
+  "pocket.gateway.EventGatewayUnbondingEnd": handleEventGatewayUnbondingEnd,
   // relay
-  "poktroll.tokenomics.EventClaimSettled": handleEventClaimSettled,
-  "poktroll.tokenomics.EventClaimExpired": handleEventClaimExpired,
-  "poktroll.tokenomics.EventSupplierSlashed": handleEventSupplierSlashed,
-  "poktroll.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
-  "poktroll.tokenomics.EventApplicationReimbursementRequest": handleEventApplicationReimbursementRequest,
-  "poktroll.proof.EventClaimUpdated": handleEventClaimUpdated,
-  "poktroll.proof.EventProofUpdated": handleEventProofUpdated,
-  "poktroll.proof.EventProofValidityChecked": handleEventProofValidityChecked,
+  "pocket.tokenomics.EventClaimSettled": handleEventClaimSettled,
+  "pocket.tokenomics.EventClaimExpired": handleEventClaimExpired,
+  "pocket.tokenomics.EventSupplierSlashed": handleEventSupplierSlashed,
+  "pocket.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
+  "pocket.tokenomics.EventApplicationReimbursementRequest": handleEventApplicationReimbursementRequest,
+  "pocket.proof.EventClaimUpdated": handleEventClaimUpdated,
+  "pocket.proof.EventProofUpdated": handleEventProofUpdated,
+  "pocket.proof.EventProofValidityChecked": handleEventProofValidityChecked,
   // todo: implement this one
   "mint": noOp,
   "coinbase": noOp,

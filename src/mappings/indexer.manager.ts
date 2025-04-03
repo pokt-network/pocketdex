@@ -23,7 +23,7 @@ import {
   EventHandlers,
   MsgHandlers,
 } from "./handlers";
-import { handleAddBlockReports } from "./poktroll/reports";
+import { handleAddBlockReports } from "./pocket/reports";
 import {
   handleBlock,
   handleEvents,
@@ -139,7 +139,7 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
 async function indexValidators(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
     "/cosmos.staking.v1beta1.MsgCreateValidator",
-    "/poktroll.proof.MsgSubmitProof",
+    "/pocket.proof.MsgSubmitProof",
   ];
   const eventTypes = [
     "rewards",
@@ -155,11 +155,11 @@ async function indexValidators(msgByType: MessageByType, eventByType: EventByTyp
 // any message or event related to relays
 async function indexRelays(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
-    "/poktroll.proof.MsgCreateClaim",
-    "/poktroll.proof.MsgSubmitProof",
+    "/pocket.proof.MsgCreateClaim",
+    "/pocket.proof.MsgSubmitProof",
   ];
   // {
-  // "type":"poktroll.tokenomics.EventClaimSettled",
+  // "type":"pocket.tokenomics.EventClaimSettled",
   // "attributes":[
   // {
   // "key":"claim",
@@ -177,13 +177,13 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
   // "index":true
   // }
   const eventTypes = [
-    "poktroll.tokenomics.EventClaimSettled",
-    "poktroll.tokenomics.EventClaimExpired",
-    "poktroll.proof.EventClaimUpdated",
-    "poktroll.proof.EventProofUpdated",
-    "poktroll.proof.EventProofValidityChecked",
-    "poktroll.tokenomics.EventApplicationOverserviced",
-    "poktroll.tokenomics.EventApplicationReimbursementRequest"
+    "pocket.tokenomics.EventClaimSettled",
+    "pocket.tokenomics.EventClaimExpired",
+    "pocket.proof.EventClaimUpdated",
+    "pocket.proof.EventProofUpdated",
+    "pocket.proof.EventProofValidityChecked",
+    "pocket.tokenomics.EventApplicationOverserviced",
+    "pocket.tokenomics.EventApplicationReimbursementRequest"
   ];
 
   await Promise.all([
@@ -202,18 +202,18 @@ async function indexParams(msgByType: MessageByType): Promise<void> {
 // any service msg or event
 async function indexService(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const eventTypes = [
-    "poktroll.service.EventRelayMiningDifficultyUpdated",
+    "pocket.service.EventRelayMiningDifficultyUpdated",
   ];
   const msgTypes = [
-    "/poktroll.service.MsgAddService",
+    "/pocket.service.MsgAddService",
   ];
 
   await indexStakeEntity([
     ...msgTypes.map(type => msgByType[type]).flat(),
     ...eventTypes.map(type => eventByType[type]).flat()
   ], {
-    "/poktroll.service.MsgAddService": "service.id",
-    "poktroll.service.EventRelayMiningDifficultyUpdated": (attributes) => {
+    "/pocket.service.MsgAddService": "service.id",
+    "pocket.service.EventRelayMiningDifficultyUpdated": (attributes) => {
       return attributes.find(({key}) => key === "service_id")?.value as string
     }
   })
@@ -222,18 +222,18 @@ async function indexService(msgByType: MessageByType, eventByType: EventByType):
 // any application msg or event
 async function indexApplications(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
-    "/poktroll.application.MsgDelegateToGateway",
-    "/poktroll.application.MsgUndelegateFromGateway",
-    "/poktroll.application.MsgUnstakeApplication",
-    "/poktroll.application.MsgStakeApplication",
-    "/poktroll.application.MsgTransferApplication",
+    "/pocket.application.MsgDelegateToGateway",
+    "/pocket.application.MsgUndelegateFromGateway",
+    "/pocket.application.MsgUnstakeApplication",
+    "/pocket.application.MsgStakeApplication",
+    "/pocket.application.MsgTransferApplication",
   ];
   const eventTypes = [
-    "poktroll.application.EventTransferBegin",
-    "poktroll.application.EventTransferEnd",
-    "poktroll.application.EventTransferError",
-    "poktroll.application.EventApplicationUnbondingBegin",
-    "poktroll.application.EventApplicationUnbondingEnd",
+    "pocket.application.EventTransferBegin",
+    "pocket.application.EventTransferEnd",
+    "pocket.application.EventTransferError",
+    "pocket.application.EventApplicationUnbondingBegin",
+    "pocket.application.EventApplicationUnbondingEnd",
   ];
 
   const getIdOfTransferEvents = (attributes: CosmosEvent['event']["attributes"]) => {
@@ -255,13 +255,13 @@ async function indexApplications(msgByType: MessageByType, eventByType: EventByT
     ...eventTypes.map(type => eventByType[type]).flat()
   ],
   {
-    "/poktroll.application.MsgDelegateToGateway": "appAddress",
-    "/poktroll.application.MsgUndelegateFromGateway": "appAddress",
-    "/poktroll.application.MsgUnstakeApplication": "address",
-    "/poktroll.application.MsgStakeApplication": "address",
-    "/poktroll.application.MsgTransferApplication": "sourceAddress",
-    "poktroll.application.EventTransferBegin": getIdOfTransferEvents,
-    "poktroll.application.EventTransferEnd": (attributes) => {
+    "/pocket.application.MsgDelegateToGateway": "appAddress",
+    "/pocket.application.MsgUndelegateFromGateway": "appAddress",
+    "/pocket.application.MsgUnstakeApplication": "address",
+    "/pocket.application.MsgStakeApplication": "address",
+    "/pocket.application.MsgTransferApplication": "sourceAddress",
+    "pocket.application.EventTransferBegin": getIdOfTransferEvents,
+    "pocket.application.EventTransferEnd": (attributes) => {
       // here we need to return two ids (id of the source and id of the destination app)
       // to group the data of those two apps
       const ids: Array<string> = []
@@ -277,22 +277,22 @@ async function indexApplications(msgByType: MessageByType, eventByType: EventByT
 
       return ids
     },
-    "poktroll.application.EventTransferError": getIdOfTransferEvents,
-    "poktroll.application.EventApplicationUnbondingBegin": getIdOfBondingEvents,
-    "poktroll.application.EventApplicationUnbondingEnd": getIdOfBondingEvents,
+    "pocket.application.EventTransferError": getIdOfTransferEvents,
+    "pocket.application.EventApplicationUnbondingBegin": getIdOfBondingEvents,
+    "pocket.application.EventApplicationUnbondingEnd": getIdOfBondingEvents,
   })
 }
 
 // any gateway msg or event
 async function indexGateway(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
-    "/poktroll.gateway.MsgUnstakeGateway",
-    "/poktroll.gateway.MsgStakeGateway",
+    "/pocket.gateway.MsgUnstakeGateway",
+    "/pocket.gateway.MsgStakeGateway",
   ];
   const eventTypes = [
-    "poktroll.gateway.EventGatewayUnstaked",
-    "poktroll.gateway.EventGatewayUnbondingBegin",
-    "poktroll.gateway.EventGatewayUnbondingEnd",
+    "pocket.gateway.EventGatewayUnstaked",
+    "pocket.gateway.EventGatewayUnbondingBegin",
+    "pocket.gateway.EventGatewayUnbondingEnd",
   ];
 
   const getIdOfUnbondingEvents = (attributes: CosmosEvent["event"]["attributes"]) => {
@@ -308,11 +308,11 @@ async function indexGateway(msgByType: MessageByType, eventByType: EventByType):
     ...eventTypes.map(type => eventByType[type]).flat()
   ],
   {
-    "/poktroll.gateway.MsgStakeGateway": "address",
-    "/poktroll.gateway.MsgUnstakeGateway": "address",
-    "poktroll.gateway.EventGatewayUnstaked": getIdOfUnbondingEvents,
-    "poktroll.gateway.EventGatewayUnbondingBegin": getIdOfUnbondingEvents,
-    "poktroll.gateway.EventGatewayUnbondingEnd": getIdOfUnbondingEvents,
+    "/pocket.gateway.MsgStakeGateway": "address",
+    "/pocket.gateway.MsgUnstakeGateway": "address",
+    "pocket.gateway.EventGatewayUnstaked": getIdOfUnbondingEvents,
+    "pocket.gateway.EventGatewayUnbondingBegin": getIdOfUnbondingEvents,
+    "pocket.gateway.EventGatewayUnbondingEnd": getIdOfUnbondingEvents,
   })
 }
 
@@ -479,14 +479,14 @@ async function indexStakeEntity(data: Array<CosmosEvent | CosmosMessage>, getEnt
 // any supplier msg or event
 async function indexSupplier(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
-    "/poktroll.supplier.MsgUnstakeSupplier",
-    "/poktroll.supplier.MsgStakeSupplier",
+    "/pocket.supplier.MsgUnstakeSupplier",
+    "/pocket.supplier.MsgStakeSupplier",
   ];
   const eventTypes = [
-    "poktroll.supplier.EventSupplierUnbondingBegin",
-    "poktroll.supplier.EventSupplierUnbondingEnd",
+    "pocket.supplier.EventSupplierUnbondingBegin",
+    "pocket.supplier.EventSupplierUnbondingEnd",
     // this is here because it modifies the staked tokens of the supplier
-    "poktroll.tokenomics.EventSupplierSlashed"
+    "pocket.tokenomics.EventSupplierSlashed"
   ];
 
 
@@ -505,11 +505,11 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
       ...eventTypes.map(type => eventByType[type]).flat()
     ],
   {
-    "/poktroll.supplier.MsgUnstakeSupplier": "operatorAddress",
-    "/poktroll.supplier.MsgStakeSupplier": "operatorAddress",
-    "poktroll.supplier.EventSupplierUnbondingBegin": eventGetId,
-    "poktroll.supplier.EventSupplierUnbondingEnd": eventGetId,
-    "poktroll.tokenomics.EventSupplierSlashed": (attributes) => {
+    "/pocket.supplier.MsgUnstakeSupplier": "operatorAddress",
+    "/pocket.supplier.MsgStakeSupplier": "operatorAddress",
+    "pocket.supplier.EventSupplierUnbondingBegin": eventGetId,
+    "pocket.supplier.EventSupplierUnbondingEnd": eventGetId,
+    "pocket.tokenomics.EventSupplierSlashed": (attributes) => {
       for (const attribute of attributes) {
         // in the previous version of this event this is the key to get the supplierId
         if (attribute.key === "supplier_operator_addr") {
