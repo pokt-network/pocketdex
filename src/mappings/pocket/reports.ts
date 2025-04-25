@@ -209,10 +209,10 @@ async function getStakedSuppliersData() {
           tokens: BigInt(0),
           amount: 0,
         };
-      } else {
-        stakedSuppliersByServiceMap[serviceId].tokens += supplier.stakeAmount;
-        stakedSuppliersByServiceMap[serviceId].amount += 1;
       }
+
+      stakedSuppliersByServiceMap[serviceId].tokens += supplier.stakeAmount;
+      stakedSuppliersByServiceMap[serviceId].amount += 1;
     }
   }
 
@@ -307,10 +307,10 @@ async function getStakedAppsData() {
           tokens: BigInt(0),
           amount: 0,
         };
-      } else {
-        stakedAppsByServiceMap[serviceId].tokens += app.stakeAmount;
-        stakedAppsByServiceMap[serviceId].amount += 1;
       }
+
+      stakedAppsByServiceMap[serviceId].tokens += app.stakeAmount;
+      stakedAppsByServiceMap[serviceId].amount += 1;
     }
   }
 

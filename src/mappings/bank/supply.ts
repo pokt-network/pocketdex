@@ -12,6 +12,7 @@ import { BlockSupplyProps } from "../../types/models/BlockSupply";
 import { fetchPaginatedRecords } from "../utils/db";
 import { getBlockId } from "../utils/ids";
 import { stringify } from "../utils/json";
+import getQueryClient from "../utils/query_client";
 
 export const getSupplyId = function(denom: string, height: number): string {
   return `${denom}@${height}`;
@@ -25,7 +26,7 @@ export const getSupplyRecord = function(supply: Coin, block: CosmosBlock): Suppl
   });
 };
 
-export async function queryTotalSupply(): Promise<Coin[]> {
+export async function queryTotalSupply(block: CosmosBlock): Promise<Coin[]> {
   logger.debug(`[handleSupply] querying total supply`);
   const finalSupply: Coin[] = [];
   let paginationKey: Uint8Array | undefined;
@@ -35,7 +36,7 @@ export async function queryTotalSupply(): Promise<Coin[]> {
   // To avoid this, we need to move to implement our own rpc client and also use `unsafe` parameter which I prefer to avoid.
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  const queryClient = api.forceGetQueryClient();
+  const queryClient = getQueryClient(block.header.height);
 
   // Initial call to get the first set of results
   const initialResponse: QueryTotalSupplyResponse = await queryClient.bank.totalSupply() as unknown as QueryTotalSupplyResponse;
@@ -69,57 +70,48 @@ export async function fetchAllSupplyDenom(): Promise<SupplyDenom[]> {
 
 // handleSupply, referenced in project.ts, handles supply information from block
 export async function handleSupply(block: CosmosBlock): Promise<void> {
-  const supplyDenoms = await fetchAllSupplyDenom();
+  const [supplyDenoms, totalSupply] = await Promise.all([
+    fetchAllSupplyDenom(),
+    // TODO: (@jorgecuesta) we should update supply handling with proper msg/event once it is implemented on pocket
+    queryTotalSupply(block)
+  ]);
+
+  const denominationsSaved = supplyDenoms.map(supplyDenom => supplyDenom.id)
+
+  // here we need to create the denoms that are not saved in the database
+  if (totalSupply.some(supply => !denominationsSaved.includes(supply.denom))) {
+    const supplyDenomsToSave = totalSupply.filter(supply => !denominationsSaved.includes(supply.denom)).map(supply => SupplyDenom.create({id: supply.denom}));
+
+    await store.bulkCreate(
+      "SupplyDenom",
+      supplyDenomsToSave
+    );
+
+    supplyDenoms.push(...supplyDenomsToSave);
+  }
+
   const supplyIdHeight = block.header.height === 1 ? block.header.height : block.header.height - 1;
 
   const blockSuppliesMap: Map<string, BlockSupplyProps> = new Map();
 
-  if (supplyDenoms.length === 0) {
-    // if this happens is because we may start in a higher block than genesis.
-    // note: we may need to evaluate genesis in more than just block == genesis.block
-    //  like, for example, check if we already have a genesis parsed.
-    const supplyDenom = SupplyDenom.create({ id: "upokt" });
-    await supplyDenom.save();
-    supplyDenoms.push(supplyDenom);
+  for (const supplyDenom of supplyDenoms) {
+    const blockSupply = await BlockSupply.get(
+      getSupplyId(supplyDenom.id, supplyIdHeight),
+    );
+
+    const blockSupplyId = getSupplyId(supplyDenom.id, block.header.height);
+
+    // normally this should not be null,
+    // but if you start syncing from a greater height than genesis, probably will not exist
+    const supplyId = blockSupply ? blockSupply.supplyId : blockSupplyId;
+
+    const blockSupplyProps = {
+      id: blockSupplyId,
+      blockId: getBlockId(block),
+      supplyId,
+    };
+    blockSuppliesMap.set(blockSupplyId, blockSupplyProps);
   }
-
-  if (block.header.height > 1) {
-    // on any block after genesis, we need to look up for the previous BlockSupply to copy the supply id of the
-    // right one; then the claim/proof settlement or ibc txs will update to the right supply id if a new one
-    // is created for this denom@block
-    for (const supplyDenom of supplyDenoms) {
-      const blockSupply = await BlockSupply.get(
-        getSupplyId(supplyDenom.id, supplyIdHeight),
-      );
-
-      const blockSupplyId = getSupplyId(supplyDenom.id, block.header.height);
-
-      // normally this should not be null,
-      // but if you start syncing from a greater height than genesis, probably will not exist
-      const supplyId = blockSupply ? blockSupply.supplyId : blockSupplyId;
-
-      const blockSupplyProps = {
-        id: blockSupplyId,
-        blockId: getBlockId(block),
-        supplyId,
-      };
-      blockSuppliesMap.set(blockSupplyId, blockSupplyProps);
-    }
-  } else {
-    // create a base record for each supply denomination because is the first block.
-    supplyDenoms.forEach((supplyDenom) => {
-      const blockSupplyId = getSupplyId(supplyDenom.id, block.header.height);
-      const blockSupplyProps = {
-        id: blockSupplyId,
-        blockId: getBlockId(block),
-        supplyId: getSupplyId(supplyDenom.id, supplyIdHeight),
-      };
-      blockSuppliesMap.set(blockSupplyId, blockSupplyProps);
-    });
-  }
-
-  // TODO: (@jorgecuesta) we should update supply handling with proper msg/event once it is implemented on pocket
-  const totalSupply = await queryTotalSupply();
 
   if (totalSupply.length === 0) {
     throw new Error(`[handleSupply]: query.totalSupply returned 0 records, block.header.height=${block.header.height}`);

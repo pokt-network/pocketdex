@@ -187,7 +187,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
 }
 
 async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
-  const moduleAccounts = await queryModuleAccounts();
+  const moduleAccounts = await queryModuleAccounts(block);
 
   const accounts: Array<EnforceAccountExistenceParams> = [];
   // const mAccounts: Array<ModuleAccountProps> = [];
