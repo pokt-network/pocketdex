@@ -9,6 +9,7 @@ import {
   getBlockId,
 } from "../utils/ids";
 import { stringify } from "../utils/json";
+import getQueryClient from "../utils/query_client";
 import { enforceAccountsExists } from "./balanceChange";
 
 export type ExtendedAccount = ModuleAccount & {
@@ -25,7 +26,7 @@ export function getModuleAccountProps(account: ModuleAccount): ModuleAccountProp
   };
 }
 
-export async function queryModuleAccounts(): Promise<Array<ExtendedAccount>> {
+export async function queryModuleAccounts(block: CosmosBlock): Promise<Array<ExtendedAccount>> {
   // Here we force the use of a private property, breaking TypeScript limitation, due to the need of call a total supply
   // rpc query of @cosmjs that is not exposed on the implemented client by SubQuery team.
   // To avoid this, we need to move to implement our own rpc client and also use `unsafe` parameter which I prefer to avoid.
@@ -33,7 +34,7 @@ export async function queryModuleAccounts(): Promise<Array<ExtendedAccount>> {
   // In this opportunity this moduleAccounts() function is only existent over a fork made by pokt-scan/cosmjs to include this.
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  const queryClient = api.forceGetQueryClient();
+  const queryClient = getQueryClient(block.header.height);
 
   const accounts = await queryClient.auth.moduleAccounts() as Array<Any>;
 
@@ -60,7 +61,7 @@ export async function queryModuleAccounts(): Promise<Array<ExtendedAccount>> {
 export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<string>> {
   const blockId = getBlockId(block);
   const moduleAccountsSet: Set<string> = new Set();
-  const moduleAccounts = await queryModuleAccounts();
+  const moduleAccounts = await queryModuleAccounts(block);
   const accounts = [];
 
   for (const moduleAccount of moduleAccounts) {
