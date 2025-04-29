@@ -6,6 +6,7 @@ import {
   handleApplicationUnbondingEndEvent,
   handleAppMsgStake,
   handleDelegateToGatewayMsg,
+  handleMsgClaimMorseApplication,
   handleTransferApplicationBeginEvent,
   handleTransferApplicationEndEvent,
   handleTransferApplicationErrorEvent,
@@ -20,6 +21,7 @@ import {
   handleEventGatewayUnbondingBegin,
   handleEventGatewayUnbondingEnd,
 } from "./pocket/gateways";
+import { handleMsgClaimMorseAccount } from "./pocket/migration";
 import {
   handleEventApplicationOverserviced,
   handleEventApplicationReimbursementRequest,
@@ -34,6 +36,7 @@ import {
 } from "./pocket/relays";
 import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./pocket/services";
 import {
+  handleMsgClaimMorseSupplier,
   handleSupplierStakeMsg,
   handleSupplierUnbondingBeginEvent,
   handleSupplierUnbondingEndEvent,
@@ -56,6 +59,7 @@ export enum ByTxStatus {
 }
 
 export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Promise<void>> = {
+  "/pocket.migration.MsgClaimMorseAccount": handleMsgClaimMorseAccount,
   // bank
   "/cosmos.bank.v1beta1.MsgSend": handleNativeTransfer,
   // validator
@@ -64,6 +68,7 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   "/cosmos.authz.v1beta1.MsgExec": handleAuthzExec,
   // application
   "/pocket.application.MsgStakeApplication": handleAppMsgStake,
+  "/pocket.migration.MsgClaimMorseApplication": handleMsgClaimMorseApplication,
   "/pocket.application.MsgDelegateToGateway": handleDelegateToGatewayMsg,
   "/pocket.application.MsgUndelegateFromGateway": handleUndelegateFromGatewayMsg,
   "/pocket.application.MsgUnstakeApplication": handleUnstakeApplicationMsg,
@@ -72,6 +77,7 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   "/pocket.service.MsgAddService": handleMsgAddService,
   // supplier
   "/pocket.supplier.MsgStakeSupplier": handleSupplierStakeMsg,
+  "/pocket.migration.MsgClaimMorseSupplier": handleMsgClaimMorseSupplier,
   "/pocket.supplier.MsgUnstakeSupplier": handleUnstakeSupplierMsg,
   // gateway
   "/pocket.gateway.MsgStakeGateway": handleGatewayMsgStake,

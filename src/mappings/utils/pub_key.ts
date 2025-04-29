@@ -70,6 +70,7 @@ export function base64PubKeyToAddress(type: string, base64PubKey: string, prefix
   return pubKeyToRawAddress(type, fromBase64(base64PubKey), prefix);
 }
 
-export function pubKeyToAddress(type: string, pubKey: Uint8Array, prefix?: string): string {
-  return pubKeyToRawAddress(type, pubKey, prefix);
+export function pubKeyToAddress(type: string, pubKey: Uint8Array, prefix?: string, toLowerCase?: boolean): string {
+  const address = pubKeyToRawAddress(type, pubKey, prefix)
+  return toLowerCase ? address.toLowerCase() : address
 }

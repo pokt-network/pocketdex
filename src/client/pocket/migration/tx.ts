@@ -34,14 +34,14 @@ export interface MsgUpdateParamsResponse {
 export interface MsgImportMorseClaimableAccounts {
   /** authority is the address that controls the module (defaults to x/gov unless overwritten). */
   authority: string;
-  /** the account state derived from the Morse state export and the `pocketd migrate collect-morse-accounts` command. */
+  /** the account state derived from the Morse state export and the `pocketd tx migration collect-morse-accounts` command. */
   morseAccountState:
     | MorseAccountState
     | undefined;
   /**
    * Additional documentation:
    * - pocket util export-genesis-for-migration --help
-   * - pocketd migrate collect-morse-accounts --help
+   * - pocketd tx migration collect-morse-accounts --help
    */
   morseAccountStateHash: Uint8Array;
 }
@@ -67,13 +67,17 @@ export interface MsgImportMorseClaimableAccountsResponse {
  * - Authz grants MAY be used to delegate claiming authority to other Shannon accounts
  */
 export interface MsgClaimMorseAccount {
+  /**
+   * The bech32-encoded address of the Shannon account which is signing for this message.
+   * This account is liable for any fees incurred by violating the constraints of Morse
+   * account/actor claim message fee waiving; the tx contains ONE OR MORE Morse account/actor
+   * claim messages AND has EXACTLY ONE signer.
+   */
+  shannonSigningAddress: string;
   /** The bech32-encoded address of the Shannon account to which the claimed balance will be minted. */
   shannonDestAddress: string;
-  /**
-   * The hex-encoded address of the Morse account whose balance will be claimed.
-   * E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
-   */
-  morseSrcAddress: string;
+  /** The ed25519 public key of the morse account with morse_src_address. */
+  morsePublicKey: Uint8Array;
   /**
    * The hex-encoded signature, by the Morse account, of this message (where this field is nil).
    * I.e.: morse_signature = private_key.sign(marshal(MsgClaimMorseAccount{morse_signature: nil, ...}))
@@ -108,11 +112,19 @@ export interface MsgClaimMorseAccountResponse {
  */
 export interface MsgClaimMorseApplication {
   /**
+   * The bech32-encoded address of the Shannon account which is signing for this message.
+   * This account is liable for any fees incurred by violating the constraints of Morse
+   * account/actor claim message fee waiving; the tx contains ONE OR MORE Morse account/actor
+   * claim messages AND has EXACTLY ONE signer.
+   */
+  shannonSigningAddress: string;
+  /**
    * The bech32-encoded address of the Shannon account to which the claimed tokens
    * will be minted and from which the application will be staked.
    */
   shannonDestAddress: string;
-  morseSrcAddress: string;
+  /** The ed25519 public key of the morse account with morse_src_address. */
+  morsePublicKey: Uint8Array;
   /**
    * The hex-encoded signature, by the Morse account, of this message (where this field is nil).
    * I.e.: morse_signature = private_key.sign(marshal(MsgClaimMorseAccount{morse_signature: nil, ...}))
@@ -163,6 +175,13 @@ export interface MsgClaimMorseApplicationResponse {
  */
 export interface MsgClaimMorseSupplier {
   /**
+   * The bech32-encoded address of the Shannon account which is signing for this message.
+   * This account is liable for any fees incurred by violating the constraints of Morse
+   * account/actor claim message fee waiving; the tx contains ONE OR MORE Morse account/actor
+   * claim messages AND has EXACTLY ONE signer.
+   */
+  shannonSigningAddress: string;
+  /**
    * The bech32-encoded address of the Shannon account to which the claimed tokens
    * will be minted and which become the supplier owner.
    * See: https://dev.poktroll.com/operate/configs/supplier_staking_config#staking-types.
@@ -174,13 +193,8 @@ export interface MsgClaimMorseSupplier {
    * See: https://dev.poktroll.com/operate/configs/supplier_staking_config#staking-types.
    */
   shannonOperatorAddress: string;
-  /**
-   * The hex-encoded address of the Morse account whose balance will be claimed.
-   * E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
-   *
-   * TODO_MAINNET(@bryanchriswhite, #1126): Rename to `morse_src_owner_address`.
-   */
-  morseSrcAddress: string;
+  /** The ed25519 public key of the morse account with morse_src_address. */
+  morsePublicKey: Uint8Array;
   /**
    * The hex-encoded signature, by the Morse account, of this message (where this field is nil).
    * I.e.: morse_signature = private_key.sign(marshal(MsgClaimMorseAccount{morse_signature: nil, ...}))
@@ -519,16 +533,24 @@ export const MsgImportMorseClaimableAccountsResponse: MessageFns<MsgImportMorseC
 };
 
 function createBaseMsgClaimMorseAccount(): MsgClaimMorseAccount {
-  return { shannonDestAddress: "", morseSrcAddress: "", morseSignature: new Uint8Array(0) };
+  return {
+    shannonSigningAddress: "",
+    shannonDestAddress: "",
+    morsePublicKey: new Uint8Array(0),
+    morseSignature: new Uint8Array(0),
+  };
 }
 
 export const MsgClaimMorseAccount: MessageFns<MsgClaimMorseAccount> = {
   encode(message: MsgClaimMorseAccount, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.shannonSigningAddress !== "") {
+      writer.uint32(34).string(message.shannonSigningAddress);
+    }
     if (message.shannonDestAddress !== "") {
       writer.uint32(10).string(message.shannonDestAddress);
     }
-    if (message.morseSrcAddress !== "") {
-      writer.uint32(18).string(message.morseSrcAddress);
+    if (message.morsePublicKey.length !== 0) {
+      writer.uint32(42).bytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       writer.uint32(26).bytes(message.morseSignature);
@@ -543,6 +565,14 @@ export const MsgClaimMorseAccount: MessageFns<MsgClaimMorseAccount> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.shannonSigningAddress = reader.string();
+          continue;
+        }
         case 1: {
           if (tag !== 10) {
             break;
@@ -551,12 +581,12 @@ export const MsgClaimMorseAccount: MessageFns<MsgClaimMorseAccount> = {
           message.shannonDestAddress = reader.string();
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
+        case 5: {
+          if (tag !== 42) {
             break;
           }
 
-          message.morseSrcAddress = reader.string();
+          message.morsePublicKey = reader.bytes();
           continue;
         }
         case 3: {
@@ -578,19 +608,23 @@ export const MsgClaimMorseAccount: MessageFns<MsgClaimMorseAccount> = {
 
   fromJSON(object: any): MsgClaimMorseAccount {
     return {
+      shannonSigningAddress: isSet(object.shannonSigningAddress) ? globalThis.String(object.shannonSigningAddress) : "",
       shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
-      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+      morsePublicKey: isSet(object.morsePublicKey) ? bytesFromBase64(object.morsePublicKey) : new Uint8Array(0),
       morseSignature: isSet(object.morseSignature) ? bytesFromBase64(object.morseSignature) : new Uint8Array(0),
     };
   },
 
   toJSON(message: MsgClaimMorseAccount): unknown {
     const obj: any = {};
+    if (message.shannonSigningAddress !== "") {
+      obj.shannonSigningAddress = message.shannonSigningAddress;
+    }
     if (message.shannonDestAddress !== "") {
       obj.shannonDestAddress = message.shannonDestAddress;
     }
-    if (message.morseSrcAddress !== "") {
-      obj.morseSrcAddress = message.morseSrcAddress;
+    if (message.morsePublicKey.length !== 0) {
+      obj.morsePublicKey = base64FromBytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       obj.morseSignature = base64FromBytes(message.morseSignature);
@@ -603,8 +637,9 @@ export const MsgClaimMorseAccount: MessageFns<MsgClaimMorseAccount> = {
   },
   fromPartial<I extends Exact<DeepPartial<MsgClaimMorseAccount>, I>>(object: I): MsgClaimMorseAccount {
     const message = createBaseMsgClaimMorseAccount();
+    message.shannonSigningAddress = object.shannonSigningAddress ?? "";
     message.shannonDestAddress = object.shannonDestAddress ?? "";
-    message.morseSrcAddress = object.morseSrcAddress ?? "";
+    message.morsePublicKey = object.morsePublicKey ?? new Uint8Array(0);
     message.morseSignature = object.morseSignature ?? new Uint8Array(0);
     return message;
   },
@@ -705,16 +740,25 @@ export const MsgClaimMorseAccountResponse: MessageFns<MsgClaimMorseAccountRespon
 };
 
 function createBaseMsgClaimMorseApplication(): MsgClaimMorseApplication {
-  return { shannonDestAddress: "", morseSrcAddress: "", morseSignature: new Uint8Array(0), serviceConfig: undefined };
+  return {
+    shannonSigningAddress: "",
+    shannonDestAddress: "",
+    morsePublicKey: new Uint8Array(0),
+    morseSignature: new Uint8Array(0),
+    serviceConfig: undefined,
+  };
 }
 
 export const MsgClaimMorseApplication: MessageFns<MsgClaimMorseApplication> = {
   encode(message: MsgClaimMorseApplication, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.shannonSigningAddress !== "") {
+      writer.uint32(42).string(message.shannonSigningAddress);
+    }
     if (message.shannonDestAddress !== "") {
       writer.uint32(10).string(message.shannonDestAddress);
     }
-    if (message.morseSrcAddress !== "") {
-      writer.uint32(18).string(message.morseSrcAddress);
+    if (message.morsePublicKey.length !== 0) {
+      writer.uint32(50).bytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       writer.uint32(26).bytes(message.morseSignature);
@@ -732,6 +776,14 @@ export const MsgClaimMorseApplication: MessageFns<MsgClaimMorseApplication> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.shannonSigningAddress = reader.string();
+          continue;
+        }
         case 1: {
           if (tag !== 10) {
             break;
@@ -740,12 +792,12 @@ export const MsgClaimMorseApplication: MessageFns<MsgClaimMorseApplication> = {
           message.shannonDestAddress = reader.string();
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
+        case 6: {
+          if (tag !== 50) {
             break;
           }
 
-          message.morseSrcAddress = reader.string();
+          message.morsePublicKey = reader.bytes();
           continue;
         }
         case 3: {
@@ -775,8 +827,9 @@ export const MsgClaimMorseApplication: MessageFns<MsgClaimMorseApplication> = {
 
   fromJSON(object: any): MsgClaimMorseApplication {
     return {
+      shannonSigningAddress: isSet(object.shannonSigningAddress) ? globalThis.String(object.shannonSigningAddress) : "",
       shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
-      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+      morsePublicKey: isSet(object.morsePublicKey) ? bytesFromBase64(object.morsePublicKey) : new Uint8Array(0),
       morseSignature: isSet(object.morseSignature) ? bytesFromBase64(object.morseSignature) : new Uint8Array(0),
       serviceConfig: isSet(object.serviceConfig) ? ApplicationServiceConfig.fromJSON(object.serviceConfig) : undefined,
     };
@@ -784,11 +837,14 @@ export const MsgClaimMorseApplication: MessageFns<MsgClaimMorseApplication> = {
 
   toJSON(message: MsgClaimMorseApplication): unknown {
     const obj: any = {};
+    if (message.shannonSigningAddress !== "") {
+      obj.shannonSigningAddress = message.shannonSigningAddress;
+    }
     if (message.shannonDestAddress !== "") {
       obj.shannonDestAddress = message.shannonDestAddress;
     }
-    if (message.morseSrcAddress !== "") {
-      obj.morseSrcAddress = message.morseSrcAddress;
+    if (message.morsePublicKey.length !== 0) {
+      obj.morsePublicKey = base64FromBytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       obj.morseSignature = base64FromBytes(message.morseSignature);
@@ -804,8 +860,9 @@ export const MsgClaimMorseApplication: MessageFns<MsgClaimMorseApplication> = {
   },
   fromPartial<I extends Exact<DeepPartial<MsgClaimMorseApplication>, I>>(object: I): MsgClaimMorseApplication {
     const message = createBaseMsgClaimMorseApplication();
+    message.shannonSigningAddress = object.shannonSigningAddress ?? "";
     message.shannonDestAddress = object.shannonDestAddress ?? "";
-    message.morseSrcAddress = object.morseSrcAddress ?? "";
+    message.morsePublicKey = object.morsePublicKey ?? new Uint8Array(0);
     message.morseSignature = object.morseSignature ?? new Uint8Array(0);
     message.serviceConfig = (object.serviceConfig !== undefined && object.serviceConfig !== null)
       ? ApplicationServiceConfig.fromPartial(object.serviceConfig)
@@ -959,9 +1016,10 @@ export const MsgClaimMorseApplicationResponse: MessageFns<MsgClaimMorseApplicati
 
 function createBaseMsgClaimMorseSupplier(): MsgClaimMorseSupplier {
   return {
+    shannonSigningAddress: "",
     shannonOwnerAddress: "",
     shannonOperatorAddress: "",
-    morseSrcAddress: "",
+    morsePublicKey: new Uint8Array(0),
     morseSignature: new Uint8Array(0),
     services: [],
   };
@@ -969,14 +1027,17 @@ function createBaseMsgClaimMorseSupplier(): MsgClaimMorseSupplier {
 
 export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
   encode(message: MsgClaimMorseSupplier, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.shannonSigningAddress !== "") {
+      writer.uint32(50).string(message.shannonSigningAddress);
+    }
     if (message.shannonOwnerAddress !== "") {
       writer.uint32(10).string(message.shannonOwnerAddress);
     }
     if (message.shannonOperatorAddress !== "") {
       writer.uint32(18).string(message.shannonOperatorAddress);
     }
-    if (message.morseSrcAddress !== "") {
-      writer.uint32(26).string(message.morseSrcAddress);
+    if (message.morsePublicKey.length !== 0) {
+      writer.uint32(58).bytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       writer.uint32(34).bytes(message.morseSignature);
@@ -994,6 +1055,14 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.shannonSigningAddress = reader.string();
+          continue;
+        }
         case 1: {
           if (tag !== 10) {
             break;
@@ -1010,12 +1079,12 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
           message.shannonOperatorAddress = reader.string();
           continue;
         }
-        case 3: {
-          if (tag !== 26) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.morseSrcAddress = reader.string();
+          message.morsePublicKey = reader.bytes();
           continue;
         }
         case 4: {
@@ -1045,11 +1114,12 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
 
   fromJSON(object: any): MsgClaimMorseSupplier {
     return {
+      shannonSigningAddress: isSet(object.shannonSigningAddress) ? globalThis.String(object.shannonSigningAddress) : "",
       shannonOwnerAddress: isSet(object.shannonOwnerAddress) ? globalThis.String(object.shannonOwnerAddress) : "",
       shannonOperatorAddress: isSet(object.shannonOperatorAddress)
         ? globalThis.String(object.shannonOperatorAddress)
         : "",
-      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+      morsePublicKey: isSet(object.morsePublicKey) ? bytesFromBase64(object.morsePublicKey) : new Uint8Array(0),
       morseSignature: isSet(object.morseSignature) ? bytesFromBase64(object.morseSignature) : new Uint8Array(0),
       services: globalThis.Array.isArray(object?.services)
         ? object.services.map((e: any) => SupplierServiceConfig.fromJSON(e))
@@ -1059,14 +1129,17 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
 
   toJSON(message: MsgClaimMorseSupplier): unknown {
     const obj: any = {};
+    if (message.shannonSigningAddress !== "") {
+      obj.shannonSigningAddress = message.shannonSigningAddress;
+    }
     if (message.shannonOwnerAddress !== "") {
       obj.shannonOwnerAddress = message.shannonOwnerAddress;
     }
     if (message.shannonOperatorAddress !== "") {
       obj.shannonOperatorAddress = message.shannonOperatorAddress;
     }
-    if (message.morseSrcAddress !== "") {
-      obj.morseSrcAddress = message.morseSrcAddress;
+    if (message.morsePublicKey.length !== 0) {
+      obj.morsePublicKey = base64FromBytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       obj.morseSignature = base64FromBytes(message.morseSignature);
@@ -1082,9 +1155,10 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
   },
   fromPartial<I extends Exact<DeepPartial<MsgClaimMorseSupplier>, I>>(object: I): MsgClaimMorseSupplier {
     const message = createBaseMsgClaimMorseSupplier();
+    message.shannonSigningAddress = object.shannonSigningAddress ?? "";
     message.shannonOwnerAddress = object.shannonOwnerAddress ?? "";
     message.shannonOperatorAddress = object.shannonOperatorAddress ?? "";
-    message.morseSrcAddress = object.morseSrcAddress ?? "";
+    message.morsePublicKey = object.morsePublicKey ?? new Uint8Array(0);
     message.morseSignature = object.morseSignature ?? new Uint8Array(0);
     message.services = object.services?.map((e) => SupplierServiceConfig.fromPartial(e)) || [];
     return message;

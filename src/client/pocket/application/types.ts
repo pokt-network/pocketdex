@@ -29,7 +29,7 @@ export interface Application {
    */
   serviceConfigs: ApplicationServiceConfig[];
   /**
-   * TODO_BETA(@bryanchriswhite): Rename `delegatee_gateway_addresses` to `gateway_addresses_delegated_to`.
+   * TODO_MAINNET_MIGRATION(@bryanchriswhite): Rename `delegatee_gateway_addresses` to `gateway_addresses_delegated_to`.
    * Ensure to rename all relevant configs, comments, variables, function names, etc as well.
    * Non-nullable list of Bech32 encoded delegatee Gateway addresses
    */

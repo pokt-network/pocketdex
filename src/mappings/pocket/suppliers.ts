@@ -1,11 +1,14 @@
+import { toHex } from "@cosmjs/encoding";
 import {
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
+import { Coin } from "../../client/cosmos/base/v1beta1/coin";
 import {
   EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
   EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity,
   MsgStakeSupplier as MsgStakeSupplierEntity,
+  MsgClaimMorseSupplier as MsgClaimMorseSupplierEntity,
   MsgUnstakeSupplier as MsgUnstakeSupplierEntity,
   StakeStatus,
   Supplier,
@@ -14,8 +17,12 @@ import {
   SupplierServiceConfig,
   SupplierUnbondingReason,
 } from "../../types";
+import { MsgClaimMorseSupplierProps } from "../../types/models/MsgClaimMorseSupplier";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
 import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
+import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
+import { MsgClaimMorseSupplier } from "../../types/proto-interfaces/pocket/migration/tx";
+import {SupplierServiceConfig as SupplierServiceConfigType} from '../../types/proto-interfaces/pocket/shared/service'
 import { SupplierSDKType } from "../../types/proto-interfaces/pocket/shared/supplier";
 import {
   supplierUnbondingReasonFromJSON,
@@ -33,6 +40,8 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
+import { updateMorseClaimableAccounts } from "./migration";
 import { fetchAllSupplierServiceConfigBySupplier } from "./pagination";
 
 function getSupplierUnbondingReasonFromSDK(item: typeof SupplierUnbondingReasonSDKType | string | number): SupplierUnbondingReason {
@@ -54,43 +63,43 @@ function getSupplierUnbondingReasonFromSDK(item: typeof SupplierUnbondingReasonS
   }
 }
 
-async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
-  if (!msg.msg.decodedMsg.stake) {
-    return logger.error(`[handleSupplierStakeMsg] stake not provided in msg`);
-  }
+interface StakeSupplierProps {
+  operatorAddress: string;
+  ownerAddress: string;
+  stake: Coin;
+  services: Array<SupplierServiceConfigType>;
+  msgId: string
+  msgServicesEntityName: string
+  serviceMsgIdKey: 'claimMsgId' | 'stakeMsgId'
+}
 
-  const msgId = messageId(msg);
+type ClaimOrStake<T extends StakeSupplierProps['serviceMsgIdKey']> = T extends 'claimMsgId' ? MsgClaimMorseSupplierProps : MsgStakeSupplierServiceProps
 
-  const supplierMsgStake = MsgStakeSupplierEntity.create({
-    id: msgId,
-    signerId: msg.msg.decodedMsg.signer,
-    supplierId: msg.msg.decodedMsg.operatorAddress,
-    ownerId: msg.msg.decodedMsg.ownerAddress,
-    stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
-    stakeDenom: msg.msg.decodedMsg.stake.denom,
-    blockId: getBlockId(msg.block),
-    transactionId: msg.tx.hash,
-    messageId: msgId,
-  });
-
+async function _stakeSupplier({
+  msgId,
+  msgServicesEntityName,
+  operatorAddress,
+  ownerAddress,
+  serviceMsgIdKey,
+  services,
+  stake,
+}: StakeSupplierProps): Promise<Array<Promise<void>>> {
   const supplier = Supplier.create({
-    id: msg.msg.decodedMsg.operatorAddress,
-    operatorId: msg.msg.decodedMsg.operatorAddress,
-    ownerId: msg.msg.decodedMsg.ownerAddress,
-    stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
-    stakeDenom: msg.msg.decodedMsg.stake.denom,
+    id: operatorAddress,
+    operatorId: operatorAddress,
+    ownerId: ownerAddress,
+    stakeAmount: BigInt(stake.amount),
+    stakeDenom: stake.denom,
     stakeStatus: StakeStatus.Staked,
   });
 
   const servicesId: Array<string> = [];
   // used to create the services that came in the stake message
-  const supplierMsgStakeServices: Array<MsgStakeSupplierServiceProps> = [];
+  const supplierMsgStakeServices: Array<ClaimOrStake<typeof serviceMsgIdKey>> = [];
   // used to have the services that are currently configured for the supplier
   const newSupplierServices: Array<SupplierServiceConfigProps> = [];
 
-  const operatorAddress = msg.msg.decodedMsg.operatorAddress;
-
-  for (const { endpoints, revShare, serviceId } of msg.msg.decodedMsg.services) {
+  for (const { endpoints, revShare, serviceId } of services) {
     servicesId.push(serviceId);
 
     const endpointsArr: Array<SupplierEndpoint> = endpoints.map((endpoint) => ({
@@ -107,10 +116,10 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     supplierMsgStakeServices.push({
       id: getMsgStakeServiceId(msgId, serviceId),
       serviceId,
-      stakeMsgId: msgId,
+      [serviceMsgIdKey]: msgId,
       endpoints: endpointsArr,
       revShare: revShareArr,
-    });
+    } as ClaimOrStake<typeof serviceMsgIdKey>);
 
     newSupplierServices.push({
       id: getStakeServiceId(operatorAddress, serviceId),
@@ -134,9 +143,8 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
   }
 
   const promises: Array<Promise<void>> = [
-    supplierMsgStake.save(),
     supplier.save(),
-    optimizedBulkCreate("MsgStakeSupplierService", supplierMsgStakeServices),
+    optimizedBulkCreate(msgServicesEntityName, supplierMsgStakeServices),
     store.bulkCreate("SupplierServiceConfig", newSupplierServices),
   ];
 
@@ -144,7 +152,114 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
     promises.push(store.bulkRemove("SupplierServiceConfig", servicesToRemove));
   }
 
+  return promises
+}
+
+async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
+  if (!msg.msg.decodedMsg.stake) {
+    return logger.error(`[handleSupplierStakeMsg] stake not provided in msg`);
+  }
+
+  const msgId = messageId(msg);
+
+  const promises = await _stakeSupplier({
+    msgId,
+    msgServicesEntityName: "MsgStakeSupplierService",
+    operatorAddress: msg.msg.decodedMsg.operatorAddress,
+    ownerAddress: msg.msg.decodedMsg.ownerAddress,
+    stake: msg.msg.decodedMsg.stake,
+    services: msg.msg.decodedMsg.services,
+    serviceMsgIdKey: 'stakeMsgId',
+  });
+
+  promises.push(
+    MsgStakeSupplierEntity.create({
+      id: msgId,
+      signerId: msg.msg.decodedMsg.signer,
+      supplierId: msg.msg.decodedMsg.operatorAddress,
+      ownerId: msg.msg.decodedMsg.ownerAddress,
+      stakeAmount: BigInt(msg.msg.decodedMsg.stake.amount),
+      stakeDenom: msg.msg.decodedMsg.stake.denom,
+      blockId: getBlockId(msg.block),
+      transactionId: msg.tx.hash,
+      messageId: msgId,
+    }).save()
+  )
+
   await Promise.all(promises);
+}
+
+async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupplier>) {
+  const msgId = messageId(msg);
+
+  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null;
+
+  for (const event of msg.tx.tx.events) {
+    if (event.type === 'pocket.migration.EventMorseSupplierClaimed') {
+      for (const attribute of event.attributes) {
+        if (attribute.key === 'claimed_balance') {
+          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+
+          balanceCoin = {
+            denom: coin.denom,
+            amount: coin.amount,
+          }
+        }
+
+        if (attribute.key === 'claimed_supplier_stake') {
+          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+
+          stakeCoin = {
+            denom: coin.denom,
+            amount: coin.amount,
+          }
+        }
+      }
+    }
+  }
+
+  if (!stakeCoin) {
+    throw new Error(`[handleMsgClaimMorseSupplier] stake coin not found in event`);
+  }
+
+  if (!balanceCoin) {
+    throw new Error(`[handleMsgClaimMorseSupplier] balance coin not found in event`);
+  }
+
+  const promises = await _stakeSupplier({
+    msgId,
+    msgServicesEntityName: "MsgClaimMorseSupplierService",
+    operatorAddress: msg.msg.decodedMsg.shannonOperatorAddress,
+    ownerAddress: msg.msg.decodedMsg.shannonOwnerAddress,
+    services: msg.msg.decodedMsg.services,
+    stake: stakeCoin,
+    serviceMsgIdKey: 'claimMsgId',
+  });
+
+  promises.push(
+    MsgClaimMorseSupplierEntity.create({
+      id: msgId,
+      supplierId: msg.msg.decodedMsg.shannonOperatorAddress,
+      shannonSigningAddress: msg.msg.decodedMsg.shannonSigningAddress,
+      shannonOwnerAddress: msg.msg.decodedMsg.shannonOwnerAddress,
+      shannonOperatorAddress: msg.msg.decodedMsg.shannonOperatorAddress,
+      morsePublicKey: toHex(msg.msg.decodedMsg.morsePublicKey),
+      morseSrcAddress: pubKeyToAddress(
+        Ed25519,
+        msg.msg.decodedMsg.morsePublicKey,
+        undefined,
+        true
+      ),
+      morseSignature: toHex(msg.msg.decodedMsg.morseSignature),
+      stakeAmount: BigInt(stakeCoin.amount),
+      stakeDenom: stakeCoin.denom,
+      balanceAmount: BigInt(balanceCoin.amount),
+      balanceDenom: balanceCoin.denom,
+      blockId: getBlockId(msg.block),
+      transactionId: msg.tx.hash,
+      messageId: msgId,
+    }).save()
+  )
 }
 
 async function _handleUnstakeSupplierMsg(
@@ -354,6 +469,20 @@ export async function handleSupplierStakeMsg(
   messages: Array<CosmosMessage<MsgStakeSupplier>>,
 ): Promise<void> {
   await Promise.all(messages.map(_handleSupplierStakeMsg));
+}
+
+export async function handleMsgClaimMorseSupplier(
+  messages: Array<CosmosMessage<MsgClaimMorseSupplier>>,
+): Promise<void> {
+  await Promise.all([
+    ...messages.map(_handleMsgClaimMorseSupplier),
+    updateMorseClaimableAccounts(
+      messages.map((msg) => ({
+        publicKey: msg.msg.decodedMsg.morsePublicKey,
+        destinationAddress: msg.msg.decodedMsg.shannonOperatorAddress,
+      }))
+    )
+  ]);
 }
 
 export async function handleUnstakeSupplierMsg(

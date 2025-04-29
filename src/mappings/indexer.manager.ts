@@ -226,6 +226,7 @@ async function indexApplications(msgByType: MessageByType, eventByType: EventByT
     "/pocket.application.MsgUndelegateFromGateway",
     "/pocket.application.MsgUnstakeApplication",
     "/pocket.application.MsgStakeApplication",
+    "/pocket.migration.MsgClaimMorseApplication",
     "/pocket.application.MsgTransferApplication",
   ];
   const eventTypes = [
@@ -259,6 +260,7 @@ async function indexApplications(msgByType: MessageByType, eventByType: EventByT
     "/pocket.application.MsgUndelegateFromGateway": "appAddress",
     "/pocket.application.MsgUnstakeApplication": "address",
     "/pocket.application.MsgStakeApplication": "address",
+    "/pocket.migration.MsgClaimMorseApplication": "shannonDestAddress",
     "/pocket.application.MsgTransferApplication": "sourceAddress",
     "pocket.application.EventTransferBegin": getIdOfTransferEvents,
     "pocket.application.EventTransferEnd": (attributes) => {
@@ -480,6 +482,7 @@ async function indexStakeEntity(data: Array<CosmosEvent | CosmosMessage>, getEnt
 async function indexSupplier(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
     "/pocket.supplier.MsgUnstakeSupplier",
+    "/pocket.migration.MsgClaimMorseSupplier",
     "/pocket.supplier.MsgStakeSupplier",
   ];
   const eventTypes = [
@@ -507,6 +510,7 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
   {
     "/pocket.supplier.MsgUnstakeSupplier": "operatorAddress",
     "/pocket.supplier.MsgStakeSupplier": "operatorAddress",
+    "/pocket.migration.MsgClaimMorseSupplier": "shannonOperatorAddress",
     "pocket.supplier.EventSupplierUnbondingBegin": eventGetId,
     "pocket.supplier.EventSupplierUnbondingEnd": eventGetId,
     "pocket.tokenomics.EventSupplierSlashed": (attributes) => {
@@ -532,6 +536,16 @@ async function indexStake(msgByType: MessageByType, eventByType: EventByType): P
     indexApplications(msgByType, eventByType),
     indexGateway(msgByType, eventByType),
     indexSupplier(msgByType, eventByType),
+  ])
+}
+
+async function indexMigrationAccounts(msgByType: MessageByType): Promise<void> {
+  const msgTypes = [
+    "/pocket.migration.MsgClaimMorseAccount",
+  ];
+
+  await Promise.all([
+    ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
   ])
 }
 
@@ -649,6 +663,7 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
     profilerWrap(generateReports, "indexingHandler", "generateReports")(block),
   ])
 }

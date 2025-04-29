@@ -109,12 +109,12 @@ export function configOptionsToJSON(object: ConfigOptions): string {
 export interface Service {
   /** For example, what if we want to request a session for a certain service but with some additional configs that identify it? */
   id: string;
-  /** TODO_BETA(@bryanchriswhite): Either remove this or rename it to alias. */
+  /** TODO_POST_MAINNET: Rename service.name to service.description */
   name: string;
   /**
    * The cost of a single relay for this service in terms of compute units.
-   * Must be used alongside the global 'compute_units_to_tokens_multipler' to calculate the cost of a relay for this service.
-   * cost_per_relay_for_specific_service = compute_units_per_relay_for_specific_service * compute_units_to_tokens_multipler_global_value
+   * Must be used alongside the global 'compute_units_to_tokens_multiplier' to calculate the cost of a relay for this service.
+   * cost_per_relay_for_specific_service = compute_units_per_relay_for_specific_service * compute_units_to_tokens_multiplier_global_value
    */
   computeUnitsPerRelay: number;
   /**

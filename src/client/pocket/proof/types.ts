@@ -162,6 +162,17 @@ export interface Claim {
   proofValidationStatus: ClaimProofStatus;
 }
 
+/**
+ * SessionSMT is the serializable session's SMST used to persist the session's
+ * state offchain by the RelayMiner.
+ * It is not used for any onchain logic.
+ */
+export interface SessionSMT {
+  sessionHeader: SessionHeader | undefined;
+  supplierOperatorAddress: string;
+  smtRoot: Uint8Array;
+}
+
 function createBaseProof(): Proof {
   return { supplierOperatorAddress: "", sessionHeader: undefined, closestMerkleProof: new Uint8Array(0) };
 }
@@ -375,6 +386,102 @@ export const Claim: MessageFns<Claim> = {
       : undefined;
     message.rootHash = object.rootHash ?? new Uint8Array(0);
     message.proofValidationStatus = object.proofValidationStatus ?? 0;
+    return message;
+  },
+};
+
+function createBaseSessionSMT(): SessionSMT {
+  return { sessionHeader: undefined, supplierOperatorAddress: "", smtRoot: new Uint8Array(0) };
+}
+
+export const SessionSMT: MessageFns<SessionSMT> = {
+  encode(message: SessionSMT, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sessionHeader !== undefined) {
+      SessionHeader.encode(message.sessionHeader, writer.uint32(10).fork()).join();
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(18).string(message.supplierOperatorAddress);
+    }
+    if (message.smtRoot.length !== 0) {
+      writer.uint32(26).bytes(message.smtRoot);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SessionSMT {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSessionSMT();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.sessionHeader = SessionHeader.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.smtRoot = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SessionSMT {
+    return {
+      sessionHeader: isSet(object.sessionHeader) ? SessionHeader.fromJSON(object.sessionHeader) : undefined,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
+      smtRoot: isSet(object.smtRoot) ? bytesFromBase64(object.smtRoot) : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: SessionSMT): unknown {
+    const obj: any = {};
+    if (message.sessionHeader !== undefined) {
+      obj.sessionHeader = SessionHeader.toJSON(message.sessionHeader);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
+    }
+    if (message.smtRoot.length !== 0) {
+      obj.smtRoot = base64FromBytes(message.smtRoot);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionSMT>, I>>(base?: I): SessionSMT {
+    return SessionSMT.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionSMT>, I>>(object: I): SessionSMT {
+    const message = createBaseSessionSMT();
+    message.sessionHeader = (object.sessionHeader !== undefined && object.sessionHeader !== null)
+      ? SessionHeader.fromPartial(object.sessionHeader)
+      : undefined;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
+    message.smtRoot = object.smtRoot ?? new Uint8Array(0);
     return message;
   },
 };

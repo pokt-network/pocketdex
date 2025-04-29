@@ -1,4 +1,6 @@
+import { toHex } from "@cosmjs/encoding";
 import { CosmosEvent, CosmosMessage, CosmosTransaction } from "@subql/types-cosmos";
+import { Coin } from "../../client/cosmos/base/v1beta1/coin";
 import {
   ApplicationUnbondingReason as ApplicationUnbondingReasonSDKType,
   applicationUnbondingReasonFromJSON,
@@ -20,8 +22,11 @@ import {
 import { ApplicationProps } from "../../types/models/Application";
 import { ApplicationGatewayProps } from "../../types/models/ApplicationGateway";
 import { ApplicationServiceProps } from "../../types/models/ApplicationService";
+import { MsgClaimMorseApplicationProps } from "../../types/models/MsgClaimMorseApplication";
+import { MsgClaimMorseApplicationServiceProps } from "../../types/models/MsgClaimMorseApplicationService";
 import { MsgStakeApplicationProps } from "../../types/models/MsgStakeApplication";
 import { MsgStakeApplicationServiceProps } from "../../types/models/MsgStakeApplicationService";
+import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 import { EventTransferBegin } from "../../types/proto-interfaces/pocket/application/event";
 import {
   MsgDelegateToGateway,
@@ -31,6 +36,8 @@ import {
   MsgUnstakeApplication,
 } from "../../types/proto-interfaces/pocket/application/tx";
 import { ApplicationSDKType } from "../../types/proto-interfaces/pocket/application/types";
+import { MsgClaimMorseApplication } from "../../types/proto-interfaces/pocket/migration/tx";
+import {ApplicationServiceConfig as ApplicationServiceConfigType} from "../../types/proto-interfaces/pocket/shared/service"
 import { getSequelize, getStoreModel, optimizedBulkCreate } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
@@ -40,6 +47,8 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
+import { updateMorseClaimableAccounts } from "./migration";
 import { fetchAllApplicationGatewayByApplicationId, fetchAllApplicationServiceByApplicationId } from "./pagination";
 
 function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
@@ -59,6 +68,69 @@ function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | 
   }
 }
 
+interface StakeApplicationProps {
+  address: string;
+  stakeAmount: bigint;
+  stakeDenom: string;
+  msgId: string;
+  services: Array<ApplicationServiceConfigType>;
+  serviceMsgIdKey: 'claimMsgId' | 'stakeMsgId'
+}
+
+type ClaimOrStake<T extends StakeApplicationProps['serviceMsgIdKey']> = T extends 'claimMsgId' ? MsgClaimMorseApplicationServiceProps : MsgStakeApplicationServiceProps
+
+async function _stakeApplication<T extends StakeApplicationProps['serviceMsgIdKey']>({
+  address,
+  msgId,
+  serviceMsgIdKey,
+  services,
+  stakeAmount,
+  stakeDenom
+}: StakeApplicationProps): Promise<[
+  ApplicationProps,
+  Array<ClaimOrStake<T>>,
+  Array<ApplicationServiceProps>,
+]> {
+  // we need to get application already saved in case it is being transferred
+  // because if we overwrite the application, we will lose the transfer information
+  const prevApp = await Application.get(address);
+
+  const application: ApplicationProps = {
+    id: address,
+    accountId: address,
+    stakeAmount,
+    stakeDenom,
+    stakeStatus: StakeStatus.Staked,
+    transferringToId: prevApp?.transferringToId,
+    transferEndHeight: prevApp?.transferEndHeight,
+  };
+
+  // used to create the services that came in the stake message
+  const appMsgStakeServices: Array<ClaimOrStake<T>> = [];
+  // used to have the services that are currently configured for the application
+  const newApplicationServices: Array<ApplicationServiceProps> = [];
+
+  for (const { serviceId } of services) {
+    appMsgStakeServices.push({
+      id: getMsgStakeServiceId(msgId, serviceId),
+      serviceId,
+      [serviceMsgIdKey]: msgId,
+    } as ClaimOrStake<T>);
+
+    newApplicationServices.push({
+      id: getStakeServiceId(address, serviceId),
+      serviceId,
+      applicationId: address,
+    });
+  }
+
+  return [
+    application,
+    appMsgStakeServices,
+    newApplicationServices,
+  ];
+}
+
 async function _handleAppMsgStake(
   msg: CosmosMessage<MsgStakeApplication>,
 ): Promise<[
@@ -67,9 +139,6 @@ async function _handleAppMsgStake(
   Array<MsgStakeApplicationServiceProps>,
   Array<ApplicationServiceProps>,
 ]> {
-  // we need to get application already saved in case it is being transferred
-  // because if we overwrite the application, we will lose the transfer information
-  const prevApp = await Application.get(msg.msg.decodedMsg.address);
 
   const msgId = messageId(msg);
   const { address, stake } = msg.msg.decodedMsg;
@@ -87,40 +156,103 @@ async function _handleAppMsgStake(
     stakeDenom,
   };
 
-  const application: ApplicationProps = {
-    id: address,
-    accountId: address,
-    stakeAmount,
-    stakeDenom,
-    stakeStatus: StakeStatus.Staked,
-    transferringToId: prevApp?.transferringToId,
-    transferEndHeight: prevApp?.transferEndHeight,
-  };
-
-  // used to create the services that came in the stake message
-  const appMsgStakeServices: Array<MsgStakeApplicationServiceProps> = [];
-  // used to have the services that are currently configured for the application
-  const newApplicationServices: Array<ApplicationServiceProps> = [];
-
-  for (const { serviceId } of msg.msg.decodedMsg.services) {
-    appMsgStakeServices.push({
-      id: getMsgStakeServiceId(msgId, serviceId),
-      serviceId,
-      stakeMsgId: msgId,
-    });
-
-    newApplicationServices.push({
-      id: getStakeServiceId(address, serviceId),
-      serviceId,
-      applicationId: address,
-    });
-  }
-
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
   return [
     appMsgStake,
-    application,
-    appMsgStakeServices,
-    newApplicationServices,
+    ...await _stakeApplication({
+      address,
+      msgId,
+      services: msg.msg.decodedMsg.services,
+      stakeAmount,
+      stakeDenom,
+      serviceMsgIdKey: 'stakeMsgId'
+    }),
+  ];
+}
+async function _handleMsgClaimMorseApplication(
+  msg: CosmosMessage<MsgClaimMorseApplication>,
+): Promise<[
+  MsgClaimMorseApplicationProps,
+  ApplicationProps,
+  Array<MsgClaimMorseApplicationServiceProps>,
+  Array<ApplicationServiceProps>,
+]> {
+
+  const msgId = messageId(msg);
+  const { shannonDestAddress, } = msg.msg.decodedMsg;
+
+  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null;
+
+  for (const event of msg.tx.tx.events) {
+    if (event.type === 'pocket.migration.EventMorseApplicationClaimed') {
+      for (const attribute of event.attributes) {
+        if (attribute.key === 'claimed_balance') {
+          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+
+          balanceCoin = {
+            denom: coin.denom,
+            amount: coin.amount,
+          }
+        }
+
+        if (attribute.key === 'claimed_application_stake') {
+          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+
+          stakeCoin = {
+            denom: coin.denom,
+            amount: coin.amount,
+          }
+        }
+      }
+    }
+  }
+
+  if (!stakeCoin) {
+    throw new Error(`[handleMsgClaimMorseSupplier] stake coin not found in event`);
+  }
+
+  if (!balanceCoin) {
+    throw new Error(`[handleMsgClaimMorseSupplier] balance coin not found in event`);
+  }
+
+  const stakeAmount = BigInt(stakeCoin.amount);
+  const stakeDenom = stakeCoin.denom;
+
+  const msgClaimMorseApplication: MsgClaimMorseApplicationProps = {
+    id: msgId,
+    transactionId: msg.tx.hash,
+    blockId: getBlockId(msg.block),
+    applicationId: shannonDestAddress,
+    messageId: msgId,
+    stakeAmount,
+    stakeDenom,
+    balanceAmount: BigInt(balanceCoin.amount),
+    balanceDenom: balanceCoin.denom,
+    shannonDestAddress,
+    shannonSigningAddress: msg.msg.decodedMsg.shannonSigningAddress,
+    morseSignature: toHex(msg.msg.decodedMsg.morseSignature),
+    morsePublicKey: toHex(msg.msg.decodedMsg.morsePublicKey),
+    morseSrcAddress: pubKeyToAddress(
+      Ed25519,
+      msg.msg.decodedMsg.morsePublicKey,
+      undefined,
+      true
+    ),
+  };
+
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  return [
+    msgClaimMorseApplication,
+    ...await _stakeApplication({
+      address: shannonDestAddress,
+      msgId,
+      services: [msg.msg.decodedMsg.serviceConfig!],
+      stakeAmount,
+      stakeDenom,
+      serviceMsgIdKey: 'claimMsgId'
+    }),
   ];
 }
 
@@ -594,6 +726,83 @@ export async function handleAppMsgStake(
         transaction: store.context.transaction,
       },
     ),
+  ]);
+}
+
+export async function handleMsgClaimMorseApplication(
+  messages: Array<CosmosMessage<MsgClaimMorseApplication>>,
+): Promise<void> {
+  const ApplicationServiceModel = getStoreModel("ApplicationService");
+  const sequelize = getSequelize("ApplicationService");
+  const blockHeight = store.context.getHistoricalUnit();
+  const claimMsgs: Array<MsgClaimMorseApplicationProps> = [];
+  const applications: Array<ApplicationProps> = [];
+  const claimAppService: Array<MsgClaimMorseApplicationServiceProps> = [];
+  const appService: Array<ApplicationServiceProps> = [];
+  const appServices = new Map<string, Set<string>>();
+  const markDeleteOr: Array<unknown> = [];
+
+  for (const msg of messages) {
+    // it needs to query db to know the current app <> service relations that need to remove
+    const r = await _handleMsgClaimMorseApplication(msg);
+
+    const {serviceConfig, shannonDestAddress: address } = msg.msg.decodedMsg;
+
+    if (serviceConfig) {
+      if (!appServices.has(address)) {
+        appServices.set(address, new Set(serviceConfig.serviceId));
+      } else {
+        appServices.get(address)?.add(serviceConfig.serviceId);
+      }
+    }
+
+    claimMsgs.push(r[0]);
+    applications.push(r[1]);
+    claimAppService.push(...r[2]);
+    appService.push(...r[3]);
+  }
+
+  for (const [address, services] of appServices) {
+    markDeleteOr.push({
+      [Symbol.for("and")]: [
+        // apps
+        { application_id: address },
+        // does not match the current stake services
+        { service_id: { [Symbol.for("notIn")]: Array.from(services) } },
+      ],
+    });
+  }
+
+  await Promise.all([
+    store.bulkCreate("Application", applications),
+    store.bulkCreate("ApplicationService", appService),
+    optimizedBulkCreate("MsgClaimMorseApplication", claimMsgs),
+    optimizedBulkCreate("MsgClaimMorseApplicationService", claimAppService),
+    ApplicationServiceModel.model.update(
+      // mark as deleted (close the block range)
+      {
+        __block_range: sequelize.fn(
+          "int8range",
+          sequelize.fn("lower", sequelize.col("_block_range")),
+          blockHeight,
+        ),
+      },
+      {
+        hooks: false,
+        where: {
+          [Symbol.for("or")]: markDeleteOr,
+          // in the range
+          __block_range: { [Symbol.for("contains")]: blockHeight },
+        },
+        transaction: store.context.transaction,
+      },
+    ),
+    updateMorseClaimableAccounts(
+      messages.map((msg) => ({
+        publicKey: msg.msg.decodedMsg.morsePublicKey,
+        destinationAddress: msg.msg.decodedMsg.shannonDestAddress,
+      }))
+    )
   ]);
 }
 

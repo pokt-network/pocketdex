@@ -4,7 +4,10 @@ import allModuleTypes from "../../cosmjs/proto";
 import { AuthzExecProps } from "../../types/models/AuthzExec";
 import { AuthzMsgExecProps } from "../../types/models/AuthzMsgExec";
 import { MessageProps } from "../../types/models/Message";
+import { MorseClaimableAccountProps } from "../../types/models/MorseClaimableAccount";
+import { MsgImportMorseClaimableAccountsProps } from "../../types/models/MsgImportMorseClaimableAccounts";
 import { ParamProps } from "../../types/models/Param";
+import { handleMsgImportMorseClaimableAccounts } from "../pocket/migration";
 import { _handleUpdateParam } from "../pocket/params";
 import { AuthzExecMsg } from "../types";
 import {
@@ -22,6 +25,8 @@ type HandleAuthzExecResult = {
   authzExec: Array<AuthzExecProps>;
   authzExecMsgs: Array<AuthzMsgExecProps>;
   params: Array<ParamProps>;
+  msgImportMorseClaimableAccounts: Array<MsgImportMorseClaimableAccountsProps>;
+  morseClaimableAccount: Array<MorseClaimableAccountProps>;
 }
 
 function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResult {
@@ -32,6 +37,8 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
     authzExec: [],
     authzExecMsgs: [],
     params: [],
+    msgImportMorseClaimableAccounts: [],
+    morseClaimableAccount: [],
   };
 
   const authzExecId = messageId(msg);
@@ -58,26 +65,40 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
   });
 
   for (const [i, encodedMsg] of msgs.entries()) {
-    // _handleUpdateParam will return the decoded message if it is a param update,
-    // otherwise it will return undefined.
-    // _handleUpdateParam will decode and save the message using its specific entity
-    const paramResult = _handleUpdateParam(encodedMsg, blockId);
 
     let decodedMsg: unknown;
 
-    if (!paramResult) {
-      for (const [typeUrl, msgType] of allModuleTypes) {
+    if (encodedMsg.typeUrl === "/pocket.migration.MsgImportMorseClaimableAccounts") {
+      const response = handleMsgImportMorseClaimableAccounts({
+        encodedMsg,
+        blockId,
+        transactionId: msg.tx.hash,
+        messageId: authzExecId,
+      })
 
-        if (typeUrl === encodedMsg.typeUrl) {
-          const bytes = new Uint8Array(Object.values(encodedMsg.value));
-
-          decodedMsg = msgType.decode(bytes);
-          break;
-        }
-      }
+      decodedMsg = response.decodedMsg;
+      result.morseClaimableAccount.push(...response.morseClaimableAccounts);
+      result.msgImportMorseClaimableAccounts.push(response.msgImportMorseClaimableAccounts);
     } else {
-      decodedMsg = paramResult.decodedMsg;
-      result.params.push(...paramResult.params);
+      // _handleUpdateParam will return the decoded message if it is a param update,
+      // otherwise it will return undefined.
+      // _handleUpdateParam will decode and save the message using its specific entity
+      const paramResult = _handleUpdateParam(encodedMsg, blockId);
+
+      if (!paramResult) {
+        for (const [typeUrl, msgType] of allModuleTypes) {
+
+          if (typeUrl === encodedMsg.typeUrl) {
+            const bytes = new Uint8Array(Object.values(encodedMsg.value));
+
+            decodedMsg = msgType.decode(bytes);
+            break;
+          }
+        }
+      } else {
+        decodedMsg = paramResult.decodedMsg;
+        result.params.push(...paramResult.params);
+      }
     }
 
     if (decodedMsg) {
@@ -112,6 +133,8 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     authzExec: [],
     authzExecMsgs: [],
     params: [],
+    msgImportMorseClaimableAccounts: [],
+    morseClaimableAccount: [],
   };
 
   // merge all the documents to write
@@ -129,6 +152,12 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     if (r.params.length > 0) {
       allResults.params.push(...r.params);
     }
+    if (r.msgImportMorseClaimableAccounts.length > 0) {
+      allResults.msgImportMorseClaimableAccounts.push(...r.msgImportMorseClaimableAccounts);
+    }
+    if (r.morseClaimableAccount.length > 0) {
+      allResults.morseClaimableAccount.push(...r.morseClaimableAccount);
+    }
   }
 
   await Promise.all([
@@ -136,5 +165,7 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     store.bulkCreate("AuthzExec", allResults.authzExec),
     store.bulkCreate("AuthzMsgExec", allResults.authzExecMsgs),
     store.bulkCreate("Param", allResults.params),
+    store.bulkCreate("MsgImportMorseClaimableAccounts", allResults.msgImportMorseClaimableAccounts),
+    store.bulkCreate("MorseClaimableAccount", allResults.morseClaimableAccount),
   ]);
 }
