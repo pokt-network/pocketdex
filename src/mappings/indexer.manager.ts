@@ -199,6 +199,14 @@ async function indexParams(msgByType: MessageByType): Promise<void> {
   );
 }
 
+// any message or event related to Grants
+async function indexGrants(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+  await Promise.all([
+    ...handleByType("/cosmos.authz.v1beta1.MsgGrant", msgByType, MsgHandlers, ByTxStatus.Success),
+    ...handleByType("cosmos.authz.v1beta1.EventGrant", eventByType, EventHandlers, ByTxStatus.Success),
+  ]);
+}
+
 // any service msg or event
 async function indexService(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const eventTypes = [
@@ -659,6 +667,7 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   await Promise.all([
     profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType),
+    profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),

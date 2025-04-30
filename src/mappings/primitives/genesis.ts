@@ -64,6 +64,7 @@ import {
 import { optimizedBulkCreate } from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
+  getAuthzId,
   getBalanceId,
   getBlockId,
   getGenesisFakeTxHash,
@@ -254,7 +255,11 @@ async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void>
     const auth = authorization.authorization as unknown as Record<string, string>;
 
     authz.push({
-      id: `${authorization.granter}:${auth.msg.replace("/", "") as string}-${authorization.grantee}`,
+      id: getAuthzId(
+        authorization.granter,
+        auth.msg,
+        authorization.grantee,
+      ),
       granterId: authorization.granter,
       granteeId: authorization.grantee,
       expiration: authorization.expiration ? new Date(authorization.expiration) : undefined,
