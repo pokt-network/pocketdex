@@ -77,7 +77,7 @@ function _handleMsgGrant(msg: CosmosMessage<MsgGrant>): AuthzProps {
 
 export async function handleEventGrant(events: CosmosEvent[]): Promise<void> {
   // only handle the events that are finalized because the non-finalized events are being indexed in the /cosmos.authz.v1beta1.MsgGrant msg handler
-  await store.bulkCreate("AuthzEventGrant", events.filter(isEventOfFinalizedBlockKind).map(_handleEventGrant));
+  await store.bulkCreate("Authz", events.filter(isEventOfFinalizedBlockKind).map(_handleEventGrant));
 }
 
 export async function handleMsgGrant(messages: CosmosMessage[]): Promise<void> {
