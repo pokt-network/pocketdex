@@ -1,5 +1,4 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
-import { GenericAuthorization } from "cosmjs-types/cosmos/authz/v1beta1/authz";
 import { MsgGrant } from "cosmjs-types/cosmos/authz/v1beta1/tx";
 import { AuthzProps } from "../../types/models/Authz";
 import { getAuthzId, getBlockId, getEventId } from "../utils/ids";
@@ -54,10 +53,21 @@ function _handleEventGrant(event: CosmosEvent): AuthzProps {
 function _handleMsgGrant(msg: CosmosMessage<MsgGrant>): AuthzProps {
   const {grant, grantee, granter} = msg.msg.decodedMsg;
 
-  const msgType = GenericAuthorization.decode(grant.authorization!.value).msg
   const expiration = grant.expiration ? new Date(Number(grant.expiration.seconds) * 1000 + Math.floor(grant.expiration.nanos / 1_000_000)) : undefined
   const event = msg.block.events.find(e => e.event.type === '' && isEventOfMessageKind(e) && e.tx.hash === msg.tx.hash)!
 
+  let msgType: string | null = null
+
+  for (const {key, value} of event.event.attributes) {
+    if (key === "msg_type_url") {
+      msgType = parseAttribute(value)
+      break
+    }
+  }
+
+  if (!msgType) {
+    throw new Error(`[handleMsgGrant] msgType not found in event`);
+  }
 
   return {
     id: getAuthzId(
