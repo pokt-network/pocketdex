@@ -1,11 +1,13 @@
 import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import { handleAuthzExec } from "./authz/exec";
+import { handleEventGrant, handleMsgGrant } from "./authz/grants";
 import { handleNativeTransfer } from "./bank";
 import {
   handleApplicationUnbondingBeginEvent,
   handleApplicationUnbondingEndEvent,
   handleAppMsgStake,
   handleDelegateToGatewayMsg,
+  handleMsgClaimMorseApplication,
   handleTransferApplicationBeginEvent,
   handleTransferApplicationEndEvent,
   handleTransferApplicationErrorEvent,
@@ -20,6 +22,7 @@ import {
   handleEventGatewayUnbondingBegin,
   handleEventGatewayUnbondingEnd,
 } from "./pocket/gateways";
+import { handleMsgClaimMorseAccount } from "./pocket/migration";
 import {
   handleEventApplicationOverserviced,
   handleEventApplicationReimbursementRequest,
@@ -34,6 +37,7 @@ import {
 } from "./pocket/relays";
 import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./pocket/services";
 import {
+  handleMsgClaimMorseSupplier,
   handleSupplierStakeMsg,
   handleSupplierUnbondingBeginEvent,
   handleSupplierUnbondingEndEvent,
@@ -56,6 +60,12 @@ export enum ByTxStatus {
 }
 
 export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Promise<void>> = {
+  // authz
+  "/cosmos.authz.v1beta1.MsgGrant": handleMsgGrant,
+  // migration
+  "/pocket.migration.MsgClaimMorseAccount": handleMsgClaimMorseAccount,
+  "/pocket.migration.MsgClaimMorseApplication": handleMsgClaimMorseApplication,
+  "/pocket.migration.MsgClaimMorseSupplier": handleMsgClaimMorseSupplier,
   // bank
   "/cosmos.bank.v1beta1.MsgSend": handleNativeTransfer,
   // validator
@@ -83,26 +93,7 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
 
 export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promise<void>> = {
   // authz
-  /*
-  todo: handle this.
-    type: cosmos.authz.v1beta1.EventGrant
-    [
-      {
-        "key": "grantee",
-        "value": "\"pokt1f0c9y7mahf2ya8tymy8g4rr75ezh3pkklu4c3e\""
-      },
-      {
-        "key": "granter",
-        "value": "\"pokt10d07y265gmmuvt4z0w9aw880jnsr700j8yv32t\""
-      },
-      {
-        "key": "msg_type_url",
-        "value": "\"/pocket.service.MsgUpdateParams\""
-      }
-    ]
-    "cosmos.authz.v1beta1.EventGrant": async () => Promise.resolve(),
-   */
-
+  "cosmos.authz.v1beta1.EventGrant": handleEventGrant,
   // Validator rewards
   // Represent the total rewards earned from block rewards and transaction fees.
   // Includes both the validator’s share and the portion allocated to delegators.

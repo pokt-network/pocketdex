@@ -91,7 +91,7 @@ export interface MorseApplication {
   address: Uint8Array;
   /** PublicKey is the binary representation of a Morse application's ed25519 public key. */
   publicKey: Uint8Array;
-  /** TODO_MAINNET(@Olshansk):  Should status and/or jailed be considered during the migration, and if so, how? */
+  /** TODO_MAINNET_MIGRATION(@Olshansk):  Should status and/or jailed be considered during the migration, and if so, how? */
   jailed: boolean;
   status: number;
   /** The string representation of the BigInt amount of upokt. */
@@ -109,7 +109,7 @@ export interface MorseValidator {
   address: Uint8Array;
   /** The binary representation of a Morse application's ed25519 public key. */
   publicKey: Uint8Array;
-  /** TODO_MAINNET(@Olshansk):  Should status and/or jailed be considered during the migration, and if so, how? */
+  /** TODO_MAINNET_MIGRATION(@Olshansk):  Should status and/or jailed be considered during the migration, and if so, how? */
   jailed: boolean;
   status: number;
   /** The string representation of the BigInt amount of upokt. */

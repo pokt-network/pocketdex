@@ -34,8 +34,6 @@ export interface MorseClaimableAccount {
   shannonDestAddress: string;
   /** The hex-encoded address of the Morse account whose balance will be claimed. */
   morseSrcAddress: string;
-  /** The ed25519 public key of the account. */
-  publicKey: Uint8Array;
   /** The unstaked upokt tokens (i.e. account balance) available for claiming. */
   unstakedBalance:
     | Coin
@@ -129,7 +127,6 @@ function createBaseMorseClaimableAccount(): MorseClaimableAccount {
   return {
     shannonDestAddress: "",
     morseSrcAddress: "",
-    publicKey: new Uint8Array(0),
     unstakedBalance: undefined,
     supplierStake: undefined,
     applicationStake: undefined,
@@ -144,9 +141,6 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
     }
     if (message.morseSrcAddress !== "") {
       writer.uint32(18).string(message.morseSrcAddress);
-    }
-    if (message.publicKey.length !== 0) {
-      writer.uint32(34).bytes(message.publicKey);
     }
     if (message.unstakedBalance !== undefined) {
       Coin.encode(message.unstakedBalance, writer.uint32(42).fork()).join();
@@ -184,14 +178,6 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
           }
 
           message.morseSrcAddress = reader.string();
-          continue;
-        }
-        case 4: {
-          if (tag !== 34) {
-            break;
-          }
-
-          message.publicKey = reader.bytes();
           continue;
         }
         case 5: {
@@ -239,7 +225,6 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
     return {
       shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
       morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
-      publicKey: isSet(object.publicKey) ? bytesFromBase64(object.publicKey) : new Uint8Array(0),
       unstakedBalance: isSet(object.unstakedBalance) ? Coin.fromJSON(object.unstakedBalance) : undefined,
       supplierStake: isSet(object.supplierStake) ? Coin.fromJSON(object.supplierStake) : undefined,
       applicationStake: isSet(object.applicationStake) ? Coin.fromJSON(object.applicationStake) : undefined,
@@ -254,9 +239,6 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
     }
     if (message.morseSrcAddress !== "") {
       obj.morseSrcAddress = message.morseSrcAddress;
-    }
-    if (message.publicKey.length !== 0) {
-      obj.publicKey = base64FromBytes(message.publicKey);
     }
     if (message.unstakedBalance !== undefined) {
       obj.unstakedBalance = Coin.toJSON(message.unstakedBalance);
@@ -280,7 +262,6 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
     const message = createBaseMorseClaimableAccount();
     message.shannonDestAddress = object.shannonDestAddress ?? "";
     message.morseSrcAddress = object.morseSrcAddress ?? "";
-    message.publicKey = object.publicKey ?? new Uint8Array(0);
     message.unstakedBalance = (object.unstakedBalance !== undefined && object.unstakedBalance !== null)
       ? Coin.fromPartial(object.unstakedBalance)
       : undefined;
@@ -294,31 +275,6 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
     return message;
   },
 };
-
-function bytesFromBase64(b64: string): Uint8Array {
-  if ((globalThis as any).Buffer) {
-    return Uint8Array.from(globalThis.Buffer.from(b64, "base64"));
-  } else {
-    const bin = globalThis.atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; ++i) {
-      arr[i] = bin.charCodeAt(i);
-    }
-    return arr;
-  }
-}
-
-function base64FromBytes(arr: Uint8Array): string {
-  if ((globalThis as any).Buffer) {
-    return globalThis.Buffer.from(arr).toString("base64");
-  } else {
-    const bin: string[] = [];
-    arr.forEach((byte) => {
-      bin.push(globalThis.String.fromCharCode(byte));
-    });
-    return globalThis.btoa(bin.join(""));
-  }
-}
 
 type Builtin = Date | Function | Uint8Array | string | number | boolean | undefined;
 

@@ -1124,3 +1124,108 @@ type BlockSupply @entity {
   block: Block!
   supply: Supply!
 }
+
+# --- MIGRATION ---
+
+type MsgImportMorseClaimableAccounts @entity {
+  id: ID!
+  authority: Account!
+  morseAccountStateHash: String!
+  block: Block!
+  message: Message!
+  transaction: Transaction!
+  morseClaimableAccounts: [MorseClaimableAccount] @derivedFrom(field: "msgImportMorseClaimableAccounts")
+}
+
+type MorseClaimableAccount @entity {
+  # the id is the morse_src_address
+  id: ID!
+  msgImportMorseClaimableAccounts: MsgImportMorseClaimableAccounts!
+  unstakedBalanceAmount: BigInt!
+  supplierStakeAmount: BigInt!
+  applicationStakeAmount: BigInt!
+
+  # to be filled when claiming
+  shannonDestAddress: String
+  claimedAtHeight: BigInt
+  claimed: Boolean!
+
+  # TODO(@Alann27): the denominations are really needed? We know for sure that they are upokt
+  unstakedBalanceDenom: String!
+  supplierStakeDenom: String!
+  applicationStakeDenom: String!
+}
+
+type MsgClaimMorseAccount @entity {
+  id: ID!
+  account: Account!
+  shannonSigningAddress: String!
+  shannonDestAddress: String!
+  morsePublicKey: String!
+  morseSrcAddress: String!
+  morseSignature: String!
+  # Retrieved from the event
+  balanceAmount: BigInt!
+  balanceDenom: String!
+  # ---
+  block: Block!
+  transaction: Transaction!
+  message: Message!
+}
+
+type MsgClaimMorseApplication @entity {
+  id: ID!
+  application: Application!
+  shannonSigningAddress: String!
+  shannonDestAddress: String!
+  morsePublicKey: String!
+  morseSrcAddress: String!
+  morseSignature: String!
+  # Retrieved from the event
+  stakeAmount: BigInt!
+  stakeDenom: String!
+  balanceAmount: BigInt!
+  balanceDenom: String!
+  # ---
+  block: Block!
+  transaction: Transaction!
+  message: Message!
+  serviceConfigs: [MsgClaimMorseApplicationService] @derivedFrom(field: "claimMsg")
+}
+
+# Many to man
+type MsgClaimMorseApplicationService @entity {
+  id: ID!
+  claimMsg: MsgClaimMorseApplication!
+  service: Service!
+}
+
+type MsgClaimMorseSupplier @entity {
+  id: ID!
+  supplier: Supplier!
+  shannonSigningAddress: String!
+  shannonOwnerAddress: String!
+  shannonOperatorAddress: String!
+  morsePublicKey: String!
+  morseSrcAddress: String!
+  morseSignature: String!
+  # Retrieved from the event
+  stakeAmount: BigInt!
+  stakeDenom: String!
+  balanceAmount: BigInt!
+  balanceDenom: String!
+  # ---
+  block: Block!
+  transaction: Transaction!
+  message: Message!
+  serviceConfigs: [MsgClaimMorseSupplierService] @derivedFrom(field: "claimMsg")
+}
+
+type MsgClaimMorseSupplierService @entity {
+  id: ID!
+  claimMsg: MsgClaimMorseSupplier!
+  service: Service!
+  revShare: [SupplierRevShare]!
+  endpoints: [SupplierEndpoint]!
+}
+

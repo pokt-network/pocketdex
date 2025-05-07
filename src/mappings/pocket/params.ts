@@ -17,6 +17,9 @@ import {
   MsgUpdateParams as MsgUpdateGatewayParams,
 } from "../../client/pocket/gateway/tx";
 import {
+  MsgUpdateParams as MsgUpdateMigrationParams,
+} from "../../client/pocket/migration/tx";
+import {
   MsgUpdateParam as MsgUpdateProofParam,
   MsgUpdateParams as MsgUpdateProofParams,
 } from "../../client/pocket/proof/tx";
@@ -66,6 +69,7 @@ const msgUpdateParamsMap: Record<string, {
   "/pocket.tokenomics.MsgUpdateParams": MsgUpdateTokenomicsParams,
   "/pocket.session.MsgUpdateParam": MsgUpdateSessionParam,
   "/pocket.session.MsgUpdateParams": MsgUpdateSessionParams,
+  "/pocket.migration.MsgUpdateParams": MsgUpdateMigrationParams,
   "/cosmos.auth.v1beta1.MsgUpdateParams": MsgUpdateAuthParams,
   "/cosmos.bank.v1beta1.MsgUpdateParams": MsgUpdateBankParams,
   "/cosmos.distribution.v1beta1.MsgUpdateParams": MsgUpdateDistributionParams,
@@ -90,24 +94,7 @@ export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): Upd
   const params: Array<ParamProps> = [];
 
   const msgCodec = msgUpdateParamsMap[encodedMsg.typeUrl];
-  const uintArray = new Uint8Array(Object.values(encodedMsg.value));
-  let decodedMsg: unknown;
-
-  // We need to pass a BinaryReader to decode pocket messages because
-  // TextDecoder.decode can't decode the Uint8Array for some unknown reason
-  if (encodedMsg.typeUrl.startsWith("/pocket")) {
-    decodedMsg = msgCodec.decode(
-      new BinaryReader(
-        uintArray,
-        (bytes) => {
-          return Buffer.from(bytes).toString("utf-8");
-        }),
-    );
-  } else {
-    decodedMsg = msgCodec.decode(
-      uintArray,
-    );
-  }
+  const decodedMsg = msgCodec.decode(new Uint8Array(Object.values(encodedMsg.value)));
 
   const decodedJsonMsg = msgCodec.toJSON(decodedMsg) as Record<string, unknown>;
   const namespace: string = encodedMsg.typeUrl.split(".")[1];
@@ -117,22 +104,10 @@ export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): Upd
     blockId,
   };
 
-  if (encodedMsg.typeUrl.endsWith("MsgUpdateParams")) {
-    for (const [key, value] of Object.entries(decodedJsonMsg.params as Record<string, unknown>)) {
-      const snakeKey = snakeCase(key);
-      params.push({
-        id: getParamId(namespace, snakeKey, blockId),
-        // we handle the key as snake case because is the same way it is coming on the genesis file.
-        key: snakeKey,
-        value: sanitize(value),
-        ...entity,
-      });
-    }
-  } else {
-    for (const key of Object.keys(decodedJsonMsg)) {
-      const value = decodedJsonMsg[key];
-      if (key.startsWith("as")) {
-        const snakeKey = snakeCase(decodedJsonMsg.name as string);
+  if (encodedMsg.typeUrl.includes('MsgUpdateParam')) {
+    if (encodedMsg.typeUrl.endsWith("MsgUpdateParams")) {
+      for (const [key, value] of Object.entries(decodedJsonMsg.params as Record<string, unknown>)) {
+        const snakeKey = snakeCase(key);
         params.push({
           id: getParamId(namespace, snakeKey, blockId),
           // we handle the key as snake case because is the same way it is coming on the genesis file.
@@ -140,6 +115,20 @@ export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): Upd
           value: sanitize(value),
           ...entity,
         });
+      }
+    } else {
+      for (const key of Object.keys(decodedJsonMsg)) {
+        const value = decodedJsonMsg[key];
+        if (key.startsWith("as")) {
+          const snakeKey = snakeCase(decodedJsonMsg.name as string);
+          params.push({
+            id: getParamId(namespace, snakeKey, blockId),
+            // we handle the key as snake case because is the same way it is coming on the genesis file.
+            key: snakeKey,
+            value: sanitize(value),
+            ...entity,
+          });
+        }
       }
     }
   }

@@ -99,6 +99,14 @@ export function getRelayId({
   return `${supplierId}-${applicationId}-${serviceId}-${sessionId}`;
 }
 
+export function getAuthzId(
+  granter: string,
+  msg: string,
+  grantee: string,
+): string {
+  return `${granter}:${msg.replace("/", "") as string}-${grantee}`;
+}
+
 // always the same to ensure we get consistent results
 const namespace = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 

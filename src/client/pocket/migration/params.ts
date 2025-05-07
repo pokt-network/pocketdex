@@ -11,14 +11,24 @@ export const protobufPackage = "pocket.migration";
 
 /** Params defines the parameters for the module. */
 export interface Params {
+  /**
+   * waive_morse_claim_gas_fees is a feature flag used to enable/disable the waiving of gas fees for txs that:
+   * - Contain exactly one secp256k1 signer
+   * - Contain at least one Morse account/actor claim messages
+   * - Do not contain any other messages other than Morse account/actor claim messages
+   */
+  waiveMorseClaimGasFees: boolean;
 }
 
 function createBaseParams(): Params {
-  return {};
+  return { waiveMorseClaimGasFees: false };
 }
 
 export const Params: MessageFns<Params> = {
-  encode(_: Params, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(message: Params, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.waiveMorseClaimGasFees !== false) {
+      writer.uint32(8).bool(message.waiveMorseClaimGasFees);
+    }
     return writer;
   },
 
@@ -29,6 +39,14 @@ export const Params: MessageFns<Params> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.waiveMorseClaimGasFees = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -38,20 +56,28 @@ export const Params: MessageFns<Params> = {
     return message;
   },
 
-  fromJSON(_: any): Params {
-    return {};
+  fromJSON(object: any): Params {
+    return {
+      waiveMorseClaimGasFees: isSet(object.waiveMorseClaimGasFees)
+        ? globalThis.Boolean(object.waiveMorseClaimGasFees)
+        : false,
+    };
   },
 
-  toJSON(_: Params): unknown {
+  toJSON(message: Params): unknown {
     const obj: any = {};
+    if (message.waiveMorseClaimGasFees !== false) {
+      obj.waiveMorseClaimGasFees = message.waiveMorseClaimGasFees;
+    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<Params>, I>>(base?: I): Params {
     return Params.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<Params>, I>>(_: I): Params {
+  fromPartial<I extends Exact<DeepPartial<Params>, I>>(object: I): Params {
     const message = createBaseParams();
+    message.waiveMorseClaimGasFees = object.waiveMorseClaimGasFees ?? false;
     return message;
   },
 };
@@ -67,6 +93,10 @@ export type DeepPartial<T> = T extends Builtin ? T
 type KeysOfUnion<T> = T extends T ? keyof T : never;
 export type Exact<P, I extends P> = P extends Builtin ? P
   : P & { [K in keyof P]: Exact<P[K], I[K]> } & { [K in Exclude<keyof I, KeysOfUnion<P>>]: never };
+
+function isSet(value: any): boolean {
+  return value !== null && value !== undefined;
+}
 
 export interface MessageFns<T> {
   encode(message: T, writer?: BinaryWriter): BinaryWriter;

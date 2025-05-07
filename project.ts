@@ -386,15 +386,37 @@ const project: CosmosProject = {
           ],
         },
       ],
+      // --- MIGRATION
+      [
+        "pocket.migration_events",
+        {
+          file: "./proto/pocket/migration/event.proto",
+          messages: [
+            "EventImportMorseClaimableAccounts",
+            "EventMorseAccountClaimed",
+            "EventMorseApplicationClaimed",
+            "EventMorseSupplierClaimed",
+          ],
+        },
+      ],
+      [
+        "pocket.migration_tx",
+        {
+          file: "./proto/pocket/migration/tx.proto",
+          messages: [
+            "MsgImportMorseClaimableAccounts",
+            "MsgClaimMorseAccount",
+            "MsgClaimMorseApplication",
+            "MsgClaimMorseSupplier",
+          ],
+        },
+      ],
     ]),
   },
   dataSources: [
     {
       startBlock: 1,
-      // startBlock: 349, // first set of txs
-      // startBlock: 34123, // first set of claims
-      // startBlock: 55330, // damn big block 176k events
-      // startBlock: 58120, // more than 570 mb in response
+      // migration at 25507 on alpha
       kind: CosmosDatasourceKind.Runtime,
       mapping: {
         file: "./dist/index.js",
