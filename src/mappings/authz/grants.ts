@@ -54,7 +54,11 @@ function _handleMsgGrant(msg: CosmosMessage<MsgGrant>): AuthzProps {
   const {grant, grantee, granter} = msg.msg.decodedMsg;
 
   const expiration = grant.expiration ? new Date(Number(grant.expiration.seconds) * 1000 + Math.floor(grant.expiration.nanos / 1_000_000)) : undefined
-  const event = msg.block.events.find(e => e.event.type === '' && isEventOfMessageKind(e) && e.tx.hash === msg.tx.hash)!
+  const event = msg.block.events.find(e => e.event.type === 'cosmos.authz.v1beta1.EventGrant' && isEventOfMessageKind(e) && e.tx.hash === msg.tx.hash)!
+
+  if (!event) {
+    throw new Error(`[handleMsgGrant] event for MsgGrant not found at ${msg.block.header.height} height`);
+  }
 
   let msgType: string | null = null
 
