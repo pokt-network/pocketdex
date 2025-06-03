@@ -63,6 +63,11 @@ function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | 
     case "APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE":{
       return ApplicationUnbondingReason.BELOW_MINIMUM_STAKE
     }
+    case 2:
+    case ApplicationUnbondingReasonSDKType.APPLICATION_UNBONDING_REASON_MIGRATION:
+    case "APPLICATION_UNBONDING_REASON_MIGRATION":{
+      return ApplicationUnbondingReason.MIGRATION
+    }
     default:
       throw new Error(`Unknown ApplicationUnbondingReason=${item}`)
   }
@@ -182,7 +187,7 @@ async function _handleMsgClaimMorseApplication(
   const msgId = messageId(msg);
   const { shannonDestAddress, } = msg.msg.decodedMsg;
 
-  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null;
+  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null, app: ApplicationSDKType | null = null;
 
   for (const event of msg.tx.tx.events) {
     if (event.type === 'pocket.migration.EventMorseApplicationClaimed') {
@@ -204,16 +209,28 @@ async function _handleMsgClaimMorseApplication(
             amount: coin.amount,
           }
         }
+
+        if (attribute.key === 'application') {
+          app = JSON.parse(attribute.value as string);
+        }
       }
     }
   }
 
   if (!stakeCoin) {
-    throw new Error(`[handleMsgClaimMorseSupplier] stake coin not found in event`);
+    throw new Error(`[handleMsgClaimMorseApplication] stake coin not found in event`);
   }
 
   if (!balanceCoin) {
-    throw new Error(`[handleMsgClaimMorseSupplier] balance coin not found in event`);
+    throw new Error(`[handleMsgClaimMorseApplication] balance coin not found in event`);
+  }
+
+  if (!app) {
+    throw new Error(`[handleMsgClaimMorseApplication] supplier not found in event`);
+  }
+
+  if (!app.stake) {
+    throw new Error(`[handleMsgClaimMorseApplication] supplier stake not found in event`);
   }
 
   const stakeAmount = BigInt(stakeCoin.amount);
@@ -225,7 +242,7 @@ async function _handleMsgClaimMorseApplication(
     blockId: getBlockId(msg.block),
     applicationId: shannonDestAddress,
     messageId: msgId,
-    stakeAmount,
+    stakeAmount: stakeAmount,
     stakeDenom,
     balanceAmount: BigInt(balanceCoin.amount),
     balanceDenom: balanceCoin.denom,
@@ -249,8 +266,8 @@ async function _handleMsgClaimMorseApplication(
       address: shannonDestAddress,
       msgId,
       services: [msg.msg.decodedMsg.serviceConfig!],
-      stakeAmount,
-      stakeDenom,
+      stakeAmount: BigInt(app.stake.amount),
+      stakeDenom: app.stake.denom,
       serviceMsgIdKey: 'claimMsgId'
     }),
   ];
