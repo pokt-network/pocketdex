@@ -1181,8 +1181,10 @@ type MorseClaimableAccount @entity {
 
   # to be filled when claiming
   shannonDestAddress: String
-  claimedAtHeight: BigInt
+  claimedAt: Block
   claimed: Boolean!
+  transaction: Transaction
+  claimedMsg: Message
 
   # TODO(@Alann27): the denominations are really needed? We know for sure that they are upokt
   unstakedBalanceDenom: String!
