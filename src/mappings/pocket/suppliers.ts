@@ -16,6 +16,7 @@ import {
   SupplierRevShare,
   SupplierServiceConfig,
   SupplierUnbondingReason,
+  MorseSupplierClaimSignerType,
 } from "../../types";
 import { MsgClaimMorseSupplierProps } from "../../types/models/MsgClaimMorseSupplier";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
@@ -43,6 +44,30 @@ import {
 import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
 import { updateMorseClaimableAccounts } from "./migration";
 import { fetchAllSupplierServiceConfigBySupplier } from "./pagination";
+import { MorseSupplierClaimSignerTypeSDKType } from "../../types/proto-interfaces/pocket/migration/morse_onchain";
+
+function getMorseSupplierClaimSignerType(item: typeof MorseSupplierClaimSignerTypeSDKType | string | number): MorseSupplierClaimSignerType {
+  switch (item) {
+    case 0:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED":
+    case MorseSupplierClaimSignerTypeSDKType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED:
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED
+    case 1:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR":
+    case MorseSupplierClaimSignerTypeSDKType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR:
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_CUSTODIAL_SIGNED_BY_NODE_ADDR
+    case 2:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR":
+    case MorseSupplierClaimSignerTypeSDKType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR:
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR
+    case 3:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER":
+    case MorseSupplierClaimSignerTypeSDKType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER:
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_NON_CUSTODIAL_SIGNED_BY_OWNER
+    default:
+      throw new Error(`Unknown MorseSupplierClaimSignerType=${item}`)
+  }
+}
 
 function getSupplierUnbondingReasonFromSDK(item: typeof SupplierUnbondingReasonSDKType | string | number): SupplierUnbondingReason {
   switch (item) {
@@ -196,11 +221,15 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
 async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupplier>) {
   const msgId = messageId(msg);
 
-  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null;
+  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null, supplier: SupplierSDKType | null = null, claimSignerType: string | null = null;
 
   for (const event of msg.tx.tx.events) {
     if (event.type === 'pocket.migration.EventMorseSupplierClaimed') {
       for (const attribute of event.attributes) {
+        if (attribute.key === 'claim_signer_type') {
+          claimSignerType = (attribute.value as string).replaceAll("\"", "");
+        }
+
         if (attribute.key === 'claimed_balance') {
           const coin: CoinSDKType = JSON.parse(attribute.value as string);
 
@@ -208,6 +237,10 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
             denom: coin.denom,
             amount: coin.amount,
           }
+        }
+
+        if (attribute.key === 'supplier') {
+          supplier = JSON.parse(attribute.value as string);
         }
 
         if (attribute.key === 'claimed_supplier_stake') {
@@ -230,13 +263,22 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
     throw new Error(`[handleMsgClaimMorseSupplier] balance coin not found in event`);
   }
 
+  if (!supplier) {
+    throw new Error(`[handleMsgClaimMorseSupplier] supplier not found in event`);
+  }
+
+  if (!supplier.stake) {
+    throw new Error(`[handleMsgClaimMorseSupplier] supplier stake not found in event`);
+  }
+
   const promises = await _stakeSupplier({
     msgId,
     msgServicesEntityName: "MsgClaimMorseSupplierService",
     operatorAddress: msg.msg.decodedMsg.shannonOperatorAddress,
     ownerAddress: msg.msg.decodedMsg.shannonOwnerAddress,
     services: msg.msg.decodedMsg.services,
-    stake: stakeCoin,
+    // we are using this stake because the migration allows migrating a supplier to an existing one, just adding the stake
+    stake: supplier.stake,
     serviceMsgIdKey: 'claimMsgId',
   });
 
@@ -262,6 +304,9 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
       blockId: getBlockId(msg.block),
       transactionId: msg.tx.hash,
       messageId: msgId,
+      morseNodeAddress: msg.msg.decodedMsg.morseNodeAddress,
+      signerIsOutputAddress: msg.msg.decodedMsg.signerIsOutputAddress,
+      claimSignerType: claimSignerType ? getMorseSupplierClaimSignerType(claimSignerType) : undefined,
     }).save()
   )
 

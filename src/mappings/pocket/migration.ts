@@ -8,8 +8,9 @@ import {
   MsgClaimMorseAccountProps,
 } from "../../types/models/MsgClaimMorseAccount";
 import type { MsgImportMorseClaimableAccountsProps } from "../../types/models/MsgImportMorseClaimableAccounts";
+import { MsgRecoverMorseAccountProps } from "../../types/models/MsgRecoverMorseAccount";
 import type { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
-import type { MsgClaimMorseAccount } from "../../types/proto-interfaces/pocket/migration/tx";
+import type { MsgClaimMorseAccount, MsgRecoverMorseAccount } from "../../types/proto-interfaces/pocket/migration/tx";
 import type { EncodedMsg } from "../types";
 import { getStoreModel } from "../utils/db";
 import { messageId } from "../utils/ids";
@@ -63,6 +64,42 @@ function _handleMsgClaimMorseAccount(
   })
 }
 
+function _handleMsgRecoverMorseAccount(msg: CosmosMessage<MsgRecoverMorseAccount>): MsgRecoverMorseAccountProps {
+  let recoveredBalance: Coin | null = null;
+
+  for (const event of msg.tx.tx.events) {
+    if (event.type === 'pocket.migration.EventMorseAccountRecovered') {
+      for (const attribute of event.attributes) {
+        if (attribute.key === 'recovered_balance') {
+          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+
+          recoveredBalance = {
+            denom: coin.denom,
+            amount: coin.amount,
+          }
+        }
+      }
+    }
+  }
+
+  if (!recoveredBalance) {
+    throw new Error(`[handleMsgRecoverMorseAccount] recovered balance not found in event`);
+  }
+
+  return {
+    id: messageId(msg),
+    recoveredBalanceAmount: BigInt(recoveredBalance.amount),
+    recoveredBalanceDenom: recoveredBalance.denom,
+    authorityId: msg.msg.decodedMsg.authority,
+    morseSrcAddress: msg.msg.decodedMsg.morseSrcAddress,
+    shannonDestAddressId: msg.msg.decodedMsg.shannonDestAddress,
+
+    blockId: msg.block.header.height,
+    transactionId: msg.tx.hash,
+    messageId: messageId(msg),
+  }
+}
+
 export async function updateMorseClaimableAccounts(
   items: Array<{
     publicKey?: Uint8Array
@@ -91,7 +128,7 @@ export async function updateMorseClaimableAccounts(
             publicKey!,
             undefined,
             true
-          )
+          ),
         },
         transaction: store.context.transaction,
       },
@@ -107,6 +144,20 @@ export async function handleMsgClaimMorseAccount(
     updateMorseClaimableAccounts(
       messages.map((msg) => ({
         publicKey: msg.msg.decodedMsg.morsePublicKey,
+        destinationAddress: msg.msg.decodedMsg.shannonDestAddress,
+      }))
+    )
+  ]);
+}
+
+export async function handleMsgRecoverMorseAccount(
+  messages: Array<CosmosMessage<MsgRecoverMorseAccount>>,
+): Promise<void> {
+  await Promise.all([
+    store.bulkCreate("MsgRecoverMorseAccount", messages.map(_handleMsgRecoverMorseAccount)),
+    updateMorseClaimableAccounts(
+      messages.map((msg) => ({
+        morseAddress: msg.msg.decodedMsg.morseSrcAddress,
         destinationAddress: msg.msg.decodedMsg.shannonDestAddress,
       }))
     )
@@ -154,6 +205,8 @@ export function handleMsgImportMorseClaimableAccounts({
       claimed: false,
       unstakedBalanceAmount: BigInt(account.unstakedBalance?.amount || 0),
       unstakedBalanceDenom: account.unstakedBalance?.denom || "",
+      morseOutputAddress: account.morseOutputAddress || undefined,
+      unstakingTime: account.unstakingTime ? new Date(account.unstakingTime) : undefined,
     }))
   }
 }

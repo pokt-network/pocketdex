@@ -569,6 +569,7 @@ async function indexStake(msgByType: MessageByType, eventByType: EventByType): P
 async function indexMigrationAccounts(msgByType: MessageByType): Promise<void> {
   const msgTypes = [
     "/pocket.migration.MsgClaimMorseAccount",
+    "/pocket.migration.MsgRecoverMorseAccount",
   ];
 
   await Promise.all([

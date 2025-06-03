@@ -22,7 +22,7 @@ import {
   handleEventGatewayUnbondingBegin,
   handleEventGatewayUnbondingEnd,
 } from "./pocket/gateways";
-import { handleMsgClaimMorseAccount } from "./pocket/migration";
+import { handleMsgClaimMorseAccount, handleMsgRecoverMorseAccount } from "./pocket/migration";
 import {
   handleEventApplicationOverserviced,
   handleEventApplicationReimbursementRequest,
@@ -64,6 +64,7 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   "/cosmos.authz.v1beta1.MsgGrant": handleMsgGrant,
   // migration
   "/pocket.migration.MsgClaimMorseAccount": handleMsgClaimMorseAccount,
+  "/pocket.migration.MsgRecoverMorseAccount": handleMsgRecoverMorseAccount,
   "/pocket.migration.MsgClaimMorseApplication": handleMsgClaimMorseApplication,
   "/pocket.migration.MsgClaimMorseSupplier": handleMsgClaimMorseSupplier,
   // bank
