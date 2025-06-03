@@ -529,6 +529,8 @@ export async function handleMsgClaimMorseSupplier(
       messages.map((msg) => ({
         publicKey: msg.msg.decodedMsg.morsePublicKey,
         destinationAddress: msg.msg.decodedMsg.shannonOperatorAddress,
+        claimedMsgId: messageId(msg),
+        transactionHash: msg.tx.hash,
       }))
     )
   ]);

@@ -94,7 +94,7 @@ function _handleMsgRecoverMorseAccount(msg: CosmosMessage<MsgRecoverMorseAccount
     morseSrcAddress: msg.msg.decodedMsg.morseSrcAddress,
     shannonDestAddressId: msg.msg.decodedMsg.shannonDestAddress,
 
-    blockId: msg.block.header.height,
+    blockId: BigInt(msg.block.header.height),
     transactionId: msg.tx.hash,
     messageId: messageId(msg),
   }
@@ -105,20 +105,24 @@ export async function updateMorseClaimableAccounts(
     publicKey?: Uint8Array
     morseAddress?: string
     destinationAddress: string
+    transactionHash: string
+    claimedMsgId: string
   }>,
 ): Promise<void> {
   const MorseClaimableAccountModel = getStoreModel("MorseClaimableAccount");
   const blockHeight = store.context.getHistoricalUnit();
 
   await Promise.all(
-    items.map(({ destinationAddress, morseAddress, publicKey }) => MorseClaimableAccountModel.model.update(
+    items.map(({ claimedMsgId, destinationAddress, morseAddress, publicKey, transactionHash }) => MorseClaimableAccountModel.model.update(
       // mark as claimed
       {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
-        claimed_at_height: blockHeight,
+        claimed_at_id: blockHeight,
         claimed: true,
         shannon_dest_address: destinationAddress,
+        transaction_id: transactionHash,
+        claimed_msg_id: claimedMsgId,
       },
       {
         hooks: false,
@@ -145,6 +149,8 @@ export async function handleMsgClaimMorseAccount(
       messages.map((msg) => ({
         publicKey: msg.msg.decodedMsg.morsePublicKey,
         destinationAddress: msg.msg.decodedMsg.shannonDestAddress,
+        claimedMsgId: messageId(msg),
+        transactionHash: msg.tx.hash,
       }))
     )
   ]);
@@ -159,6 +165,8 @@ export async function handleMsgRecoverMorseAccount(
       messages.map((msg) => ({
         morseAddress: msg.msg.decodedMsg.morseSrcAddress,
         destinationAddress: msg.msg.decodedMsg.shannonDestAddress,
+        claimedMsgId: messageId(msg),
+        transactionHash: msg.tx.hash,
       }))
     )
   ]);
