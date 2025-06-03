@@ -21,25 +21,26 @@ export interface Application {
     | undefined;
   /**
    * CRITICAL: Must contain EXACTLY ONE service config
-   * This prevents applications from over-servicing.
-   * Kept as repeated field for legacy and future compatibility
-   * Refs:
+   * - Enforces a single service configuration per application to prevent over-servicing.
+   * - Field is repeated for legacy reasons and potential future compatibility.
+   * - References for rationale:
    *   - https://github.com/pokt-network/poktroll/pull/750#discussion_r1735025033
    *   - https://www.notion.so/buildwithgrove/Off-chain-Application-Stake-Tracking-6a8bebb107db4f7f9dc62cbe7ba555f7
    */
   serviceConfigs: ApplicationServiceConfig[];
   /**
-   * TODO_MAINNET_MIGRATION(@bryanchriswhite): Rename `delegatee_gateway_addresses` to `gateway_addresses_delegated_to`.
-   * Ensure to rename all relevant configs, comments, variables, function names, etc as well.
-   * Non-nullable list of Bech32 encoded delegatee Gateway addresses
+   * TODO_MAINNET_MIGRATION(@bryanchriswhite): Rename `delegatee_gateway_addresses` to `gateway_addresses_delegated_to` for better clarity and consistency.
+   * - Update all related configs, comments, variables, and function names throughout the codebase to reflect this change.
+   * - This field is a non-nullable list of Bech32-encoded delegatee Gateway addresses.
    */
   delegateeGatewayAddresses: string[];
   /**
    * Mapping of session end heights to gateways being undelegated from
-   * - Key: Height of the last block of the session when undelegation tx was committed
-   * - Value: List of gateways being undelegated from
-   * TODO_DOCUMENT(@red-0ne): Need to document the flow from this comment
-   * so its clear to everyone why this is necessary; https://github.com/pokt-network/poktroll/issues/476#issuecomment-2052639906.
+   * - Key: Height of the last block of the session when the undelegation transaction was committed
+   * - Value: List of gateways being undelegated from at that session end height
+   * TODO_DOCUMENT(@red-0ne): Document the complete flow and rationale behind this mapping.
+   * - Ensure the documentation explains why tracking pending undelegations by session end height is necessary.
+   * - See: https://github.com/pokt-network/poktroll/issues/476#issuecomment-2052639906 for context and examples.
    */
   pendingUndelegations: { [key: number]: UndelegatingGatewayList };
   /** Session end height when application initiated unstaking (0 if not unstaking) */
@@ -68,6 +69,20 @@ export interface UndelegatingGatewayList {
 export interface PendingApplicationTransfer {
   destinationAddress: string;
   sessionEndHeight: number;
+}
+
+/**
+ * Undelegation represents a connection between an application and a gateway that
+ * is in the process of being removed.
+ *
+ * This record is stored in the undelegation index
+ * and used to track and process pending undelegations after the unbonding period has elapsed.
+ */
+export interface PendingUndelegation {
+  /** Address of the application that is undelegating from the gateway. */
+  applicationAddress: string;
+  /** Address of the gateway that the application is undelegating from. */
+  gatewayAddress: string;
 }
 
 function createBaseApplication(): Application {
@@ -484,6 +499,82 @@ export const PendingApplicationTransfer: MessageFns<PendingApplicationTransfer> 
     const message = createBasePendingApplicationTransfer();
     message.destinationAddress = object.destinationAddress ?? "";
     message.sessionEndHeight = object.sessionEndHeight ?? 0;
+    return message;
+  },
+};
+
+function createBasePendingUndelegation(): PendingUndelegation {
+  return { applicationAddress: "", gatewayAddress: "" };
+}
+
+export const PendingUndelegation: MessageFns<PendingUndelegation> = {
+  encode(message: PendingUndelegation, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.applicationAddress !== "") {
+      writer.uint32(10).string(message.applicationAddress);
+    }
+    if (message.gatewayAddress !== "") {
+      writer.uint32(18).string(message.gatewayAddress);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PendingUndelegation {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePendingUndelegation();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.gatewayAddress = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PendingUndelegation {
+    return {
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      gatewayAddress: isSet(object.gatewayAddress) ? globalThis.String(object.gatewayAddress) : "",
+    };
+  },
+
+  toJSON(message: PendingUndelegation): unknown {
+    const obj: any = {};
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.gatewayAddress !== "") {
+      obj.gatewayAddress = message.gatewayAddress;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PendingUndelegation>, I>>(base?: I): PendingUndelegation {
+    return PendingUndelegation.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PendingUndelegation>, I>>(object: I): PendingUndelegation {
+    const message = createBasePendingUndelegation();
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.gatewayAddress = object.gatewayAddress ?? "";
     return message;
   },
 };

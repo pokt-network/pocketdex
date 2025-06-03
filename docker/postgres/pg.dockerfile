@@ -14,11 +14,11 @@ RUN apk add --no-cache --virtual .build-deps \
     curl
 
 # Clone, build, and install system_stats extension
-RUN git clone https://github.com/EnterpriseDB/system_stats.git /tmp/system_stats && \
-    cd /tmp/system_stats && \
-    PATH="/usr/local/pgsql/bin:$PATH" make USE_PGXS=1 && \
-    PATH="/usr/local/pgsql/bin:$PATH" make install USE_PGXS=1 && \
-    cd .. && rm -rf /tmp/system_stats
+#RUN git clone https://github.com/EnterpriseDB/system_stats.git /tmp/system_stats && \
+#    cd /tmp/system_stats && \
+#    PATH="/usr/local/pgsql/bin:$PATH" make USE_PGXS=1 && \
+#    PATH="/usr/local/pgsql/bin:$PATH" make install USE_PGXS=1 && \
+#    cd .. && rm -rf /tmp/system_stats
 
 # Copy in the load-extensions script
 COPY docker/postgres/load-extensions.sh /docker-entrypoint-initdb.d/

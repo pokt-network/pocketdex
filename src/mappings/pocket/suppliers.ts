@@ -58,6 +58,10 @@ function getSupplierUnbondingReasonFromSDK(item: typeof SupplierUnbondingReasonS
     case SupplierUnbondingReasonSDKType.SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE:
     case "SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE":
       return SupplierUnbondingReason.BELOW_MIN_STAKE
+    case 3:
+    case SupplierUnbondingReasonSDKType.SUPPLIER_UNBONDING_REASON_MIGRATION:
+    case "SUPPLIER_UNBONDING_REASON_MIGRATION":
+      return SupplierUnbondingReason.MIGRATION
     default:
       throw new Error(`Unknown SupplierUnbondingReason=${item}`)
   }
@@ -260,6 +264,8 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
       messageId: msgId,
     }).save()
   )
+
+  await Promise.all(promises);
 }
 
 async function _handleUnstakeSupplierMsg(

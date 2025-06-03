@@ -42,15 +42,26 @@ export interface Supplier {
 /**
  * ServiceConfigUpdate tracks a change in a supplier's service configurations
  * at a specific block height, enabling tracking of configuration changes over time.
+ * This record helps maintain a complete history of service configs and their availability periods.
  */
 export interface ServiceConfigUpdate {
-  /** List of service configurations after the update was applied. */
-  services: SupplierServiceConfig[];
+  /** Operator address of the supplier corresponding to the service configuration change */
+  operatorAddress: string;
+  /** The specific service configuration that was added, modified or scheduled for removal */
+  service:
+    | SupplierServiceConfig
+    | undefined;
+  /** Block height at which this service configuration became active in the network */
+  activationHeight: number;
   /**
-   * Block height at which this service configuration update takes effect,
-   * aligned with the session start height.
+   * Block height at which this service configuration was deactivated (0 if still active)
+   * For service configs scheduled for deactivation:
+   * - This field stores the block height when deactivation will occur
+   * - After deactivation, the config remains in history only as needed for claim settlement
+   * - Once no longer required for settlement, the config is automatically removed by
+   *   the EndBlockerPruneSupplierServiceConfigHistory process
    */
-  effectiveBlockHeight: number;
+  deactivationHeight: number;
 }
 
 function createBaseSupplier(): Supplier {
@@ -207,16 +218,22 @@ export const Supplier: MessageFns<Supplier> = {
 };
 
 function createBaseServiceConfigUpdate(): ServiceConfigUpdate {
-  return { services: [], effectiveBlockHeight: 0 };
+  return { operatorAddress: "", service: undefined, activationHeight: 0, deactivationHeight: 0 };
 }
 
 export const ServiceConfigUpdate: MessageFns<ServiceConfigUpdate> = {
   encode(message: ServiceConfigUpdate, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    for (const v of message.services) {
-      SupplierServiceConfig.encode(v!, writer.uint32(10).fork()).join();
+    if (message.operatorAddress !== "") {
+      writer.uint32(10).string(message.operatorAddress);
     }
-    if (message.effectiveBlockHeight !== 0) {
-      writer.uint32(16).uint64(message.effectiveBlockHeight);
+    if (message.service !== undefined) {
+      SupplierServiceConfig.encode(message.service, writer.uint32(18).fork()).join();
+    }
+    if (message.activationHeight !== 0) {
+      writer.uint32(24).int64(message.activationHeight);
+    }
+    if (message.deactivationHeight !== 0) {
+      writer.uint32(32).int64(message.deactivationHeight);
     }
     return writer;
   },
@@ -233,15 +250,31 @@ export const ServiceConfigUpdate: MessageFns<ServiceConfigUpdate> = {
             break;
           }
 
-          message.services.push(SupplierServiceConfig.decode(reader, reader.uint32()));
+          message.operatorAddress = reader.string();
           continue;
         }
         case 2: {
-          if (tag !== 16) {
+          if (tag !== 18) {
             break;
           }
 
-          message.effectiveBlockHeight = longToNumber(reader.uint64());
+          message.service = SupplierServiceConfig.decode(reader, reader.uint32());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.activationHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.deactivationHeight = longToNumber(reader.int64());
           continue;
         }
       }
@@ -255,20 +288,26 @@ export const ServiceConfigUpdate: MessageFns<ServiceConfigUpdate> = {
 
   fromJSON(object: any): ServiceConfigUpdate {
     return {
-      services: globalThis.Array.isArray(object?.services)
-        ? object.services.map((e: any) => SupplierServiceConfig.fromJSON(e))
-        : [],
-      effectiveBlockHeight: isSet(object.effectiveBlockHeight) ? globalThis.Number(object.effectiveBlockHeight) : 0,
+      operatorAddress: isSet(object.operatorAddress) ? globalThis.String(object.operatorAddress) : "",
+      service: isSet(object.service) ? SupplierServiceConfig.fromJSON(object.service) : undefined,
+      activationHeight: isSet(object.activationHeight) ? globalThis.Number(object.activationHeight) : 0,
+      deactivationHeight: isSet(object.deactivationHeight) ? globalThis.Number(object.deactivationHeight) : 0,
     };
   },
 
   toJSON(message: ServiceConfigUpdate): unknown {
     const obj: any = {};
-    if (message.services?.length) {
-      obj.services = message.services.map((e) => SupplierServiceConfig.toJSON(e));
+    if (message.operatorAddress !== "") {
+      obj.operatorAddress = message.operatorAddress;
     }
-    if (message.effectiveBlockHeight !== 0) {
-      obj.effectiveBlockHeight = Math.round(message.effectiveBlockHeight);
+    if (message.service !== undefined) {
+      obj.service = SupplierServiceConfig.toJSON(message.service);
+    }
+    if (message.activationHeight !== 0) {
+      obj.activationHeight = Math.round(message.activationHeight);
+    }
+    if (message.deactivationHeight !== 0) {
+      obj.deactivationHeight = Math.round(message.deactivationHeight);
     }
     return obj;
   },
@@ -278,8 +317,12 @@ export const ServiceConfigUpdate: MessageFns<ServiceConfigUpdate> = {
   },
   fromPartial<I extends Exact<DeepPartial<ServiceConfigUpdate>, I>>(object: I): ServiceConfigUpdate {
     const message = createBaseServiceConfigUpdate();
-    message.services = object.services?.map((e) => SupplierServiceConfig.fromPartial(e)) || [];
-    message.effectiveBlockHeight = object.effectiveBlockHeight ?? 0;
+    message.operatorAddress = object.operatorAddress ?? "";
+    message.service = (object.service !== undefined && object.service !== null)
+      ? SupplierServiceConfig.fromPartial(object.service)
+      : undefined;
+    message.activationHeight = object.activationHeight ?? 0;
+    message.deactivationHeight = object.deactivationHeight ?? 0;
     return message;
   },
 };

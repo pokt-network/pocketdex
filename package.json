@@ -25,6 +25,7 @@
     "poktroll:proxy:start": "./scripts/proxy-tunnel.sh start",
     "poktroll:proxy:stop": "./scripts/proxy-tunnel.sh stop",
     "poktroll:update-proto-files": "scripts/copy-poktroll-files.sh",
+    "poktroll:generate-ts-from-proto": "buf generate",
     "docker:check-env:production": "env sh ./scripts/dotenv-check.sh production",
     "docker:build:production": "yarn run docker:compose production build",
     "docker:build:no-cache:production": "yarn run docker:compose production build --no-cache",

@@ -13,6 +13,7 @@ export const protobufPackage = "pocket.application";
 export enum ApplicationUnbondingReason {
   APPLICATION_UNBONDING_REASON_ELECTIVE = 0,
   APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE = 1,
+  APPLICATION_UNBONDING_REASON_MIGRATION = 2,
   UNRECOGNIZED = -1,
 }
 
@@ -24,6 +25,9 @@ export function applicationUnbondingReasonFromJSON(object: any): ApplicationUnbo
     case 1:
     case "APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE":
       return ApplicationUnbondingReason.APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE;
+    case 2:
+    case "APPLICATION_UNBONDING_REASON_MIGRATION":
+      return ApplicationUnbondingReason.APPLICATION_UNBONDING_REASON_MIGRATION;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -37,6 +41,8 @@ export function applicationUnbondingReasonToJSON(object: ApplicationUnbondingRea
       return "APPLICATION_UNBONDING_REASON_ELECTIVE";
     case ApplicationUnbondingReason.APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE:
       return "APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE";
+    case ApplicationUnbondingReason.APPLICATION_UNBONDING_REASON_MIGRATION:
+      return "APPLICATION_UNBONDING_REASON_MIGRATION";
     case ApplicationUnbondingReason.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
