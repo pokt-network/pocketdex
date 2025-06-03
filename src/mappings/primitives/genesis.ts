@@ -743,7 +743,7 @@ function saveParams(namespace: string, params: Record<string, unknown> | undefin
   }
 
   return paramsEntries.map(([key, value]) => ({
-    id: getParamId(namespace, key, getBlockId(block)),
+    id: getParamId(namespace, key),
     // we handle the key as is, which is snake case, so on the AuthzExec handler they will transform to snake too.
     key,
     namespace,

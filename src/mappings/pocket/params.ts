@@ -109,7 +109,7 @@ export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): Upd
       for (const [key, value] of Object.entries(decodedJsonMsg.params as Record<string, unknown>)) {
         const snakeKey = snakeCase(key);
         params.push({
-          id: getParamId(namespace, snakeKey, blockId),
+          id: getParamId(namespace, snakeKey),
           // we handle the key as snake case because is the same way it is coming on the genesis file.
           key: snakeKey,
           value: sanitize(value),
@@ -122,7 +122,7 @@ export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): Upd
         if (key.startsWith("as")) {
           const snakeKey = snakeCase(decodedJsonMsg.name as string);
           params.push({
-            id: getParamId(namespace, snakeKey, blockId),
+            id: getParamId(namespace, snakeKey),
             // we handle the key as snake case because is the same way it is coming on the genesis file.
             key: snakeKey,
             value: sanitize(value),
