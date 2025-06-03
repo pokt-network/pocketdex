@@ -55,7 +55,8 @@ export interface Params {
    */
   applicationUnbondingPeriodSessions: number;
   /**
-   * The amount of upokt that a compute unit should translate to when settling a session.
+   * The amount of tokens that a compute unit should translate to when settling a session.
+   * It is denominated in fractional uPOKT (1/compute_unit_cost_granularity)
    * DEV_NOTE: This used to be under x/tokenomics but has been moved here to avoid cyclic dependencies.
    */
   computeUnitsToTokensMultiplier: number;
@@ -64,6 +65,33 @@ export interface Params {
    * unstaking before their staked assets are moved to its account balance.
    */
   gatewayUnbondingPeriodSessions: number;
+  /**
+   * compute_unit_cost_granularity is the fraction of the base unit (uPOKT) used
+   * to represent the smallest price of a single compute unit.
+   * compute_unit_cost_granularity defines the smallest fraction of uPOKT that can represent
+   * the cost of a single compute unit.
+   *
+   * It acts as a denominator in the formula:
+   *
+   *   compute_unit_cost_in_uPOKT = compute_units_to_tokens_multiplier / compute_unit_cost_granularity
+   *
+   * This enables high-precision pricing of compute units using integer math.
+   * For example:
+   *
+   * +-------------------------------+---------------------------------------------+
+   * | compute_unit_cost_granularity | compute_units_to_tokens_multiplier unit     |
+   * +-------------------------------+---------------------------------------------+
+   * | 1                             | uPOKT                                       |
+   * | 1_000                         | nPOKT (nanoPOKT, 1e-3 uPOKT)                |
+   * | 1_000_000                     | pPOKT (picoPOKT, 1e-6 uPOKT)                |
+   * +-------------------------------+---------------------------------------------+
+   *
+   * ⚠️ Note: This value is a configurable global network parameter (not a constant).
+   * It must be a power of 10, allowing precise denomination shifts without affecting
+   * ongoing sessions. This prevents sessions from settling using parameters that
+   * were not in effect during their creation.
+   */
+  computeUnitCostGranularity: number;
 }
 
 function createBaseParams(): Params {
@@ -78,6 +106,7 @@ function createBaseParams(): Params {
     applicationUnbondingPeriodSessions: 0,
     computeUnitsToTokensMultiplier: 0,
     gatewayUnbondingPeriodSessions: 0,
+    computeUnitCostGranularity: 0,
   };
 }
 
@@ -112,6 +141,9 @@ export const Params: MessageFns<Params> = {
     }
     if (message.gatewayUnbondingPeriodSessions !== 0) {
       writer.uint32(80).uint64(message.gatewayUnbondingPeriodSessions);
+    }
+    if (message.computeUnitCostGranularity !== 0) {
+      writer.uint32(88).uint64(message.computeUnitCostGranularity);
     }
     return writer;
   },
@@ -203,6 +235,14 @@ export const Params: MessageFns<Params> = {
           message.gatewayUnbondingPeriodSessions = longToNumber(reader.uint64());
           continue;
         }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.computeUnitCostGranularity = longToNumber(reader.uint64());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -242,6 +282,9 @@ export const Params: MessageFns<Params> = {
       gatewayUnbondingPeriodSessions: isSet(object.gatewayUnbondingPeriodSessions)
         ? globalThis.Number(object.gatewayUnbondingPeriodSessions)
         : 0,
+      computeUnitCostGranularity: isSet(object.computeUnitCostGranularity)
+        ? globalThis.Number(object.computeUnitCostGranularity)
+        : 0,
     };
   },
 
@@ -277,6 +320,9 @@ export const Params: MessageFns<Params> = {
     if (message.gatewayUnbondingPeriodSessions !== 0) {
       obj.gatewayUnbondingPeriodSessions = Math.round(message.gatewayUnbondingPeriodSessions);
     }
+    if (message.computeUnitCostGranularity !== 0) {
+      obj.computeUnitCostGranularity = Math.round(message.computeUnitCostGranularity);
+    }
     return obj;
   },
 
@@ -295,6 +341,7 @@ export const Params: MessageFns<Params> = {
     message.applicationUnbondingPeriodSessions = object.applicationUnbondingPeriodSessions ?? 0;
     message.computeUnitsToTokensMultiplier = object.computeUnitsToTokensMultiplier ?? 0;
     message.gatewayUnbondingPeriodSessions = object.gatewayUnbondingPeriodSessions ?? 0;
+    message.computeUnitCostGranularity = object.computeUnitCostGranularity ?? 0;
     return message;
   },
 };

@@ -82,7 +82,7 @@ export interface EventClaimExpired {
   numEstimatedComputeUnits: number;
   /**
    * The uPOKT coin claimed to be rewarded for the work done as a function of
-   * the number of estimated compute units and the compute uints to token multiplier.
+   * the number of estimated compute units and the compute units to token multiplier.
    */
   claimedUpokt: Coin | undefined;
 }
@@ -111,7 +111,7 @@ export interface EventClaimSettled {
   numEstimatedComputeUnits: number;
   /**
    * The uPOKT coin claimed to be rewarded for the work done as a function of
-   * the number of estimated compute units and the compute uints to token multiplier.
+   * the number of estimated compute units and the compute units to token multiplier.
    */
   claimedUpokt:
     | Coin

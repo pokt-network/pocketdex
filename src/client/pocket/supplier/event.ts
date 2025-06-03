@@ -14,6 +14,7 @@ export enum SupplierUnbondingReason {
   SUPPLIER_UNBONDING_REASON_UNSPECIFIED = 0,
   SUPPLIER_UNBONDING_REASON_VOLUNTARY = 1,
   SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE = 2,
+  SUPPLIER_UNBONDING_REASON_MIGRATION = 3,
   UNRECOGNIZED = -1,
 }
 
@@ -28,6 +29,9 @@ export function supplierUnbondingReasonFromJSON(object: any): SupplierUnbondingR
     case 2:
     case "SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE":
       return SupplierUnbondingReason.SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE;
+    case 3:
+    case "SUPPLIER_UNBONDING_REASON_MIGRATION":
+      return SupplierUnbondingReason.SUPPLIER_UNBONDING_REASON_MIGRATION;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -43,6 +47,8 @@ export function supplierUnbondingReasonToJSON(object: SupplierUnbondingReason): 
       return "SUPPLIER_UNBONDING_REASON_VOLUNTARY";
     case SupplierUnbondingReason.SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE:
       return "SUPPLIER_UNBONDING_REASON_BELOW_MIN_STAKE";
+    case SupplierUnbondingReason.SUPPLIER_UNBONDING_REASON_MIGRATION:
+      return "SUPPLIER_UNBONDING_REASON_MIGRATION";
     case SupplierUnbondingReason.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
