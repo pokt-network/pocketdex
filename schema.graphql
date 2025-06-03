@@ -80,12 +80,14 @@ enum ApplicationUnbondingReason {
   ELECTIVE
   BELOW_MINIMUM_STAKE
   TRANSFER
+  MIGRATION
 }
 
 enum SupplierUnbondingReason {
   UNSPECIFIED
   VOLUNTARY
   BELOW_MIN_STAKE
+  MIGRATION
 }
 
 # SettlementOpReason is a distinct, tlm-specific causal reason for a given operation.

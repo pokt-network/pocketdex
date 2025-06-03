@@ -7,58 +7,154 @@
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Coin } from "../../cosmos/base/v1beta1/coin";
+import { Timestamp } from "../../google/protobuf/timestamp";
 
 export const protobufPackage = "pocket.migration";
 
 /**
- * MorseAccountState is the onchain representation of all account state to be migrated from Morse.
- * It is NEVER persisted onchain but is a dependency of the MsgImportMorseClaimableAccount handler.
- * It's main purpose is to expose the #GetHash() method for verifying the integrity of all MorseClaimableAccounts.
+ * MorseSupplierClaimSignerType
+ * - Enum for Morse supplier claim signer type
+ */
+export enum MorseSupplierClaimSignerType {
+  /** MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED - Unspecified signer type */
+  MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED = 0,
+  /**
+   * MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR - signer === addr === operator === owner
+   * Custodial signer type
+   * - The Morse node address is NOT EMPTY (i.e. operator)
+   * - The Morse output address is EMPTY (i.e. owner)
+   * - Implies that the operator and owner are THE SAME offchain identity
+   */
+  MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR = 1,
+  /**
+   * MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR - signer === operator === addr && owner !== operator
+   * Non-custodial signer type
+   * - The Morse node address is NOT EMPTY (i.e. operator)
+   * - The Morse output address is NOT EMPTY (i.e. owner)
+   * - Implies that the operator and owner are MOST LIKELY DIFFERENT offchain identities
+   * - The operator is the one signing the supplier claim
+   */
+  MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR = 2,
+  /**
+   * MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER - signer === owner && owner !== addr
+   * Owner non-custodial signer type
+   * - The Morse node address is EMPTY (i.e. operator)
+   * - The Morse output address is NOT EMPTY (i.e. owner)
+   * - Implies that the operator and owner are MOST LIKELY different offchain identities
+   * - The owner is the one signing the supplier claim
+   */
+  MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER = 3,
+  UNRECOGNIZED = -1,
+}
+
+export function morseSupplierClaimSignerTypeFromJSON(object: any): MorseSupplierClaimSignerType {
+  switch (object) {
+    case 0:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED":
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED;
+    case 1:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR":
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR;
+    case 2:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR":
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR;
+    case 3:
+    case "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER":
+      return MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return MorseSupplierClaimSignerType.UNRECOGNIZED;
+  }
+}
+
+export function morseSupplierClaimSignerTypeToJSON(object: MorseSupplierClaimSignerType): string {
+  switch (object) {
+    case MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED:
+      return "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED";
+    case MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR:
+      return "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_NODE_ADDR";
+    case MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR:
+      return "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR";
+    case MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER:
+      return "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER";
+    case MorseSupplierClaimSignerType.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
+/**
+ * MorseAccountState
+ * - Onchain representation of all account state to be migrated from Morse
+ * - NEVER persisted onchain
+ * - Dependency of the MsgImportMorseClaimableAccount handler
+ * - Main purpose: exposes #GetHash() for verifying integrity of all MorseClaimableAccounts
  */
 export interface MorseAccountState {
   accounts: MorseClaimableAccount[];
 }
 
 /**
- * MorseClaimableAccount is the onchain (persisted) representation of a Morse
- * account which is claimable as part of the Morse -> Shannon migration.
- * They are intended to be created during MorseAccountState import (see: MsgImportMorseClaimableAccount).
- * It is created ONLY ONCE and NEVER deleted (per morse_src_address per network / re-genesis).
- * It is updated ONLY ONCE, when it is claimed (per morse_src_address per network / re-genesis).
+ * MorseClaimableAccount
+ * - Onchain (persisted) representation of a Morse account claimable as part of Morse -> Shannon migration
+ * - Created during MorseAccountState import (see: MsgImportMorseClaimableAccount)
+ * - Created ONLY ONCE and NEVER deleted (per morse_src_address per network / re-genesis),
+ *   unless the allow_morse_account_import_overwrite migration param is enabled
+ * - Updated ONLY ONCE, when claimed (per morse_src_address per network / re-genesis)
  */
 export interface MorseClaimableAccount {
   /**
-   * The bech32-encoded address of the Shannon account to which the claimed balance will be minted.
-   * This field is intended to remain empty until the account has been claimed.
+   * bech32-encoded address of the Shannon account to mint claimed balance
+   * Intended to remain empty until the account is claimed
    */
   shannonDestAddress: string;
-  /** The hex-encoded address of the Morse account whose balance will be claimed. */
+  /**
+   * Hex-encoded address of the Morse account whose balance will be claimed.
+   * If this MorseClaimableAccount represents a Morse node/supplier:
+   *   - Morse non-custodial (i.e. operator) address.
+   *   - If morse_output_address is not set, this is the custodial address.
+   *   - See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   */
   morseSrcAddress: string;
-  /** The unstaked upokt tokens (i.e. account balance) available for claiming. */
+  /** Unstaked upokt tokens (account balance) available for claiming */
   unstakedBalance:
     | Coin
     | undefined;
   /**
-   * The staked tokens associated with a supplier actor which corresponds to this account address.
-   * DEV_NOTE: A few contextual notes related to Morse:
-   * - A Supplier is called a Servicer or Node (not a full node) in Morse
-   * - All Validators are Servicers, not all servicers are Validators
-   * - Automatically, the top 100 staked Servicers are validator
-   * - This only accounts for servicer stake balance transition
-   * TODO_MAINNET(@Olshansk): Develop a strategy for bootstrapping validators in Shannon by working with the cosmos ecosystem
+   * Staked tokens for supplier actor corresponding to this account address
+   * DEV_NOTE: Context for Morse:
+   * - Supplier = Servicer or Node (not a full node) in Morse
+   * - All Validators are Servicers; not all Servicers are Validators
+   * - Top 100 staked Servicers are validators (automatic)
+   * - Only accounts for servicer stake balance transition
+   * TODO_MAINNET(@Olshansk): Develop strategy for bootstrapping validators in Shannon with cosmos ecosystem
    */
   supplierStake:
     | Coin
     | undefined;
-  /** The staked tokens associated with an application actor which corresponds to this account address. */
+  /** Staked tokens for application actor corresponding to this account address */
   applicationStake:
     | Coin
     | undefined;
   /**
-   * The Shannon height at which the account was claimed.
-   * This field is intended to remain empty until the account has been claimed.
+   * Shannon height at which the account was claimed
+   * Intended to remain empty until the account is claimed
    */
   claimedAtHeight: number;
+  /**
+   * ONLY applicable to Morse node/supplier accounts.
+   * Hex-encoded address of the Morse output account/wallet associated with the Morse node/supplier.
+   * - E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
+   * - Morse custodial (i.e. owner) address, which owns the staked tokens of the operator.
+   *   See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   */
+  morseOutputAddress: string;
+  /**
+   * The ISO 8601 UTC timestamp after which the Morse node/supplier unbonding period will have elapsed.
+   * It reflects the "unbonding completion time" of the Morse node/supplier, but is called "unstaking time" to comply with necessary Morse data structures.
+   */
+  unstakingTime: Date | undefined;
 }
 
 function createBaseMorseAccountState(): MorseAccountState {
@@ -131,6 +227,8 @@ function createBaseMorseClaimableAccount(): MorseClaimableAccount {
     supplierStake: undefined,
     applicationStake: undefined,
     claimedAtHeight: 0,
+    morseOutputAddress: "",
+    unstakingTime: undefined,
   };
 }
 
@@ -153,6 +251,12 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
     }
     if (message.claimedAtHeight !== 0) {
       writer.uint32(64).int64(message.claimedAtHeight);
+    }
+    if (message.morseOutputAddress !== "") {
+      writer.uint32(74).string(message.morseOutputAddress);
+    }
+    if (message.unstakingTime !== undefined) {
+      Timestamp.encode(toTimestamp(message.unstakingTime), writer.uint32(82).fork()).join();
     }
     return writer;
   },
@@ -212,6 +316,22 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
           message.claimedAtHeight = longToNumber(reader.int64());
           continue;
         }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.morseOutputAddress = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.unstakingTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -229,6 +349,8 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
       supplierStake: isSet(object.supplierStake) ? Coin.fromJSON(object.supplierStake) : undefined,
       applicationStake: isSet(object.applicationStake) ? Coin.fromJSON(object.applicationStake) : undefined,
       claimedAtHeight: isSet(object.claimedAtHeight) ? globalThis.Number(object.claimedAtHeight) : 0,
+      morseOutputAddress: isSet(object.morseOutputAddress) ? globalThis.String(object.morseOutputAddress) : "",
+      unstakingTime: isSet(object.unstakingTime) ? fromJsonTimestamp(object.unstakingTime) : undefined,
     };
   },
 
@@ -252,6 +374,12 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
     if (message.claimedAtHeight !== 0) {
       obj.claimedAtHeight = Math.round(message.claimedAtHeight);
     }
+    if (message.morseOutputAddress !== "") {
+      obj.morseOutputAddress = message.morseOutputAddress;
+    }
+    if (message.unstakingTime !== undefined) {
+      obj.unstakingTime = message.unstakingTime.toISOString();
+    }
     return obj;
   },
 
@@ -272,6 +400,8 @@ export const MorseClaimableAccount: MessageFns<MorseClaimableAccount> = {
       ? Coin.fromPartial(object.applicationStake)
       : undefined;
     message.claimedAtHeight = object.claimedAtHeight ?? 0;
+    message.morseOutputAddress = object.morseOutputAddress ?? "";
+    message.unstakingTime = object.unstakingTime ?? undefined;
     return message;
   },
 };
@@ -287,6 +417,28 @@ export type DeepPartial<T> = T extends Builtin ? T
 type KeysOfUnion<T> = T extends T ? keyof T : never;
 export type Exact<P, I extends P> = P extends Builtin ? P
   : P & { [K in keyof P]: Exact<P[K], I[K]> } & { [K in Exclude<keyof I, KeysOfUnion<P>>]: never };
+
+function toTimestamp(date: Date): Timestamp {
+  const seconds = Math.trunc(date.getTime() / 1_000);
+  const nanos = (date.getTime() % 1_000) * 1_000_000;
+  return { seconds, nanos };
+}
+
+function fromTimestamp(t: Timestamp): Date {
+  let millis = (t.seconds || 0) * 1_000;
+  millis += (t.nanos || 0) / 1_000_000;
+  return new globalThis.Date(millis);
+}
+
+function fromJsonTimestamp(o: any): Date {
+  if (o instanceof globalThis.Date) {
+    return o;
+  } else if (typeof o === "string") {
+    return new globalThis.Date(o);
+  } else {
+    return fromTimestamp(Timestamp.fromJSON(o));
+  }
+}
 
 function longToNumber(int64: { toString(): string }): number {
   const num = globalThis.Number(int64.toString());

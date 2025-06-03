@@ -9,76 +9,154 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Coin } from "../../cosmos/base/v1beta1/coin";
 import { Application } from "../application/types";
 import { Supplier } from "../shared/supplier";
+import {
+  MorseSupplierClaimSignerType,
+  morseSupplierClaimSignerTypeFromJSON,
+  morseSupplierClaimSignerTypeToJSON,
+} from "./morse_onchain";
 
 export const protobufPackage = "pocket.migration";
 
-/** EventImportMorseClaimableAccounts is emitted when the MorseClaimableAccounts are created on-chain. */
+/**
+ * EventImportMorseClaimableAccounts
+ * - Emitted when MorseClaimableAccounts are created on-chain
+ * - Represents import event for Morse claimable accounts
+ */
 export interface EventImportMorseClaimableAccounts {
-  /** The height (on Shannon) at which the MorseAccountState was created on-chain. */
+  /** Shannon height at which MorseAccountState was created on-chain */
   createdAtHeight: number;
-  /** The onchain computed sha256 hash of the entire MorseAccountState containing the MorseClaimableAccounts which were imported. */
+  /**
+   * On-chain computed sha256 hash of the MorseAccountState
+   * - Contains all imported MorseClaimableAccounts
+   */
   morseAccountStateHash: Uint8Array;
   /**
-   * Number of claimable accounts (EOAs) collected from Morse state export
-   * NOTE: Account balances include consolidated application and supplier actor stakes
+   * Number of claimable accounts (EOAs) imported from Morse state export
+   * - Account balances include consolidated application and supplier actor stakes
    */
   numAccounts: number;
 }
 
-/** EventMorseAccountClaimed is emitted when a MorseAccount is claimed on-chain. */
+/**
+ * EventMorseAccountClaimed
+ * - Emitted when a MorseAccount is claimed on-chain
+ */
 export interface EventMorseAccountClaimed {
-  /** The session end height (on Shannon) in which the claim was committed (i.e. claimed). */
+  /** Shannon session end height in which the claim was committed */
   sessionEndHeight: number;
-  /** The unstaked balance which was claimed. */
+  /** Unstaked balance claimed from Morse */
   claimedBalance:
     | Coin
     | undefined;
-  /** The bech32-encoded address of the Shannon account to which the claimed balance will be minted. */
+  /** bech32-encoded Shannon address to mint claimed balance */
   shannonDestAddress: string;
-  /** The hex-encoded address of the Morse account whose balance will be claimed. */
+  /** Hex-encoded Morse account address whose balance was claimed */
   morseSrcAddress: string;
 }
 
-/** EventMorseApplicationClaimed is emitted when a MorseAccount is claimed on-chain as a staked application. */
+/**
+ * EventMorseApplicationClaimed
+ * - Emitted when a MorseAccount is claimed on-chain as a staked application
+ */
 export interface EventMorseApplicationClaimed {
-  /** The session end height (on Shannon) in which the claim was committed (i.e. claimed). */
+  /** Shannon session end height in which the claim was committed */
   sessionEndHeight: number;
-  /** The unstaked balance which was claimed. */
+  /** Unstaked balance claimed from Morse */
   claimedBalance:
     | Coin
     | undefined;
-  /** The hex-encoded address of the Morse account whose balance will be claimed. */
+  /** Hex-encoded Morse account address whose balance was claimed */
   morseSrcAddress: string;
-  /** The stake of the application which was staked as a result of the claim. */
+  /**
+   * Application stake claimed as a result of the claim
+   * - Equivalent to Morse application staked amount
+   */
   claimedApplicationStake:
     | Coin
     | undefined;
   /**
-   * The application which was staked as a result of the claim.
-   * This is equivalent to the amount it had staked on Morse.
+   * Application staked as a result of the claim
+   * - Mirrors Morse application stake
    */
   application: Application | undefined;
 }
 
-/** EventMorseSupplierClaimed is emitted when a MorseAccount is claimed on-chain as a staked Supplier. */
+/**
+ * EventMorseSupplierClaimed
+ * - Emitted when a MorseAccount is claimed on-chain as a staked Supplier
+ */
 export interface EventMorseSupplierClaimed {
-  /** The session end height (on Shannon) in which the claim was committed (i.e. claimed). */
+  /** Shannon session end height in which the claim was committed */
   sessionEndHeight: number;
-  /** The unstaked balance which was claimed. */
+  /** Unstaked balance claimed from Morse */
   claimedBalance:
     | Coin
     | undefined;
-  /** The hex-encoded address of the Morse account whose balance will be claimed. */
-  morseSrcAddress: string;
   /**
-   * The stake of the Supplier which was staked as a result of the claim.
-   * This will be equivalent to the amount it had staked on Morse.
+   * The hex-encoded address of the Morse non-custodial (i.e. operator) account.
+   * - Unstaked balance was migrated 1:1
+   * - Stake was migrated 1:1 from morse_node_address to shannon_operator_address
+   * - Morse non-custodial (i.e. operator) address.
+   * If morse_output_address was not set, this is the custodial address.
+   * - See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   * E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
+   */
+  morseNodeAddress: string;
+  /**
+   * ONLY applicable to Morse node/supplier accounts.
+   * Hex-encoded address of the Morse output account/wallet associated with the Morse node/supplier.
+   * - E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
+   * - Morse custodial (i.e. owner) address, which owned the staked tokens of the operator.
+   *   See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   */
+  morseOutputAddress: string;
+  /**
+   * The type of supplier claim signer, indicating which actor executed the claim
+   * and whether it was a custodial or non-custodial claim.
+   * - MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_ADDR
+   * - MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_OPERATOR
+   * - MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_OWNER
+   */
+  claimSignerType: MorseSupplierClaimSignerType;
+  /**
+   * Supplier stake claimed as a result of the claim
+   * - Equivalent to Morse supplier staked amount
    */
   claimedSupplierStake:
     | Coin
     | undefined;
-  /** The Supplier which was staked as a result of the claim. */
+  /**
+   * Supplier staked as a result of the claim
+   * - Mirrors Morse supplier stake
+   */
   supplier: Supplier | undefined;
+}
+
+/**
+ * EventMorseAccountRecovered
+ * - Emitted when a Morse account is recovered on-chain
+ */
+export interface EventMorseAccountRecovered {
+  /** The session end height (on Shannon) in which the recovery was committed (i.e. claimed). */
+  sessionEndHeight: number;
+  /**
+   * The total balance which was recovered:
+   * - Includes both unstaked and staked balances (consolidated)
+   * - Auto-liquidates both unstaked and staked balances at once
+   */
+  recoveredBalance:
+    | Coin
+    | undefined;
+  /** The bech32-encoded address of the Shannon account to which the recovered balance was minted. */
+  shannonDestAddress: string;
+  /**
+   * The hex-encoded address of the Morse account whose balance and stakes have been recovered.
+   * This address MUST be in the recovery allow list and could be of types such as:
+   * - Unreachable/Locked EOA, Supplier or Application address
+   * - Module account
+   * - Invalid address (too short, too long, or non-hexadecimal format)
+   */
+  morseSrcAddress: string;
 }
 
 function createBaseEventImportMorseClaimableAccounts(): EventImportMorseClaimableAccounts {
@@ -432,7 +510,9 @@ function createBaseEventMorseSupplierClaimed(): EventMorseSupplierClaimed {
   return {
     sessionEndHeight: 0,
     claimedBalance: undefined,
-    morseSrcAddress: "",
+    morseNodeAddress: "",
+    morseOutputAddress: "",
+    claimSignerType: 0,
     claimedSupplierStake: undefined,
     supplier: undefined,
   };
@@ -446,8 +526,14 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     if (message.claimedBalance !== undefined) {
       Coin.encode(message.claimedBalance, writer.uint32(18).fork()).join();
     }
-    if (message.morseSrcAddress !== "") {
-      writer.uint32(26).string(message.morseSrcAddress);
+    if (message.morseNodeAddress !== "") {
+      writer.uint32(66).string(message.morseNodeAddress);
+    }
+    if (message.morseOutputAddress !== "") {
+      writer.uint32(50).string(message.morseOutputAddress);
+    }
+    if (message.claimSignerType !== 0) {
+      writer.uint32(56).int32(message.claimSignerType);
     }
     if (message.claimedSupplierStake !== undefined) {
       Coin.encode(message.claimedSupplierStake, writer.uint32(34).fork()).join();
@@ -481,12 +567,28 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
           message.claimedBalance = Coin.decode(reader, reader.uint32());
           continue;
         }
-        case 3: {
-          if (tag !== 26) {
+        case 8: {
+          if (tag !== 66) {
             break;
           }
 
-          message.morseSrcAddress = reader.string();
+          message.morseNodeAddress = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.morseOutputAddress = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.claimSignerType = reader.int32() as any;
           continue;
         }
         case 4: {
@@ -518,7 +620,9 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     return {
       sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
       claimedBalance: isSet(object.claimedBalance) ? Coin.fromJSON(object.claimedBalance) : undefined,
-      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+      morseNodeAddress: isSet(object.morseNodeAddress) ? globalThis.String(object.morseNodeAddress) : "",
+      morseOutputAddress: isSet(object.morseOutputAddress) ? globalThis.String(object.morseOutputAddress) : "",
+      claimSignerType: isSet(object.claimSignerType) ? morseSupplierClaimSignerTypeFromJSON(object.claimSignerType) : 0,
       claimedSupplierStake: isSet(object.claimedSupplierStake) ? Coin.fromJSON(object.claimedSupplierStake) : undefined,
       supplier: isSet(object.supplier) ? Supplier.fromJSON(object.supplier) : undefined,
     };
@@ -532,8 +636,14 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     if (message.claimedBalance !== undefined) {
       obj.claimedBalance = Coin.toJSON(message.claimedBalance);
     }
-    if (message.morseSrcAddress !== "") {
-      obj.morseSrcAddress = message.morseSrcAddress;
+    if (message.morseNodeAddress !== "") {
+      obj.morseNodeAddress = message.morseNodeAddress;
+    }
+    if (message.morseOutputAddress !== "") {
+      obj.morseOutputAddress = message.morseOutputAddress;
+    }
+    if (message.claimSignerType !== 0) {
+      obj.claimSignerType = morseSupplierClaimSignerTypeToJSON(message.claimSignerType);
     }
     if (message.claimedSupplierStake !== undefined) {
       obj.claimedSupplierStake = Coin.toJSON(message.claimedSupplierStake);
@@ -553,13 +663,125 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     message.claimedBalance = (object.claimedBalance !== undefined && object.claimedBalance !== null)
       ? Coin.fromPartial(object.claimedBalance)
       : undefined;
-    message.morseSrcAddress = object.morseSrcAddress ?? "";
+    message.morseNodeAddress = object.morseNodeAddress ?? "";
+    message.morseOutputAddress = object.morseOutputAddress ?? "";
+    message.claimSignerType = object.claimSignerType ?? 0;
     message.claimedSupplierStake = (object.claimedSupplierStake !== undefined && object.claimedSupplierStake !== null)
       ? Coin.fromPartial(object.claimedSupplierStake)
       : undefined;
     message.supplier = (object.supplier !== undefined && object.supplier !== null)
       ? Supplier.fromPartial(object.supplier)
       : undefined;
+    return message;
+  },
+};
+
+function createBaseEventMorseAccountRecovered(): EventMorseAccountRecovered {
+  return { sessionEndHeight: 0, recoveredBalance: undefined, shannonDestAddress: "", morseSrcAddress: "" };
+}
+
+export const EventMorseAccountRecovered: MessageFns<EventMorseAccountRecovered> = {
+  encode(message: EventMorseAccountRecovered, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sessionEndHeight !== 0) {
+      writer.uint32(8).int64(message.sessionEndHeight);
+    }
+    if (message.recoveredBalance !== undefined) {
+      Coin.encode(message.recoveredBalance, writer.uint32(18).fork()).join();
+    }
+    if (message.shannonDestAddress !== "") {
+      writer.uint32(26).string(message.shannonDestAddress);
+    }
+    if (message.morseSrcAddress !== "") {
+      writer.uint32(34).string(message.morseSrcAddress);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EventMorseAccountRecovered {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEventMorseAccountRecovered();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.sessionEndHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.recoveredBalance = Coin.decode(reader, reader.uint32());
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.shannonDestAddress = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.morseSrcAddress = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EventMorseAccountRecovered {
+    return {
+      sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
+      recoveredBalance: isSet(object.recoveredBalance) ? Coin.fromJSON(object.recoveredBalance) : undefined,
+      shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
+      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+    };
+  },
+
+  toJSON(message: EventMorseAccountRecovered): unknown {
+    const obj: any = {};
+    if (message.sessionEndHeight !== 0) {
+      obj.sessionEndHeight = Math.round(message.sessionEndHeight);
+    }
+    if (message.recoveredBalance !== undefined) {
+      obj.recoveredBalance = Coin.toJSON(message.recoveredBalance);
+    }
+    if (message.shannonDestAddress !== "") {
+      obj.shannonDestAddress = message.shannonDestAddress;
+    }
+    if (message.morseSrcAddress !== "") {
+      obj.morseSrcAddress = message.morseSrcAddress;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EventMorseAccountRecovered>, I>>(base?: I): EventMorseAccountRecovered {
+    return EventMorseAccountRecovered.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EventMorseAccountRecovered>, I>>(object: I): EventMorseAccountRecovered {
+    const message = createBaseEventMorseAccountRecovered();
+    message.sessionEndHeight = object.sessionEndHeight ?? 0;
+    message.recoveredBalance = (object.recoveredBalance !== undefined && object.recoveredBalance !== null)
+      ? Coin.fromPartial(object.recoveredBalance)
+      : undefined;
+    message.shannonDestAddress = object.shannonDestAddress ?? "";
+    message.morseSrcAddress = object.morseSrcAddress ?? "";
     return message;
   },
 };

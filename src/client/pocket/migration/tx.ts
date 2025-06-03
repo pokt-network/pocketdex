@@ -10,45 +10,73 @@ import { Coin } from "../../cosmos/base/v1beta1/coin";
 import { Application } from "../application/types";
 import { ApplicationServiceConfig, SupplierServiceConfig } from "../shared/service";
 import { Supplier } from "../shared/supplier";
-import { MorseAccountState } from "./morse_onchain";
+import {
+  MorseAccountState,
+  MorseSupplierClaimSignerType,
+  morseSupplierClaimSignerTypeFromJSON,
+  morseSupplierClaimSignerTypeToJSON,
+} from "./morse_onchain";
 import { Params } from "./params";
 
 export const protobufPackage = "pocket.migration";
 
-/** MsgUpdateParams is the Msg/UpdateParams request type. */
+/**
+ * MsgUpdateParams is the Msg/UpdateParams request type.
+ *
+ * - Used for updating the migration module parameters via governance
+ * - All parameters must be supplied
+ */
 export interface MsgUpdateParams {
   /** authority is the address that controls the module (defaults to x/gov unless overwritten). */
   authority: string;
-  /** NOTE: All parameters must be supplied. */
+  /**
+   * Module parameters to update
+   * NOTE: All parameters must be supplied
+   */
   params: Params | undefined;
 }
 
 /**
- * MsgUpdateParamsResponse defines the response structure for executing a
- * MsgUpdateParams message.
+ * MsgUpdateParamsResponse defines the response structure for executing a MsgUpdateParams message.
+ *
+ * - Empty response on success
  */
 export interface MsgUpdateParamsResponse {
 }
 
-/** MsgImportMorseClaimableAccounts is used to create the on-chain MorseClaimableAccounts ONLY AND EXACTLY ONCE (per network / re-genesis). */
+/**
+ * MsgImportMorseClaimableAccounts is used to:
+ *
+ * - Create the on-chain MorseClaimableAccounts ONLY AND EXACTLY ONCE (per network / re-genesis)
+ * - Import Morse account state derived from Morse state export
+ */
 export interface MsgImportMorseClaimableAccounts {
   /** authority is the address that controls the module (defaults to x/gov unless overwritten). */
   authority: string;
-  /** the account state derived from the Morse state export and the `pocketd tx migration collect-morse-accounts` command. */
+  /** Account state derived from Morse state export and `pocketd tx migration collect-morse-accounts` */
   morseAccountState:
     | MorseAccountState
     | undefined;
   /**
-   * Additional documentation:
-   * - pocket util export-genesis-for-migration --help
-   * - pocketd tx migration collect-morse-accounts --help
+   * Validates the morse_account_state sha256 hash:
+   * - Transaction fails if hash doesn't match on-chain computation
+   * - Off-chain social consensus should be reached before verification
+   *
+   * Verification (high-level):
+   *   $ pocketd tx migration collect-morse-accounts $<(pocket util export-genesis-for-reset)
+   *
+   * Additional docs:
+   *   - pocket util export-genesis-for-migration --help
+   *   - pocketd tx migration collect-morse-accounts --help
    */
   morseAccountStateHash: Uint8Array;
 }
 
 /**
  * MsgImportMorseClaimableAccountsResponse is returned from MsgImportMorseClaimableAccounts.
- * It indicates the canonical hash of the imported MorseAccountState, and the number of claimable accounts which were imported.
+ *
+ * - Indicates the canonical hash of the imported MorseAccountState
+ * - Reports the number of claimable accounts imported
  */
 export interface MsgImportMorseClaimableAccountsResponse {
   /** On-chain computed sha256 hash of the morse_account_state provided in the corresponding MsgCreateMorseAccountState. */
@@ -58,11 +86,14 @@ export interface MsgImportMorseClaimableAccountsResponse {
 }
 
 /**
- * MsgClaimMorseAccount is used to execute a claim (one-time minting of tokens on Shannon),
- * of the balance of the given Morse account, according to the on-chain MorseClaimableAccounts,
- * to the balance of the given Shannon account.
+ * MsgClaimMorseAccount is used to:
+ *
+ * - Execute a claim (one-time minting of tokens on Shannon)
+ * - Claim the balance of a given Morse account per on-chain MorseClaimableAccounts
+ * - Mint claimed balance to the given Shannon account
  *
  * NOTE:
+ * - A transaction can contain ONE OR MORE Morse account/actor claim messages AND has EXACTLY ONE signer.
  * - The Shannon account specified must be the message signer
  * - Authz grants MAY be used to delegate claiming authority to other Shannon accounts
  */
@@ -70,8 +101,7 @@ export interface MsgClaimMorseAccount {
   /**
    * The bech32-encoded address of the Shannon account which is signing for this message.
    * This account is liable for any fees incurred by violating the constraints of Morse
-   * account/actor claim message fee waiving; the tx contains ONE OR MORE Morse account/actor
-   * claim messages AND has EXACTLY ONE signer.
+   * account/actor claim message fee waiving.
    */
   shannonSigningAddress: string;
   /** The bech32-encoded address of the Shannon account to which the claimed balance will be minted. */
@@ -87,8 +117,9 @@ export interface MsgClaimMorseAccount {
 
 /**
  * MsgClaimMorseAccountResponse is returned from MsgClaimMorseAccount.
- * It indicates the morse_src_address of the account which was claimed, the total
- * balance claimed, and the height at which the claim was committed.
+ *
+ * - Indicates the morse_src_address of the claimed account
+ * - Reports the claimed balance and commit height
  */
 export interface MsgClaimMorseAccountResponse {
   /**
@@ -105,10 +136,11 @@ export interface MsgClaimMorseAccountResponse {
 }
 
 /**
- * MsgClaimMorseApplication is used to execute a claim (one-time minting of tokens on Shannon),
- * of the total tokens owned by the given Morse account, according to the on-chain MorseClaimableAccounts,
- * to the balance of the given Shannon account, followed by staking that Shannon account as an application
- * for the given service_config and the same stake amount as on Morse.
+ * MsgClaimMorseApplication is used to:
+ *
+ * - Execute a claim (one-time minting of tokens on Shannon) of total tokens owned by a Morse account
+ * - Mint claimed tokens to the given Shannon account
+ * - Stake that Shannon account as an application for the given service_config and same stake amount
  */
 export interface MsgClaimMorseApplication {
   /**
@@ -140,8 +172,10 @@ export interface MsgClaimMorseApplication {
 
 /**
  * MsgClaimMorseApplicationResponse is returned from MsgClaimMorseApplication.
- * It indicates the morse_src_address of the account which was claimed, the unstaked
- * balance claimed, the application stake, and the height at which the claim was committed.
+ *
+ * - Indicates the morse_src_address of the claimed account
+ * - Reports the unstaked balance claimed, application stake, and commit height
+ * - Returns the staked application
  */
 export interface MsgClaimMorseApplicationResponse {
   /** The hex-encoded address of the Morse account whose balance will be claimed. */
@@ -165,13 +199,13 @@ export interface MsgClaimMorseApplicationResponse {
 
 /**
  * MsgClaimMorseSupplier is used to:
+ *
  * - Execute a one-time minting of tokens on Shannon based on tokens owned by the given Morse account
  * - Use the on-chain MorseClaimableAccounts for verification
  * - Credit the minted tokens to the balance of the given Shannon account
  * - Automatically stake that Shannon account as a supplier
  *
- * NOTE: The supplier module's staking fee parameter (at the time of claiming) is deducted from the
- * claimed balance.
+ * NOTE: The supplier module's staking fee parameter (at the time of claiming) is deducted from the claimed balance
  */
 export interface MsgClaimMorseSupplier {
   /**
@@ -193,33 +227,78 @@ export interface MsgClaimMorseSupplier {
    * See: https://dev.poktroll.com/operate/configs/supplier_staking_config#staking-types.
    */
   shannonOperatorAddress: string;
-  /** The ed25519 public key of the morse account with morse_src_address. */
+  /**
+   * The hex-encoded address of the Morse non-custodial (i.e. operator) account.
+   * - Unstaked balance will be migrated 1:1
+   * - Stake will be migrated 1:1 from morse_node_address to shannon_operator_address
+   * - Morse non-custodial (i.e. operator) address.
+   * If morse_output_address is not set, this is the custodial address.
+   * - See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   * E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
+   */
+  morseNodeAddress: string;
+  /**
+   * The ed25519 public key of EITHER the Morse node/supplier operator OR owner account.
+   * - MUST correspond to the private key which was used to produce the morse_signature.
+   * - MUST correspond to ONE OF THE FOLLOWING:
+   *   - morse_node_address
+   *   - morse_output_address
+   */
   morsePublicKey: Uint8Array;
   /**
-   * The hex-encoded signature, by the Morse account, of this message (where this field is nil).
-   * I.e.: morse_signature = private_key.sign(marshal(MsgClaimMorseAccount{morse_signature: nil, ...}))
-   *
-   * TODO_MAINNET(@bryanchriswhite, #1126): Rename to `morse_src_owner_signature`.
+   * The hex-encoded signature, of this message (where this field is nil).
+   * I.e.: morse_signature = private_key.sign(marshal(MsgClaimMorseSupplier{morse_signature: nil, ...}))
+   * - MUST match morse_public_key.
+   * - MUST be signed by ONE OF THE FOLLOWING:
+   *   - Morse node account (i.e. operator); if signer_is_output_address is false
+   *   - Morse output account (i.e. owner); if signer_is_output_address is true
    */
   morseSignature: Uint8Array;
+  /**
+   * Set to true if the private key corresponding to the morse_output_address is producing the morse_signature.
+   * For non-custodial claiming:
+   * - This MUST be true.
+   * - The morse_public_key MUST correspond to morse_output_address.
+   * - The morse_signature MUST correspond to morse_output_address.
+   */
+  signerIsOutputAddress: boolean;
   /** The services this supplier is staked to provide service for. */
   services: SupplierServiceConfig[];
 }
 
 /**
  * MsgClaimMorseSupplierResponse is returned from MsgClaimMorseSupplier.
- * It indicates:
- * - The morse_src_address of the claimed account
- * - The unstaked balance claimed
- * - The session end height in which the claim was committed
- * - The staked supplier
+ *
+ * - Indicates the morse_operator_address of the claimed account
+ * - Reports the unstaked balance claimed, session end height, and staked supplier
+ * - Includes claim signer type and signer address
  */
 export interface MsgClaimMorseSupplierResponse {
   /**
-   * The hex-encoded address of the Morse account whose balance was claimed.
+   * The hex-encoded address of the Morse non-custodial (i.e. operator) account.
+   * - Unstaked balance will be migrated 1:1
+   * - Stake will be migrated 1:1 from morse_node_address to shannon_operator_address
+   * - Morse non-custodial (i.e. operator) address.
+   * If morse_output_address is not set, this is the custodial address.
+   * - See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
    * E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
    */
-  morseSrcAddress: string;
+  morseNodeAddress: string;
+  /**
+   * Hex-encoded address of the Morse output account/wallet associated with the Morse node/supplier.
+   * - E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
+   * - Morse custodial (i.e. owner) address, which owns the staked tokens of the operator.
+   *   See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   */
+  morseOutputAddress: string;
+  /**
+   * The type of supplier claim signer, indicating which actor executed the claim
+   * and whether it was a custodial or non-custodial claim.
+   * - MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_ADDR
+   * - MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_OPERATOR
+   * - MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_CUSTODIAL_SIGNED_BY_OWNER
+   */
+  claimSignerType: MorseSupplierClaimSignerType;
   /** The unstaked balance which was claimed. */
   claimedBalance: Coin | undefined;
   claimedSupplierStake:
@@ -229,6 +308,69 @@ export interface MsgClaimMorseSupplierResponse {
   sessionEndHeight: number;
   /** The supplier which was staked as a result of the claim. */
   supplier: Supplier | undefined;
+}
+
+/**
+ * MsgRecoverMorseAccount is used to:
+ *
+ * - Execute a one-time minting of tokens on Shannon based on tokens owned by the given Morse account
+ * - Credit the minted tokens to the balance of the given Shannon account
+ * - Migrate unclaimable staked and liquid Morse tokens as liquid Shannon tokens
+ *
+ * - MAY ONLY be executed by the authority
+ * - ONLY intended for use on accounts with invalid addresses and/or known lost private keys
+ */
+export interface MsgRecoverMorseAccount {
+  /**
+   * The bech32-encoded address of the migration module authority account ("gov" module address by default).
+   * ONLY the authority, or its delegates, MAY recover Morse recoverable accounts.
+   */
+  authority: string;
+  /**
+   * The bech32-encoded address of the Shannon account to which the Morse account's stake(s) and/or
+   * balance(s) will be minted (recovered) as liquid Shannon tokens.
+   */
+  shannonDestAddress: string;
+  /**
+   * EITHER:
+   * - The hex-encoded address of the recoverable Morse account whose stake(s) and/or balance(s) will be recovered.
+   *   This address MAY be invalid but NEVER empty.
+   *   E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
+   * - The name of a Morse module account whose balance will be recovered.
+   *   E.g. "dao" or "fee-collector"
+   */
+  morseSrcAddress: string;
+}
+
+/**
+ * MsgRecoverMorseAccountResponse is returned from MsgRecoverMorseAccount.
+ *
+ * - Indicates the morse_src_address of the recovered account
+ * - Reports the sum of any actor stakes and unstaked balance recovered
+ * - Reports the session end height in which the recovery was committed
+ * - Returns the destination Shannon address
+ */
+export interface MsgRecoverMorseAccountResponse {
+  /**
+   * EITHER:
+   * - The hex-encoded address of the Morse account whose stake(s) and/or balances were recovered.
+   *   This address MAY be invalid but NEVER empty.
+   *   E.g.: 00f9900606fa3d5c9179fc0c8513078a53a2073e
+   * - The name of a Morse module account whose balance was recovered.
+   *   E.g. "dao" or "fee-collector"
+   */
+  morseSrcAddress: string;
+  /** The sum of any unstaked and staked balances which were recovered. */
+  recoveredBalance:
+    | Coin
+    | undefined;
+  /** The session end height (on Shannon) in which the recovery was committed (i.e. recovered). */
+  sessionEndHeight: number;
+  /**
+   * The bech32-encoded address of the Shannon account to which the Morse account's stake(s) and/or
+   * balance(s) were recovered.
+   */
+  shannonDestAddress: string;
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
@@ -1019,8 +1161,10 @@ function createBaseMsgClaimMorseSupplier(): MsgClaimMorseSupplier {
     shannonSigningAddress: "",
     shannonOwnerAddress: "",
     shannonOperatorAddress: "",
+    morseNodeAddress: "",
     morsePublicKey: new Uint8Array(0),
     morseSignature: new Uint8Array(0),
+    signerIsOutputAddress: false,
     services: [],
   };
 }
@@ -1036,11 +1180,17 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
     if (message.shannonOperatorAddress !== "") {
       writer.uint32(18).string(message.shannonOperatorAddress);
     }
+    if (message.morseNodeAddress !== "") {
+      writer.uint32(26).string(message.morseNodeAddress);
+    }
     if (message.morsePublicKey.length !== 0) {
       writer.uint32(58).bytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       writer.uint32(34).bytes(message.morseSignature);
+    }
+    if (message.signerIsOutputAddress !== false) {
+      writer.uint32(64).bool(message.signerIsOutputAddress);
     }
     for (const v of message.services) {
       SupplierServiceConfig.encode(v!, writer.uint32(42).fork()).join();
@@ -1079,6 +1229,14 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
           message.shannonOperatorAddress = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.morseNodeAddress = reader.string();
+          continue;
+        }
         case 7: {
           if (tag !== 58) {
             break;
@@ -1093,6 +1251,14 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
           }
 
           message.morseSignature = reader.bytes();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.signerIsOutputAddress = reader.bool();
           continue;
         }
         case 5: {
@@ -1119,8 +1285,12 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
       shannonOperatorAddress: isSet(object.shannonOperatorAddress)
         ? globalThis.String(object.shannonOperatorAddress)
         : "",
+      morseNodeAddress: isSet(object.morseNodeAddress) ? globalThis.String(object.morseNodeAddress) : "",
       morsePublicKey: isSet(object.morsePublicKey) ? bytesFromBase64(object.morsePublicKey) : new Uint8Array(0),
       morseSignature: isSet(object.morseSignature) ? bytesFromBase64(object.morseSignature) : new Uint8Array(0),
+      signerIsOutputAddress: isSet(object.signerIsOutputAddress)
+        ? globalThis.Boolean(object.signerIsOutputAddress)
+        : false,
       services: globalThis.Array.isArray(object?.services)
         ? object.services.map((e: any) => SupplierServiceConfig.fromJSON(e))
         : [],
@@ -1138,11 +1308,17 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
     if (message.shannonOperatorAddress !== "") {
       obj.shannonOperatorAddress = message.shannonOperatorAddress;
     }
+    if (message.morseNodeAddress !== "") {
+      obj.morseNodeAddress = message.morseNodeAddress;
+    }
     if (message.morsePublicKey.length !== 0) {
       obj.morsePublicKey = base64FromBytes(message.morsePublicKey);
     }
     if (message.morseSignature.length !== 0) {
       obj.morseSignature = base64FromBytes(message.morseSignature);
+    }
+    if (message.signerIsOutputAddress !== false) {
+      obj.signerIsOutputAddress = message.signerIsOutputAddress;
     }
     if (message.services?.length) {
       obj.services = message.services.map((e) => SupplierServiceConfig.toJSON(e));
@@ -1158,8 +1334,10 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
     message.shannonSigningAddress = object.shannonSigningAddress ?? "";
     message.shannonOwnerAddress = object.shannonOwnerAddress ?? "";
     message.shannonOperatorAddress = object.shannonOperatorAddress ?? "";
+    message.morseNodeAddress = object.morseNodeAddress ?? "";
     message.morsePublicKey = object.morsePublicKey ?? new Uint8Array(0);
     message.morseSignature = object.morseSignature ?? new Uint8Array(0);
+    message.signerIsOutputAddress = object.signerIsOutputAddress ?? false;
     message.services = object.services?.map((e) => SupplierServiceConfig.fromPartial(e)) || [];
     return message;
   },
@@ -1167,7 +1345,9 @@ export const MsgClaimMorseSupplier: MessageFns<MsgClaimMorseSupplier> = {
 
 function createBaseMsgClaimMorseSupplierResponse(): MsgClaimMorseSupplierResponse {
   return {
-    morseSrcAddress: "",
+    morseNodeAddress: "",
+    morseOutputAddress: "",
+    claimSignerType: 0,
     claimedBalance: undefined,
     claimedSupplierStake: undefined,
     sessionEndHeight: 0,
@@ -1177,8 +1357,14 @@ function createBaseMsgClaimMorseSupplierResponse(): MsgClaimMorseSupplierRespons
 
 export const MsgClaimMorseSupplierResponse: MessageFns<MsgClaimMorseSupplierResponse> = {
   encode(message: MsgClaimMorseSupplierResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.morseSrcAddress !== "") {
-      writer.uint32(10).string(message.morseSrcAddress);
+    if (message.morseNodeAddress !== "") {
+      writer.uint32(74).string(message.morseNodeAddress);
+    }
+    if (message.morseOutputAddress !== "") {
+      writer.uint32(66).string(message.morseOutputAddress);
+    }
+    if (message.claimSignerType !== 0) {
+      writer.uint32(56).int32(message.claimSignerType);
     }
     if (message.claimedBalance !== undefined) {
       Coin.encode(message.claimedBalance, writer.uint32(18).fork()).join();
@@ -1202,12 +1388,28 @@ export const MsgClaimMorseSupplierResponse: MessageFns<MsgClaimMorseSupplierResp
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
+        case 9: {
+          if (tag !== 74) {
             break;
           }
 
-          message.morseSrcAddress = reader.string();
+          message.morseNodeAddress = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.morseOutputAddress = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.claimSignerType = reader.int32() as any;
           continue;
         }
         case 2: {
@@ -1253,7 +1455,9 @@ export const MsgClaimMorseSupplierResponse: MessageFns<MsgClaimMorseSupplierResp
 
   fromJSON(object: any): MsgClaimMorseSupplierResponse {
     return {
-      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+      morseNodeAddress: isSet(object.morseNodeAddress) ? globalThis.String(object.morseNodeAddress) : "",
+      morseOutputAddress: isSet(object.morseOutputAddress) ? globalThis.String(object.morseOutputAddress) : "",
+      claimSignerType: isSet(object.claimSignerType) ? morseSupplierClaimSignerTypeFromJSON(object.claimSignerType) : 0,
       claimedBalance: isSet(object.claimedBalance) ? Coin.fromJSON(object.claimedBalance) : undefined,
       claimedSupplierStake: isSet(object.claimedSupplierStake) ? Coin.fromJSON(object.claimedSupplierStake) : undefined,
       sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
@@ -1263,8 +1467,14 @@ export const MsgClaimMorseSupplierResponse: MessageFns<MsgClaimMorseSupplierResp
 
   toJSON(message: MsgClaimMorseSupplierResponse): unknown {
     const obj: any = {};
-    if (message.morseSrcAddress !== "") {
-      obj.morseSrcAddress = message.morseSrcAddress;
+    if (message.morseNodeAddress !== "") {
+      obj.morseNodeAddress = message.morseNodeAddress;
+    }
+    if (message.morseOutputAddress !== "") {
+      obj.morseOutputAddress = message.morseOutputAddress;
+    }
+    if (message.claimSignerType !== 0) {
+      obj.claimSignerType = morseSupplierClaimSignerTypeToJSON(message.claimSignerType);
     }
     if (message.claimedBalance !== undefined) {
       obj.claimedBalance = Coin.toJSON(message.claimedBalance);
@@ -1288,7 +1498,9 @@ export const MsgClaimMorseSupplierResponse: MessageFns<MsgClaimMorseSupplierResp
     object: I,
   ): MsgClaimMorseSupplierResponse {
     const message = createBaseMsgClaimMorseSupplierResponse();
-    message.morseSrcAddress = object.morseSrcAddress ?? "";
+    message.morseNodeAddress = object.morseNodeAddress ?? "";
+    message.morseOutputAddress = object.morseOutputAddress ?? "";
+    message.claimSignerType = object.claimSignerType ?? 0;
     message.claimedBalance = (object.claimedBalance !== undefined && object.claimedBalance !== null)
       ? Coin.fromPartial(object.claimedBalance)
       : undefined;
@@ -1303,7 +1515,216 @@ export const MsgClaimMorseSupplierResponse: MessageFns<MsgClaimMorseSupplierResp
   },
 };
 
-/** Msg defines the Msg service. */
+function createBaseMsgRecoverMorseAccount(): MsgRecoverMorseAccount {
+  return { authority: "", shannonDestAddress: "", morseSrcAddress: "" };
+}
+
+export const MsgRecoverMorseAccount: MessageFns<MsgRecoverMorseAccount> = {
+  encode(message: MsgRecoverMorseAccount, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.authority !== "") {
+      writer.uint32(10).string(message.authority);
+    }
+    if (message.shannonDestAddress !== "") {
+      writer.uint32(18).string(message.shannonDestAddress);
+    }
+    if (message.morseSrcAddress !== "") {
+      writer.uint32(26).string(message.morseSrcAddress);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgRecoverMorseAccount {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgRecoverMorseAccount();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.authority = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.shannonDestAddress = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.morseSrcAddress = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgRecoverMorseAccount {
+    return {
+      authority: isSet(object.authority) ? globalThis.String(object.authority) : "",
+      shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
+      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+    };
+  },
+
+  toJSON(message: MsgRecoverMorseAccount): unknown {
+    const obj: any = {};
+    if (message.authority !== "") {
+      obj.authority = message.authority;
+    }
+    if (message.shannonDestAddress !== "") {
+      obj.shannonDestAddress = message.shannonDestAddress;
+    }
+    if (message.morseSrcAddress !== "") {
+      obj.morseSrcAddress = message.morseSrcAddress;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgRecoverMorseAccount>, I>>(base?: I): MsgRecoverMorseAccount {
+    return MsgRecoverMorseAccount.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgRecoverMorseAccount>, I>>(object: I): MsgRecoverMorseAccount {
+    const message = createBaseMsgRecoverMorseAccount();
+    message.authority = object.authority ?? "";
+    message.shannonDestAddress = object.shannonDestAddress ?? "";
+    message.morseSrcAddress = object.morseSrcAddress ?? "";
+    return message;
+  },
+};
+
+function createBaseMsgRecoverMorseAccountResponse(): MsgRecoverMorseAccountResponse {
+  return { morseSrcAddress: "", recoveredBalance: undefined, sessionEndHeight: 0, shannonDestAddress: "" };
+}
+
+export const MsgRecoverMorseAccountResponse: MessageFns<MsgRecoverMorseAccountResponse> = {
+  encode(message: MsgRecoverMorseAccountResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.morseSrcAddress !== "") {
+      writer.uint32(10).string(message.morseSrcAddress);
+    }
+    if (message.recoveredBalance !== undefined) {
+      Coin.encode(message.recoveredBalance, writer.uint32(18).fork()).join();
+    }
+    if (message.sessionEndHeight !== 0) {
+      writer.uint32(24).int64(message.sessionEndHeight);
+    }
+    if (message.shannonDestAddress !== "") {
+      writer.uint32(34).string(message.shannonDestAddress);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgRecoverMorseAccountResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgRecoverMorseAccountResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.morseSrcAddress = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.recoveredBalance = Coin.decode(reader, reader.uint32());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.sessionEndHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.shannonDestAddress = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgRecoverMorseAccountResponse {
+    return {
+      morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+      recoveredBalance: isSet(object.recoveredBalance) ? Coin.fromJSON(object.recoveredBalance) : undefined,
+      sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
+      shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
+    };
+  },
+
+  toJSON(message: MsgRecoverMorseAccountResponse): unknown {
+    const obj: any = {};
+    if (message.morseSrcAddress !== "") {
+      obj.morseSrcAddress = message.morseSrcAddress;
+    }
+    if (message.recoveredBalance !== undefined) {
+      obj.recoveredBalance = Coin.toJSON(message.recoveredBalance);
+    }
+    if (message.sessionEndHeight !== 0) {
+      obj.sessionEndHeight = Math.round(message.sessionEndHeight);
+    }
+    if (message.shannonDestAddress !== "") {
+      obj.shannonDestAddress = message.shannonDestAddress;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgRecoverMorseAccountResponse>, I>>(base?: I): MsgRecoverMorseAccountResponse {
+    return MsgRecoverMorseAccountResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgRecoverMorseAccountResponse>, I>>(
+    object: I,
+  ): MsgRecoverMorseAccountResponse {
+    const message = createBaseMsgRecoverMorseAccountResponse();
+    message.morseSrcAddress = object.morseSrcAddress ?? "";
+    message.recoveredBalance = (object.recoveredBalance !== undefined && object.recoveredBalance !== null)
+      ? Coin.fromPartial(object.recoveredBalance)
+      : undefined;
+    message.sessionEndHeight = object.sessionEndHeight ?? 0;
+    message.shannonDestAddress = object.shannonDestAddress ?? "";
+    return message;
+  },
+};
+
+/**
+ * Msg defines the Msg service.
+ *
+ * - Provides RPCs for migration-related operations
+ * - Includes parameter updates, Morse account claims, supplier claims, and recovery
+ */
 export interface Msg {
   /**
    * UpdateParams defines a (governance) operation for updating the module
@@ -1316,6 +1737,7 @@ export interface Msg {
   ClaimMorseAccount(request: MsgClaimMorseAccount): Promise<MsgClaimMorseAccountResponse>;
   ClaimMorseApplication(request: MsgClaimMorseApplication): Promise<MsgClaimMorseApplicationResponse>;
   ClaimMorseSupplier(request: MsgClaimMorseSupplier): Promise<MsgClaimMorseSupplierResponse>;
+  RecoverMorseAccount(request: MsgRecoverMorseAccount): Promise<MsgRecoverMorseAccountResponse>;
 }
 
 export const MsgServiceName = "pocket.migration.Msg";
@@ -1330,6 +1752,7 @@ export class MsgClientImpl implements Msg {
     this.ClaimMorseAccount = this.ClaimMorseAccount.bind(this);
     this.ClaimMorseApplication = this.ClaimMorseApplication.bind(this);
     this.ClaimMorseSupplier = this.ClaimMorseSupplier.bind(this);
+    this.RecoverMorseAccount = this.RecoverMorseAccount.bind(this);
   }
   UpdateParams(request: MsgUpdateParams): Promise<MsgUpdateParamsResponse> {
     const data = MsgUpdateParams.encode(request).finish();
@@ -1361,6 +1784,12 @@ export class MsgClientImpl implements Msg {
     const data = MsgClaimMorseSupplier.encode(request).finish();
     const promise = this.rpc.request(this.service, "ClaimMorseSupplier", data);
     return promise.then((data) => MsgClaimMorseSupplierResponse.decode(new BinaryReader(data)));
+  }
+
+  RecoverMorseAccount(request: MsgRecoverMorseAccount): Promise<MsgRecoverMorseAccountResponse> {
+    const data = MsgRecoverMorseAccount.encode(request).finish();
+    const promise = this.rpc.request(this.service, "RecoverMorseAccount", data);
+    return promise.then((data) => MsgRecoverMorseAccountResponse.decode(new BinaryReader(data)));
   }
 }
 

@@ -22,6 +22,7 @@ syntax = "proto3";
 package pocket.migration;
 
 import "gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
 import "cosmos_proto/cosmos.proto";
 import "cosmos/base/v1beta1/coin.proto";
 import "pocket/migration/morse_onchain.proto";
@@ -68,13 +69,17 @@ message MorseAuth {
   repeated MorseAuthAccount accounts = 1 [(gogoproto.jsontag) = "accounts"];
 }
 
-// MorseAccount:
+// MorseAuthAccount:
 // * Wraps MorseAuthAccount information to conform to Morse genesis structure
-// * Represents only externally owned accounts (not module accounts)
-// * Avoids pb.Any serialization since only external accounts needed for migration
+// * Can represent EITHER an externally owned account OR a module account
 message MorseAuthAccount {
   string type = 1 [(gogoproto.jsontag) = "type"];
-  MorseAccount value = 2 [(gogoproto.jsontag) = "value"];
+
+  // MorseAccount value = 2 [(gogoproto.jsontag) = "value"];
+  reserved 2;
+
+  // value is a EITHER a JSON-encoded MorseAccount or a MorseModuleAccount.
+  bytes value = 3 [(gogoproto.jsontag) = "value", (gogoproto.casttype) = "encoding/json.RawMessage"];
 }
 
 // A wrapper around the list of Morse suppliers (aka "validators", "nodes", of "servicers").
@@ -90,6 +95,8 @@ message MorsePos {
 //
 // See: https://github.com/pokt-network/pocket-core/blob/staging/proto/x/apps/apps.proto#L16
 message MorseApplication {
+  // Next free index: 9
+
   option (gogoproto.equal) = true;
   option (gogoproto.goproto_getters) = false;
 
@@ -103,6 +110,10 @@ message MorseApplication {
   int32  status = 4 [(gogoproto.jsontag) = "status", (gogoproto.moretags) = "yaml:\"status\""];
   // The string representation of the BigInt amount of upokt.
   string staked_tokens = 6 [(gogoproto.jsontag) = "staked_tokens"];
+
+  // The ISO 8601 UTC timestamp after which the Morse node/supplier unbonding period will have elapsed.
+  // It reflects the "unbonding completion time" of the Morse node/supplier, but is called "unstaking time" to comply with necessary Morse data structures.
+  google.protobuf.Timestamp unstaking_time = 8 [(gogoproto.nullable) = false, (gogoproto.stdtime) = true, (gogoproto.jsontag) = "unstaking_time", (gogoproto.moretags) = "yaml:\"unstaking_time\""];
 }
 
 // MorseValidator is a subset of the Morse ProtoValidator type.
@@ -110,19 +121,35 @@ message MorseApplication {
 //
 // See: https://github.com/pokt-network/pocket-core/blob/staging/proto/x/pos/types.proto#L16
 message MorseValidator {
+  // Next free index: 10
+
   option (gogoproto.equal) = true;
   option (gogoproto.goproto_stringer) = true;
   option (gogoproto.goproto_getters) = false;
 
-  // A binary representation of the address corresponding to a Morse application's ed25519 public key.
+  // Morse non-custodial (i.e. operator) address. If output_address is not set, this is the custodial address.
+  // Binary representation of the Morse address corresponding to a Morse node's ed25519 public key.
+  // See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
   bytes address = 1 [(gogoproto.casttype) = "github.com/cometbft/cometbft/crypto.Address", (gogoproto.moretags) = "yaml:\"address\"", (gogoproto.jsontag) = "address"];
-  // The binary representation of a Morse application's ed25519 public key.
+
+  // Binary representation of a Morse node's ed25519 public key.
   bytes public_key = 2 [(gogoproto.moretags) = "yaml:\"public_key\"", (gogoproto.jsontag) = "public_key"];
+
   // TODO_MAINNET_MIGRATION(@Olshansk):  Should status and/or jailed be considered during the migration, and if so, how?
   bool jailed = 3 [(gogoproto.jsontag) = "jailed"];
   int32 status = 4 [(gogoproto.jsontag) = "status"];
+
   // The string representation of the BigInt amount of upokt.
   string staked_tokens = 7 [(gogoproto.jsontag) = "tokens"];
+
+  // The ISO 8601 UTC timestamp after which the Morse node/supplier unbonding period will have elapsed.
+  // It reflects the "unbonding completion time" of the Morse node/supplier, but is called "unstaking time" to comply with necessary Morse data structures.
+  google.protobuf.Timestamp unstaking_time = 8 [(gogoproto.nullable) = false, (gogoproto.stdtime) = true, (gogoproto.jsontag) = "unstaking_time", (gogoproto.moretags) = "yaml:\"unstaking_time\""];
+
+  // Morse custodial (i.e. owner) address, which owns the staked tokens of the operator.
+  // Binary representation of the Morse address corresponding to a Morse account's ed25519 public key.
+  // See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+  bytes output_address = 9 [(gogoproto.casttype) = "github.com/cometbft/cometbft/crypto.Address", (gogoproto.jsontag) = "output_address,omitempty", (gogoproto.moretags) = "yaml:\"output_address\""];
 }
 
 // MorseAccount is an analog of the Morse ProtoBaseAccount type.
@@ -149,4 +176,12 @@ message MorseAccount {
 // NB: All Morse account public keys will be ed25519 keys by definition.
 message MorsePublicKey {
   bytes value = 2 [(gogoproto.casttype) = "crypto/ed25519.PublicKey"];
+}
+
+// MorseModuleAccount is the module account type for Morse, it wraps a MorseAccount
+// and has a unique name, which is used instead of the address.
+message MorseModuleAccount {
+  // DEV_NOTE: the JSON tag is intentionally cased contrary to convention to match the real-world Morse state export.
+  MorseAccount base_account = 1 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "BaseAccount"];
+  string name = 2 [(gogoproto.jsontag) = "name", (gogoproto.moretags) = "yaml:\"name\""];
 }

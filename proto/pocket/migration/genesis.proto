@@ -12,7 +12,7 @@ option (gogoproto.stable_marshaler_all) = true;
 
 // GenesisState defines the migration module's genesis state.
 message GenesisState {
-
+  
   // params defines all the parameters of the module.
            Params                params                    = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
   repeated MorseClaimableAccount morseClaimableAccountList = 2 [(gogoproto.nullable) = false] ;

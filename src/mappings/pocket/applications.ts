@@ -63,6 +63,11 @@ function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | 
     case "APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE":{
       return ApplicationUnbondingReason.BELOW_MINIMUM_STAKE
     }
+    case 2:
+    case ApplicationUnbondingReasonSDKType.APPLICATION_UNBONDING_REASON_MIGRATION:
+    case "APPLICATION_UNBONDING_REASON_MIGRATION":{
+      return ApplicationUnbondingReason.MIGRATION
+    }
     default:
       throw new Error(`Unknown ApplicationUnbondingReason=${item}`)
   }

@@ -7,6 +7,7 @@
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Coin } from "../../cosmos/base/v1beta1/coin";
+import { Timestamp } from "../../google/protobuf/timestamp";
 
 export const protobufPackage = "pocket.migration";
 
@@ -57,14 +58,14 @@ export interface MorseAuth {
 }
 
 /**
- * MorseAccount:
+ * MorseAuthAccount:
  * * Wraps MorseAuthAccount information to conform to Morse genesis structure
- * * Represents only externally owned accounts (not module accounts)
- * * Avoids pb.Any serialization since only external accounts needed for migration
+ * * Can represent EITHER an externally owned account OR a module account
  */
 export interface MorseAuthAccount {
   type: string;
-  value: MorseAccount | undefined;
+  /** value is a EITHER a JSON-encoded MorseAccount or a MorseModuleAccount. */
+  value: Uint8Array;
 }
 
 /**
@@ -96,6 +97,11 @@ export interface MorseApplication {
   status: number;
   /** The string representation of the BigInt amount of upokt. */
   stakedTokens: string;
+  /**
+   * The ISO 8601 UTC timestamp after which the Morse node/supplier unbonding period will have elapsed.
+   * It reflects the "unbonding completion time" of the Morse node/supplier, but is called "unstaking time" to comply with necessary Morse data structures.
+   */
+  unstakingTime: Date | undefined;
 }
 
 /**
@@ -105,15 +111,32 @@ export interface MorseApplication {
  * See: https://github.com/pokt-network/pocket-core/blob/staging/proto/x/pos/types.proto#L16
  */
 export interface MorseValidator {
-  /** A binary representation of the address corresponding to a Morse application's ed25519 public key. */
+  /**
+   * Morse non-custodial (i.e. operator) address. If output_address is not set, this is the custodial address.
+   * Binary representation of the Morse address corresponding to a Morse node's ed25519 public key.
+   * See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   */
   address: Uint8Array;
-  /** The binary representation of a Morse application's ed25519 public key. */
+  /** Binary representation of a Morse node's ed25519 public key. */
   publicKey: Uint8Array;
   /** TODO_MAINNET_MIGRATION(@Olshansk):  Should status and/or jailed be considered during the migration, and if so, how? */
   jailed: boolean;
   status: number;
   /** The string representation of the BigInt amount of upokt. */
   stakedTokens: string;
+  /**
+   * The ISO 8601 UTC timestamp after which the Morse node/supplier unbonding period will have elapsed.
+   * It reflects the "unbonding completion time" of the Morse node/supplier, but is called "unstaking time" to comply with necessary Morse data structures.
+   */
+  unstakingTime:
+    | Date
+    | undefined;
+  /**
+   * Morse custodial (i.e. owner) address, which owns the staked tokens of the operator.
+   * Binary representation of the Morse address corresponding to a Morse account's ed25519 public key.
+   * See 'pocket nodes --help' for more information. Note that this refers to the Morse CLI.
+   */
+  outputAddress: Uint8Array;
 }
 
 /**
@@ -139,6 +162,16 @@ export interface MorseAccount {
  */
 export interface MorsePublicKey {
   value: Uint8Array;
+}
+
+/**
+ * MorseModuleAccount is the module account type for Morse, it wraps a MorseAccount
+ * and has a unique name, which is used instead of the address.
+ */
+export interface MorseModuleAccount {
+  /** DEV_NOTE: the JSON tag is intentionally cased contrary to convention to match the real-world Morse state export. */
+  baseAccount: MorseAccount | undefined;
+  name: string;
 }
 
 function createBaseMorseStateExport(): MorseStateExport {
@@ -438,7 +471,7 @@ export const MorseAuth: MessageFns<MorseAuth> = {
 };
 
 function createBaseMorseAuthAccount(): MorseAuthAccount {
-  return { type: "", value: undefined };
+  return { type: "", value: new Uint8Array(0) };
 }
 
 export const MorseAuthAccount: MessageFns<MorseAuthAccount> = {
@@ -446,8 +479,8 @@ export const MorseAuthAccount: MessageFns<MorseAuthAccount> = {
     if (message.type !== "") {
       writer.uint32(10).string(message.type);
     }
-    if (message.value !== undefined) {
-      MorseAccount.encode(message.value, writer.uint32(18).fork()).join();
+    if (message.value.length !== 0) {
+      writer.uint32(26).bytes(message.value);
     }
     return writer;
   },
@@ -467,12 +500,12 @@ export const MorseAuthAccount: MessageFns<MorseAuthAccount> = {
           message.type = reader.string();
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
+        case 3: {
+          if (tag !== 26) {
             break;
           }
 
-          message.value = MorseAccount.decode(reader, reader.uint32());
+          message.value = reader.bytes();
           continue;
         }
       }
@@ -487,7 +520,7 @@ export const MorseAuthAccount: MessageFns<MorseAuthAccount> = {
   fromJSON(object: any): MorseAuthAccount {
     return {
       type: isSet(object.type) ? globalThis.String(object.type) : "",
-      value: isSet(object.value) ? MorseAccount.fromJSON(object.value) : undefined,
+      value: isSet(object.value) ? bytesFromBase64(object.value) : new Uint8Array(0),
     };
   },
 
@@ -496,8 +529,8 @@ export const MorseAuthAccount: MessageFns<MorseAuthAccount> = {
     if (message.type !== "") {
       obj.type = message.type;
     }
-    if (message.value !== undefined) {
-      obj.value = MorseAccount.toJSON(message.value);
+    if (message.value.length !== 0) {
+      obj.value = base64FromBytes(message.value);
     }
     return obj;
   },
@@ -508,9 +541,7 @@ export const MorseAuthAccount: MessageFns<MorseAuthAccount> = {
   fromPartial<I extends Exact<DeepPartial<MorseAuthAccount>, I>>(object: I): MorseAuthAccount {
     const message = createBaseMorseAuthAccount();
     message.type = object.type ?? "";
-    message.value = (object.value !== undefined && object.value !== null)
-      ? MorseAccount.fromPartial(object.value)
-      : undefined;
+    message.value = object.value ?? new Uint8Array(0);
     return message;
   },
 };
@@ -578,7 +609,14 @@ export const MorsePos: MessageFns<MorsePos> = {
 };
 
 function createBaseMorseApplication(): MorseApplication {
-  return { address: new Uint8Array(0), publicKey: new Uint8Array(0), jailed: false, status: 0, stakedTokens: "" };
+  return {
+    address: new Uint8Array(0),
+    publicKey: new Uint8Array(0),
+    jailed: false,
+    status: 0,
+    stakedTokens: "",
+    unstakingTime: undefined,
+  };
 }
 
 export const MorseApplication: MessageFns<MorseApplication> = {
@@ -597,6 +635,9 @@ export const MorseApplication: MessageFns<MorseApplication> = {
     }
     if (message.stakedTokens !== "") {
       writer.uint32(50).string(message.stakedTokens);
+    }
+    if (message.unstakingTime !== undefined) {
+      Timestamp.encode(toTimestamp(message.unstakingTime), writer.uint32(66).fork()).join();
     }
     return writer;
   },
@@ -648,6 +689,14 @@ export const MorseApplication: MessageFns<MorseApplication> = {
           message.stakedTokens = reader.string();
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.unstakingTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -664,6 +713,7 @@ export const MorseApplication: MessageFns<MorseApplication> = {
       jailed: isSet(object.jailed) ? globalThis.Boolean(object.jailed) : false,
       status: isSet(object.status) ? globalThis.Number(object.status) : 0,
       stakedTokens: isSet(object.stakedTokens) ? globalThis.String(object.stakedTokens) : "",
+      unstakingTime: isSet(object.unstakingTime) ? fromJsonTimestamp(object.unstakingTime) : undefined,
     };
   },
 
@@ -684,6 +734,9 @@ export const MorseApplication: MessageFns<MorseApplication> = {
     if (message.stakedTokens !== "") {
       obj.stakedTokens = message.stakedTokens;
     }
+    if (message.unstakingTime !== undefined) {
+      obj.unstakingTime = message.unstakingTime.toISOString();
+    }
     return obj;
   },
 
@@ -697,12 +750,21 @@ export const MorseApplication: MessageFns<MorseApplication> = {
     message.jailed = object.jailed ?? false;
     message.status = object.status ?? 0;
     message.stakedTokens = object.stakedTokens ?? "";
+    message.unstakingTime = object.unstakingTime ?? undefined;
     return message;
   },
 };
 
 function createBaseMorseValidator(): MorseValidator {
-  return { address: new Uint8Array(0), publicKey: new Uint8Array(0), jailed: false, status: 0, stakedTokens: "" };
+  return {
+    address: new Uint8Array(0),
+    publicKey: new Uint8Array(0),
+    jailed: false,
+    status: 0,
+    stakedTokens: "",
+    unstakingTime: undefined,
+    outputAddress: new Uint8Array(0),
+  };
 }
 
 export const MorseValidator: MessageFns<MorseValidator> = {
@@ -721,6 +783,12 @@ export const MorseValidator: MessageFns<MorseValidator> = {
     }
     if (message.stakedTokens !== "") {
       writer.uint32(58).string(message.stakedTokens);
+    }
+    if (message.unstakingTime !== undefined) {
+      Timestamp.encode(toTimestamp(message.unstakingTime), writer.uint32(66).fork()).join();
+    }
+    if (message.outputAddress.length !== 0) {
+      writer.uint32(74).bytes(message.outputAddress);
     }
     return writer;
   },
@@ -772,6 +840,22 @@ export const MorseValidator: MessageFns<MorseValidator> = {
           message.stakedTokens = reader.string();
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.unstakingTime = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.outputAddress = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -788,6 +872,8 @@ export const MorseValidator: MessageFns<MorseValidator> = {
       jailed: isSet(object.jailed) ? globalThis.Boolean(object.jailed) : false,
       status: isSet(object.status) ? globalThis.Number(object.status) : 0,
       stakedTokens: isSet(object.stakedTokens) ? globalThis.String(object.stakedTokens) : "",
+      unstakingTime: isSet(object.unstakingTime) ? fromJsonTimestamp(object.unstakingTime) : undefined,
+      outputAddress: isSet(object.outputAddress) ? bytesFromBase64(object.outputAddress) : new Uint8Array(0),
     };
   },
 
@@ -808,6 +894,12 @@ export const MorseValidator: MessageFns<MorseValidator> = {
     if (message.stakedTokens !== "") {
       obj.stakedTokens = message.stakedTokens;
     }
+    if (message.unstakingTime !== undefined) {
+      obj.unstakingTime = message.unstakingTime.toISOString();
+    }
+    if (message.outputAddress.length !== 0) {
+      obj.outputAddress = base64FromBytes(message.outputAddress);
+    }
     return obj;
   },
 
@@ -821,6 +913,8 @@ export const MorseValidator: MessageFns<MorseValidator> = {
     message.jailed = object.jailed ?? false;
     message.status = object.status ?? 0;
     message.stakedTokens = object.stakedTokens ?? "";
+    message.unstakingTime = object.unstakingTime ?? undefined;
+    message.outputAddress = object.outputAddress ?? new Uint8Array(0);
     return message;
   },
 };
@@ -977,6 +1071,84 @@ export const MorsePublicKey: MessageFns<MorsePublicKey> = {
   },
 };
 
+function createBaseMorseModuleAccount(): MorseModuleAccount {
+  return { baseAccount: undefined, name: "" };
+}
+
+export const MorseModuleAccount: MessageFns<MorseModuleAccount> = {
+  encode(message: MorseModuleAccount, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.baseAccount !== undefined) {
+      MorseAccount.encode(message.baseAccount, writer.uint32(10).fork()).join();
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MorseModuleAccount {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMorseModuleAccount();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.baseAccount = MorseAccount.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MorseModuleAccount {
+    return {
+      baseAccount: isSet(object.baseAccount) ? MorseAccount.fromJSON(object.baseAccount) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+    };
+  },
+
+  toJSON(message: MorseModuleAccount): unknown {
+    const obj: any = {};
+    if (message.baseAccount !== undefined) {
+      obj.baseAccount = MorseAccount.toJSON(message.baseAccount);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MorseModuleAccount>, I>>(base?: I): MorseModuleAccount {
+    return MorseModuleAccount.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MorseModuleAccount>, I>>(object: I): MorseModuleAccount {
+    const message = createBaseMorseModuleAccount();
+    message.baseAccount = (object.baseAccount !== undefined && object.baseAccount !== null)
+      ? MorseAccount.fromPartial(object.baseAccount)
+      : undefined;
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
 function bytesFromBase64(b64: string): Uint8Array {
   if ((globalThis as any).Buffer) {
     return Uint8Array.from(globalThis.Buffer.from(b64, "base64"));
@@ -1013,6 +1185,28 @@ export type DeepPartial<T> = T extends Builtin ? T
 type KeysOfUnion<T> = T extends T ? keyof T : never;
 export type Exact<P, I extends P> = P extends Builtin ? P
   : P & { [K in keyof P]: Exact<P[K], I[K]> } & { [K in Exclude<keyof I, KeysOfUnion<P>>]: never };
+
+function toTimestamp(date: Date): Timestamp {
+  const seconds = Math.trunc(date.getTime() / 1_000);
+  const nanos = (date.getTime() % 1_000) * 1_000_000;
+  return { seconds, nanos };
+}
+
+function fromTimestamp(t: Timestamp): Date {
+  let millis = (t.seconds || 0) * 1_000;
+  millis += (t.nanos || 0) / 1_000_000;
+  return new globalThis.Date(millis);
+}
+
+function fromJsonTimestamp(o: any): Date {
+  if (o instanceof globalThis.Date) {
+    return o;
+  } else if (typeof o === "string") {
+    return new globalThis.Date(o);
+  } else {
+    return fromTimestamp(Timestamp.fromJSON(o));
+  }
+}
 
 function isSet(value: any): boolean {
   return value !== null && value !== undefined;
