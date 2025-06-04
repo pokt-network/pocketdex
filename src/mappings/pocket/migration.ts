@@ -65,7 +65,8 @@ function _handleMsgClaimMorseAccount(
 
 export async function updateMorseClaimableAccounts(
   items: Array<{
-    publicKey: Uint8Array
+    publicKey?: Uint8Array
+    morseAddress?: string
     destinationAddress: string
   }>,
 ): Promise<void> {
@@ -73,7 +74,7 @@ export async function updateMorseClaimableAccounts(
   const blockHeight = store.context.getHistoricalUnit();
 
   await Promise.all(
-    items.map(({ destinationAddress, publicKey }) => MorseClaimableAccountModel.model.update(
+    items.map(({ destinationAddress, morseAddress, publicKey }) => MorseClaimableAccountModel.model.update(
       // mark as claimed
       {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -85,9 +86,9 @@ export async function updateMorseClaimableAccounts(
       {
         hooks: false,
         where: {
-          id: pubKeyToAddress(
+          id: morseAddress ? morseAddress : pubKeyToAddress(
             Ed25519,
-            publicKey,
+            publicKey!,
             undefined,
             true
           )

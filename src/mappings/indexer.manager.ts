@@ -378,7 +378,26 @@ This function is used to call handlers in order to avoid updating the same entit
     for messages it is the path of the decodedMsg to get the entity id
     for events it is a function that receives the attributes and returns the entity id
 */
-async function indexStakeEntity(data: Array<CosmosEvent | CosmosMessage>, getEntityIdArg: RecordGetId) {
+async function indexStakeEntity(allData: Array<CosmosEvent | CosmosMessage>, getEntityIdArg: RecordGetId) {
+  const allEvents: Array<CosmosEvent> = [], allMsgs: Array<CosmosMessage> = [];
+
+  for (const datum of allData) {
+    if ('event' in datum) {
+      allEvents.push(datum)
+    } else {
+      allMsgs.push(datum)
+    }
+  }
+
+  const {success: successfulEvents} = filterEventsByTxStatus(allEvents)
+
+  const {success: successfulMsgs} = filterMsgByTxStatus(allMsgs)
+
+  const data = [
+    ...successfulEvents,
+    ...successfulMsgs,
+  ]
+
   // this is to handle events where more than one stake entity is updated
   // like in _handleTransferApplicationEndEvent handler
   const entitiesUpdatedAtSameDatum: Array<Array<string>> = [];
