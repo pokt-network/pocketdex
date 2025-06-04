@@ -18,6 +18,7 @@ import {
   handleSupply,
 } from "./bank";
 import { PREFIX } from "./constants";
+import { createDbFunctions } from "./dbFunctions";
 import {
   ByTxStatus,
   EventHandlers,
@@ -46,7 +47,6 @@ import {
   hasValidAmountAttribute,
   isEventOfFinalizedBlockKind,
 } from "./utils/primitives";
-import { createDbFunctions } from "./pocket/functions";
 
 function handleByType(typeUrl: string | Array<string>, byTypeMap: MessageByType | EventByType, byTypeHandlers: typeof MsgHandlers | typeof EventHandlers, byTxStatus: ByTxStatus): Array<Promise<void>> {
   const promises = [];
@@ -695,11 +695,11 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
     profilerWrap(generateReports, "indexingHandler", "generateReports")(block),
-    createDbFunctions(),
   ])
 }
 
 export async function indexingHandler(block: CosmosBlock): Promise<void> {
+  await createDbFunctions()
   await profilerWrap(_indexingHandler, "all", "index.manager")(block);
 }
 
