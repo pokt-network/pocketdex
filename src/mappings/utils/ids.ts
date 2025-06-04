@@ -37,7 +37,7 @@ export function getBalanceId(address: string, denom: string): string {
 
 // Returns the id of the param entity using the namespace, key, blockId passed.
 export function getParamId(ns: string, key: string): string {
-  return `${ns}-${key}-${blockId.toString()}`;
+  return `${ns}-${key}`;
 }
 
 // Returns the id of the entity that establishes the relationship between the Gateway that the app is being delegated to.
