@@ -46,6 +46,7 @@ import {
   hasValidAmountAttribute,
   isEventOfFinalizedBlockKind,
 } from "./utils/primitives";
+import { createDbFunctions } from "./pocket/functions";
 
 function handleByType(typeUrl: string | Array<string>, byTypeMap: MessageByType | EventByType, byTypeHandlers: typeof MsgHandlers | typeof EventHandlers, byTxStatus: ByTxStatus): Array<Promise<void>> {
   const promises = [];
@@ -694,6 +695,7 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
     profilerWrap(generateReports, "indexingHandler", "generateReports")(block),
+    createDbFunctions(),
   ])
 }
 
