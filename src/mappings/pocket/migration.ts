@@ -149,7 +149,7 @@ export function handleMsgImportMorseClaimableAccounts({
       msgImportMorseClaimableAccountsId: messageId,
       applicationStakeAmount: BigInt(account.applicationStake?.amount || 0),
       applicationStakeDenom: account.applicationStake?.denom || "",
-      supplierStakeAmount: BigInt(account.applicationStake?.amount || 0),
+      supplierStakeAmount: BigInt(account.supplierStake?.amount || 0),
       supplierStakeDenom: account.supplierStake?.denom || "",
       claimed: false,
       unstakedBalanceAmount: BigInt(account.unstakedBalance?.amount || 0),
