@@ -484,7 +484,7 @@ export async function handleMsgClaimMorseSupplier(
     ...messages.map(_handleMsgClaimMorseSupplier),
     updateMorseClaimableAccounts(
       messages.map((msg) => ({
-        publicKey: msg.msg.decodedMsg.morsePublicKey,
+        morseAddress: msg.msg.decodedMsg.morseNodeAddress,
         destinationAddress: msg.msg.decodedMsg.shannonOperatorAddress,
       }))
     )
