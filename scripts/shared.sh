@@ -34,8 +34,20 @@ update_project() {
   fi
 
   if [ ! -z "${ENDPOINT}" ]; then
-      info_log "[Config Update] Network Endpoint: ${ENDPOINT}"
+    info_log "[Config Update] Network Endpoint: $ENDPOINT"
+    if echo "$ENDPOINT" | grep -q ','; then
+      yq -i '.network.endpoint = []' project.yaml
+      OLDIFS=$IFS
+      IFS=,
+      for ep in $ENDPOINT; do
+          # Remove leading/trailing whitespace
+          ep=$(printf "%s" "$ep" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          yq -i ".network.endpoint += [\"$ep\"]" project.yaml
+      done
+      IFS=$OLDIFS
+    else
       yq -i '.network.endpoint = strenv(ENDPOINT)' project.yaml
+    fi
   fi
 }
 
