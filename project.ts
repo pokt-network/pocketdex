@@ -13,6 +13,9 @@ const mode = process.env.NODE_ENV || "production";
 const dotenvPath = path.resolve(__dirname, `.env.${mode}`);
 dotenv.config({ path: dotenvPath });
 
+const endpoints: string[] = process.env.ENDPOINT?.split(",") as string[];
+console.log(`Endpoints: ${endpoints}`);
+
 // Can expand the Datasource processor types via the generic param
 const project: CosmosProject = {
   specVersion: "1.0.0",
@@ -36,7 +39,7 @@ const project: CosmosProject = {
   network: {
     /* The unique chainID of the Cosmos Zone */
     chainId: process.env.CHAIN_ID!,
-    endpoint: process.env.ENDPOINT!?.split(",") as string[] | string,
+    endpoint: endpoints,
     chaintypes: new Map([
       [
         "cosmos.slashing.v1beta1",
