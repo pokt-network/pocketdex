@@ -17,6 +17,7 @@ import {
   SupplierServiceConfig,
   SupplierUnbondingReason,
   MorseSupplierClaimSignerType,
+  EventSupplierServiceConfigActivated,
 } from "../../types";
 import { MsgClaimMorseSupplierProps } from "../../types/models/MsgClaimMorseSupplier";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
@@ -342,6 +343,52 @@ async function _handleUnstakeSupplierMsg(
   ]);
 }
 
+async function _handleEventSupplierServiceConfigActivated(
+  event: CosmosEvent,
+) {
+  let activationHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null;
+
+  for (const {key, value} of event.event.attributes) {
+    if (key === "activation_height") {
+      activationHeight = BigInt((value as string).replaceAll('"', ''));
+    }
+
+    if (key === "supplier") {
+      supplierSdk = JSON.parse(value as unknown as string);
+    }
+  }
+
+  if (!activationHeight) {
+    throw new Error(`[handleEventSupplierServiceConfigActivated] activation_height not found in event`);
+  }
+
+  if (!supplierSdk) {
+    throw new Error(`[handleEventSupplierServiceConfigActivated] supplier not found in event`);
+  }
+
+  const services = await fetchAllSupplierServiceConfigBySupplier(supplierSdk.operator_address);
+
+  const eventId = getEventId(event);
+
+  await Promise.all([
+    EventSupplierServiceConfigActivated.create({
+      id: eventId,
+      eventId: eventId,
+      blockId: getBlockId(event.block),
+    }).save(),
+    store.bulkUpdate(
+      "SupplierServiceConfig",
+      services
+        .filter((service) => !service.activatedAtId)
+        .map((service) => {
+          service.activatedAtId = activationHeight;
+          service.activatedEventId = eventId;
+          return service;
+      })
+    )
+  ])
+}
+
 async function _handleSupplierUnbondingBeginEvent(
   event: CosmosEvent,
 ) {
@@ -542,6 +589,12 @@ export async function handleUnstakeSupplierMsg(
   messages: Array<CosmosMessage<MsgUnstakeSupplier>>,
 ): Promise<void> {
   await Promise.all(messages.map(_handleUnstakeSupplierMsg));
+}
+
+export async function handleEventSupplierServiceConfigActivated(
+  events: Array<CosmosEvent>,
+): Promise<void> {
+  await Promise.all(events.map(_handleEventSupplierServiceConfigActivated));
 }
 
 export async function handleSupplierUnbondingBeginEvent(

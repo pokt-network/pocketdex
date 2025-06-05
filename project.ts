@@ -335,6 +335,7 @@ const project: CosmosProject = {
             "EventSupplierStaked",
             "EventSupplierUnbondingBegin",
             "EventSupplierUnbondingEnd",
+            "EventSupplierServiceConfigActivated",
           ],
         },
       ],

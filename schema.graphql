@@ -744,6 +744,16 @@ type SupplierServiceConfig @entity {
   service: Service!
   revShare: [SupplierRevShare]!
   endpoints: [SupplierEndpoint]!
+  # activation block per EventSupplierServiceConfigActivated event
+  activatedAt: Block
+  activatedEvent: EventSupplierServiceConfigActivated
+}
+
+type EventSupplierServiceConfigActivated @entity {
+  id: ID!
+  event: Event!
+  block: Block!
+  activatedServicesConfig: [SupplierServiceConfig] @derivedFrom(field: "activatedEvent")
 }
 
 type EventSupplierUnbondingBegin @entity {

@@ -37,6 +37,7 @@ import {
 } from "./pocket/relays";
 import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./pocket/services";
 import {
+  handleEventSupplierServiceConfigActivated,
   handleMsgClaimMorseSupplier,
   handleSupplierStakeMsg,
   handleSupplierUnbondingBeginEvent,
@@ -116,6 +117,7 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "pocket.application.EventApplicationUnbondingBegin": handleApplicationUnbondingBeginEvent,
   "pocket.application.EventApplicationUnbondingEnd": handleApplicationUnbondingEndEvent,
   // supplier
+  "pocket.supplier.EventSupplierServiceConfigActivated": handleEventSupplierServiceConfigActivated,
   "pocket.supplier.EventSupplierUnbondingBegin": handleSupplierUnbondingBeginEvent,
   "pocket.supplier.EventSupplierUnbondingEnd": handleSupplierUnbondingEndEvent,
   // service

@@ -516,6 +516,7 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
   const eventTypes = [
     "pocket.supplier.EventSupplierUnbondingBegin",
     "pocket.supplier.EventSupplierUnbondingEnd",
+    "pocket.supplier.EventSupplierServiceConfigActivated",
     // this is here because it modifies the staked tokens of the supplier
     "pocket.tokenomics.EventSupplierSlashed"
   ];
@@ -541,6 +542,7 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
     "/pocket.migration.MsgClaimMorseSupplier": "shannonOperatorAddress",
     "pocket.supplier.EventSupplierUnbondingBegin": eventGetId,
     "pocket.supplier.EventSupplierUnbondingEnd": eventGetId,
+    "pocket.supplier.EventSupplierServiceConfigActivated": eventGetId,
     "pocket.tokenomics.EventSupplierSlashed": (attributes) => {
       for (const attribute of attributes) {
         // in the previous version of this event this is the key to get the supplierId
@@ -618,6 +620,11 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     if (isMessageType) {
       return false;
     }
+
+    if (evt.event.type === "tx") {
+      return false
+    }
+
     const hasValidAmount = hasValidAmountAttribute(evt);
 
     if (!hasValidAmount) {
