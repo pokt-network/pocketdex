@@ -14,7 +14,12 @@ import {
   getTxStatus,
   isMsgValidatorRelated,
 } from "../utils/primitives";
-import { pubKeyToAddress } from "../utils/pub_key";
+import {
+  MultisigLegacyAminoPubKey,
+  pubKeyToAddress,
+  Secp256k1,
+} from "../utils/pub_key";
+import { LegacyAminoPubKey } from "../../types/proto-interfaces/cosmos/crypto/multisig/keys";
 
 function _handleTransaction(tx: CosmosTransaction): TransactionProps {
   let signerAddress;
@@ -24,11 +29,37 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
     const prefix = isMsgValidatorRelated(tx.decodedTx.body.messages[0].typeUrl) ? VALIDATOR_PREFIX : PREFIX;
     // if the first message is a MsgCreateValidator, we assume the signer is the account related to it,
     // that is hashed with a different prefix.
-    signerAddress = pubKeyToAddress(
-      tx.decodedTx.authInfo.signerInfos[0]?.publicKey.typeUrl,
-      tx.decodedTx.authInfo.signerInfos[0]?.publicKey.value,
-      prefix,
-    );
+    const signerType = tx.decodedTx.authInfo.signerInfos[0]?.publicKey.typeUrl;
+
+    if (signerType === MultisigLegacyAminoPubKey) {
+      try {
+        // TODO: Add support for multisign
+        // Beta network:
+        // MultiSign TX 8FBC06F36312F48E3ECABDDC145322BF24C322BAB37F9A3D7B9AA2430C16CC16
+        // Block: 39712
+        // This results in error since signersInfo.publicKeys is not an array, maybe public_keys or current cosmosjs
+        // does not handle this well?
+        const signersInfo = tx.decodedTx.authInfo.signerInfos[0] as unknown as LegacyAminoPubKey;
+        const signers = (signersInfo.publicKeys as unknown as [Uint8Array]).map((value: Uint8Array) => pubKeyToAddress(
+          signerType,
+          value,
+          prefix,
+        ));
+        console.log(`MultisigLegacyAminoPubKey: ${signers.join(", ")}`);
+        signerAddress = signers[0]; // TODO: we need to handle this properly as multisign
+      } catch (e) {
+        signerAddress = `Unsupported pubkey type: ${signerType}`;
+        console.error(e);
+      }
+    } else if (signerType === Secp256k1) {
+      signerAddress = pubKeyToAddress(
+        signerType,
+        tx.decodedTx.authInfo.signerInfos[0]?.publicKey.value,
+        prefix,
+      );
+    } else {
+      signerAddress = `Unsupported pubkey type: ${signerType}`;
+    }
   }
 
   const feeAmount = !isNil(tx.decodedTx.authInfo.fee) ? tx.decodedTx.authInfo.fee.amount : [];
