@@ -4,7 +4,10 @@ import {
   CosmosMessage,
 } from "@subql/types-cosmos";
 import type { MsgCreateValidator } from "cosmjs-types/cosmos/staking/v1beta1/tx";
-import { isNil } from "lodash";
+import {
+  isEmpty,
+  isNil,
+} from "lodash";
 import { parseCoins } from "../../cosmjs/utils";
 import {
   StakeStatus,
@@ -13,6 +16,7 @@ import {
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
 import { ValidatorCommissionProps } from "../../types/models/ValidatorCommission";
 import { ValidatorRewardProps } from "../../types/models/ValidatorReward";
+import { SignerInfo } from "../../types/proto-interfaces/cosmos/tx/v1beta1/tx";
 import { enforceAccountsExists } from "../bank";
 import {
   PREFIX,
@@ -26,6 +30,11 @@ import {
 } from "../utils/ids";
 import { stringify } from "../utils/json";
 import {
+  extractThresholdAndPubkeysFromMultisig,
+  getMultiSignPubKeyAddress,
+  isMulti,
+} from "../utils/multisig";
+import {
   Ed25519,
   pubKeyToAddress,
   Secp256k1,
@@ -36,18 +45,38 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   const msgId = messageId(msg);
   const blockId = getBlockId(msg.block);
   const createValMsg = msg.msg.decodedMsg;
-  const signer = msg.tx.decodedTx.authInfo.signerInfos[0];
 
-  if (isNil(signer) || isNil(signer.publicKey)) {
-    throw new Error("Signer is nil");
+  if (isEmpty(msg.tx.decodedTx.authInfo.signerInfos) || isNil(msg.tx.decodedTx.authInfo.signerInfos[0]?.publicKey)) {
+    throw new Error(`[handleValidatorMsgCreate] (block ${msg.block.block.header.height}): hash=${msg.tx.hash} missing signerInfos public key`);
+  }
+
+  const signerInfo = (msg.tx.decodedTx.authInfo.signerInfos as SignerInfo[])[0];
+
+  if (!signerInfo.publicKey) {
+    throw new Error(`[handleValidatorMsgCreate] (block ${msg.tx.block.block.header.height}): hash=${msg.tx.hash} missing signerInfos public key`);
+  }
+
+  const signerType = signerInfo.publicKey.typeUrl;
+  let signerAddress, poktSignerAddress;
+
+  if (isMulti(signerInfo)) {
+    // TODO: is this doable?
+    //  probably yes, but we should attempt to reproduce this and see if this
+    //  code satisfied this well enough
+    const { pubkeysBase64, threshold } = extractThresholdAndPubkeysFromMultisig(signerInfo.publicKey.value);
+    signerAddress = getMultiSignPubKeyAddress(pubkeysBase64, threshold, VALIDATOR_PREFIX);
+    poktSignerAddress = getMultiSignPubKeyAddress(pubkeysBase64, threshold, PREFIX);
+  } else if (signerType === Secp256k1) {
+    signerAddress = pubKeyToAddress(Secp256k1, signerInfo.publicKey.value, VALIDATOR_PREFIX);
+    poktSignerAddress = pubKeyToAddress(Secp256k1, signerInfo.publicKey.value, PREFIX);
+  } else {
+    signerAddress = `Unsupported Signer: ${signerType}`;
+    poktSignerAddress = `Unsupported Signer: ${signerType}`;
   }
 
   if (isNil(createValMsg.pubkey)) {
     throw new Error("Pubkey is nil");
   }
-
-  const signerAddress = pubKeyToAddress(Secp256k1, signer.publicKey.value, VALIDATOR_PREFIX);
-  const poktSignerAddress = pubKeyToAddress(Secp256k1, signer.publicKey.value, PREFIX);
 
   const msgCreateValidator = MsgCreateValidatorEntity.create({
     id: msgId,
