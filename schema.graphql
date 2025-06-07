@@ -124,6 +124,33 @@ enum SettlementOpReason {
   TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER
 }
 
+enum MorseSupplierClaimSignerType {
+  # Unspecified signer type
+  MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED
+
+  # signer === addr === operator === owner
+  # Custodial signer type
+  # - The Morse node address is NOT EMPTY (i.e. operator)
+  # - The Morse output address is EMPTY (i.e. owner)
+  # - Implies that the operator and owner are THE SAME offchain identity
+  MORSE_SUPPLIER_CLAIM_CUSTODIAL_SIGNED_BY_NODE_ADDR
+
+  # signer === operator === addr && owner !== operator
+  # Non-custodial signer type
+  # - The Morse node address is NOT EMPTY (i.e. operator)
+  # - The Morse output address is NOT EMPTY (i.e. owner)
+  # - Implies that the operator and owner are MOST LIKELY DIFFERENT offchain identities
+  # - The operator is the one signing the supplier claim
+  MORSE_SUPPLIER_CLAIM_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR
+  # signer === owner && owner !== addr
+  # Owner non-custodial signer type
+  # - The Morse node address is EMPTY (i.e. operator)
+  # - The Morse output address is NOT EMPTY (i.e. owner)
+  # - Implies that the operator and owner are MOST LIKELY different offchain identities
+  # - The owner is the one signing the supplier claim
+  MORSE_SUPPLIER_CLAIM_NON_CUSTODIAL_SIGNED_BY_OWNER
+}
+
 ### JSON FIELDS
 
 type EventAttribute @jsonField(indexed: false) {
@@ -717,6 +744,16 @@ type SupplierServiceConfig @entity {
   service: Service!
   revShare: [SupplierRevShare]!
   endpoints: [SupplierEndpoint]!
+  # activation block per EventSupplierServiceConfigActivated event
+  activatedAt: Block
+  activatedEvent: EventSupplierServiceConfigActivated
+}
+
+type EventSupplierServiceConfigActivated @entity {
+  id: ID!
+  event: Event!
+  block: Block!
+  activatedServicesConfig: [SupplierServiceConfig] @derivedFrom(field: "activatedEvent")
 }
 
 type EventSupplierUnbondingBegin @entity {
@@ -1147,10 +1184,17 @@ type MorseClaimableAccount @entity {
   supplierStakeAmount: BigInt!
   applicationStakeAmount: BigInt!
 
+  # Only applicable to morse node/supplier accounts
+  morseOutputAddress: String
+  # the datetime after which the Morse node/supplier unbonding period will have elapsed.
+  unstakingTime: Date
+
   # to be filled when claiming
   shannonDestAddress: String
-  claimedAtHeight: BigInt
+  claimedAt: Block
   claimed: Boolean!
+  transaction: Transaction
+  claimedMsg: Message
 
   # TODO(@Alann27): the denominations are really needed? We know for sure that they are upokt
   unstakedBalanceDenom: String!
@@ -1170,6 +1214,19 @@ type MsgClaimMorseAccount @entity {
   balanceAmount: BigInt!
   balanceDenom: String!
   # ---
+  block: Block!
+  transaction: Transaction!
+  message: Message!
+}
+
+type MsgRecoverMorseAccount @entity {
+  id: ID!
+  authority: ModuleAccount!
+  shannonDestAddress: Account!
+  morseSrcAddress: String!
+  recoveredBalanceAmount: BigInt!
+  recoveredBalanceDenom: String!
+
   block: Block!
   transaction: Transaction!
   message: Message!
@@ -1211,6 +1268,9 @@ type MsgClaimMorseSupplier @entity {
   morsePublicKey: String!
   morseSrcAddress: String!
   morseSignature: String!
+  morseNodeAddress: String
+  signerIsOutputAddress: Boolean
+  claimSignerType: MorseSupplierClaimSignerType
   # Retrieved from the event
   stakeAmount: BigInt!
   stakeDenom: String!

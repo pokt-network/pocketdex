@@ -1,0 +1,44 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="(VB) Index MainNet" type="NodeJSConfigurationType" singleton="false" application-parameters="--force-clean --db-schema=mainnet --unfinalized-blocks=true --batch-size=1 --timeout=360000 --scale-batch-size=false --store-cache-async=true --store-flush-interval=1 --enable-cache=false --kyve-endpoint=false --query-limit=1000 --pg-pool-min=300 --pg-pool-max=500 --pg-pool-acquire=30000 --pg-pool-idle=10000 --pg-pool-evict=12000" path-to-node="$USER_HOME$/.nvm/versions/node/v18.20.3/bin/node" node-parameters="--max-old-space-size=8192" path-to-js-file="node_modules/@subql/node-cosmos/bin/run" typescript-loader="bundled" working-dir="$PROJECT_DIR$">
+    <envs>
+      <env name="BATCH_SIZE" value="100" />
+      <env name="CHAIN_ID" value="pocket" />
+      <env name="DB_HOST" value="localhost" />
+      <env name="DB_PASS" value="postgres" />
+      <env name="DB_PORT" value="5432" />
+      <env name="DB_SCHEMA" value="mainnet" />
+      <env name="DB_USER" value="postgres" />
+      <env name="ENDPOINT" value="https://shannon-grove-rpc.mainnet.poktroll.com" />
+      <env name="NODE_ENV" value="development" />
+      <env name="NODE_OPTIONS" value="--max-old-space-size=8192" />
+      <env name="POCKETDEX_DB_BATCH_SIZE" value="5000" />
+      <env name="POCKETDEX_DB_PAGE_LIMIT" value="1000" />
+      <env name="POCKETDEX_GENESIS" value="https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/mainnet/genesis.json" />
+      <env name="TZ" value="utc" />
+    </envs>
+    <method v="2">
+      <option name="NpmBeforeRunTask" enabled="true">
+        <package-json value="$PROJECT_DIR$/package.json" />
+        <command value="run" />
+        <scripts>
+          <script value="build" />
+        </scripts>
+        <arguments value="--mode=development" />
+        <node-interpreter value="project" />
+        <envs>
+          <env name="BATCH_SIZE" value="100" />
+          <env name="CHAIN_ID" value="pocket" />
+          <env name="DB_SCHEMA" value="mainnet" />
+          <env name="DB_HOST" value="localhost" />
+          <env name="DB_PASS" value="postgres" />
+          <env name="DB_PORT" value="5432" />
+          <env name="DB_USER" value="postgres" />
+          <env name="DEBUG_BLOCK" value="false" />
+          <env name="ENDPOINT" value="https://shannon-grove-rpc.mainnet.poktroll.com" />
+          <env name="NODE_ENV" value="development" />
+          <env name="TZ" value="utc" />
+        </envs>
+      </option>
+    </method>
+  </configuration>
+</component>

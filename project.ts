@@ -335,6 +335,7 @@ const project: CosmosProject = {
             "EventSupplierStaked",
             "EventSupplierUnbondingBegin",
             "EventSupplierUnbondingEnd",
+            "EventSupplierServiceConfigActivated",
           ],
         },
       ],
@@ -399,6 +400,7 @@ const project: CosmosProject = {
             "EventMorseAccountClaimed",
             "EventMorseApplicationClaimed",
             "EventMorseSupplierClaimed",
+            "EventMorseAccountRecovered",
           ],
         },
       ],
@@ -411,6 +413,7 @@ const project: CosmosProject = {
             "MsgClaimMorseAccount",
             "MsgClaimMorseApplication",
             "MsgClaimMorseSupplier",
+            "MsgRecoverMorseAccount",
           ],
         },
       ],
@@ -420,6 +423,7 @@ const project: CosmosProject = {
     {
       startBlock: 1,
       // migration at 25507 on alpha
+      // msg grants at 23196 on alpha
       kind: CosmosDatasourceKind.Runtime,
       mapping: {
         file: "./dist/index.js",

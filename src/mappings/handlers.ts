@@ -22,7 +22,7 @@ import {
   handleEventGatewayUnbondingBegin,
   handleEventGatewayUnbondingEnd,
 } from "./pocket/gateways";
-import { handleMsgClaimMorseAccount } from "./pocket/migration";
+import { handleMsgClaimMorseAccount, handleMsgRecoverMorseAccount } from "./pocket/migration";
 import {
   handleEventApplicationOverserviced,
   handleEventApplicationReimbursementRequest,
@@ -37,6 +37,7 @@ import {
 } from "./pocket/relays";
 import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./pocket/services";
 import {
+  handleEventSupplierServiceConfigActivated,
   handleMsgClaimMorseSupplier,
   handleSupplierStakeMsg,
   handleSupplierUnbondingBeginEvent,
@@ -64,6 +65,7 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   "/cosmos.authz.v1beta1.MsgGrant": handleMsgGrant,
   // migration
   "/pocket.migration.MsgClaimMorseAccount": handleMsgClaimMorseAccount,
+  "/pocket.migration.MsgRecoverMorseAccount": handleMsgRecoverMorseAccount,
   "/pocket.migration.MsgClaimMorseApplication": handleMsgClaimMorseApplication,
   "/pocket.migration.MsgClaimMorseSupplier": handleMsgClaimMorseSupplier,
   // bank
@@ -115,6 +117,7 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "pocket.application.EventApplicationUnbondingBegin": handleApplicationUnbondingBeginEvent,
   "pocket.application.EventApplicationUnbondingEnd": handleApplicationUnbondingEndEvent,
   // supplier
+  "pocket.supplier.EventSupplierServiceConfigActivated": handleEventSupplierServiceConfigActivated,
   "pocket.supplier.EventSupplierUnbondingBegin": handleSupplierUnbondingBeginEvent,
   "pocket.supplier.EventSupplierUnbondingEnd": handleSupplierUnbondingEndEvent,
   // service
