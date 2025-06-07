@@ -4,6 +4,7 @@ import {
   isNil,
 } from "lodash";
 import { TransactionProps } from "../../types/models/Transaction";
+import { SignerInfo } from "../../types/proto-interfaces/cosmos/tx/v1beta1/tx";
 import {
   PREFIX,
   VALIDATOR_PREFIX,
@@ -11,24 +12,57 @@ import {
 import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId } from "../utils/ids";
 import {
+  getMultisigInfo,
+  isMulti,
+} from "../utils/multisig";
+import {
   getTxStatus,
   isMsgValidatorRelated,
 } from "../utils/primitives";
-import { pubKeyToAddress } from "../utils/pub_key";
+import {
+  pubKeyToAddress,
+  Secp256k1,
+} from "../utils/pub_key";
 
 function _handleTransaction(tx: CosmosTransaction): TransactionProps {
   let signerAddress;
-  if (isEmpty(tx.decodedTx.authInfo.signerInfos) || isNil(tx.decodedTx.authInfo.signerInfos[0]?.publicKey)) {
+
+  if (isEmpty(tx.decodedTx.authInfo.signerInfos) || isNil(tx.decodedTx.authInfo.signerInfos[0].publicKey)) {
     throw new Error(`[handleTransaction] (block ${tx.block.block.header.height}): hash=${tx.hash} missing signerInfos public key`);
-  } else {
-    const prefix = isMsgValidatorRelated(tx.decodedTx.body.messages[0].typeUrl) ? VALIDATOR_PREFIX : PREFIX;
-    // if the first message is a MsgCreateValidator, we assume the signer is the account related to it,
-    // that is hashed with a different prefix.
+  }
+
+  const prefix = isMsgValidatorRelated(tx.decodedTx.body.messages[0].typeUrl) ? VALIDATOR_PREFIX : PREFIX;
+
+  const signerInfo = (tx.decodedTx.authInfo.signerInfos as SignerInfo[])[0];
+
+  if (!signerInfo.publicKey) {
+    throw new Error(`[handleTransaction] (block ${tx.block.block.header.height}): hash=${tx.hash} missing signerInfos public key`);
+  }
+
+  const signerType = signerInfo.publicKey.typeUrl;
+
+  if (isMulti(signerInfo)) {
+    const {
+      allSignerAddresses,
+      fromAddress,
+      signedSignerAddresses,
+    } = getMultisigInfo(signerInfo);
+
+    console.log("[handleTransaction] MultiSig -> From:", fromAddress);
+    console.log("[handleTransaction] MultiSig -> All: ", allSignerAddresses);
+    console.log("[handleTransaction] MultiSig -> Signed:", signedSignerAddresses);
+
+    // TODO: Add another properties to transaction to display that this is a multisig one
+    // TODO: We should probably "create" this account otherwise maybe will not exists?
+    signerAddress = fromAddress;
+  } else if (signerType === Secp256k1) {
     signerAddress = pubKeyToAddress(
-      tx.decodedTx.authInfo.signerInfos[0]?.publicKey.typeUrl,
+      signerType,
       tx.decodedTx.authInfo.signerInfos[0]?.publicKey.value,
       prefix,
     );
+  } else {
+    signerAddress = `Unsupported Signer: ${signerType}`;
   }
 
   const feeAmount = !isNil(tx.decodedTx.authInfo.fee) ? tx.decodedTx.authInfo.fee.amount : [];

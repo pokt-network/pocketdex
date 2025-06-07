@@ -14,6 +14,7 @@ import {
 
 export const Secp256k1 = "/cosmos.crypto.secp256k1.PubKey";
 export const Ed25519 = "/cosmos.crypto.ed25519.PubKey";
+export const MultisigLegacyAminoPubKey = "/cosmos.crypto.multisig.LegacyAminoPubKey";
 
 function rawEd25519PubKeyToRawAddress(pubKey: Uint8Array): Uint8Array {
   let pk = pubKey;
