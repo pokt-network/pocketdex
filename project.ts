@@ -14,7 +14,7 @@ const dotenvPath = path.resolve(__dirname, `.env.${mode}`);
 dotenv.config({ path: dotenvPath });
 
 const endpoints: string[] = process.env.ENDPOINT?.split(",") as string[];
-console.log(`Endpoints: ${endpoints}`);
+console.log(`Parsed Endpoints: ${endpoints}`);
 
 // Can expand the Datasource processor types via the generic param
 const project: CosmosProject = {
@@ -424,6 +424,7 @@ const project: CosmosProject = {
       startBlock: 1,
       // migration at 25507 on alpha
       // msg grants at 23196 on alpha
+      // mutlsig send tx at 39712 on beta
       kind: CosmosDatasourceKind.Runtime,
       mapping: {
         file: "./dist/index.js",

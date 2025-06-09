@@ -3,6 +3,7 @@ import {
   isEmpty,
   isNil,
 } from "lodash";
+import { Multisig } from "../../types";
 import { TransactionProps } from "../../types/models/Transaction";
 import { SignerInfo } from "../../types/proto-interfaces/cosmos/tx/v1beta1/tx";
 import {
@@ -40,21 +41,33 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
   }
 
   const signerType = signerInfo.publicKey.typeUrl;
+  const isMultisig = isMulti(signerInfo);
+  let multisigObject: Multisig | undefined;
 
-  if (isMulti(signerInfo)) {
+  if (isMultisig) {
     const {
       allSignerAddresses,
+      bitarrayElems,
+      extraBitsStored,
       fromAddress,
+      multisigPubKey,
       signedSignerAddresses,
+      signerIndices,
+      threshold,
     } = getMultisigInfo(signerInfo);
 
-    console.log("[handleTransaction] MultiSig -> From:", fromAddress);
-    console.log("[handleTransaction] MultiSig -> All: ", allSignerAddresses);
-    console.log("[handleTransaction] MultiSig -> Signed:", signedSignerAddresses);
-
-    // TODO: Add another properties to transaction to display that this is a multisig one
     // TODO: We should probably "create" this account otherwise maybe will not exists?
     signerAddress = fromAddress;
+    multisigObject = {
+      from: fromAddress,
+      all: allSignerAddresses,
+      signed: signedSignerAddresses,
+      indices: signerIndices,
+      threshold,
+      multisigPubKey,
+      bitarrayElems,
+      extraBitsStored,
+    };
   } else if (signerType === Secp256k1) {
     signerAddress = pubKeyToAddress(
       signerType,
@@ -79,6 +92,8 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
     log: tx.tx.log || "",
     status: getTxStatus(tx),
     signerAddress,
+    isMultisig,
+    multisig: isMultisig ? multisigObject : undefined,
     code: tx.tx.code,
     codespace: tx.tx.codespace,
   };

@@ -64,8 +64,10 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
     //  probably yes, but we should attempt to reproduce this and see if this
     //  code satisfied this well enough
     const { pubkeysBase64, threshold } = extractThresholdAndPubkeysFromMultisig(signerInfo.publicKey.value);
-    signerAddress = getMultiSignPubKeyAddress(pubkeysBase64, threshold, VALIDATOR_PREFIX);
-    poktSignerAddress = getMultiSignPubKeyAddress(pubkeysBase64, threshold, PREFIX);
+    const { from: validatorFrom } = getMultiSignPubKeyAddress(pubkeysBase64, threshold, VALIDATOR_PREFIX);
+    signerAddress = validatorFrom;
+    const { from: poktValidatorFrom } = getMultiSignPubKeyAddress(pubkeysBase64, threshold, PREFIX);
+    poktSignerAddress = poktValidatorFrom;
   } else if (signerType === Secp256k1) {
     signerAddress = pubKeyToAddress(Secp256k1, signerInfo.publicKey.value, VALIDATOR_PREFIX);
     poktSignerAddress = pubKeyToAddress(Secp256k1, signerInfo.publicKey.value, PREFIX);
