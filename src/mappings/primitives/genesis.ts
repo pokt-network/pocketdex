@@ -389,6 +389,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
       memo: "",
       log: "",
       status: TxStatus.Success,
+      isMultisig: false,
       code: 0,
     });
 
@@ -447,6 +448,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       memo: "",
       log: "",
       timeoutHeight: BigInt(0),
+      isMultisig: false,
     });
 
     supplierMsgStakes.push({
@@ -574,6 +576,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       memo: "",
       log: "",
       status: TxStatus.Success,
+      isMultisig: false,
       code: 0,
     });
 
@@ -687,6 +690,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
       memo: "",
       log: "",
       status: TxStatus.Success,
+      isMultisig: false,
       code: 0,
     });
 
@@ -870,6 +874,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
       memo: "",
       log: "",
       status: TxStatus.Success,
+      isMultisig: false,
       code: 0,
     });
   }
