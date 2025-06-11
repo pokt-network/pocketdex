@@ -5,10 +5,12 @@ import {
 } from "@subql/types-cosmos";
 import { Coin } from "../../client/cosmos/base/v1beta1/coin";
 import {
+  EventSupplierServiceConfigActivated,
   EventSupplierUnbondingBegin as EventSupplierUnbondingBeginEntity,
   EventSupplierUnbondingEnd as EventSupplierUnbondingEndEntity,
-  MsgStakeSupplier as MsgStakeSupplierEntity,
+  MorseSupplierClaimSignerType,
   MsgClaimMorseSupplier as MsgClaimMorseSupplierEntity,
+  MsgStakeSupplier as MsgStakeSupplierEntity,
   MsgUnstakeSupplier as MsgUnstakeSupplierEntity,
   StakeStatus,
   Supplier,
@@ -16,15 +18,14 @@ import {
   SupplierRevShare,
   SupplierServiceConfig,
   SupplierUnbondingReason,
-  MorseSupplierClaimSignerType,
-  EventSupplierServiceConfigActivated,
 } from "../../types";
 import { MsgClaimMorseSupplierProps } from "../../types/models/MsgClaimMorseSupplier";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
 import { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
+import { MorseSupplierClaimSignerTypeSDKType } from "../../types/proto-interfaces/pocket/migration/morse_onchain";
 import { MsgClaimMorseSupplier } from "../../types/proto-interfaces/pocket/migration/tx";
-import {SupplierServiceConfig as SupplierServiceConfigType} from '../../types/proto-interfaces/pocket/shared/service'
+import { SupplierServiceConfig as SupplierServiceConfigType } from "../../types/proto-interfaces/pocket/shared/service";
 import { SupplierSDKType } from "../../types/proto-interfaces/pocket/shared/supplier";
 import {
   supplierUnbondingReasonFromJSON,
@@ -42,10 +43,12 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
-import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
+import {
+  Ed25519,
+  pubKeyToAddress,
+} from "../utils/pub_key";
 import { updateMorseClaimableAccounts } from "./migration";
 import { fetchAllSupplierServiceConfigBySupplier } from "./pagination";
-import { MorseSupplierClaimSignerTypeSDKType } from "../../types/proto-interfaces/pocket/migration/morse_onchain";
 
 function getMorseSupplierClaimSignerType(item: typeof MorseSupplierClaimSignerTypeSDKType | string | number): MorseSupplierClaimSignerType {
   switch (item) {
