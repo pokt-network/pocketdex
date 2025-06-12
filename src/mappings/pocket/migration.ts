@@ -127,7 +127,7 @@ export async function updateMorseClaimableAccounts(
       {
         hooks: false,
         where: {
-          id: morseAddress ? morseAddress : pubKeyToAddress(
+          id: morseAddress ? morseAddress.toLowerCase() : pubKeyToAddress(
             Ed25519,
             publicKey!,
             undefined,

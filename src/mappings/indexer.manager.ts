@@ -36,7 +36,10 @@ import {
   EventByType,
   MessageByType,
 } from "./types/common";
-import { GetIdFromEventAttribute, RecordGetId } from "./types/stake";
+import {
+  GetIdFromEventAttribute,
+  RecordGetId,
+} from "./types/stake";
 import { optimizedBulkCreate } from "./utils/db";
 import { getBlockId } from "./utils/ids";
 import { stringify } from "./utils/json";
@@ -84,15 +87,12 @@ function handleByType(typeUrl: string | Array<string>, byTypeMap: MessageByType 
 }
 
 // anything primitive types
-async function indexPrimitives(block: CosmosBlock, events: Array<CosmosEvent>) {
+async function indexPrimitives(block: CosmosBlock) {
   await profilerWrap(handleGenesis, "indexPrimitives", "handleGenesis")(block);
 
   await Promise.all([
     profilerWrap(handleBlock, "indexPrimitives", "handleGenesis")(block),
     profilerWrap(handleSupply, "indexPrimitives", "handleSupply")(block),
-    profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions),
-    profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages),
-    profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(events),
   ]);
 }
 
@@ -690,9 +690,12 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     logger.warn(`[indexer.manager] unhandledEventTypes=${stringify(Array.from(unhandledEventTypes))} eventsByType=${stringify(eventsByType, jsonArrayCounter, 0)}`);
   }
 
-  await profilerWrap(indexPrimitives, "indexingHandler", "indexPrimitives")(block, filteredEvents);
+  await profilerWrap(indexPrimitives, "indexingHandler", "indexPrimitives")(block);
 
   await Promise.all([
+    profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions),
+    profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages),
+    profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents),
     profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType),
     profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType),
@@ -701,8 +704,9 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
-    profilerWrap(generateReports, "indexingHandler", "generateReports")(block),
-  ])
+  ]);
+
+  await profilerWrap(generateReports, "indexingHandler", "generateReports")(block);
 }
 
 export async function indexingHandler(block: CosmosBlock): Promise<void> {
