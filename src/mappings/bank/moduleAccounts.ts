@@ -8,7 +8,6 @@ import {
   getBalanceId,
   getBlockId,
 } from "../utils/ids";
-import { stringify } from "../utils/json";
 import getQueryClient from "../utils/query_client";
 import { enforceAccountsExists } from "./balanceChange";
 
@@ -53,7 +52,7 @@ export async function queryModuleAccounts(block: CosmosBlock): Promise<Array<Ext
     ),
   );
 
-  logger.debug(`[queryModuleAccounts] extendedAccounts=${stringify(extendedAccounts, undefined, 2)}`);
+  logger.debug(`[queryModuleAccounts] extendedAccounts=${extendedAccounts.length}`);
 
   return extendedAccounts;
 }

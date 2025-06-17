@@ -40,7 +40,6 @@ export async function queryTotalSupply(block: CosmosBlock): Promise<Coin[]> {
 
   // Initial call to get the first set of results
   const initialResponse: QueryTotalSupplyResponse = await queryClient.bank.totalSupply() as unknown as QueryTotalSupplyResponse;
-  logger.debug(`[handleTotalSupply]: initialResponse=${stringify(initialResponse, undefined, 2)}`);
   finalSupply.push(...initialResponse.supply);
   paginationKey = initialResponse.pagination?.nextKey;
 

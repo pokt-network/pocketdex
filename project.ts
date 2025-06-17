@@ -435,7 +435,7 @@ const project: CosmosProject = {
             // and parallel operations.
             handler: "indexingHandler",
             kind: CosmosHandlerKind.Block,
-          }
+          },
         ],
       },
     },
