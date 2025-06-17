@@ -27,9 +27,10 @@ type Transformer<T> = (doc: T) => any;
 
 // PAGE_LIMIT should be less or equal to --query-limit=<value> otherwise Subql will throw an error.
 const PAGE_LIMIT = isNumber(process.env.POCKETDEX_DB_PAGE_LIMIT) ? Number(process.env.POCKETDEX_DB_PAGE_LIMIT) : 1000;
-const BATCH_SIZE = isNumber(process.env.POCKETDEX_DB_BATCH_SIZE) ? Number(process.env.POCKETDEX_DB_BATCH_SIZE) : 15000;
-const CONCURRENCY = isNumber(process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY) ? Number(process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY) : 10;
+const BATCH_SIZE = isNumber(process.env.POCKETDEX_DB_BATCH_SIZE) ? Number(process.env.POCKETDEX_DB_BATCH_SIZE) : 5000;
+const CONCURRENCY = isNumber(process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY) ? Number(process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY) : 5;
 
+logger.info(`[Global] PAGE_LIMIT=${PAGE_LIMIT} BATCH_SIZE=${BATCH_SIZE} CONCURRENCY=${CONCURRENCY}`);
 
 /**
  * Retrieves the store model associated with the given name.

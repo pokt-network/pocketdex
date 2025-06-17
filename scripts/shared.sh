@@ -77,3 +77,8 @@ get_env_file_name(){
   fi
   echo "$file"
 }
+
+# Function to sanitize sensitive values in the command string for logging
+sanitize_cmd() {
+  echo "$1" | sed "s/DB_PASS=[^ ]*/DB_PASS=****/g"
+}

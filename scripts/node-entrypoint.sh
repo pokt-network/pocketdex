@@ -10,7 +10,10 @@ set -e
 # all this is to been able to join WATCH and Normal execution in a single dockerfile
 cmd="env NODE_OPTIONS=$NODE_OPTIONS \
 NODE_ENV=$NODE_ENV \
-CHAIN_ID=$CHAIN_ID"
+CHAIN_ID=$CHAIN_ID \
+BATCH_SIZE=$BATCH_SIZE \
+START_BLOCK=$START_BLOCK \
+DB_SCHEMA=$DB_SCHEMA"
 
 if [ "$NODE_ENV" = "test" ]
 then
@@ -37,7 +40,10 @@ EOF
     DB_PASS=$DB_PASS \
     DB_DATABASE=$DB_DATABASE \
     DB_HOST=$DB_HOST \
-    DB_PORT=$DB_PORT"
+    DB_PORT=$DB_PORT \
+    POCKETDEX_DB_PAGE_LIMIT=$POCKETDEX_DB_PAGE_LIMIT \
+    POCKETDEX_DB_BATCH_SIZE=$POCKETDEX_DB_BATCH_SIZE \
+    POCKETDEX_DB_BULK_WRITE_CONCURRENCY=$POCKETDEX_DB_BULK_WRITE_CONCURRENCY"
 
   if [ "$NODE_ENV" = "development" ]
   then
@@ -58,9 +64,15 @@ EOF
     # move the dist folder to the mounted folder in run time
     update_project
     params=$(get_params)
+
+
     # run the main node
     cmd="$cmd node ./node_modules/@subql/node-cosmos/bin/run $params $@"
   fi
 fi
+
+# Sanitize and log the command before execution
+sanitized_cmd=$(sanitize_cmd "$cmd")
+info_log "Executing command: $sanitized_cmd"
 
 eval $cmd
