@@ -1,5 +1,8 @@
 import { toHex } from "@cosmjs/encoding";
-import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
+import {
+  CosmosEvent,
+  CosmosMessage,
+} from "@subql/types-cosmos";
 import { omit } from "lodash";
 import { claimExpirationReasonFromJSON } from "../../client/pocket/tokenomics/event";
 import {
@@ -24,7 +27,10 @@ import { MsgCreateClaimProps } from "../../types/models/MsgCreateClaim";
 import { MsgSubmitProofProps } from "../../types/models/MsgSubmitProof";
 import { RelayProps } from "../../types/models/Relay";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
-import { MsgCreateClaim, MsgSubmitProof } from "../../types/proto-interfaces/pocket/proof/tx";
+import {
+  MsgCreateClaim,
+  MsgSubmitProof,
+} from "../../types/proto-interfaces/pocket/proof/tx";
 import {
   ClaimProofStatusSDKType,
   ClaimSDKType,
@@ -39,8 +45,16 @@ import {
   SettlementOpReasonSDKType,
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
 import { optimizedBulkCreate } from "../utils/db";
-import { getBlockId, getEventId, getRelayId, messageId } from "../utils/ids";
-import { parseJson, stringify } from "../utils/json";
+import {
+  getBlockId,
+  getEventId,
+  getRelayId,
+  messageId,
+} from "../utils/ids";
+import {
+  parseJson,
+  stringify,
+} from "../utils/json";
 
 // this can return undefined because older events do not have this attribute
 function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
@@ -298,7 +312,7 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): [MsgCreateCl
 }
 
 function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): [MsgSubmitProofProps, RelayProps] {
-  const { proof, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
+  const { /*proof,*/ sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
 
   const applicationId = sessionHeader?.applicationAddress || "";
   const serviceId = sessionHeader?.serviceId || "";
@@ -318,7 +332,9 @@ function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): [MsgSubmitPr
     {
       id: msgId,
       ...shared,
-      proof: stringify(proof),
+      // proof: stringify(proof),
+      // some proof payloads are way bigger than what jsonb allows on a database.
+      proof: "",
       transactionId: msg.tx.hash,
       blockId: getBlockId(msg.block),
     },
