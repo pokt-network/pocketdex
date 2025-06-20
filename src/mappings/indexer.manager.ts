@@ -216,15 +216,10 @@ async function indexService(msgByType: MessageByType, eventByType: EventByType):
     "/pocket.service.MsgAddService",
   ];
 
-  await indexStakeEntity([
-    ...msgTypes.map(type => msgByType[type]).flat(),
-    ...eventTypes.map(type => eventByType[type]).flat()
-  ], {
-    "/pocket.service.MsgAddService": "service.id",
-    "pocket.service.EventRelayMiningDifficultyUpdated": (attributes) => {
-      return attributes.find(({key}) => key === "service_id")?.value as string
-    }
-  })
+  await Promise.all([
+    ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
+    ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
+  ])
 }
 
 // any application msg or event
@@ -694,25 +689,18 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
 
   // lets this happens first because is massive
   // await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
+  // await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
 
-  await profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions);
-  await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
 
-  try {
-    await profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType);
-  } catch (e) {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    logger.error(`[indexer.manager] error indexingRelays: ${e.message}`);
-  }
 
   await Promise.all([
+    profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType),
     profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
-    profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
   ]);
 

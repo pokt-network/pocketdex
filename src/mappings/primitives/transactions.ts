@@ -80,6 +80,35 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
 
   const feeAmount = !isNil(tx.decodedTx.authInfo.fee) ? tx.decodedTx.authInfo.fee.amount : [];
 
+  const amountOfMessagesRecord = tx.decodedTx.body.messages.reduce((acc: Record<string, number>, message) => ({
+    ...acc,
+    [message.typeUrl]: acc[message.typeUrl] ? acc[message.typeUrl] + 1 : 1
+  }), {})
+
+  const amountOfMessages = Object.entries(amountOfMessagesRecord).map(([type, amount]) => ({
+    type,
+    amount,
+  }))
+
+  const messages = tx.block.messages.filter(m => m.tx.hash === tx.hash)
+
+  const amountSentRecord = messages
+  .filter(m => m.msg.typeUrl === "/cosmos.bank.v1beta1.MsgSend")
+  .reduce((acc: Record<string, bigint>, item) => {
+    for (const coin of item.msg.decodedMsg.amount) {
+      if (!acc[coin.denom]) acc[coin.denom] = BigInt(0);
+
+      acc[coin.denom] += BigInt(coin.amount);
+    }
+
+    return acc;
+  }, {})
+
+  const amountSentByDenom = Object.entries(amountSentRecord).map(([denom, amount]) => ({
+    denom,
+    amount: amount.toString(),
+  }))
+
   return {
     id: tx.hash,
     idx: tx.idx,
@@ -96,6 +125,8 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
     multisig: isMultisig ? multisigObject : undefined,
     code: tx.tx.code,
     codespace: tx.tx.codespace,
+    amountOfMessages,
+    amountSentByDenom,
   };
 }
 

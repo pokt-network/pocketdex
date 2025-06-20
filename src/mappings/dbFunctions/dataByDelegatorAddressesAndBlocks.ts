@@ -26,11 +26,10 @@ AS $$
     SELECT 
       mcc.supplier_id,
       COUNT(DISTINCT mcc.id) AS claim_count,
-      SUM(r.num_relays) AS claim_relays,
-      SUM(r.num_claimed_computed_units) AS claim_computed_units,
-      SUM(r.claimed_amount) AS claim_upokt
+      SUM(mcc.num_relays) AS claim_relays,
+      SUM(mcc.num_claimed_computed_units) AS claim_computed_units,
+      SUM(mcc.claimed_amount) AS claim_upokt
     FROM ${dbSchema}.msg_create_claims mcc
-    INNER JOIN ${dbSchema}.relays r ON r.msg_create_claim_id = mcc.id
     WHERE mcc.block_id BETWEEN start_height AND end_height
     GROUP BY mcc.supplier_id
   ),

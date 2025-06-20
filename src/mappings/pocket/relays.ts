@@ -1,9 +1,7 @@
-import { toHex } from "@cosmjs/encoding";
 import {
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
-import { omit } from "lodash";
 import { claimExpirationReasonFromJSON } from "../../client/pocket/tokenomics/event";
 import {
   ClaimExpirationReason,
@@ -11,7 +9,6 @@ import {
   Coin,
   EventSupplierSlashed,
   ProofRequirementReason,
-  RelayStatus,
   SettlementOpReason,
   Supplier,
 } from "../../types";
@@ -25,7 +22,6 @@ import { EventProofValidityCheckedProps } from "../../types/models/EventProofVal
 import { ModToAcctTransferProps } from "../../types/models/ModToAcctTransfer";
 import { MsgCreateClaimProps } from "../../types/models/MsgCreateClaim";
 import { MsgSubmitProofProps } from "../../types/models/MsgSubmitProof";
-import { RelayProps } from "../../types/models/Relay";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 import {
   MsgCreateClaim,
@@ -45,16 +41,8 @@ import {
   SettlementOpReasonSDKType,
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
 import { optimizedBulkCreate } from "../utils/db";
-import {
-  getBlockId,
-  getEventId,
-  getRelayId,
-  messageId,
-} from "../utils/ids";
-import {
-  parseJson,
-  stringify,
-} from "../utils/json";
+import { getBlockId, getEventId, messageId } from "../utils/ids";
+import { parseJson, stringify } from "../utils/json";
 
 // this can return undefined because older events do not have this attribute
 function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
@@ -212,8 +200,8 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
       proofMissingPenalty = JSON.parse(attribute.value as string);
     }
 
-    if (attribute.key === "failure_reason") {
-      failureReason = attribute.value as string;
+    if (attribute.key === 'failure_reason') {
+      failureReason = parseAttribute(attribute.value as string)
     }
 
     if (attribute.key === "proof_status") {
@@ -271,88 +259,72 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
   };
 }
 
-function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): [MsgCreateClaimProps, RelayProps] {
-  const { rootHash, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
+function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateClaimProps {
+  const { sessionHeader, supplierOperatorAddress, } = msg.msg.decodedMsg;
   const applicationId = sessionHeader?.applicationAddress || "";
   const serviceId = sessionHeader?.serviceId || "";
   const sessionId = sessionHeader?.sessionId || "";
 
-  const id = getRelayId({
-    applicationId,
-    supplierId: supplierOperatorAddress,
-    serviceId,
-    sessionId,
-  });
+  const eventClaimCreated = msg.tx.tx.events.find(event => event.type === "pocket.proof.EventClaimCreated");
+
+  if (!eventClaimCreated) {
+    throw new Error(`EventClaimCreated not found for msg MsgCreateClaim ${msg.idx} ${msg.tx.hash} ${msg.block.block.header.height}`);
+  }
+
+  const {
+    claimed,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays
+  } = getAttributes(eventClaimCreated.attributes)
 
   const shared = {
+
+  };
+
+  return {
+    id: messageId(msg),
+    ...shared,
+    transactionId: msg.tx.hash,
+    blockId: getBlockId(msg.block),
     supplierId: supplierOperatorAddress,
     applicationId,
     serviceId,
     sessionId,
+    numRelays,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
-    // todo: convert uint8array that come as uint8map to hex string
-    rootHash: toHex(rootHash),
-  };
-
-  return [
-    {
-      id: messageId(msg),
-      ...shared,
-      transactionId: msg.tx.hash,
-      blockId: getBlockId(msg.block),
-    },
-    {
-      id,
-      ...shared,
-      status: RelayStatus.Pending,
-      msgCreateClaimId: messageId(msg),
-    },
-  ];
+    rootHash: undefined,
+  }
 }
 
-function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): [MsgSubmitProofProps, RelayProps] {
-  const { /*proof,*/ sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
+function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): MsgSubmitProofProps {
+  const { sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
 
   const applicationId = sessionHeader?.applicationAddress || "";
   const serviceId = sessionHeader?.serviceId || "";
   const sessionId = sessionHeader?.sessionId || "";
   const msgId = messageId(msg);
 
-  const shared = {
+  return {
+    id: msgId,
+    transactionId: msg.tx.hash,
+    blockId: getBlockId(msg.block),
     applicationId,
     supplierId: supplierOperatorAddress,
     sessionId,
     serviceId,
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
-  };
-
-  return [
-    {
-      id: msgId,
-      ...shared,
-      // proof: stringify(proof),
-      // some proof payloads are way bigger than what jsonb allows on a database.
-      proof: "",
-      transactionId: msg.tx.hash,
-      blockId: getBlockId(msg.block),
-    },
-    {
-      ...shared,
-      id: getRelayId({
-        applicationId,
-        supplierId: supplierOperatorAddress,
-        serviceId,
-        sessionId,
-      }),
-      status: RelayStatus.Pending,
-      msgSubmitProofId: msgId,
-    },
-  ];
+    proof: undefined,
+  }
 }
 
-function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, RelayProps, Array<ModToAcctTransferProps>] {
+function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
   const {
     claim,
     claimed,
@@ -363,36 +335,25 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
     settlementResult,
   } = getAttributes(event.event.attributes);
 
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const shared = {
-    supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || "",
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-    sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
-    sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: "", //stringify(root_hash),
-    numRelays,
-    numClaimedComputedUnits,
-    numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || "",
-    claimedAmount: BigInt(claimed?.amount || "0"),
-    proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-  } as const;
-
-  const eventId = getEventId(event);
-  const blockId = getBlockId(event.block);
-  const relayId = getRelayId({
-    applicationId: session_header?.application_address || "",
-    supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-  });
+  const eventId = getEventId(event)
+  const blockId = getBlockId(event.block)
 
   return [
     {
-      ...shared,
+      supplierId: supplier_operator_address,
+      applicationId: session_header?.application_address || "",
+      serviceId: session_header?.service_id || "",
+      sessionId: session_header?.session_id || "",
+      sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
+      sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
+      numRelays,
+      numClaimedComputedUnits,
+      numEstimatedComputedUnits,
+      claimedDenom: claimed?.denom || "",
+      claimedAmount: BigInt(claimed?.amount || "0"),
+      proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
       transactionId: event.tx?.hash,
       blockId: blockId,
       id: eventId,
@@ -416,16 +377,10 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
         amount: BigInt(item.coin.amount),
         denom: item.coin.denom,
       })) || [],
-    },
-    {
-      ...shared,
-      id: relayId,
-      status: RelayStatus.Success,
-      eventClaimSettledId: getEventId(event),
+      rootHash: undefined,
     },
     settlementResult?.mod_to_acct_transfers?.map((item, index) => ({
       id: `${eventId}-${index}`,
-      relayId,
       blockId,
       eventClaimSettledId: eventId,
       senderModule: item.SenderModule,
@@ -433,11 +388,12 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
       amount: BigInt(item.coin.amount),
       denom: item.coin.denom,
       opReason: getSettlementOpReasonFromSDK(item.op_reason),
+      relayId: '',
     })) || [],
   ];
 }
 
-function _handleEventClaimExpired(event: CosmosEvent): [EventClaimExpiredProps, RelayProps] {
+function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
   const {
     claim,
     claimed,
@@ -447,47 +403,30 @@ function _handleEventClaimExpired(event: CosmosEvent): [EventClaimExpiredProps, 
     numRelays,
   } = getAttributes(event.event.attributes);
 
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const shared = {
+  return {
     supplierId: supplier_operator_address,
     applicationId: session_header?.application_address || "",
     serviceId: session_header?.service_id || "",
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: "", //stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     claimedDenom: claimed?.denom || "",
     claimedAmount: BigInt(claimed?.amount || "0"),
     proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-  } as const;
-
-  return [
-    {
-      ...shared,
-      id: getEventId(event),
-      expirationReason,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-    },
-    {
-      ...shared,
-      id: getRelayId({
-        applicationId: session_header?.application_address || "",
-        supplierId: supplier_operator_address,
-        serviceId: session_header?.service_id || "",
-        sessionId: session_header?.session_id || "",
-      }),
-      eventClaimExpiredId: getEventId(event),
-      status: RelayStatus.Fail,
-    },
-  ];
+    id: getEventId(event),
+    expirationReason,
+    transactionId: event.tx?.hash,
+    blockId: getBlockId(event.block),
+    rootHash: undefined,
+  }
 }
 
-function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, RelayProps] {
+function _handleEventClaimUpdated(event: CosmosEvent): EventClaimUpdatedProps {
   const {
     claim,
     claimed,
@@ -498,23 +437,18 @@ function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, 
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const relayId = getRelayId({
-    applicationId: session_header?.application_address || "",
-    supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-  });
-
-  const shared = {
+  return {
+    id: getEventId(event),
+    transactionId: event.tx?.hash,
+    blockId: getBlockId(event.block),
     supplierId: supplier_operator_address,
     applicationId: session_header?.application_address || "",
     serviceId: session_header?.service_id || "",
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: "", //stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -523,44 +457,32 @@ function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, 
     ...(proof_validation_status && {
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
     }),
-  } as const;
-
-  return [
-    {
-      ...shared,
-      id: getEventId(event),
-      relayId,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-    },
-    {
-      ...shared,
-      id: relayId,
-      status: RelayStatus.Pending,
-    },
-  ];
+    relayId: undefined,
+    rootHash: undefined,
+  }
 }
 
-function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, RelayProps] {
+function _handleEventProofUpdated(event: CosmosEvent): EventProofUpdatedProps {
   const {
     claim,
     claimed,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-    proof,
   } = getAttributes(event.event.attributes);
 
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const shared = {
+  return {
+    id: getEventId(event),
+    transactionId: event.tx?.hash,
+    blockId: getBlockId(event.block),
     supplierId: supplier_operator_address,
     applicationId: session_header?.application_address || "",
     serviceId: session_header?.service_id || "",
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: "", //stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -569,31 +491,10 @@ function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, 
     ...(proof_validation_status && {
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
     }),
-  } as const;
-
-
-  const id = getRelayId({
-    applicationId: session_header?.application_address || "",
-    supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-  });
-
-  return [
-    {
-      id: getEventId(event),
-      ...shared,
-      closestMerkleProof: proof ? stringify(proof.closest_merkle_proof) : undefined,
-      relayId: id,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-    },
-    {
-      ...shared,
-      id,
-      status: RelayStatus.Pending,
-    },
-  ];
+    closestMerkleProof: undefined,
+    relayId: undefined,
+    rootHash: undefined,
+  }
 }
 
 function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicationOverservicedProps {
@@ -791,222 +692,73 @@ async function _handleEventSupplierSlashed(event: CosmosEvent) {
   ]);
 }
 
-// TODO: research this because was wrongly code in relation to the event entity
-//  https://github.com/pokt-network/poktroll/blob/feb68848d0fe969f1997b87520170741711cf4d4/proto/pocket/proof/event.proto
-// CHANGE HERE: https://github.com/pokt-network/poktroll/commit/feb68848d0fe969f1997b87520170741711cf4d4#diff-6348a0a7ee0a1fdb26be2ea8d8bbc295adaef0d8f49d870cc7b281f9b822b029L38-L50
-/*
-2025-06-19T23:19:46.428Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt1y4gu4aevj2x4g06x0uup5f6wh70wvc4a2c3q00\",\"session_header\":{\"application_address\":\"pokt1pf3wvd7v5g5qk56j37uqqsq8t8vnhms5zghpfm\",\"service_id\":\"bsc\",\"session_id\":\"cbf85a4a4a3a7fe3ddd8f77fc316752db97320de1b3d22fd75e0092b580f1fae\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"/YSrkcbr14WsSb/uPjGDQc6Grl5crURTr71lguQt2lUAAAAAAAXk+AAAAAAAAAG0\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
-2025-06-19T23:19:46.428Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt1hyp7vstqndzzn8snlfv553e8uaand6097eq4yu\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"pMXV5Oe4ApIjH5BUnkC8uakU6AG1+3DldxNqsxXMf6AAAAAAAAvOTgAAAAAAAAHq\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
-2025-06-19T23:19:46.428Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt15ve3yszw3jvnczud7eld3uvktd3xe39tstrux6\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"Mof2xnkaUKpH5i1bkz2jKzoHQl8hmt8SwHiW18YMYB4AAAAAAAqmPgAAAAAAAAG6\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
-2025-06-19T23:19:46.429Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt1mh4lue0ypers4lvw3wp0lxhlgxugt5yreafgcz\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"d9pwEzom0s1v0/h9dg7v7cjQz484R0wMalMLsRSCpaYAAAAAAA1ZDgAAAAAAAAIq\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
-2025-06-19T23:19:46.429Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt16kux02e9eh3tpvl3xsf06tcvkmzvjt0we6m40s\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"zUPG6hw93XmF5Euwuo6kPT3vAdT44cUKT+zwkzMkYpsAAAAAAA7dowAAAAAAAAJp\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
- */
-function _handleEventProofValidityChecked(event: CosmosEvent): [EventProofValidityCheckedProps, Partial<RelayProps>] {
-  const { claim, failureReason, proof, proofValidationStatus } = getAttributes(event.event.attributes);
+function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidityCheckedProps {
+  // in the current proto files of this event, proof does not come, but in the older version of this event it comes.
+  const { claim, failureReason, proof, proofValidationStatus} = getAttributes(event.event.attributes);
 
-  if (proof) {
-    // Beta https://shannon-testnet-grove-rpc.beta.poktroll.com/block_results?height=69007
-    // {"type":"pocket.proof.EventProofValidityChecked","attributes":[{"key":"block_height","value":"\"69007\"","index":true},{"key":"failure_reason","value":"\"\"","index":true},{"key":"proof","value":"{\"supplier_operator_address\":\"pokt1hgldzstydutfc7qjwe6wqz3h6qc6fgfasaadrf\",\"session_header\":{\"application_address\":\"pokt1vey0k90uc62msvs0hlnc6ml4v9jdlnu7cuz8ur\",\"service_id\":\"ink\",\"session_id\":\"103ab2c9d75b7b58acb5bef65fde81af94dfb54d1044f86d245721c2f6c0a894\",\"session_start_block_height\":\"68991\",\"session_end_block_height\":\"69000\"},\"closest_merkle_proof\":\"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\"}","index":true},{"key":"proof_status","value":"\"VALIDATED\"","index":true},{"key":"mode","value":"EndBlock","index":true}]}
-    if (!proof.session_header) {
-      logger.error(`[handleEventProofValidityChecked] session_header not found in event: ${stringify(event.event.attributes)}`);
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      return [];
-      // throw new Error(`[handleEventProofValidityChecked] session_header not found in event`);
-    }
+  const sessionHeader = proof?.session_header || claim?.session_header;
 
-    if (!proofValidationStatus) {
-      logger.error(`[handleEventProofValidityChecked] proofValidationStatus not found in event: ${stringify(event.event.attributes)}`);
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      return [];
-      // throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
-    }
+  if (!sessionHeader) {
+    throw new Error(`[handleEventProofValidityChecked] session_header not found in event ${stringify(event.event.attributes)}`);
+  }
 
-    if (!failureReason) {
-      logger.error(`[handleEventProofValidityChecked] failureReason not found in event: ${stringify(event.event.attributes)}`);
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      return [];
-      // throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
-    }
+  const supplierOperatorAddress = proof?.supplier_operator_address || claim?.supplier_operator_address;
 
-    return [
-      {
-        id: getEventId(event),
-        blockId: getBlockId(event.block),
-        supplierId: proof.supplier_operator_address,
-        applicationId: proof.session_header.application_address,
-        serviceId: proof.session_header.service_id,
-        sessionId: proof.session_header.session_id,
-        sessionStartHeight: BigInt(proof.session_header.session_start_block_height.toString()),
-        sessionEndHeight: BigInt(proof.session_header.session_end_block_height.toString()),
-        proofValidationStatus: proofValidationStatus,
-        failureReason: failureReason,
-        eventId: getEventId(event),
-      },
-      {
-        id: getRelayId({
-          applicationId: proof.session_header.application_address,
-          supplierId: proof.supplier_operator_address,
-          serviceId: proof.session_header.service_id,
-          sessionId: proof.session_header.session_id,
-        }),
-        proofValidationStatus: proofValidationStatus,
-      },
-    ];
-  } else if (claim) {
-    // Mainnet https://shannon-grove-rpc.mainnet.poktroll.com/block_results?height=138947
-    // {"type":"pocket.proof.EventProofValidityChecked","attributes":[{"key":"block_height","value":"\"138947\"","index":true},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt14aw9dp74x3rucl4lraesjw04f6ec28dw60q0u7\",\"session_header\":{\"application_address\":\"pokt19xeme2s0756y7j5gpwa2sy5wg7pw6n5wjxegxa\",\"service_id\":\"op\",\"session_id\":\"f6751b0defdf87a127ecb09b0d84e09222aec9af3e73554b733d523068d4efa4\",\"session_start_block_height\":\"138931\",\"session_end_block_height\":\"138940\"},\"root_hash\":\"7TZnv2qEk1NYLw6QiSVu0Jnc6TESw6KvmjYyIryQE/oAAAAAAAmg0AAAAAAAAAFd\",\"proof_validation_status\":\"VALIDATED\"}","index":true},{"key":"failure_reason","value":"\"\"","index":true},{"key":"mode","value":"EndBlock","index":true}]}
-    /*const x = {
-      "supplier_operator_address": "pokt14aw9dp74x3rucl4lraesjw04f6ec28dw60q0u7",
-      "session_header": {
-        "application_address": "pokt19xeme2s0756y7j5gpwa2sy5wg7pw6n5wjxegxa",
-        "service_id": "op",
-        "session_id": "f6751b0defdf87a127ecb09b0d84e09222aec9af3e73554b733d523068d4efa4",
-        "session_start_block_height": "138931",
-        "session_end_block_height": "138940",
-      },
-      "root_hash": "7TZnv2qEk1NYLw6QiSVu0Jnc6TESw6KvmjYyIryQE/oAAAAAAAmg0AAAAAAAAAFd",
-      "proof_validation_status": "VALIDATED",
-    };*/
-    if (!claim.session_header) {
-      logger.error(`[handleEventProofValidityChecked] session_header not found in event: ${stringify(event.event.attributes)}`);
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      return [];
-      // throw new Error(`[handleEventProofValidityChecked] session_header not found in event`);
-    }
+  if (!supplierOperatorAddress) {
+    throw new Error(`[handleEventProofValidityChecked] supplier_operator_address not found in event ${stringify(event.event.attributes)}`);
+  }
 
-    if (!claim.proof_validation_status) {
-      logger.error(`[handleEventProofValidityChecked] proofValidationStatus not found in event: ${stringify(event.event.attributes)}`);
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      return [];
-      // throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
-    }
-
-    if (!failureReason) {
-      logger.error(`[handleEventProofValidityChecked] failureReason not found in event: ${stringify(event.event.attributes)}`);
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      return [];
-      // throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
-    }
-
-    return [
-      {
-        id: getEventId(event),
-        blockId: getBlockId(event.block),
-        supplierId: claim.supplier_operator_address,
-        applicationId: claim.session_header.application_address,
-        serviceId: claim.session_header.service_id,
-        sessionId: claim.session_header.session_id,
-        sessionStartHeight: BigInt(claim.session_header.session_start_block_height.toString()),
-        sessionEndHeight: BigInt(claim.session_header.session_end_block_height.toString()),
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        proofValidationStatus: getClaimProofStatusFromSDK(claim.proof_validation_status)!,
-        failureReason: failureReason,
-        eventId: getEventId(event),
-      },
-      {
-        id: getRelayId({
-          applicationId: claim.session_header.application_address,
-          supplierId: claim.supplier_operator_address,
-          serviceId: claim.session_header.service_id,
-          sessionId: claim.session_header.session_id,
-        }),
-        proofValidationStatus: proofValidationStatus,
-      },
-    ];
-  } else {
-    logger.error(`[handleEventProofValidityChecked] proof|claim not found in event: ${stringify(event.event.attributes)}`);
+  if (!proofValidationStatus) {
+    logger.error(`[handleEventProofValidityChecked] proofValidationStatus not found in event: ${stringify(event.event.attributes)}`);
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     return [];
+    // throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
   }
-}
 
-// _updateRelays - we need to update relay documents without historical tracking get to involve.
-async function _updateRelays(relays: Array<RelayProps>): Promise<void> {
-  const promises: Promise<void>[] = [];
-  const RelayModel = store.modelProvider.getModel("Relay");
-  relays.forEach(relay => {
+  if (!failureReason) {
+    logger.error(`[handleEventProofValidityChecked] failureReason not found in event: ${stringify(event.event.attributes)}`);
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
-    promises.push(RelayModel.model.update(
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      omit(relay, "id"),
-      {
-        where: {
-          id: relay.id,
-        },
-        transaction: store.context.transaction,
-      },
-    ));
-  });
-  await Promise.all(promises);
+    return [];
+    // throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
+  }
+
+  return {
+    id: getEventId(event),
+    blockId: getBlockId(event.block),
+    supplierId: supplierOperatorAddress,
+    applicationId: sessionHeader.application_address,
+    serviceId: sessionHeader.service_id,
+    sessionId: sessionHeader.session_id,
+    sessionStartHeight: BigInt(sessionHeader.session_start_block_height.toString()),
+    sessionEndHeight: BigInt(sessionHeader.session_end_block_height.toString()),
+    proofValidationStatus: proofValidationStatus,
+    failureReason: failureReason,
+    eventId: getEventId(event),
+  }
 }
 
 export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
-  const claimMsgs = [];
-  const relays = [];
-
-  for (const msg of messages) {
-    const [claimMsg, relay] = _handleMsgCreateClaim(msg);
-    claimMsgs.push(claimMsg);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("MsgCreateClaim", claimMsgs),
-    // on msg claim is the first time a Relay entity record is created.
-    optimizedBulkCreate("Relay", relays),
-  ]);
+  await optimizedBulkCreate("MsgCreateClaim", messages.map(_handleMsgCreateClaim))
 }
 
 export async function handleMsgSubmitProof(messages: Array<CosmosMessage<MsgSubmitProof>>): Promise<void> {
-  const proofMsgs = [];
-  const relays = [];
-
-  for (const msg of messages) {
-    const [proofMsg, relay] = _handleMsgSubmitProof(msg);
-    proofMsgs.push(proofMsg);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("MsgSubmitProof", proofMsgs),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("MsgSubmitProof", messages.map(_handleMsgSubmitProof))
 }
 
 export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promise<void> {
-  const eventsExpired = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventExpired, relay] = _handleEventClaimExpired(event);
-    eventsExpired.push(eventExpired);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventClaimExpired", eventsExpired),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired))
 }
 
 export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promise<void> {
   const eventsSettled = [];
-  const relays = [];
   const modToAcctTransfersToSave = [];
 
   for (const event of events) {
-    const [eventSettled, relay, modToAcctTransfers] = _handleEventClaimSettled(event);
+    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event);
     eventsSettled.push(eventSettled);
-    relays.push(relay);
+
     if (modToAcctTransfers.length) {
       modToAcctTransfersToSave.push(...modToAcctTransfers);
     }
@@ -1015,40 +767,15 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promi
   await Promise.all([
     optimizedBulkCreate("EventClaimSettled", eventsSettled),
     optimizedBulkCreate("ModToAcctTransfer", modToAcctTransfersToSave),
-    _updateRelays(relays),
   ]);
 }
 
 export async function handleEventClaimUpdated(events: Array<CosmosEvent>): Promise<void> {
-  const eventsUpdated = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventUpdated, relay] = _handleEventClaimUpdated(event);
-    eventsUpdated.push(eventUpdated);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventClaimUpdated", eventsUpdated),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("EventClaimUpdated", events.map(_handleEventClaimUpdated))
 }
 
 export async function handleEventProofUpdated(events: Array<CosmosEvent>): Promise<void> {
-  const eventsUpdated = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventUpdated, relay] = _handleEventProofUpdated(event);
-    eventsUpdated.push(eventUpdated);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventProofUpdated", eventsUpdated),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("EventProofUpdated", events.map(_handleEventProofUpdated))
 }
 
 export async function handleEventApplicationOverserviced(events: Array<CosmosEvent>): Promise<void> {
@@ -1068,21 +795,5 @@ export async function handleEventSupplierSlashed(events: Array<CosmosEvent>): Pr
 }
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {
-  const eventsUpdated = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventUpdated, relay] = _handleEventProofValidityChecked(event);
-    if (eventUpdated) {
-      eventsUpdated.push(eventUpdated);
-    }
-    if (relay) {
-      relays.push(relay);
-    }
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventProofValidityChecked", eventsUpdated),
-    _updateRelays(relays as Array<RelayProps>),
-  ]);
+  await optimizedBulkCreate("EventProofValidityChecked", events.map(_handleEventProofValidityChecked))
 }
