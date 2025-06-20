@@ -686,10 +686,10 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
 
   // let's serialize to maybe avoid issues do to even loop saturation?
   await profilerWrap(indexPrimitives, "indexingHandler", "indexPrimitives")(block);
-
   // lets this happens first because is massive
   // await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
   // await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
+  await profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions);
 
   await Promise.all([
     profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
