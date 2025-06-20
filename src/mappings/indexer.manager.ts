@@ -27,7 +27,6 @@ import {
 import { handleAddBlockReports } from "./pocket/reports";
 import {
   handleBlock,
-  handleEvents,
   handleGenesis,
   handleMessages,
   handleTransactions,
@@ -694,27 +693,28 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   await profilerWrap(indexPrimitives, "indexingHandler", "indexPrimitives")(block);
 
   // lets this happens first because is massive
-  await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
+  // await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
 
   await profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions);
-
   await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
 
-  await profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType);
+  try {
+    await profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType);
+  } catch (e) {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    logger.error(`[indexer.manager] error indexingRelays: ${e.message}`);
+  }
 
-  await profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType);
-
-  await profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType);
+  await Promise.all([
+    profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType),
+    profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
+  ]);
 
   await profilerWrap(generateReports, "indexingHandler", "generateReports")(block);
 }

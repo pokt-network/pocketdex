@@ -87,67 +87,67 @@ function getSettlementOpReasonFromSDK(item: typeof SettlementOpReasonSDKType | n
 
     case "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT":
     case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT:
-      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT;
 
     case "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN":
     case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN:
-      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN;
 
     case "TLM_GLOBAL_MINT_INFLATION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_INFLATION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_INFLATION
+      return SettlementOpReason.TLM_GLOBAL_MINT_INFLATION;
 
     case "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_RD
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_RD;
 
     case "TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER:
-      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER
+      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER;
 
     case "UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER":
     case SettlementOpReasonSDKType.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER:
-      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER
+      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER;
 
     case "UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN":
     case SettlementOpReasonSDKType.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN:
-      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN
+      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN;
 
     case "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER:
-      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER
+      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER;
 
     case "TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER:
-      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER
+      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER;
 
     default:
-      throw new Error(`Unknown SettlementOpReason=${item}`)
+      throw new Error(`Unknown SettlementOpReason=${item}`);
   }
 }
 
 function parseAttribute(attribute: unknown): string {
-    return (attribute as string).replaceAll("\"", "");
+  return (attribute as string).replaceAll("\"", "");
 }
 
 // eslint-disable-next-line complexity
@@ -167,7 +167,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     claimed: CoinSDKType = {},
-    failureReason = '',
+    failureReason = "",
     proofValidationStatus: ClaimProofStatus | undefined,
     settlementResult: ClaimSettlementResultSDKType | null = null,
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -212,11 +212,11 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
       proofMissingPenalty = JSON.parse(attribute.value as string);
     }
 
-    if (attribute.key === 'failure_reason') {
-      failureReason = attribute.value as string
+    if (attribute.key === "failure_reason") {
+      failureReason = attribute.value as string;
     }
 
-    if (attribute.key === 'proof_status') {
+    if (attribute.key === "proof_status") {
       proofValidationStatus = getClaimProofStatusFromSDK(parseAttribute(attribute.value as string));
     }
 
@@ -372,7 +372,7 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
+    rootHash: "", //stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -381,14 +381,14 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
     proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
   } as const;
 
-  const eventId = getEventId(event)
-  const blockId = getBlockId(event.block)
+  const eventId = getEventId(event);
+  const blockId = getBlockId(event.block);
   const relayId = getRelayId({
     applicationId: session_header?.application_address || "",
     supplierId: supplier_operator_address,
     serviceId: session_header?.service_id || "",
     sessionId: session_header?.session_id || "",
-  })
+  });
 
   return [
     {
@@ -415,7 +415,7 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
         recipientModule: item.RecipientModule,
         amount: BigInt(item.coin.amount),
         denom: item.coin.denom,
-      })) || []
+      })) || [],
     },
     {
       ...shared,
@@ -433,7 +433,7 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
       amount: BigInt(item.coin.amount),
       denom: item.coin.denom,
       opReason: getSettlementOpReasonFromSDK(item.op_reason),
-    })) || []
+    })) || [],
   ];
 }
 
@@ -456,7 +456,7 @@ function _handleEventClaimExpired(event: CosmosEvent): [EventClaimExpiredProps, 
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
+    rootHash: "", //stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -514,7 +514,7 @@ function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, 
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
+    rootHash: "", //stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -522,7 +522,7 @@ function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, 
     claimedAmount: BigInt(claimed?.amount || "0"),
     ...(proof_validation_status && {
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-    })
+    }),
   } as const;
 
   return [
@@ -560,7 +560,7 @@ function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, 
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
+    rootHash: "", //stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -568,7 +568,7 @@ function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, 
     claimedAmount: BigInt(claimed?.amount || "0"),
     ...(proof_validation_status && {
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-    })
+    }),
   } as const;
 
 
@@ -597,15 +597,16 @@ function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, 
 }
 
 function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicationOverservicedProps {
-  let expectedBurn: Coin | null = null, effectiveBurn: Coin | null = null, applicationAddress = '', supplierAddress = '';
+  let expectedBurn: Coin | null = null, effectiveBurn: Coin | null = null, applicationAddress = "",
+    supplierAddress = "";
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "application_addr") {
-      applicationAddress = parseAttribute(attribute.value)
+      applicationAddress = parseAttribute(attribute.value);
     }
 
     if (attribute.key === "supplier_operator_addr") {
-      supplierAddress = parseAttribute(attribute.value as string)
+      supplierAddress = parseAttribute(attribute.value as string);
     }
 
     if (attribute.key === "expected_burn") {
@@ -643,34 +644,34 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
     effectiveBurnDenom: effectiveBurn.denom,
     blockId: getBlockId(event.block),
     eventId: getEventId(event),
-  }
+  };
 }
 
 function _handleEventApplicationReimbursementRequest(event: CosmosEvent): EventApplicationReimbursementRequestProps {
-  let applicationAddress = '', supplierAddress = '', serviceId = '', sessionId = '', coin: CoinSDKType | null = null
+  let applicationAddress = "", supplierAddress = "", serviceId = "", sessionId = "", coin: CoinSDKType | null = null;
 
-  for (const {key, value} of event.event.attributes) {
-    if (key === 'amount') {
-      coin = parseJson(value as string)
-      continue
+  for (const { key, value } of event.event.attributes) {
+    if (key === "amount") {
+      coin = parseJson(value as string);
+      continue;
     }
 
-    const parsedValue = parseAttribute(value)
+    const parsedValue = parseAttribute(value);
 
-    if (key === 'application_addr') {
-      applicationAddress = parsedValue
+    if (key === "application_addr") {
+      applicationAddress = parsedValue;
     }
 
-    if (key === 'supplier_operator_addr') {
-      supplierAddress = parsedValue
+    if (key === "supplier_operator_addr") {
+      supplierAddress = parsedValue;
     }
 
-    if (key === 'service_id') {
-      serviceId = parsedValue
+    if (key === "service_id") {
+      serviceId = parsedValue;
     }
 
-    if (key === 'session_id') {
-      sessionId = parsedValue
+    if (key === "session_id") {
+      sessionId = parsedValue;
     }
   }
 
@@ -688,11 +689,11 @@ function _handleEventApplicationReimbursementRequest(event: CosmosEvent): EventA
     denom: coin.denom,
     blockId: getBlockId(event.block),
     eventId: getEventId(event),
-  }
+  };
 }
 
 async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
-  let slashingCoin: CoinSDKType | null = null, operatorAddress = '';
+  let slashingCoin: CoinSDKType | null = null, operatorAddress = "";
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "slashing_amount") {
@@ -712,13 +713,13 @@ async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
     throw new Error(`[handleEventSupplierSlashed] operatorAddress not found in event`);
   }
 
-  const supplier = await Supplier.get(operatorAddress)
+  const supplier = await Supplier.get(operatorAddress);
 
   if (!supplier) {
-    throw new Error(`[handleEventSupplierSlashed] supplier not found for operator address ${operatorAddress}`)
+    throw new Error(`[handleEventSupplierSlashed] supplier not found for operator address ${operatorAddress}`);
   }
 
-  supplier.stakeAmount -= BigInt(slashingCoin.amount)
+  supplier.stakeAmount -= BigInt(slashingCoin.amount);
 
   await Promise.all([
     supplier.save(),
@@ -732,41 +733,41 @@ async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
       previousStakeAmount: supplier.stakeAmount,
       afterStakeAmount: supplier.stakeAmount,
       // in alpha this event does not have the values below, so we are setting them to empty values for now
-      applicationId: '',
-      serviceId: '',
-      sessionId: '',
+      applicationId: "",
+      serviceId: "",
+      sessionId: "",
       sessionStartHeight: BigInt(0),
       sessionEndHeight: BigInt(0),
     }).save(),
-  ])
+  ]);
 }
 
 async function _handleEventSupplierSlashed(event: CosmosEvent) {
   const {
     claim,
-    proofMissingPenalty
+    proofMissingPenalty,
   } = getAttributes(event.event.attributes);
 
   if (!claim) {
     logger.warn(`[handleEventSupplierSlashed] claim not found in event, trying to handle with previous version`);
-    await _handleOldEventSupplierSlashed(event)
-    return
+    await _handleOldEventSupplierSlashed(event);
+    return;
   }
 
   if (!claim.session_header) {
     logger.warn(`[handleEventSupplierSlashed] session_header not found in event, trying to handle with previous version`);
-    await _handleOldEventSupplierSlashed(event)
-    return
+    await _handleOldEventSupplierSlashed(event);
+    return;
   }
 
-  const supplier = await Supplier.get(claim.supplier_operator_address)
+  const supplier = await Supplier.get(claim.supplier_operator_address);
 
   if (!supplier) {
-    throw new Error(`[handleEventSupplierSlashed] supplier not found for address: ${claim.supplier_operator_address}`)
+    throw new Error(`[handleEventSupplierSlashed] supplier not found for address: ${claim.supplier_operator_address}`);
   }
 
-  const previousStakeAmount = supplier.stakeAmount.valueOf()
-  supplier.stakeAmount -= BigInt(proofMissingPenalty.amount)
+  const previousStakeAmount = supplier.stakeAmount.valueOf();
+  supplier.stakeAmount -= BigInt(proofMissingPenalty.amount);
 
   await Promise.all([
     supplier.save(),
@@ -787,52 +788,143 @@ async function _handleEventSupplierSlashed(event: CosmosEvent) {
       afterStakeAmount: supplier.stakeAmount,
       proofValidationStatus: getClaimProofStatusFromSDK(claim.proof_validation_status),
     }).save(),
-  ])
+  ]);
 }
 
+// TODO: research this because was wrongly code in relation to the event entity
+//  https://github.com/pokt-network/poktroll/blob/feb68848d0fe969f1997b87520170741711cf4d4/proto/pocket/proof/event.proto
+// CHANGE HERE: https://github.com/pokt-network/poktroll/commit/feb68848d0fe969f1997b87520170741711cf4d4#diff-6348a0a7ee0a1fdb26be2ea8d8bbc295adaef0d8f49d870cc7b281f9b822b029L38-L50
+/*
+2025-06-19T23:19:46.428Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt1y4gu4aevj2x4g06x0uup5f6wh70wvc4a2c3q00\",\"session_header\":{\"application_address\":\"pokt1pf3wvd7v5g5qk56j37uqqsq8t8vnhms5zghpfm\",\"service_id\":\"bsc\",\"session_id\":\"cbf85a4a4a3a7fe3ddd8f77fc316752db97320de1b3d22fd75e0092b580f1fae\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"/YSrkcbr14WsSb/uPjGDQc6Grl5crURTr71lguQt2lUAAAAAAAXk+AAAAAAAAAG0\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
+2025-06-19T23:19:46.428Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt1hyp7vstqndzzn8snlfv553e8uaand6097eq4yu\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"pMXV5Oe4ApIjH5BUnkC8uakU6AG1+3DldxNqsxXMf6AAAAAAAAvOTgAAAAAAAAHq\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
+2025-06-19T23:19:46.428Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt15ve3yszw3jvnczud7eld3uvktd3xe39tstrux6\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"Mof2xnkaUKpH5i1bkz2jKzoHQl8hmt8SwHiW18YMYB4AAAAAAAqmPgAAAAAAAAG6\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
+2025-06-19T23:19:46.429Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt1mh4lue0ypers4lvw3wp0lxhlgxugt5yreafgcz\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"d9pwEzom0s1v0/h9dg7v7cjQz484R0wMalMLsRSCpaYAAAAAAA1ZDgAAAAAAAAIq\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
+2025-06-19T23:19:46.429Z <sandbox> ERROR [handleEventProofValidityChecked] session_header not found in event: [{"key":"block_height","value":"\"139799\""},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt16kux02e9eh3tpvl3xsf06tcvkmzvjt0we6m40s\",\"session_header\":{\"application_address\":\"pokt1hufj6cdgu83dluput6klhmh54vtrgtl3drttva\",\"service_id\":\"poly\",\"session_id\":\"0948127d639ada32098404d478a2aad663ce42f5c34bd81d241dae893229fad0\",\"session_start_block_height\":\"139781\",\"session_end_block_height\":\"139790\"},\"root_hash\":\"zUPG6hw93XmF5Euwuo6kPT3vAdT44cUKT+zwkzMkYpsAAAAAAA7dowAAAAAAAAJp\",\"proof_validation_status\":\"VALIDATED\"}"},{"key":"failure_reason","value":"\"\""},{"key":"mode","value":"EndBlock"}]
+ */
 function _handleEventProofValidityChecked(event: CosmosEvent): [EventProofValidityCheckedProps, Partial<RelayProps>] {
-  const {failureReason, proof, proofValidationStatus} = getAttributes(event.event.attributes)
+  const { claim, failureReason, proof, proofValidationStatus } = getAttributes(event.event.attributes);
 
-  if (!proof) {
-    throw new Error(`[handleEventProofValidityChecked] proof not found in event`);
-  }
+  if (proof) {
+    // Beta https://shannon-testnet-grove-rpc.beta.poktroll.com/block_results?height=69007
+    // {"type":"pocket.proof.EventProofValidityChecked","attributes":[{"key":"block_height","value":"\"69007\"","index":true},{"key":"failure_reason","value":"\"\"","index":true},{"key":"proof","value":"{\"supplier_operator_address\":\"pokt1hgldzstydutfc7qjwe6wqz3h6qc6fgfasaadrf\",\"session_header\":{\"application_address\":\"pokt1vey0k90uc62msvs0hlnc6ml4v9jdlnu7cuz8ur\",\"service_id\":\"ink\",\"session_id\":\"103ab2c9d75b7b58acb5bef65fde81af94dfb54d1044f86d245721c2f6c0a894\",\"session_start_block_height\":\"68991\",\"session_end_block_height\":\"69000\"},\"closest_merkle_proof\":\"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\"}","index":true},{"key":"proof_status","value":"\"VALIDATED\"","index":true},{"key":"mode","value":"EndBlock","index":true}]}
+    if (!proof.session_header) {
+      logger.error(`[handleEventProofValidityChecked] session_header not found in event: ${stringify(event.event.attributes)}`);
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      return [];
+      // throw new Error(`[handleEventProofValidityChecked] session_header not found in event`);
+    }
 
-  if (!proof.session_header) {
-    throw new Error(`[handleEventProofValidityChecked] session_header not found in event`);
-  }
+    if (!proofValidationStatus) {
+      logger.error(`[handleEventProofValidityChecked] proofValidationStatus not found in event: ${stringify(event.event.attributes)}`);
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      return [];
+      // throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
+    }
 
-  if (!proofValidationStatus) {
-    throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
-  }
+    if (!failureReason) {
+      logger.error(`[handleEventProofValidityChecked] failureReason not found in event: ${stringify(event.event.attributes)}`);
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      return [];
+      // throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
+    }
 
-  if (!failureReason) {
-    throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
-  }
-
-  return [
-    {
-      id: getEventId(event),
-      blockId: getBlockId(event.block),
-      supplierId: proof.supplier_operator_address,
-      applicationId: proof.session_header.application_address,
-      serviceId: proof.session_header.service_id,
-      sessionId: proof.session_header.session_id,
-      sessionStartHeight: BigInt(proof.session_header.session_start_block_height.toString()),
-      sessionEndHeight: BigInt(proof.session_header.session_end_block_height.toString()),
-      proofValidationStatus: proofValidationStatus,
-      failureReason: failureReason,
-      eventId: getEventId(event),
-    },
-    {
-      id: getRelayId({
-        applicationId: proof.session_header.application_address,
+    return [
+      {
+        id: getEventId(event),
+        blockId: getBlockId(event.block),
         supplierId: proof.supplier_operator_address,
+        applicationId: proof.session_header.application_address,
         serviceId: proof.session_header.service_id,
         sessionId: proof.session_header.session_id,
-      }),
-      proofValidationStatus: proofValidationStatus,
+        sessionStartHeight: BigInt(proof.session_header.session_start_block_height.toString()),
+        sessionEndHeight: BigInt(proof.session_header.session_end_block_height.toString()),
+        proofValidationStatus: proofValidationStatus,
+        failureReason: failureReason,
+        eventId: getEventId(event),
+      },
+      {
+        id: getRelayId({
+          applicationId: proof.session_header.application_address,
+          supplierId: proof.supplier_operator_address,
+          serviceId: proof.session_header.service_id,
+          sessionId: proof.session_header.session_id,
+        }),
+        proofValidationStatus: proofValidationStatus,
+      },
+    ];
+  } else if (claim) {
+    // Mainnet https://shannon-grove-rpc.mainnet.poktroll.com/block_results?height=138947
+    // {"type":"pocket.proof.EventProofValidityChecked","attributes":[{"key":"block_height","value":"\"138947\"","index":true},{"key":"claim","value":"{\"supplier_operator_address\":\"pokt14aw9dp74x3rucl4lraesjw04f6ec28dw60q0u7\",\"session_header\":{\"application_address\":\"pokt19xeme2s0756y7j5gpwa2sy5wg7pw6n5wjxegxa\",\"service_id\":\"op\",\"session_id\":\"f6751b0defdf87a127ecb09b0d84e09222aec9af3e73554b733d523068d4efa4\",\"session_start_block_height\":\"138931\",\"session_end_block_height\":\"138940\"},\"root_hash\":\"7TZnv2qEk1NYLw6QiSVu0Jnc6TESw6KvmjYyIryQE/oAAAAAAAmg0AAAAAAAAAFd\",\"proof_validation_status\":\"VALIDATED\"}","index":true},{"key":"failure_reason","value":"\"\"","index":true},{"key":"mode","value":"EndBlock","index":true}]}
+    /*const x = {
+      "supplier_operator_address": "pokt14aw9dp74x3rucl4lraesjw04f6ec28dw60q0u7",
+      "session_header": {
+        "application_address": "pokt19xeme2s0756y7j5gpwa2sy5wg7pw6n5wjxegxa",
+        "service_id": "op",
+        "session_id": "f6751b0defdf87a127ecb09b0d84e09222aec9af3e73554b733d523068d4efa4",
+        "session_start_block_height": "138931",
+        "session_end_block_height": "138940",
+      },
+      "root_hash": "7TZnv2qEk1NYLw6QiSVu0Jnc6TESw6KvmjYyIryQE/oAAAAAAAmg0AAAAAAAAAFd",
+      "proof_validation_status": "VALIDATED",
+    };*/
+    if (!claim.session_header) {
+      logger.error(`[handleEventProofValidityChecked] session_header not found in event: ${stringify(event.event.attributes)}`);
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      return [];
+      // throw new Error(`[handleEventProofValidityChecked] session_header not found in event`);
     }
-  ]
+
+    if (!claim.proof_validation_status) {
+      logger.error(`[handleEventProofValidityChecked] proofValidationStatus not found in event: ${stringify(event.event.attributes)}`);
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      return [];
+      // throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
+    }
+
+    if (!failureReason) {
+      logger.error(`[handleEventProofValidityChecked] failureReason not found in event: ${stringify(event.event.attributes)}`);
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      return [];
+      // throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
+    }
+
+    return [
+      {
+        id: getEventId(event),
+        blockId: getBlockId(event.block),
+        supplierId: claim.supplier_operator_address,
+        applicationId: claim.session_header.application_address,
+        serviceId: claim.session_header.service_id,
+        sessionId: claim.session_header.session_id,
+        sessionStartHeight: BigInt(claim.session_header.session_start_block_height.toString()),
+        sessionEndHeight: BigInt(claim.session_header.session_end_block_height.toString()),
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        proofValidationStatus: getClaimProofStatusFromSDK(claim.proof_validation_status)!,
+        failureReason: failureReason,
+        eventId: getEventId(event),
+      },
+      {
+        id: getRelayId({
+          applicationId: claim.session_header.application_address,
+          supplierId: claim.supplier_operator_address,
+          serviceId: claim.session_header.service_id,
+          sessionId: claim.session_header.session_id,
+        }),
+        proofValidationStatus: proofValidationStatus,
+      },
+    ];
+  } else {
+    logger.error(`[handleEventProofValidityChecked] proof|claim not found in event: ${stringify(event.event.attributes)}`);
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    return [];
+  }
 }
 
 // _updateRelays - we need to update relay documents without historical tracking get to involve.
@@ -909,14 +1001,14 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
 export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promise<void> {
   const eventsSettled = [];
   const relays = [];
-  const modToAcctTransfersToSave = []
+  const modToAcctTransfersToSave = [];
 
   for (const event of events) {
     const [eventSettled, relay, modToAcctTransfers] = _handleEventClaimSettled(event);
     eventsSettled.push(eventSettled);
     relays.push(relay);
     if (modToAcctTransfers.length) {
-      modToAcctTransfersToSave.push(...modToAcctTransfers)
+      modToAcctTransfersToSave.push(...modToAcctTransfers);
     }
   }
 
@@ -962,17 +1054,17 @@ export async function handleEventProofUpdated(events: Array<CosmosEvent>): Promi
 export async function handleEventApplicationOverserviced(events: Array<CosmosEvent>): Promise<void> {
   const eventsUpdated = events.map(_handleEventApplicationOverserviced);
 
-  await optimizedBulkCreate("EventApplicationOverserviced", eventsUpdated)
+  await optimizedBulkCreate("EventApplicationOverserviced", eventsUpdated);
 }
 
 export async function handleEventApplicationReimbursementRequest(events: Array<CosmosEvent>): Promise<void> {
   const eventsUpdated = events.map(_handleEventApplicationReimbursementRequest);
 
-  await optimizedBulkCreate("EventApplicationReimbursementRequest", eventsUpdated)
+  await optimizedBulkCreate("EventApplicationReimbursementRequest", eventsUpdated);
 }
 
 export async function handleEventSupplierSlashed(events: Array<CosmosEvent>): Promise<void> {
-  await Promise.all(events.map(_handleEventSupplierSlashed))
+  await Promise.all(events.map(_handleEventSupplierSlashed));
 }
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {
@@ -981,8 +1073,12 @@ export async function handleEventProofValidityChecked(events: Array<CosmosEvent>
 
   for (const event of events) {
     const [eventUpdated, relay] = _handleEventProofValidityChecked(event);
-    eventsUpdated.push(eventUpdated);
-    relays.push(relay);
+    if (eventUpdated) {
+      eventsUpdated.push(eventUpdated);
+    }
+    if (relay) {
+      relays.push(relay);
+    }
   }
 
   await Promise.all([
