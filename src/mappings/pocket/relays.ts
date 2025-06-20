@@ -708,7 +708,9 @@ function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidit
     throw new Error(`[handleEventProofValidityChecked] supplier_operator_address not found in event ${stringify(event.event.attributes)}`);
   }
 
-  if (!proofValidationStatus) {
+  const validationStatus = proofValidationStatus || getClaimProofStatusFromSDK(parseAttribute(claim?.proof_validation_status));
+
+  if (!validationStatus) {
     logger.error(`[handleEventProofValidityChecked] proofValidationStatus not found in event: ${stringify(event.event.attributes)}`);
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
@@ -733,7 +735,7 @@ function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidit
     sessionId: sessionHeader.session_id,
     sessionStartHeight: BigInt(sessionHeader.session_start_block_height.toString()),
     sessionEndHeight: BigInt(sessionHeader.session_end_block_height.toString()),
-    proofValidationStatus: proofValidationStatus,
+    proofValidationStatus: validationStatus,
     failureReason: failureReason,
     eventId: getEventId(event),
   }
