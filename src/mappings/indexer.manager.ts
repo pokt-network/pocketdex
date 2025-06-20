@@ -691,8 +691,6 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   // await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
   // await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
 
-
-
   await Promise.all([
     profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),

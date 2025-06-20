@@ -155,7 +155,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     claimed: CoinSDKType = {},
-    failureReason = "",
+    failureReason: string | null = null,
     proofValidationStatus: ClaimProofStatus | undefined,
     settlementResult: ClaimSettlementResultSDKType | null = null,
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -716,7 +716,7 @@ function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidit
     // throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
   }
 
-  if (!failureReason) {
+  if (failureReason === null) {
     logger.error(`[handleEventProofValidityChecked] failureReason not found in event: ${stringify(event.event.attributes)}`);
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
