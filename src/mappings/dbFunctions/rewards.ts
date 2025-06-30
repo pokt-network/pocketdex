@@ -1,7 +1,8 @@
 export function getRewardsByDate(dbSchema: string): string {
   return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_rewards_by_date(
     start_date TIMESTAMP,
-    end_date TIMESTAMP
+    end_date TIMESTAMP,
+    trunc_interval TEXT  -- 'day' or 'hour'
 )
 RETURNS JSON AS $$
 BEGIN
