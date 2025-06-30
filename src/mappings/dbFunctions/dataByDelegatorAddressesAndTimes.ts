@@ -10,8 +10,8 @@ LANGUAGE sql
 STABLE
 AS $$
   WITH matched_suppliers AS (
-    SELECT DISTINCT ON (elem->>'address') 
-      ssc.supplier_id,
+  	SELECT
+      distinct ssc.supplier_id,
       elem->>'address' AS address
     FROM ${dbSchema}.supplier_service_configs ssc
     INNER JOIN ${dbSchema}.suppliers s ON s.id = ssc.supplier_id
@@ -60,22 +60,34 @@ AS $$
 
   SELECT jsonb_agg(
     jsonb_build_object(
-      'address', ms.address,
-      'proof_relays', COALESCE(p.proof_relays, 0),
-      'proof_computed_units', COALESCE(p.proof_computed_units, 0),
-      'proof_upokt', COALESCE(p.proof_upokt, 0),
-      'proof_amount', COALESCE(p.proof_count, 0),
-      'claim_relays', COALESCE(c.claim_relays, 0),
-      'claim_computed_units', COALESCE(c.claim_computed_units, 0),
-      'claim_upokt', COALESCE(c.claim_upokt, 0),
-      'claim_amount', COALESCE(c.claim_count, 0),
-      'slashed', COALESCE(s.slashed, 0)
+      'address', address,
+      'proof_relays', COALESCE(proof_relays, 0),
+      'proof_computed_units', COALESCE(proof_computed_units, 0),
+      'proof_upokt', COALESCE(proof_upokt, 0),
+      'proof_amount', COALESCE(proof_count, 0),
+      'claim_relays', COALESCE(claim_relays, 0),
+      'claim_computed_units', COALESCE(claim_computed_units, 0),
+      'claim_upokt', COALESCE(claim_upokt, 0),
+      'claim_amount', COALESCE(claim_count, 0),
+      'slashed', COALESCE(slashed, 0)
     )
-  )
+  ) FROM (
+  SELECT 
+  	ms.address,
+	  SUM(p.proof_relays) proof_relays,
+	  SUM(p.proof_computed_units) proof_computed_units,
+	  SUM(p.proof_upokt) proof_upokt,
+	  SUM(p.proof_count) proof_count,
+	  SUM(c.claim_relays) claim_relays,
+	  SUM(c.claim_computed_units) claim_computed_units,
+	  SUM(c.claim_upokt) claim_upokt,
+	  SUM(c.claim_count) claim_count,
+	  SUM(s.slashed) slashed
   FROM matched_suppliers ms
   LEFT JOIN claim_agg c ON c.supplier_id = ms.supplier_id
   LEFT JOIN proof_agg p ON p.supplier_id = ms.supplier_id
-  LEFT JOIN slashed_agg s ON s.supplier_id = ms.supplier_id;
+  LEFT JOIN slashed_agg s ON s.supplier_id = ms.supplier_id
+  GROUP BY ms.address);
 $$;
 `
 }

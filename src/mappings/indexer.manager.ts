@@ -110,9 +110,17 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
     blockId,
   );
 
-  for (const [addressDenom, changes] of Object.entries(addressDenomMap)) {
-    const [address, denom] = addressDenom.split("-");
-    await handleNativeBalanceChangesForAddressAndDenom(address, denom, changes, blockId);
+  const addressDenomArray = Object.entries(addressDenomMap)
+
+  while (addressDenomArray.length > 0) {
+    const items = addressDenomArray.splice(0, 10)
+
+    await Promise.all(
+      items.map(([addressDenom, changes]) => {
+        const [address, denom] = addressDenom.split("-");
+        return handleNativeBalanceChangesForAddressAndDenom(address, denom, changes, blockId);
+      })
+    )
   }
 
   const msgTypes = [
