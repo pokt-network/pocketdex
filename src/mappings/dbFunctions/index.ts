@@ -21,6 +21,7 @@ import {
 import { updateTookOnBlocksFn } from "./reports/took";
 import { updateTxsDataOnBlockFn } from "./reports/txs";
 import { updateStakedValidatorsDataOnBlockFn, updateUnstakingValidatorsDataOnBlockFn } from "./reports/validators";
+import { getRewardsByDate } from "./rewards";
 import { getRewardsByAddressesAndTime, getRewardsByAddressesAndTimeGroupByDate } from "./rewardsByAddressesAndTime";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
 
@@ -56,6 +57,7 @@ export async function createDbFunctions(): Promise<void> {
     getDataByDelegatorAddressesAndBlocksFn,
     getRewardsByAddressesAndTime,
     getRewardsByAddressesAndTimeGroupByDate,
+    getRewardsByDate,
   )
 
   // these are the function used to generate the aggregated data saved by block
