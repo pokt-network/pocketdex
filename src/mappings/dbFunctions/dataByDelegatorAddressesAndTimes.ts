@@ -31,6 +31,7 @@ AS $$
       SUM(mcc.claimed_amount) AS claim_upokt
     FROM ${dbSchema}.msg_create_claims mcc
     INNER JOIN ${dbSchema}.blocks b ON b.id = mcc.block_id
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = mcc.supplier_id
     WHERE b.timestamp BETWEEN start_ts AND end_ts
     GROUP BY mcc.supplier_id
   ),
@@ -44,6 +45,7 @@ AS $$
       SUM(ecs.claimed_amount) AS proof_upokt
     FROM ${dbSchema}.event_claim_settleds ecs
     INNER JOIN ${dbSchema}.blocks b ON b.id = ecs.block_id
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = ecs.supplier_id
     WHERE b.timestamp BETWEEN start_ts AND end_ts
     GROUP BY ecs.supplier_id
   ),
@@ -54,6 +56,7 @@ AS $$
       SUM(ess.previous_stake_amount - ess.after_stake_amount) AS slashed
     FROM ${dbSchema}.event_supplier_slasheds ess
     INNER JOIN ${dbSchema}.blocks b ON b.id = ess.block_id
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = ess.supplier_id
     WHERE b.timestamp BETWEEN start_ts AND end_ts
     GROUP BY ess.supplier_id
   )

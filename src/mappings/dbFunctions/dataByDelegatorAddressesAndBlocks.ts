@@ -30,6 +30,7 @@ AS $$
       SUM(mcc.num_claimed_computed_units) AS claim_computed_units,
       SUM(mcc.claimed_amount) AS claim_upokt
     FROM ${dbSchema}.msg_create_claims mcc
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = mcc.supplier_id
     WHERE mcc.block_id BETWEEN start_height AND end_height
     GROUP BY mcc.supplier_id
   ),
@@ -42,6 +43,7 @@ AS $$
       SUM(ecs.num_claimed_computed_units) AS proof_computed_units,
       SUM(ecs.claimed_amount) AS proof_upokt
     FROM ${dbSchema}.event_claim_settleds ecs
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = ecs.supplier_id
     WHERE ecs.block_id BETWEEN start_height AND end_height
     GROUP BY ecs.supplier_id
   ),
@@ -51,6 +53,7 @@ AS $$
       ess.supplier_id,
       SUM(ess.previous_stake_amount - ess.after_stake_amount) AS slashed
     FROM ${dbSchema}.event_supplier_slasheds ess
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = ess.supplier_id
     WHERE ess.block_id BETWEEN start_height AND end_height
     GROUP BY ess.supplier_id
   )

@@ -22,7 +22,12 @@ import { updateTookOnBlocksFn } from "./reports/took";
 import { updateTxsDataOnBlockFn } from "./reports/txs";
 import { updateStakedValidatorsDataOnBlockFn, updateUnstakingValidatorsDataOnBlockFn } from "./reports/validators";
 import { getRewardsByDate } from "./rewards";
-import { getRewardsByAddressesAndTime, getRewardsByAddressesAndTimeGroupByDate } from "./rewardsByAddressesAndTime";
+import {
+  getRewardsByAddressesAndTime,
+  getRewardsByAddressesAndTimeGroupByDate,
+  getRewardsByAddressesAndTimeGroupByDateAndAddress,
+} from "./rewardsByAddressesAndTime";
+import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByAddressesAndTimes";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
 
 const functionsCreatedCacheKey = 'functionsCreated';
@@ -57,6 +62,8 @@ export async function createDbFunctions(): Promise<void> {
     getDataByDelegatorAddressesAndBlocksFn,
     getRewardsByAddressesAndTime,
     getRewardsByAddressesAndTimeGroupByDate,
+    getRewardsByAddressesAndTimeGroupByDateAndAddress,
+    getRewardsByDelegatorAddressesAndTimesGroupByServiceFn,
     getRewardsByDate,
   )
 
