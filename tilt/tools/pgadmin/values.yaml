@@ -1,0 +1,18 @@
+serverDefinitions:
+  enabled: true
+  servers:
+    postgres:
+      Name: "Local"
+      Group: "Servers"
+      Port: 5432
+      Username: "postgres"
+      Host: "postgresql.default.svc.cluster.local"
+      SSLMode: "prefer"
+      MaintenanceDB: "postgres"
+preferences:
+  enabled: true
+  data:
+    # your eyes will love this :) like mine...
+    misc:user_interface:theme: dark
+test:
+  enabled: false

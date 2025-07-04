@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: indexer
+  labels:
+    app: explorer
+    component: indexer
+spec:
+  type: ClusterIP
+  selector:
+    app: explorer
+    component: indexer
+  ports:
+    - name: indexer
+      port: 3000
+      protocol: TCP
+      targetPort: 3000

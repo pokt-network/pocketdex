@@ -34,7 +34,7 @@ jobs:
         uses: docker/build-push-action@v6.14.0
         if: ${{ inputs.env == 'production' }}
         with:
-          file: docker/node.dockerfile
+          file: .github/workflows/indexer.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=min
           platforms: ${{ inputs.platform }}
@@ -44,7 +44,7 @@ jobs:
         uses: docker/build-push-action@v6.14.0
         if: ${{ inputs.env != 'production' }}
         with:
-          file: docker/dev-node.dockerfile
+          file: tilt/docker/indexer.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=min
           platforms: ${{ inputs.platform }}

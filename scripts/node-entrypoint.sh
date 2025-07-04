@@ -3,6 +3,8 @@ set -e
 
 . scripts/shared.sh
 
+echo "Entrypoint Args: $@"
+
 # prepare the env variables needed for subql node in a previous step to then based on WATCH env
 # attach the rest of the command
 # NOTE: this is needed because we exec the command with su - app which start a new session where the available

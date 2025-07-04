@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: explorer
+    component: query
+  name: query
+spec:
+  progressDeadlineSeconds: 15
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: explorer
+      component: query
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: explorer
+        component: query
+    spec:
+      containers:
+        - name: query
+          args:
+            - exec /sbin/tini -- /bin/run $(cat /mnt/config/args.txt) --query-timeout=30000 -f /app
+          command:
+            - /bin/sh
+            - -c
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  key: "user"
+                  name: "db-credentials"
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  key: "password"
+                  name: "db-credentials"
+            - name: DB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  key: "database"
+                  name: "db-credentials"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  key: "host"
+                  name: "db-credentials"
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  key: "port"
+                  name: "db-credentials"
+          image: subquerynetwork/subql-query:v2.22.2
+          imagePullPolicy: IfNotPresent
+          resources: { }
+          volumeMounts:
+            - mountPath: /mnt/config
+              name: config-volume
+      dnsPolicy: ClusterFirst
+      initContainers:
+        - name: init-args
+          command:
+            - /bin/sh
+            - -c
+            - echo "--name=${DB_SCHEMA} --playground --indexer=${INDEXER_URL} --subscription --log-level=info"
+              > /mnt/config/args.txt
+          env:
+            - name: DB_SCHEMA
+              valueFrom:
+                secretKeyRef:
+                  key: "schema"
+                  name: "db-credentials"
+            - name: INDEXER_URL
+              valueFrom:
+                configMapKeyRef:
+                  key: "indexer_endpoint"
+                  name: "pokt-shannon"
+          image: subquerynetwork/subql-query:v2.22.2
+          imagePullPolicy: IfNotPresent
+          resources: { }
+          volumeMounts:
+            - mountPath: /mnt/config
+              name: config-volume
+      restartPolicy: Always
+      securityContext: { }
+      terminationGracePeriodSeconds: 20
+      volumes:
+        - emptyDir: { }
+          name: config-volume

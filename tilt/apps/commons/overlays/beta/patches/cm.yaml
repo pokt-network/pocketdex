@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pokt-shannon
+data:
+  chain_id: "pocket-beta"
+  genesis: "https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/testnet-beta/genesis.json"
+  # API endpoints
+  # Grove
+  api_endpoint: "https://shannon-testnet-grove-api.beta.poktroll.com"
+  # RPC endpoints
+  # Grove
+  rpc_endpoint: "https://shannon-testnet-grove-rpc.beta.poktroll.com"

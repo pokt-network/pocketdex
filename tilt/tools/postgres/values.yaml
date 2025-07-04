@@ -1,0 +1,13 @@
+global:
+  postgresql:
+    auth:
+      postgresPassword: "postgres"
+primary:
+  initdb:
+    scripts:
+      01-extensions.sql: |
+        CREATE EXTENSION IF NOT EXISTS btree_gist;
+        CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+  persistentVolumeClaimRetentionPolicy:
+    enabled: true
+    whenDeleted: Delete

@@ -1,0 +1,120 @@
+load('./apps/static/Tiltfile', 'deploy_static_server')
+load('./apps/commons/Tiltfile', 'deploy_commons')
+load('./apps/indexer/Tiltfile', 'deploy_indexer')
+load('./apps/query/Tiltfile', 'deploy_query')
+load('./tools/pgadmin/Tiltfile', 'deploy_pgadmin')
+load('./tools/postgres/Tiltfile', 'deploy_postgres')
+
+defaultEmail = 'pocketdex@local.dev'
+defaultPassword = 'pocketdex'
+
+localnet = 'localnet'
+testnet_beta = 'beta'
+testnet_alpha = 'alpha'
+mainnet = 'mainnet'
+
+def validate_network(network):
+  if network == mainnet or network != testnet_beta or network != testnet_alpha or network != localnet:
+    return
+
+  fail(
+    'network value should be one of: {}|{}|{}|{}'.format(
+      mainnet,
+      testnet_beta,
+      testnet_alpha,
+      localnet
+    )
+  )
+
+
+def pocketdex(
+  # Global Network selection, which will drive the overlay loaded in: commons, indexer and query.
+  network=mainnet,
+  # Commons defined configmap and secrets for Indexer and Query.
+  commons_kustomize_path='./tilt/apps/commons',
+  commons_kustomize_flags=[],
+  # Static and Genesis path is only needed on localnet
+  static_kustomize_path='./tilt/apps/static',
+  static_kustomize_flags=[],
+  genesis_file_path='./tilt/genesis.json',
+  # Indexer params
+  indexer_kustomize_path='./tilt/apps/indexer',
+  indexer_kustomize_flags=[],
+  indexer_dockerfile='./tilt/docker/indexer.dockerfile',
+  indexer_docker_context='.',
+  indexer_params_overwrite={},
+  # Query params
+  query_kustomize_path='./tilt/apps/query',
+  query_kustomize_flags=[],
+  # Postgres params
+  postgres_values_path='./tilt/tools/postgres/values.yaml',
+  # PgAdmin4 params
+  pgadmin_enabled=True,
+  pgadmin_email=defaultEmail,
+  pgadmin_password=defaultPassword,
+  pgadmin_values_path='./tilt/tools/pgadmin/values.yaml',
+  # Labels
+  apps_labels=[],
+  tools_labels=[],
+  helm_repo_labels=[]
+):
+  # Validate network value
+  validate_network(network)
+
+  # default should be $ROOT/tilt/genesis.json since it is listed at .gitignore
+  if not os.path.exists(genesis_file_path) and network == 'localnet':
+    fail('genesis_file: {} does not exists and the network=localnet'.format(genesis_file_path))
+
+  # Deploy postgresql
+  deploy_postgres(
+    values_path=postgres_values_path,
+    labels=tools_labels,
+    helm_repo_labels=helm_repo_labels
+  )
+
+  # Deploy pgadmin only if enable which is True by default.
+  if pgadmin_enabled:
+    deploy_pgadmin(
+      email=pgadmin_email,
+      password=pgadmin_password,
+      values_path=pgadmin_values_path,
+      labels=tools_labels,
+      helm_repo_labels=helm_repo_labels
+    )
+
+  if network == 'localnet':
+    # Deploy static server to service the genesis file for the indexer
+    # NOTE: indexer allow load genesis file from remote source which is used for:
+    # mainnet, beta and alpha from Pocket Network GitHub.
+    deploy_static_server(
+      network=network,
+      kustomize_path=static_kustomize_path,
+      kustomize_flags=static_kustomize_flags,
+      genesis_file_path=genesis_file_path,
+      labels=apps_labels
+    )
+
+  deploy_commons(
+    network=network,
+    kustomize_path=commons_kustomize_path,
+    kustomize_flags=commons_kustomize_flags,
+    labels=apps_labels
+  )
+
+  deploy_indexer(
+    network=network,
+    params_overwrite=indexer_params_overwrite,
+    kustomize_path=indexer_kustomize_path,
+    kustomize_flags=indexer_kustomize_flags,
+    dockerfile_path=indexer_dockerfile,
+    context_path=indexer_docker_context,
+    labels=apps_labels
+  )
+
+  deploy_query(
+    network=network,
+    kustomize_path=query_kustomize_path,
+    kustomize_flags=query_kustomize_flags,
+    labels=apps_labels
+  )
+

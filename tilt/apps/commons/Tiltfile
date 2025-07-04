@@ -1,0 +1,18 @@
+def deploy_commons(
+  network='localnet',
+  kustomize_path='./tilt/apps/commons',
+  # Ref to: https://docs.tilt.dev/api.html#api.kustomize
+  # use this to pass things like: ['--load-restrictor LoadRestrictionsNone, '--enable-helm']
+  kustomize_flags=[],
+  labels=[]
+):
+  kustomize_path = os.path.join(kustomize_path, 'overlays', network)
+  # load the right kustomization
+  k8s_yaml(kustomize(kustomize_path, flags=kustomize_flags))
+
+  # tag resources
+  k8s_resource(
+    workload='indexer',
+    objects=['pokt-shannon:configmap', 'db-credentials:secret'],
+    labels=labels
+  )
