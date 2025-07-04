@@ -12,7 +12,7 @@ def deploy_commons(
 
   # tag resources
   k8s_resource(
-    workload='indexer',
+    new_name='commons',
     objects=['pokt-shannon:configmap', 'db-credentials:secret'],
     labels=labels
   )

@@ -7,6 +7,7 @@ def deploy_static_server(
   # use this to pass things like: ['--load-restrictor LoadRestrictionsNone, '--enable-helm']
   kustomize_flags=[],
   genesis_file_path='./tilt/genesis.json',
+  labels=[]
 ):
   kustomize_path = os.path.join(kustomize_path, 'overlays', network)
   # load the right kustomization
@@ -23,6 +24,6 @@ def deploy_static_server(
   k8s_resource(
     workload='static-server',
     objects=['static-server:ConfigMap:default'],
-    labels=['static-server']
+    labels=labels
   )
 

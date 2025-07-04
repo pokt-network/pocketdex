@@ -5,9 +5,4 @@ metadata:
 data:
   chain_id: "pocket"
   genesis: "https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/mainnet/genesis.json"
-  # API endpoints
-  # Grove
-  api_endpoint: "https://shannon-grove-api.mainnet.poktroll.com"
-  # RPC endpoints
-  # Grove
   rpc_endpoint: "https://shannon-grove-rpc.mainnet.poktroll.com"

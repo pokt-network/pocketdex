@@ -1,8 +1,9 @@
 load('ext://restart_process', 'docker_build_with_restart')
 load('../../utils.Tiltfile', 'inject_env_vars', 'inject_args', 'extract_env_and_args')
+load('../../cons.Tiltfile', 'localnet', 'mainnet')
 
 def deploy_indexer(
-  network='localnet',
+  network=mainnet,
   # node_options: ""
   # block_batch_size: ""
   # endpoint: ""
@@ -74,7 +75,7 @@ def deploy_indexer(
   # Use this extension when you have an image and you want to re-execute its entrypoint/command as part of a live_update.
   # This is exactly what we want, because endpoint, chain_id and others will update the yaml file
   docker_build_with_restart(
-    ref='localhost:5001/indexer',
+    ref='localhost:5001/indexer', # this image name allow us use local registry to speedup image build/load
     dockerfile=dockerfile_path,
     context=context_path,
     entrypoint=['/sbin/tini', '--', '/home/app/scripts/node-entrypoint.sh'],
@@ -86,10 +87,16 @@ def deploy_indexer(
     live_update=live_updates
   )
 
-  # tag resources
+  resource_deps = ['postgresql', 'commons']
+
+  if network == localnet:
+    resource_deps.append('static-server')
+
+  # tag and set dependencies to indexer resources
   k8s_resource(
     workload='indexer',
-    labels=labels
+    labels=labels,
+    resource_deps=resource_deps
   )
 
 

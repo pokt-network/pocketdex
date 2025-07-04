@@ -8,6 +8,7 @@ primary:
       01-extensions.sql: |
         CREATE EXTENSION IF NOT EXISTS btree_gist;
         CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
   persistentVolumeClaimRetentionPolicy:
     enabled: true
     whenDeleted: Delete

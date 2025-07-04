@@ -4,14 +4,15 @@ load('./apps/indexer/Tiltfile', 'deploy_indexer')
 load('./apps/query/Tiltfile', 'deploy_query')
 load('./tools/pgadmin/Tiltfile', 'deploy_pgadmin')
 load('./tools/postgres/Tiltfile', 'deploy_postgres')
-
-defaultEmail = 'pocketdex@local.dev'
-defaultPassword = 'pocketdex'
-
-localnet = 'localnet'
-testnet_beta = 'beta'
-testnet_alpha = 'alpha'
-mainnet = 'mainnet'
+load(
+  './cons.Tiltfile',
+  'mainnet',
+  'testnet_beta',
+  'testnet_alpha',
+  'localnet',
+  'defaultEmail',
+  'defaultPassword'
+)
 
 def validate_network(network):
   if network == mainnet or network != testnet_beta or network != testnet_alpha or network != localnet:
@@ -30,6 +31,7 @@ def validate_network(network):
 def pocketdex(
   # Global Network selection, which will drive the overlay loaded in: commons, indexer and query.
   network=mainnet,
+  base_path=".",
   # Commons defined configmap and secrets for Indexer and Query.
   commons_kustomize_path='./tilt/apps/commons',
   commons_kustomize_flags=[],
@@ -56,10 +58,24 @@ def pocketdex(
   # Labels
   apps_labels=[],
   tools_labels=[],
-  helm_repo_labels=[]
+  helm_repo_labels=[],
+  # Special case: some devs (like me @jorgecuesta and @Alann27 work on host instead of container)
+  # so this allow to turn on the database only.
+  only_db=False
 ):
   # Validate network value
   validate_network(network)
+
+  # set all the paths using base_path, which be default will be root
+  genesis_file_path = os.path.abspath(os.path.join(base_path, genesis_file_path))
+  postgres_values_path = os.path.abspath(os.path.join(base_path, postgres_values_path))
+  pgadmin_values_path = os.path.abspath(os.path.join(base_path, pgadmin_values_path))
+  static_kustomize_path = os.path.abspath(os.path.join(base_path, static_kustomize_path))
+  commons_kustomize_path = os.path.abspath(os.path.join(base_path, commons_kustomize_path))
+  indexer_kustomize_path = os.path.abspath(os.path.join(base_path, indexer_kustomize_path))
+  indexer_dockerfile = os.path.abspath(os.path.join(base_path, indexer_dockerfile))
+  indexer_docker_context = os.path.abspath(os.path.join(base_path, indexer_docker_context))
+  query_kustomize_path = os.path.abspath(os.path.join(base_path, query_kustomize_path))
 
   # default should be $ROOT/tilt/genesis.json since it is listed at .gitignore
   if not os.path.exists(genesis_file_path) and network == 'localnet':
@@ -81,6 +97,10 @@ def pocketdex(
       labels=tools_labels,
       helm_repo_labels=helm_repo_labels
     )
+
+  if only_db:
+    print("only_db=True so anything else will be turn on.")
+    return
 
   if network == 'localnet':
     # Deploy static server to service the genesis file for the indexer

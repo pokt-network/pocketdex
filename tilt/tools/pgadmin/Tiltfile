@@ -30,6 +30,7 @@ def deploy_pgadmin(
     ],
     port_forwards=['5050:80'],
     pod_readiness='wait',
+    resource_deps=['helm-repo-runix', 'postgresql'],
     labels=labels,
     links=[
         link('localhost:5050', 'User: {}'.format(email)),

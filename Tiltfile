@@ -13,6 +13,7 @@ network = os.getenv('NETWORK', 'mainnet')
 # Default to genesis.json at tilt folder
 genesis_path = os.getenv('GENESIS_PATH', './tilt/genesis.json')
 
+only_db = os.getenv('ONLY_DB', 'no')
 # default=<> only applies if the ENV variable is unset
 pgadmin_enabled = os.getenv('PGADMIN_ENABLED', default='yes')
 pgadmin_email = os.getenv('PGADMIN_EMAIL')
@@ -29,5 +30,6 @@ pocketdex(
   pgadmin_password=pgadmin_password,
   apps_labels=['pocketdex'],
   tools_labels=['pocketdex-db'],
-  helm_repo_labels=['pocketdex-helm-repo']
+  helm_repo_labels=['pocketdex-helm-repo'],
+  only_db=only_db == 'yes'
 )

@@ -5,5 +5,4 @@ metadata:
 data:
   chain_id: "pocket-alpha"
   genesis: "https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/testnet-alpha/genesis.json"
-  api_endpoint: "https://shannon-testnet-grove-api.alpha.poktroll.com"
   rpc_endpoint: "https://shannon-testnet-grove-rpc.alpha.poktroll.com"

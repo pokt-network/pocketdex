@@ -6,9 +6,4 @@ data:
   chain_id: "pocket"
   # localnet genesis file - this avoids mount file
   genesis: "http://static-server.default.svc.cluster.local/genesis.json"
-  # API endpoints
-  # Grove
-  api_endpoint: "http://validator.default.svc.cluster.local:9090"
-  # RPC endpoints
-  # Grove
-  rpc_endpoint: "http://validator.default.svc.cluster.local:26657"
+  rpc_endpoint: "http://validator-pocket-validator.default.svc.cluster.local:26657"

@@ -13,5 +13,6 @@ def deploy_query(
   # tag resources
   k8s_resource(
     workload='query',
+    resource_deps=['postgresql', 'commons', 'indexer'],
     labels=labels
   )

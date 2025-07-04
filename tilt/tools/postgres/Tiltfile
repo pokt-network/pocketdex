@@ -27,5 +27,6 @@ def deploy_postgres(
     ],
     port_forwards=['5432:5432'],
     pod_readiness='wait',
+    resource_deps=['helm-repo-bitnami'],
     labels=labels,
   )
