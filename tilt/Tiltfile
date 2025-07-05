@@ -45,6 +45,7 @@ def pocketdex(
   indexer_dockerfile='./tilt/docker/indexer.dockerfile',
   indexer_docker_context='.',
   indexer_params_overwrite={},
+  indexer_resource_deps=[], # allow to pass extra dependencies if you use this with other recipes
   # Query params
   query_kustomize_path='./tilt/apps/query',
   query_kustomize_flags=[],
@@ -128,7 +129,8 @@ def pocketdex(
     kustomize_flags=indexer_kustomize_flags,
     dockerfile_path=indexer_dockerfile,
     context_path=indexer_docker_context,
-    labels=apps_labels
+    labels=apps_labels,
+    resource_deps=indexer_resource_deps
   )
 
   deploy_query(

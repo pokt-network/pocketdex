@@ -34,17 +34,9 @@ jobs:
         uses: docker/build-push-action@v6.14.0
         if: ${{ inputs.env == 'production' }}
         with:
-          file: .github/workflows/indexer.dockerfile
-          cache-from: type=gha
-          cache-to: type=gha,mode=min
-          platforms: ${{ inputs.platform }}
-
-      # development mode
-      - name: Build Development
-        uses: docker/build-push-action@v6.14.0
-        if: ${{ inputs.env != 'production' }}
-        with:
           file: tilt/docker/indexer.dockerfile
           cache-from: type=gha
           cache-to: type=gha,mode=min
+          build-args: |
+            BUILD_MODE=production
           platforms: ${{ inputs.platform }}

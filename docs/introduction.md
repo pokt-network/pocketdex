@@ -1,3 +1,7 @@
+# OUT OF DATE DOCUMENTATION. BE CAREFUL!
+
+# -----------------------------------------------
+
 # Query & Usage Introduction <!-- omit in toc -->
 
 - [Introduction](#introduction)
