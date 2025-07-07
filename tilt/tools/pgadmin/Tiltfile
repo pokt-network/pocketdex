@@ -1,4 +1,9 @@
 load('ext://helm_resource', 'helm_resource', 'helm_repo')
+load(
+  '../../cons.Tiltfile',
+  'defaultEmail',
+  'defaultPassword'
+)
 
 def deploy_pgadmin(
   email,
@@ -9,6 +14,14 @@ def deploy_pgadmin(
 ):
   if not os.path.exists(values_path):
     fail('pgadmin4 values files does not exists at: {}'.format(values_path))
+
+  if not email:
+    print('⚠️ Using default email for pgadmin4')
+    email = defaultEmail
+
+  if not password:
+    print('⚠️ Using default password for pgadmin4')
+    password = defaultPassword
 
   # Add runix/pgadmin4 repo https://artifacthub.io/packages/helm/runix/pgadmin4
   helm_repo(
@@ -28,12 +41,14 @@ def deploy_pgadmin(
       '--set=env.email={}'.format(email),
       '--set=env.password={}'.format(password)
     ],
-    port_forwards=['5050:80'],
+    port_forwards=[
+      port_forward(5050, 50, name='PgAdmin4 Web')
+    ],
     pod_readiness='wait',
     resource_deps=['helm-repo-runix', 'postgresql'],
     labels=labels,
     links=[
-        link('localhost:5050', 'User: {}'.format(email)),
-        link('localhost:5050', 'Pass: {}'.format(password))
-     ]
+      link('localhost:5050', 'User: {}'.format(email)),
+      link('localhost:5050', 'Pwd: {}'.format(password)),
+    ]
   )

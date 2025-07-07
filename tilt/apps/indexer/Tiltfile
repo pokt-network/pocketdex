@@ -108,7 +108,13 @@ def deploy_indexer(
   k8s_resource(
     workload='indexer',
     labels=labels,
-    resource_deps=rs_deps
+    resource_deps=rs_deps,
+    port_forwards=[
+      port_forward(3001, 3000, name='Indexer Admin')
+    ],
+    links=[
+      link('https://subquery.network/doc/indexer/welcome.html', 'SubQuery Indexer SDK'),
+    ]
   )
 
 

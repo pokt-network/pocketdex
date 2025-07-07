@@ -14,5 +14,11 @@ def deploy_query(
   k8s_resource(
     workload='query',
     resource_deps=['postgresql', 'commons', 'indexer'],
-    labels=labels
+    labels=labels,
+    port_forwards=[
+      port_forward(3000, 3000, name='GraphQL Playground')
+    ],
+    links=[
+      link('https://www.apollographql.com/docs/apollo-server/v2/testing/graphql-playground', 'GraphQL Playground Docs'),
+    ]
   )

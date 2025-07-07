@@ -1,6 +1,18 @@
 load('ext://dotenv', 'dotenv')
 load('./tilt/Tiltfile', 'pocketdex')
 load('./tilt/utils.Tiltfile', 'build_indexer_params_overwrite')
+load(
+  '.tilt/cons.Tiltfile',
+  'mainnet',
+  'testnet_beta',
+  'testnet_alpha',
+  'localnet',
+  'genesisPath',
+  'defaultEmail',
+  'defaultPassword',
+  'pgadminEnabled',
+  'onlyDb'
+)
 
 dotenv(fn=".env", verbose=True, showValues=False)
 
@@ -9,15 +21,15 @@ secret_settings(disable_scrub = True)
 
 # Default to mainnet since it is running longer than maybe alpha
 # and requires less setup than localnet.
-network = os.getenv('NETWORK', 'mainnet')
+network = os.getenv('NETWORK', mainnet)
 # Default to genesis.json at tilt folder
-genesis_path = os.getenv('GENESIS_PATH', './tilt/genesis.json')
+genesis_path = os.getenv('GENESIS_PATH', genesisPath)
 
-only_db = os.getenv('ONLY_DB', 'no')
+only_db = os.getenv('ONLY_DB', onlyDb)
 # default=<> only applies if the ENV variable is unset
-pgadmin_enabled = os.getenv('PGADMIN_ENABLED', default='yes')
-pgadmin_email = os.getenv('PGADMIN_EMAIL')
-pgadmin_password = os.getenv('PGADMIN_PASSWORD')
+pgadmin_enabled = os.getenv('PGADMIN_ENABLED', default=pgadminEnabled)
+pgadmin_email = os.getenv('PGADMIN_EMAIL', defaultEmail)
+pgadmin_password = os.getenv('PGADMIN_PASSWORD', defaultPassword)
 
 indexer_params_overwrite = build_indexer_params_overwrite()
 
