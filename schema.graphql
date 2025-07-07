@@ -348,8 +348,15 @@ type Transaction @entity {
   isMultisig: Boolean!
   # could be null is isMulti = false
   multisig: Multisig
+  amountOfMessages: [AmountOfMessages]
+  amountSentByDenom: [Coin]
   messages: [Message] @derivedFrom(field: "transaction")
   events: [Event]@derivedFrom(field: "transaction")
+}
+
+type AmountOfMessages @jsonField {
+  type: String!
+  amount: Int!
 }
 
 type Message @entity {
@@ -926,6 +933,11 @@ type MsgCreateClaim @entity {
   sessionEndHeight: BigInt!
   rootHash: String
   transaction: Transaction!
+  numRelays: BigInt
+  numClaimedComputedUnits: BigInt
+  numEstimatedComputedUnits: BigInt
+  claimedAmount: BigInt
+  claimedDenom: String
   block: Block!
 }
 

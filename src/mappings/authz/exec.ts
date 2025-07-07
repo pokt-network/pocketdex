@@ -6,8 +6,13 @@ import { AuthzMsgExecProps } from "../../types/models/AuthzMsgExec";
 import { MessageProps } from "../../types/models/Message";
 import { MorseClaimableAccountProps } from "../../types/models/MorseClaimableAccount";
 import { MsgImportMorseClaimableAccountsProps } from "../../types/models/MsgImportMorseClaimableAccounts";
+import { MsgRecoverMorseAccountProps } from "../../types/models/MsgRecoverMorseAccount";
 import { ParamProps } from "../../types/models/Param";
-import { handleMsgImportMorseClaimableAccounts } from "../pocket/migration";
+import {
+  handleMsgImportMorseClaimableAccounts,
+  handleMsgRecoverMorseAccount,
+  updateMorseClaimableAccounts,
+} from "../pocket/migration";
 import { _handleUpdateParam } from "../pocket/params";
 import { AuthzExecMsg } from "../types";
 import {
@@ -27,6 +32,7 @@ type HandleAuthzExecResult = {
   params: Array<ParamProps>;
   msgImportMorseClaimableAccounts: Array<MsgImportMorseClaimableAccountsProps>;
   morseClaimableAccount: Array<MorseClaimableAccountProps>;
+  msgRecoverMorseAccount: Array<MsgRecoverMorseAccountProps>;
 }
 
 function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResult {
@@ -39,6 +45,7 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
     params: [],
     msgImportMorseClaimableAccounts: [],
     morseClaimableAccount: [],
+    msgRecoverMorseAccount: [],
   };
 
   const authzExecId = messageId(msg);
@@ -79,6 +86,16 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
       decodedMsg = response.decodedMsg;
       result.morseClaimableAccount.push(...response.morseClaimableAccounts);
       result.msgImportMorseClaimableAccounts.push(response.msgImportMorseClaimableAccounts);
+    } else if (encodedMsg.typeUrl === "/pocket.migration.MsgRecoverMorseAccount") {
+      const response = handleMsgRecoverMorseAccount({
+        encodedMsg,
+        blockId,
+        tx: msg.tx,
+        messageId: authzExecId,
+      })
+
+      decodedMsg = response.decodedMsg;
+      result.msgRecoverMorseAccount.push(response.msgRecoverMorseAccount);
     } else {
       // _handleUpdateParam will return the decoded message if it is a param update,
       // otherwise it will return undefined.
@@ -135,6 +152,7 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     params: [],
     msgImportMorseClaimableAccounts: [],
     morseClaimableAccount: [],
+    msgRecoverMorseAccount: [],
   };
 
   // merge all the documents to write
@@ -158,14 +176,33 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     if (r.morseClaimableAccount.length > 0) {
       allResults.morseClaimableAccount.push(...r.morseClaimableAccount);
     }
+    if (r.msgRecoverMorseAccount.length > 0) {
+      allResults.msgRecoverMorseAccount.push(...r.msgRecoverMorseAccount);
+    }
   }
 
-  await Promise.all([
+  const promises = [
     store.bulkCreate("Message", allResults.messages),
     store.bulkCreate("AuthzExec", allResults.authzExec),
     store.bulkCreate("AuthzMsgExec", allResults.authzExecMsgs),
     store.bulkCreate("Param", allResults.params),
     store.bulkCreate("MsgImportMorseClaimableAccounts", allResults.msgImportMorseClaimableAccounts),
     store.bulkCreate("MorseClaimableAccount", allResults.morseClaimableAccount),
-  ]);
+    store.bulkCreate("MsgRecoverMorseAccount", allResults.msgRecoverMorseAccount),
+  ];
+
+  if (allResults.msgRecoverMorseAccount.length) {
+    promises.push(
+      updateMorseClaimableAccounts(
+        allResults.msgRecoverMorseAccount.map(msg => ({
+          morseAddress: msg.morseSrcAddress,
+          destinationAddress: msg.shannonDestAddressId,
+          claimedMsgId: msg.id,
+          transactionHash: msg.transactionId,
+        }))
+      )
+    )
+  }
+
+  await Promise.all(promises);
 }

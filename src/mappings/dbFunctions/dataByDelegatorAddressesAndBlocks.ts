@@ -10,8 +10,8 @@ LANGUAGE sql
 STABLE
 AS $$
   WITH matched_suppliers AS (
-    SELECT DISTINCT ON (elem->>'address')  
-      ssc.supplier_id,
+    SELECT  
+      distinct ssc.supplier_id,
       elem->>'address' AS address
     FROM ${dbSchema}.supplier_service_configs ssc
     INNER JOIN ${dbSchema}.suppliers s ON s.id = ssc.supplier_id
@@ -26,11 +26,11 @@ AS $$
     SELECT 
       mcc.supplier_id,
       COUNT(DISTINCT mcc.id) AS claim_count,
-      SUM(r.num_relays) AS claim_relays,
-      SUM(r.num_claimed_computed_units) AS claim_computed_units,
-      SUM(r.claimed_amount) AS claim_upokt
+      SUM(mcc.num_relays) AS claim_relays,
+      SUM(mcc.num_claimed_computed_units) AS claim_computed_units,
+      SUM(mcc.claimed_amount) AS claim_upokt
     FROM ${dbSchema}.msg_create_claims mcc
-    INNER JOIN ${dbSchema}.relays r ON r.msg_create_claim_id = mcc.id
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = mcc.supplier_id
     WHERE mcc.block_id BETWEEN start_height AND end_height
     GROUP BY mcc.supplier_id
   ),
@@ -43,6 +43,7 @@ AS $$
       SUM(ecs.num_claimed_computed_units) AS proof_computed_units,
       SUM(ecs.claimed_amount) AS proof_upokt
     FROM ${dbSchema}.event_claim_settleds ecs
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = ecs.supplier_id
     WHERE ecs.block_id BETWEEN start_height AND end_height
     GROUP BY ecs.supplier_id
   ),
@@ -52,28 +53,41 @@ AS $$
       ess.supplier_id,
       SUM(ess.previous_stake_amount - ess.after_stake_amount) AS slashed
     FROM ${dbSchema}.event_supplier_slasheds ess
+    INNER JOIN matched_suppliers ms ON ms.supplier_id = ess.supplier_id
     WHERE ess.block_id BETWEEN start_height AND end_height
     GROUP BY ess.supplier_id
   )
 
   SELECT jsonb_agg(
     jsonb_build_object(
-      'address', ms.address,
-      'proof_relays', COALESCE(p.proof_relays, 0),
-      'proof_computed_units', COALESCE(p.proof_computed_units, 0),
-      'proof_upokt', COALESCE(p.proof_upokt, 0),
-      'proof_amount', COALESCE(p.proof_count, 0),
-      'claim_relays', COALESCE(c.claim_relays, 0),
-      'claim_computed_units', COALESCE(c.claim_computed_units, 0),
-      'claim_upokt', COALESCE(c.claim_upokt, 0),
-      'claim_amount', COALESCE(c.claim_count, 0),
-      'slashed', COALESCE(s.slashed, 0)
+      'address', address,
+      'proof_relays', COALESCE(proof_relays, 0),
+      'proof_computed_units', COALESCE(proof_computed_units, 0),
+      'proof_upokt', COALESCE(proof_upokt, 0),
+      'proof_amount', COALESCE(proof_count, 0),
+      'claim_relays', COALESCE(claim_relays, 0),
+      'claim_computed_units', COALESCE(claim_computed_units, 0),
+      'claim_upokt', COALESCE(claim_upokt, 0),
+      'claim_amount', COALESCE(claim_count, 0),
+      'slashed', COALESCE(slashed, 0)
     )
-  )
+  ) FROM (
+  SELECT 
+  	ms.address,
+	  SUM(p.proof_relays) proof_relays,
+	  SUM(p.proof_computed_units) proof_computed_units,
+	  SUM(p.proof_upokt) proof_upokt,
+	  SUM(p.proof_count) proof_count,
+	  SUM(c.claim_relays) claim_relays,
+	  SUM(c.claim_computed_units) claim_computed_units,
+	  SUM(c.claim_upokt) claim_upokt,
+	  SUM(c.claim_count) claim_count,
+	  SUM(s.slashed) slashed
   FROM matched_suppliers ms
   LEFT JOIN claim_agg c ON c.supplier_id = ms.supplier_id
   LEFT JOIN proof_agg p ON p.supplier_id = ms.supplier_id
-  LEFT JOIN slashed_agg s ON s.supplier_id = ms.supplier_id;
+  LEFT JOIN slashed_agg s ON s.supplier_id = ms.supplier_id
+  GROUP BY ms.address)
 $$;
 `
 }

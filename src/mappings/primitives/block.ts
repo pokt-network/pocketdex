@@ -68,6 +68,10 @@ export async function handleBlock(block: CosmosBlock): Promise<void> {
     unstakedGatewaysTokens: BigInt(0),
     unstakedAppsTokens: BigInt(0),
     unstakedApps: 0,
+    stakedValidatorsTokens: BigInt(0),
+    stakedValidators: 0,
+    unstakingValidatorsTokens: BigInt(0),
+    unstakingValidators: 0,
   });
 
   await Promise.all([

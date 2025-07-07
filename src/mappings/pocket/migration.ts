@@ -1,7 +1,7 @@
 import { toHex } from "@cosmjs/encoding";
-import type { CosmosMessage } from "@subql/types-cosmos";
+import type { CosmosMessage, CosmosTransaction } from "@subql/types-cosmos";
 import type { Coin } from "../../client/cosmos/base/v1beta1/coin";
-import { MsgImportMorseClaimableAccounts } from "../../client/pocket/migration/tx";
+import { MsgImportMorseClaimableAccounts, MsgRecoverMorseAccount } from "../../client/pocket/migration/tx";
 import type { MorseClaimableAccountProps } from "../../types/models/MorseClaimableAccount";
 import {
   MsgClaimMorseAccount as MsgClaimMorseAccountEntity,
@@ -10,7 +10,7 @@ import {
 import type { MsgImportMorseClaimableAccountsProps } from "../../types/models/MsgImportMorseClaimableAccounts";
 import { MsgRecoverMorseAccountProps } from "../../types/models/MsgRecoverMorseAccount";
 import type { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
-import type { MsgClaimMorseAccount, MsgRecoverMorseAccount } from "../../types/proto-interfaces/pocket/migration/tx";
+import type { MsgClaimMorseAccount } from "../../types/proto-interfaces/pocket/migration/tx";
 import type { EncodedMsg } from "../types";
 import { getStoreModel } from "../utils/db";
 import { messageId } from "../utils/ids";
@@ -64,20 +64,56 @@ function _handleMsgClaimMorseAccount(
   })
 }
 
-function _handleMsgRecoverMorseAccount(msg: CosmosMessage<MsgRecoverMorseAccount>): MsgRecoverMorseAccountProps {
+interface HandleMsgRecoverMorseAccount {
+  encodedMsg: EncodedMsg,
+  tx: CosmosTransaction
+  blockId: bigint
+  messageId: string
+}
+
+export function handleMsgRecoverMorseAccount({
+  blockId,
+  encodedMsg,
+  messageId,
+  tx,
+}: HandleMsgRecoverMorseAccount): {
+  decodedMsg: object
+  msgRecoverMorseAccount: MsgRecoverMorseAccountProps
+} {
+  const decodedMsg = MsgRecoverMorseAccount.decode(
+    new Uint8Array(Object.values(encodedMsg.value))
+  )
+
   let recoveredBalance: Coin | null = null;
 
-  for (const event of msg.tx.tx.events) {
+  for (const event of tx.tx.events) {
     if (event.type === 'pocket.migration.EventMorseAccountRecovered') {
+      let coin: CoinSDKType | null = null, morseAddress: string | null = null, shannonAddress: string | null = null;
+
       for (const attribute of event.attributes) {
         if (attribute.key === 'recovered_balance') {
-          const coin: CoinSDKType = JSON.parse(attribute.value as string);
-
-          recoveredBalance = {
-            denom: coin.denom,
-            amount: coin.amount,
-          }
+          coin = JSON.parse(attribute.value as string);
         }
+
+        if (attribute.key === 'morse_src_address') {
+          morseAddress = (attribute.value as string).replaceAll('"', '');
+        }
+
+        if (attribute.key === 'shannon_dest_address') {
+          shannonAddress = (attribute.value as string).replaceAll('"', '');
+        }
+      }
+
+      if (
+        coin && morseAddress?.toLowerCase() === decodedMsg.morseSrcAddress.toLowerCase() &&
+        shannonAddress?.toLowerCase() === decodedMsg.shannonDestAddress.toLowerCase()
+      ) {
+        recoveredBalance = {
+          denom: coin.denom,
+          amount: coin.amount,
+        }
+
+        break
       }
     }
   }
@@ -87,16 +123,18 @@ function _handleMsgRecoverMorseAccount(msg: CosmosMessage<MsgRecoverMorseAccount
   }
 
   return {
-    id: messageId(msg),
-    recoveredBalanceAmount: BigInt(recoveredBalance.amount),
-    recoveredBalanceDenom: recoveredBalance.denom,
-    authorityId: msg.msg.decodedMsg.authority,
-    morseSrcAddress: msg.msg.decodedMsg.morseSrcAddress,
-    shannonDestAddressId: msg.msg.decodedMsg.shannonDestAddress,
-
-    blockId: BigInt(msg.block.header.height),
-    transactionId: msg.tx.hash,
-    messageId: messageId(msg),
+    decodedMsg,
+    msgRecoverMorseAccount: {
+      id: messageId,
+      recoveredBalanceAmount: BigInt(recoveredBalance.amount),
+      recoveredBalanceDenom: recoveredBalance.denom,
+      authorityId: decodedMsg.authority,
+      morseSrcAddress: decodedMsg.morseSrcAddress.toLowerCase(),
+      shannonDestAddressId: decodedMsg.shannonDestAddress,
+      blockId: blockId,
+      transactionId: tx.hash,
+      messageId: messageId,
+    }
   }
 }
 
@@ -148,22 +186,6 @@ export async function handleMsgClaimMorseAccount(
     updateMorseClaimableAccounts(
       messages.map((msg) => ({
         publicKey: msg.msg.decodedMsg.morsePublicKey,
-        destinationAddress: msg.msg.decodedMsg.shannonDestAddress,
-        claimedMsgId: messageId(msg),
-        transactionHash: msg.tx.hash,
-      }))
-    )
-  ]);
-}
-
-export async function handleMsgRecoverMorseAccount(
-  messages: Array<CosmosMessage<MsgRecoverMorseAccount>>,
-): Promise<void> {
-  await Promise.all([
-    store.bulkCreate("MsgRecoverMorseAccount", messages.map(_handleMsgRecoverMorseAccount)),
-    updateMorseClaimableAccounts(
-      messages.map((msg) => ({
-        morseAddress: msg.msg.decodedMsg.morseSrcAddress,
         destinationAddress: msg.msg.decodedMsg.shannonDestAddress,
         claimedMsgId: messageId(msg),
         transactionHash: msg.tx.hash,

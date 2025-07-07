@@ -1,6 +1,7 @@
-import { toHex } from "@cosmjs/encoding";
-import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
-import { omit } from "lodash";
+import {
+  CosmosEvent,
+  CosmosMessage,
+} from "@subql/types-cosmos";
 import { claimExpirationReasonFromJSON } from "../../client/pocket/tokenomics/event";
 import {
   ClaimExpirationReason,
@@ -8,7 +9,6 @@ import {
   Coin,
   EventSupplierSlashed,
   ProofRequirementReason,
-  RelayStatus,
   SettlementOpReason,
   Supplier,
 } from "../../types";
@@ -22,9 +22,11 @@ import { EventProofValidityCheckedProps } from "../../types/models/EventProofVal
 import { ModToAcctTransferProps } from "../../types/models/ModToAcctTransfer";
 import { MsgCreateClaimProps } from "../../types/models/MsgCreateClaim";
 import { MsgSubmitProofProps } from "../../types/models/MsgSubmitProof";
-import { RelayProps } from "../../types/models/Relay";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
-import { MsgCreateClaim, MsgSubmitProof } from "../../types/proto-interfaces/pocket/proof/tx";
+import {
+  MsgCreateClaim,
+  MsgSubmitProof,
+} from "../../types/proto-interfaces/pocket/proof/tx";
 import {
   ClaimProofStatusSDKType,
   ClaimSDKType,
@@ -39,7 +41,7 @@ import {
   SettlementOpReasonSDKType,
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
 import { optimizedBulkCreate } from "../utils/db";
-import { getBlockId, getEventId, getRelayId, messageId } from "../utils/ids";
+import { getBlockId, getEventId, messageId } from "../utils/ids";
 import { parseJson, stringify } from "../utils/json";
 
 // this can return undefined because older events do not have this attribute
@@ -73,67 +75,67 @@ function getSettlementOpReasonFromSDK(item: typeof SettlementOpReasonSDKType | n
 
     case "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT":
     case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT:
-      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT;
 
     case "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN":
     case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN:
-      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN;
 
     case "TLM_GLOBAL_MINT_INFLATION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_INFLATION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_INFLATION
+      return SettlementOpReason.TLM_GLOBAL_MINT_INFLATION;
 
     case "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_RD
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_RD;
 
     case "TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION:
-      return SettlementOpReason.TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION
+      return SettlementOpReason.TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER:
-      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER
+      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER;
 
     case "UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER":
     case SettlementOpReasonSDKType.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER:
-      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER
+      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER;
 
     case "UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN":
     case SettlementOpReasonSDKType.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN:
-      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN
+      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN;
 
     case "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER:
-      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER
+      return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER;
 
     case "TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER":
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER:
-      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER
+      return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER;
 
     default:
-      throw new Error(`Unknown SettlementOpReason=${item}`)
+      throw new Error(`Unknown SettlementOpReason=${item}`);
   }
 }
 
 function parseAttribute(attribute: unknown): string {
-    return (attribute as string).replaceAll("\"", "");
+  return (attribute as string).replaceAll("\"", "");
 }
 
 // eslint-disable-next-line complexity
@@ -153,7 +155,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     claimed: CoinSDKType = {},
-    failureReason = '',
+    failureReason: string | null = null,
     proofValidationStatus: ClaimProofStatus | undefined,
     settlementResult: ClaimSettlementResultSDKType | null = null,
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -199,10 +201,10 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     }
 
     if (attribute.key === 'failure_reason') {
-      failureReason = attribute.value as string
+      failureReason = parseAttribute(attribute.value as string)
     }
 
-    if (attribute.key === 'proof_status') {
+    if (attribute.key === "proof_status") {
       proofValidationStatus = getClaimProofStatusFromSDK(parseAttribute(attribute.value as string));
     }
 
@@ -257,86 +259,72 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
   };
 }
 
-function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): [MsgCreateClaimProps, RelayProps] {
-  const { rootHash, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
+function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateClaimProps {
+  const { sessionHeader, supplierOperatorAddress, } = msg.msg.decodedMsg;
   const applicationId = sessionHeader?.applicationAddress || "";
   const serviceId = sessionHeader?.serviceId || "";
   const sessionId = sessionHeader?.sessionId || "";
 
-  const id = getRelayId({
-    applicationId,
-    supplierId: supplierOperatorAddress,
-    serviceId,
-    sessionId,
-  });
+  const eventClaimCreated = msg.tx.tx.events.find(event => event.type === "pocket.proof.EventClaimCreated");
+
+  if (!eventClaimCreated) {
+    throw new Error(`EventClaimCreated not found for msg MsgCreateClaim ${msg.idx} ${msg.tx.hash} ${msg.block.block.header.height}`);
+  }
+
+  const {
+    claimed,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    numRelays
+  } = getAttributes(eventClaimCreated.attributes)
 
   const shared = {
+
+  };
+
+  return {
+    id: messageId(msg),
+    ...shared,
+    transactionId: msg.tx.hash,
+    blockId: getBlockId(msg.block),
     supplierId: supplierOperatorAddress,
     applicationId,
     serviceId,
     sessionId,
+    numRelays,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(claimed?.amount || "0"),
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
-    // todo: convert uint8array that come as uint8map to hex string
-    rootHash: toHex(rootHash),
-  };
-
-  return [
-    {
-      id: messageId(msg),
-      ...shared,
-      transactionId: msg.tx.hash,
-      blockId: getBlockId(msg.block),
-    },
-    {
-      id,
-      ...shared,
-      status: RelayStatus.Pending,
-      msgCreateClaimId: messageId(msg),
-    },
-  ];
+    rootHash: undefined,
+  }
 }
 
-function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): [MsgSubmitProofProps, RelayProps] {
-  const { proof, sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
+function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): MsgSubmitProofProps {
+  const { sessionHeader, supplierOperatorAddress } = msg.msg.decodedMsg;
 
   const applicationId = sessionHeader?.applicationAddress || "";
   const serviceId = sessionHeader?.serviceId || "";
   const sessionId = sessionHeader?.sessionId || "";
   const msgId = messageId(msg);
 
-  const shared = {
+  return {
+    id: msgId,
+    transactionId: msg.tx.hash,
+    blockId: getBlockId(msg.block),
     applicationId,
     supplierId: supplierOperatorAddress,
     sessionId,
     serviceId,
     sessionEndHeight: BigInt(sessionHeader?.sessionEndBlockHeight?.toString() || 0),
     sessionStartHeight: BigInt(sessionHeader?.sessionStartBlockHeight?.toString() || 0),
-  };
-
-  return [
-    {
-      id: msgId,
-      ...shared,
-      proof: stringify(proof),
-      transactionId: msg.tx.hash,
-      blockId: getBlockId(msg.block),
-    },
-    {
-      ...shared,
-      id: getRelayId({
-        applicationId,
-        supplierId: supplierOperatorAddress,
-        serviceId,
-        sessionId,
-      }),
-      status: RelayStatus.Pending,
-      msgSubmitProofId: msgId,
-    },
-  ];
+    proof: undefined,
+  }
 }
 
-function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, RelayProps, Array<ModToAcctTransferProps>] {
+function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
   const {
     claim,
     claimed,
@@ -347,36 +335,25 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
     settlementResult,
   } = getAttributes(event.event.attributes);
 
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
-
-  const shared = {
-    supplierId: supplier_operator_address,
-    applicationId: session_header?.application_address || "",
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-    sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
-    sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
-    numRelays,
-    numClaimedComputedUnits,
-    numEstimatedComputedUnits,
-    claimedDenom: claimed?.denom || "",
-    claimedAmount: BigInt(claimed?.amount || "0"),
-    proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-  } as const;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
   const eventId = getEventId(event)
   const blockId = getBlockId(event.block)
-  const relayId = getRelayId({
-    applicationId: session_header?.application_address || "",
-    supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-  })
 
   return [
     {
-      ...shared,
+      supplierId: supplier_operator_address,
+      applicationId: session_header?.application_address || "",
+      serviceId: session_header?.service_id || "",
+      sessionId: session_header?.session_id || "",
+      sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
+      sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
+      numRelays,
+      numClaimedComputedUnits,
+      numEstimatedComputedUnits,
+      claimedDenom: claimed?.denom || "",
+      claimedAmount: BigInt(claimed?.amount || "0"),
+      proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
       transactionId: event.tx?.hash,
       blockId: blockId,
       id: eventId,
@@ -399,17 +376,11 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
         recipientModule: item.RecipientModule,
         amount: BigInt(item.coin.amount),
         denom: item.coin.denom,
-      })) || []
-    },
-    {
-      ...shared,
-      id: relayId,
-      status: RelayStatus.Success,
-      eventClaimSettledId: getEventId(event),
+      })) || [],
+      rootHash: undefined,
     },
     settlementResult?.mod_to_acct_transfers?.map((item, index) => ({
       id: `${eventId}-${index}`,
-      relayId,
       blockId,
       eventClaimSettledId: eventId,
       senderModule: item.SenderModule,
@@ -417,11 +388,12 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
       amount: BigInt(item.coin.amount),
       denom: item.coin.denom,
       opReason: getSettlementOpReasonFromSDK(item.op_reason),
-    })) || []
+      relayId: '',
+    })) || [],
   ];
 }
 
-function _handleEventClaimExpired(event: CosmosEvent): [EventClaimExpiredProps, RelayProps] {
+function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
   const {
     claim,
     claimed,
@@ -431,47 +403,30 @@ function _handleEventClaimExpired(event: CosmosEvent): [EventClaimExpiredProps, 
     numRelays,
   } = getAttributes(event.event.attributes);
 
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const shared = {
+  return {
     supplierId: supplier_operator_address,
     applicationId: session_header?.application_address || "",
     serviceId: session_header?.service_id || "",
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     claimedDenom: claimed?.denom || "",
     claimedAmount: BigInt(claimed?.amount || "0"),
     proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-  } as const;
-
-  return [
-    {
-      ...shared,
-      id: getEventId(event),
-      expirationReason,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-    },
-    {
-      ...shared,
-      id: getRelayId({
-        applicationId: session_header?.application_address || "",
-        supplierId: supplier_operator_address,
-        serviceId: session_header?.service_id || "",
-        sessionId: session_header?.session_id || "",
-      }),
-      eventClaimExpiredId: getEventId(event),
-      status: RelayStatus.Fail,
-    },
-  ];
+    id: getEventId(event),
+    expirationReason,
+    transactionId: event.tx?.hash,
+    blockId: getBlockId(event.block),
+    rootHash: undefined,
+  }
 }
 
-function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, RelayProps] {
+function _handleEventClaimUpdated(event: CosmosEvent): EventClaimUpdatedProps {
   const {
     claim,
     claimed,
@@ -482,23 +437,18 @@ function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, 
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const relayId = getRelayId({
-    applicationId: session_header?.application_address || "",
-    supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-  });
-
-  const shared = {
+  return {
+    id: getEventId(event),
+    transactionId: event.tx?.hash,
+    blockId: getBlockId(event.block),
     supplierId: supplier_operator_address,
     applicationId: session_header?.application_address || "",
     serviceId: session_header?.service_id || "",
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -506,45 +456,33 @@ function _handleEventClaimUpdated(event: CosmosEvent): [EventClaimUpdatedProps, 
     claimedAmount: BigInt(claimed?.amount || "0"),
     ...(proof_validation_status && {
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-    })
-  } as const;
-
-  return [
-    {
-      ...shared,
-      id: getEventId(event),
-      relayId,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-    },
-    {
-      ...shared,
-      id: relayId,
-      status: RelayStatus.Pending,
-    },
-  ];
+    }),
+    relayId: undefined,
+    rootHash: undefined,
+  }
 }
 
-function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, RelayProps] {
+function _handleEventProofUpdated(event: CosmosEvent): EventProofUpdatedProps {
   const {
     claim,
     claimed,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-    proof,
   } = getAttributes(event.event.attributes);
 
-  const { proof_validation_status, root_hash, session_header, supplier_operator_address } = claim;
+  const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const shared = {
+  return {
+    id: getEventId(event),
+    transactionId: event.tx?.hash,
+    blockId: getBlockId(event.block),
     supplierId: supplier_operator_address,
     applicationId: session_header?.application_address || "",
     serviceId: session_header?.service_id || "",
     sessionId: session_header?.session_id || "",
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-    rootHash: stringify(root_hash),
     numRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
@@ -552,44 +490,24 @@ function _handleEventProofUpdated(event: CosmosEvent): [EventProofUpdatedProps, 
     claimedAmount: BigInt(claimed?.amount || "0"),
     ...(proof_validation_status && {
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-    })
-  } as const;
-
-
-  const id = getRelayId({
-    applicationId: session_header?.application_address || "",
-    supplierId: supplier_operator_address,
-    serviceId: session_header?.service_id || "",
-    sessionId: session_header?.session_id || "",
-  });
-
-  return [
-    {
-      id: getEventId(event),
-      ...shared,
-      closestMerkleProof: proof ? stringify(proof.closest_merkle_proof) : undefined,
-      relayId: id,
-      transactionId: event.tx?.hash,
-      blockId: getBlockId(event.block),
-    },
-    {
-      ...shared,
-      id,
-      status: RelayStatus.Pending,
-    },
-  ];
+    }),
+    closestMerkleProof: undefined,
+    relayId: undefined,
+    rootHash: undefined,
+  }
 }
 
 function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicationOverservicedProps {
-  let expectedBurn: Coin | null = null, effectiveBurn: Coin | null = null, applicationAddress = '', supplierAddress = '';
+  let expectedBurn: Coin | null = null, effectiveBurn: Coin | null = null, applicationAddress = "",
+    supplierAddress = "";
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "application_addr") {
-      applicationAddress = parseAttribute(attribute.value)
+      applicationAddress = parseAttribute(attribute.value);
     }
 
     if (attribute.key === "supplier_operator_addr") {
-      supplierAddress = parseAttribute(attribute.value as string)
+      supplierAddress = parseAttribute(attribute.value as string);
     }
 
     if (attribute.key === "expected_burn") {
@@ -627,34 +545,34 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
     effectiveBurnDenom: effectiveBurn.denom,
     blockId: getBlockId(event.block),
     eventId: getEventId(event),
-  }
+  };
 }
 
 function _handleEventApplicationReimbursementRequest(event: CosmosEvent): EventApplicationReimbursementRequestProps {
-  let applicationAddress = '', supplierAddress = '', serviceId = '', sessionId = '', coin: CoinSDKType | null = null
+  let applicationAddress = "", supplierAddress = "", serviceId = "", sessionId = "", coin: CoinSDKType | null = null;
 
-  for (const {key, value} of event.event.attributes) {
-    if (key === 'amount') {
-      coin = parseJson(value as string)
-      continue
+  for (const { key, value } of event.event.attributes) {
+    if (key === "amount") {
+      coin = parseJson(value as string);
+      continue;
     }
 
-    const parsedValue = parseAttribute(value)
+    const parsedValue = parseAttribute(value);
 
-    if (key === 'application_addr') {
-      applicationAddress = parsedValue
+    if (key === "application_addr") {
+      applicationAddress = parsedValue;
     }
 
-    if (key === 'supplier_operator_addr') {
-      supplierAddress = parsedValue
+    if (key === "supplier_operator_addr") {
+      supplierAddress = parsedValue;
     }
 
-    if (key === 'service_id') {
-      serviceId = parsedValue
+    if (key === "service_id") {
+      serviceId = parsedValue;
     }
 
-    if (key === 'session_id') {
-      sessionId = parsedValue
+    if (key === "session_id") {
+      sessionId = parsedValue;
     }
   }
 
@@ -672,11 +590,11 @@ function _handleEventApplicationReimbursementRequest(event: CosmosEvent): EventA
     denom: coin.denom,
     blockId: getBlockId(event.block),
     eventId: getEventId(event),
-  }
+  };
 }
 
 async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
-  let slashingCoin: CoinSDKType | null = null, operatorAddress = '';
+  let slashingCoin: CoinSDKType | null = null, operatorAddress = "";
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "slashing_amount") {
@@ -696,13 +614,13 @@ async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
     throw new Error(`[handleEventSupplierSlashed] operatorAddress not found in event`);
   }
 
-  const supplier = await Supplier.get(operatorAddress)
+  const supplier = await Supplier.get(operatorAddress);
 
   if (!supplier) {
-    throw new Error(`[handleEventSupplierSlashed] supplier not found for operator address ${operatorAddress}`)
+    throw new Error(`[handleEventSupplierSlashed] supplier not found for operator address ${operatorAddress}`);
   }
 
-  supplier.stakeAmount -= BigInt(slashingCoin.amount)
+  supplier.stakeAmount -= BigInt(slashingCoin.amount);
 
   await Promise.all([
     supplier.save(),
@@ -716,41 +634,41 @@ async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
       previousStakeAmount: supplier.stakeAmount,
       afterStakeAmount: supplier.stakeAmount,
       // in alpha this event does not have the values below, so we are setting them to empty values for now
-      applicationId: '',
-      serviceId: '',
-      sessionId: '',
+      applicationId: "",
+      serviceId: "",
+      sessionId: "",
       sessionStartHeight: BigInt(0),
       sessionEndHeight: BigInt(0),
     }).save(),
-  ])
+  ]);
 }
 
 async function _handleEventSupplierSlashed(event: CosmosEvent) {
   const {
     claim,
-    proofMissingPenalty
+    proofMissingPenalty,
   } = getAttributes(event.event.attributes);
 
   if (!claim) {
     logger.warn(`[handleEventSupplierSlashed] claim not found in event, trying to handle with previous version`);
-    await _handleOldEventSupplierSlashed(event)
-    return
+    await _handleOldEventSupplierSlashed(event);
+    return;
   }
 
   if (!claim.session_header) {
     logger.warn(`[handleEventSupplierSlashed] session_header not found in event, trying to handle with previous version`);
-    await _handleOldEventSupplierSlashed(event)
-    return
+    await _handleOldEventSupplierSlashed(event);
+    return;
   }
 
-  const supplier = await Supplier.get(claim.supplier_operator_address)
+  const supplier = await Supplier.get(claim.supplier_operator_address);
 
   if (!supplier) {
-    throw new Error(`[handleEventSupplierSlashed] supplier not found for address: ${claim.supplier_operator_address}`)
+    throw new Error(`[handleEventSupplierSlashed] supplier not found for address: ${claim.supplier_operator_address}`);
   }
 
-  const previousStakeAmount = supplier.stakeAmount.valueOf()
-  supplier.stakeAmount -= BigInt(proofMissingPenalty.amount)
+  const previousStakeAmount = supplier.stakeAmount.valueOf();
+  supplier.stakeAmount -= BigInt(proofMissingPenalty.amount);
 
   await Promise.all([
     supplier.save(),
@@ -771,206 +689,113 @@ async function _handleEventSupplierSlashed(event: CosmosEvent) {
       afterStakeAmount: supplier.stakeAmount,
       proofValidationStatus: getClaimProofStatusFromSDK(claim.proof_validation_status),
     }).save(),
-  ])
+  ]);
 }
 
-function _handleEventProofValidityChecked(event: CosmosEvent): [EventProofValidityCheckedProps, Partial<RelayProps>] {
-  const {failureReason, proof, proofValidationStatus} = getAttributes(event.event.attributes)
+function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidityCheckedProps {
+  // in the current proto files of this event, proof does not come, but in the older version of this event it comes.
+  const { claim, failureReason, proof, proofValidationStatus} = getAttributes(event.event.attributes);
 
-  if (!proof) {
-    throw new Error(`[handleEventProofValidityChecked] proof not found in event`);
+  const sessionHeader = proof?.session_header || claim?.session_header;
+
+  if (!sessionHeader) {
+    throw new Error(`[handleEventProofValidityChecked] session_header not found in event ${stringify(event.event.attributes)}`);
   }
 
-  if (!proof.session_header) {
-    throw new Error(`[handleEventProofValidityChecked] session_header not found in event`);
+  const supplierOperatorAddress = proof?.supplier_operator_address || claim?.supplier_operator_address;
+
+  if (!supplierOperatorAddress) {
+    throw new Error(`[handleEventProofValidityChecked] supplier_operator_address not found in event ${stringify(event.event.attributes)}`);
   }
 
-  if (!proofValidationStatus) {
-    throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
-  }
+  const validationStatus = proofValidationStatus || getClaimProofStatusFromSDK(parseAttribute(claim?.proof_validation_status));
 
-  if (!failureReason) {
-    throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
-  }
-
-  return [
-    {
-      id: getEventId(event),
-      blockId: getBlockId(event.block),
-      supplierId: proof.supplier_operator_address,
-      applicationId: proof.session_header.application_address,
-      serviceId: proof.session_header.service_id,
-      sessionId: proof.session_header.session_id,
-      sessionStartHeight: BigInt(proof.session_header.session_start_block_height.toString()),
-      sessionEndHeight: BigInt(proof.session_header.session_end_block_height.toString()),
-      proofValidationStatus: proofValidationStatus,
-      failureReason: failureReason,
-      eventId: getEventId(event),
-    },
-    {
-      id: getRelayId({
-        applicationId: proof.session_header.application_address,
-        supplierId: proof.supplier_operator_address,
-        serviceId: proof.session_header.service_id,
-        sessionId: proof.session_header.session_id,
-      }),
-      proofValidationStatus: proofValidationStatus,
-    }
-  ]
-}
-
-// _updateRelays - we need to update relay documents without historical tracking get to involve.
-async function _updateRelays(relays: Array<RelayProps>): Promise<void> {
-  const promises: Promise<void>[] = [];
-  const RelayModel = store.modelProvider.getModel("Relay");
-  relays.forEach(relay => {
+  if (!validationStatus) {
+    logger.error(`[handleEventProofValidityChecked] proofValidationStatus not found in event: ${stringify(event.event.attributes)}`);
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
-    promises.push(RelayModel.model.update(
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      omit(relay, "id"),
-      {
-        where: {
-          id: relay.id,
-        },
-        transaction: store.context.transaction,
-      },
-    ));
-  });
-  await Promise.all(promises);
+    return [];
+    // throw new Error(`[handleEventProofValidityChecked] proofValidationStatus not found in event`);
+  }
+
+  if (failureReason === null) {
+    logger.error(`[handleEventProofValidityChecked] failureReason not found in event: ${stringify(event.event.attributes)}`);
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    return [];
+    // throw new Error(`[handleEventProofValidityChecked] failureReason not found in event`);
+  }
+
+  return {
+    id: getEventId(event),
+    blockId: getBlockId(event.block),
+    supplierId: supplierOperatorAddress,
+    applicationId: sessionHeader.application_address,
+    serviceId: sessionHeader.service_id,
+    sessionId: sessionHeader.session_id,
+    sessionStartHeight: BigInt(sessionHeader.session_start_block_height.toString()),
+    sessionEndHeight: BigInt(sessionHeader.session_end_block_height.toString()),
+    proofValidationStatus: validationStatus,
+    failureReason: failureReason,
+    eventId: getEventId(event),
+  }
 }
 
 export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
-  const claimMsgs = [];
-  const relays = [];
-
-  for (const msg of messages) {
-    const [claimMsg, relay] = _handleMsgCreateClaim(msg);
-    claimMsgs.push(claimMsg);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("MsgCreateClaim", claimMsgs),
-    // on msg claim is the first time a Relay entity record is created.
-    optimizedBulkCreate("Relay", relays),
-  ]);
+  await optimizedBulkCreate("MsgCreateClaim", messages.map(_handleMsgCreateClaim))
 }
 
 export async function handleMsgSubmitProof(messages: Array<CosmosMessage<MsgSubmitProof>>): Promise<void> {
-  const proofMsgs = [];
-  const relays = [];
-
-  for (const msg of messages) {
-    const [proofMsg, relay] = _handleMsgSubmitProof(msg);
-    proofMsgs.push(proofMsg);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("MsgSubmitProof", proofMsgs),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("MsgSubmitProof", messages.map(_handleMsgSubmitProof))
 }
 
 export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promise<void> {
-  const eventsExpired = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventExpired, relay] = _handleEventClaimExpired(event);
-    eventsExpired.push(eventExpired);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventClaimExpired", eventsExpired),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired))
 }
 
 export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promise<void> {
   const eventsSettled = [];
-  const relays = [];
-  const modToAcctTransfersToSave = []
+  const modToAcctTransfersToSave = [];
 
   for (const event of events) {
-    const [eventSettled, relay, modToAcctTransfers] = _handleEventClaimSettled(event);
+    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event);
     eventsSettled.push(eventSettled);
-    relays.push(relay);
+
     if (modToAcctTransfers.length) {
-      modToAcctTransfersToSave.push(...modToAcctTransfers)
+      modToAcctTransfersToSave.push(...modToAcctTransfers);
     }
   }
 
   await Promise.all([
     optimizedBulkCreate("EventClaimSettled", eventsSettled),
     optimizedBulkCreate("ModToAcctTransfer", modToAcctTransfersToSave),
-    _updateRelays(relays),
   ]);
 }
 
 export async function handleEventClaimUpdated(events: Array<CosmosEvent>): Promise<void> {
-  const eventsUpdated = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventUpdated, relay] = _handleEventClaimUpdated(event);
-    eventsUpdated.push(eventUpdated);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventClaimUpdated", eventsUpdated),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("EventClaimUpdated", events.map(_handleEventClaimUpdated))
 }
 
 export async function handleEventProofUpdated(events: Array<CosmosEvent>): Promise<void> {
-  const eventsUpdated = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventUpdated, relay] = _handleEventProofUpdated(event);
-    eventsUpdated.push(eventUpdated);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventProofUpdated", eventsUpdated),
-    _updateRelays(relays),
-  ]);
+  await optimizedBulkCreate("EventProofUpdated", events.map(_handleEventProofUpdated))
 }
 
 export async function handleEventApplicationOverserviced(events: Array<CosmosEvent>): Promise<void> {
   const eventsUpdated = events.map(_handleEventApplicationOverserviced);
 
-  await optimizedBulkCreate("EventApplicationOverserviced", eventsUpdated)
+  await optimizedBulkCreate("EventApplicationOverserviced", eventsUpdated);
 }
 
 export async function handleEventApplicationReimbursementRequest(events: Array<CosmosEvent>): Promise<void> {
   const eventsUpdated = events.map(_handleEventApplicationReimbursementRequest);
 
-  await optimizedBulkCreate("EventApplicationReimbursementRequest", eventsUpdated)
+  await optimizedBulkCreate("EventApplicationReimbursementRequest", eventsUpdated);
 }
 
 export async function handleEventSupplierSlashed(events: Array<CosmosEvent>): Promise<void> {
-  await Promise.all(events.map(_handleEventSupplierSlashed))
+  await Promise.all(events.map(_handleEventSupplierSlashed));
 }
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {
-  const eventsUpdated = [];
-  const relays = [];
-
-  for (const event of events) {
-    const [eventUpdated, relay] = _handleEventProofValidityChecked(event);
-    eventsUpdated.push(eventUpdated);
-    relays.push(relay);
-  }
-
-  await Promise.all([
-    optimizedBulkCreate("EventProofValidityChecked", eventsUpdated),
-    _updateRelays(relays as Array<RelayProps>),
-  ]);
+  await optimizedBulkCreate("EventProofValidityChecked", events.map(_handleEventProofValidityChecked))
 }

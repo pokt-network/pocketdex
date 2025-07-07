@@ -40,9 +40,7 @@ async function _handleMsgAddService(
   ]);
 }
 
-// we are returning the idx because we need it to get the latest event per service
-// to update the relay mining difficulty of the service entity
-function _handleEventRelayMiningDifficultyUpdated(event: CosmosEvent): EventRelayMiningDifficultyUpdatedProps & {idx: number} {
+function _handleEventRelayMiningDifficultyUpdated(event: CosmosEvent): EventRelayMiningDifficultyUpdatedProps {
   let serviceId = '',
     prevTargetHashHexEncoded = '',
     newTargetHashHexEncoded = '',
@@ -104,7 +102,6 @@ function _handleEventRelayMiningDifficultyUpdated(event: CosmosEvent): EventRela
     newNumRelaysEma,
     blockId: getBlockId(event.block),
     eventId: eventId,
-    idx: event.idx
   }
 }
 
@@ -128,29 +125,5 @@ export async function handleMsgAddService(messages: Array<CosmosMessage<MsgAddSe
 }
 
 export async function handleEventRelayMiningDifficultyUpdated(events: Array<CosmosEvent>): Promise<void> {
-  const relayMiningDifficultyUpdatedEvents = events.map(_handleEventRelayMiningDifficultyUpdated)
-  const eventsWithoutIdx: Array<EventRelayMiningDifficultyUpdatedProps> = []
-
-  const eventsGroupedByServiceId = relayMiningDifficultyUpdatedEvents.reduce((acc, event) => {
-    const serviceId = event.serviceId
-
-    if (!acc[serviceId]) {
-      acc[serviceId] = []
-    }
-
-    acc[serviceId].push(event)
-    eventsWithoutIdx.push(omit(event, 'idx'))
-
-    return acc
-  }, {} as Record<string, Array<EventRelayMiningDifficultyUpdatedProps>>)
-
-
-  await Promise.all([
-    store.bulkCreate("EventRelayMiningDifficultyUpdated", eventsWithoutIdx),
-    Object.values(eventsGroupedByServiceId).map(async (eventsOfService) => {
-      const sortedEvents = orderBy(eventsOfService, ['idx'], ['asc'])
-
-      await _updateRelayMiningDifficultyOfService(sortedEvents.at(-1)!)
-    })
-  ])
+  await store.bulkCreate("EventRelayMiningDifficultyUpdated", events.map(_handleEventRelayMiningDifficultyUpdated))
 }

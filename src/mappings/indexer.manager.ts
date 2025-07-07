@@ -27,7 +27,6 @@ import {
 import { handleAddBlockReports } from "./pocket/reports";
 import {
   handleBlock,
-  handleEvents,
   handleGenesis,
   handleMessages,
   handleTransactions,
@@ -111,9 +110,17 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
     blockId,
   );
 
-  for (const [addressDenom, changes] of Object.entries(addressDenomMap)) {
-    const [address, denom] = addressDenom.split("-");
-    await handleNativeBalanceChangesForAddressAndDenom(address, denom, changes, blockId);
+  const addressDenomArray = Object.entries(addressDenomMap)
+
+  while (addressDenomArray.length > 0) {
+    const items = addressDenomArray.splice(0, 10)
+
+    await Promise.all(
+      items.map(([addressDenom, changes]) => {
+        const [address, denom] = addressDenom.split("-");
+        return handleNativeBalanceChangesForAddressAndDenom(address, denom, changes, blockId);
+      })
+    )
   }
 
   const msgTypes = [
@@ -217,15 +224,10 @@ async function indexService(msgByType: MessageByType, eventByType: EventByType):
     "/pocket.service.MsgAddService",
   ];
 
-  await indexStakeEntity([
-    ...msgTypes.map(type => msgByType[type]).flat(),
-    ...eventTypes.map(type => eventByType[type]).flat()
-  ], {
-    "/pocket.service.MsgAddService": "service.id",
-    "pocket.service.EventRelayMiningDifficultyUpdated": (attributes) => {
-      return attributes.find(({key}) => key === "service_id")?.value as string
-    }
-  })
+  await Promise.all([
+    ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
+    ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
+  ])
 }
 
 // any application msg or event
@@ -692,29 +694,21 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
 
   // let's serialize to maybe avoid issues do to even loop saturation?
   await profilerWrap(indexPrimitives, "indexingHandler", "indexPrimitives")(block);
-
   // lets this happens first because is massive
-  await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
-
+  // await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
+  // await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
   await profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions);
 
-  await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
-
-  await profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType);
-
-  await profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType);
-
-  await profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType);
+  await Promise.all([
+    profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType),
+    profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
+  ]);
 
   await profilerWrap(generateReports, "indexingHandler", "generateReports")(block);
 }

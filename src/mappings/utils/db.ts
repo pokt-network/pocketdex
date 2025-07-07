@@ -84,7 +84,11 @@ export async function fetchPaginatedRecords<T>({
     );
 
     // Fetch the current batch of results
-    batch = await fetchFn({ ...initialOptions as GetOptions<EntityProps<T>>, offset });
+    batch = await fetchFn({
+      ...initialOptions as GetOptions<EntityProps<T>>,
+      offset,
+      limit: PAGE_LIMIT, // we need to be sure that --query-limit=1000 is passed to the node-cosmos cli
+    });
 
     // Append batch to results
     results = results.concat(batch);
@@ -228,4 +232,10 @@ export async function optimizedBulkCreate<T>(
   );
 
   await Promise.all(tasks);
+}
+
+export function getDbSchema(): string {
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  return store.context.config?.dbSchema
 }
