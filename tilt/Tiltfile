@@ -112,7 +112,7 @@ def pocketdex(
       kustomize_path=static_kustomize_path,
       kustomize_flags=static_kustomize_flags,
       genesis_file_path=genesis_file_path,
-      labels=apps_labels
+      labels=tools_labels
     )
 
   deploy_commons(

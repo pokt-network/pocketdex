@@ -2,7 +2,7 @@ load('ext://dotenv', 'dotenv')
 load('./tilt/Tiltfile', 'pocketdex')
 load('./tilt/utils.Tiltfile', 'build_indexer_params_overwrite')
 load(
-  '.tilt/cons.Tiltfile',
+  './tilt/cons.Tiltfile',
   'mainnet',
   'testnet_beta',
   'testnet_alpha',
@@ -41,7 +41,7 @@ pocketdex(
   pgadmin_email=pgadmin_email,
   pgadmin_password=pgadmin_password,
   apps_labels=['pocketdex'],
-  tools_labels=['pocketdex-db'],
+  tools_labels=['pocketdex-tools'],
   helm_repo_labels=['pocketdex-helm-repo'],
   only_db=only_db == 'yes'
 )

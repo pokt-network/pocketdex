@@ -42,7 +42,7 @@ def deploy_pgadmin(
       '--set=env.password={}'.format(password)
     ],
     port_forwards=[
-      port_forward(5050, 50, name='PgAdmin4 Web')
+      port_forward(5050, 80, name='PgAdmin4 Web')
     ],
     pod_readiness='wait',
     resource_deps=['helm-repo-runix', 'postgresql'],
