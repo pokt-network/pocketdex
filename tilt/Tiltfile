@@ -119,7 +119,7 @@ def pocketdex(
     network=network,
     kustomize_path=commons_kustomize_path,
     kustomize_flags=commons_kustomize_flags,
-    labels=apps_labels
+    labels=tools_labels
   )
 
   deploy_indexer(
