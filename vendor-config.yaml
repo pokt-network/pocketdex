@@ -4,7 +4,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install"
+      script: "yarn install --silent 2>&1 | grep -vE 'YN000|YN0013|YN0060'"
       cleanCache: true
     build:
       required: true
@@ -19,7 +19,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install"
+      script: "yarn install --silent 2>&1 | grep -vE 'YN000|YN0013|YN0060'"
       cleanCache: true
     build:
       required: true
@@ -32,7 +32,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install"
+      script: "yarn install --silent 2>&1 | grep -vE 'YN000|YN0013|YN0060'"
       cleanCache: true
     build:
       required: true

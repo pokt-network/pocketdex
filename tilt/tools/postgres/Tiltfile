@@ -1,0 +1,32 @@
+load('ext://helm_resource', 'helm_resource', 'helm_repo')
+
+def deploy_postgres(
+  values_path,
+  labels=[],
+  helm_repo_labels=[]
+):
+  if not os.path.exists(values_path):
+    fail('postgresql values files does not exists at: {} cwd is {}'.format(values_path, os.getcwd()))
+
+  # Add bitnami repo
+  helm_repo(
+    name='bitnami',
+    url='https://charts.bitnami.com/bitnami',
+    resource_name='helm-repo-bitnami',
+    labels=helm_repo_labels,
+  )
+
+  # Add postgresql helm release
+  helm_resource(
+    name='postgresql',
+    chart='bitnami/postgresql',
+    release_name='postgresql',
+    flags=[
+      '--version=16.7.15',
+      '--values={}'.format(values_path)
+    ],
+    port_forwards=['5432:5432'],
+    pod_readiness='wait',
+    resource_deps=['helm-repo-bitnami'],
+    labels=labels,
+  )

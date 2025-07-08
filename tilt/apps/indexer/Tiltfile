@@ -1,0 +1,120 @@
+load('ext://restart_process', 'docker_build_with_restart')
+load('../../utils.Tiltfile', 'inject_env_vars', 'inject_args', 'extract_env_and_args')
+load('../../cons.Tiltfile', 'localnet', 'mainnet')
+
+def deploy_indexer(
+  network=mainnet,
+  # node_options: ""
+  # block_batch_size: ""
+  # endpoint: ""
+  # chain_id: ""
+  # start_block: ""
+  # page_limit: ""
+  # db_batch_size: ""
+  # db_bulk_concurrency: ""
+  # pg_pool: {
+  #   min: "",
+  #   max: "",
+  #   acquire: "",
+  #   idle: "",
+  #   evict: ""
+  # }
+  params_overwrite={},
+  kustomize_path='./tilt/apps/indexer',
+  # Ref to: https://docs.tilt.dev/api.html#api.kustomize
+  # use this to pass things like: ['--load-restrictor LoadRestrictionsNone, '--enable-helm']
+  kustomize_flags=[],
+  # Docker build related params
+  dockerfile_path='../../docker/indexer.dockerfile',
+  context_path='../../../',
+  resource_deps=[],
+  labels=[]
+):
+  kustomize_path = os.path.join(kustomize_path, 'overlays', network)
+
+  resources = decode_yaml_stream(kustomize(kustomize_path, flags=kustomize_flags))
+
+  target_kind = 'Deployment'
+  target_name= 'indexer'
+  container_name='indexer'
+
+  # replace value with params
+  envs, args = extract_env_and_args(params_overwrite)
+
+  envs['NODE_ENV'] = 'development'
+
+  # modify env variables
+  resources = inject_env_vars(
+    resources,
+    target_kind=target_kind,
+    target_name=target_name,
+    container_name=container_name,
+    env_vars=envs
+  )
+
+  # modify args
+  resources = inject_args(
+      resources,
+      target_kind=target_kind,
+      target_name=target_name,
+      container_name=container_name,
+      new_args=args
+  )
+
+  # load the right kustomization
+  k8s_yaml(encode_yaml_stream(resources), allow_duplicates=False)
+
+  live_updates = [
+    sync(os.path.abspath(os.path.join(context_path, 'src')), '/home/app/src'),
+    sync(os.path.abspath(os.path.join(context_path, 'project.ts')), '/home/app/project.ts'),
+    sync(os.path.abspath(os.path.join(context_path, 'schema.graphql')), '/home/app/schema.graphql')
+  ]
+
+  dotenv_file = os.path.abspath(os.path.join(context_path, '.env'))
+  if os.path.exists(dotenv_file):
+    # this helps to ensure it is reloaded when we run this from pocketdex repo
+    live_updates.append(sync(dotenv_file, '/home/app/.env'))
+
+  # https://github.com/tilt-dev/tilt-extensions/tree/master/restart_process#when-to-use
+  # Use this extension when you have an image and you want to re-execute its entrypoint/command as part of a live_update.
+  # This is exactly what we want, because endpoint, chain_id and others will update the yaml file
+  docker_build(
+    ref='localhost:5001/indexer', # this image name allow us use local registry to speedup image build/load
+    dockerfile=dockerfile_path,
+    context=context_path,
+    build_args={
+      "BUILD_MODE": "development"
+    },
+    ignore = [
+      os.path.join(context_path, '*.md'),
+      os.path.join(context_path, 'docs'),
+      os.path.join(context_path, 'node_modules'), # root
+      os.path.join(context_path, 'vendor/**/node_modules'), # vendor root
+      os.path.join(context_path,'vendor/**/packages/**/node_modules') # vendor packages root
+    ],
+    live_update=live_updates
+  )
+
+  rs_deps = ['postgresql', 'commons']
+
+  if network == localnet:
+    rs_deps.append('static-server')
+
+  if len(resource_deps) > 0:
+    for resource in resource_deps:
+      rs_deps.append(resource)
+
+  # tag and set dependencies to indexer resources
+  k8s_resource(
+    workload='indexer',
+    labels=labels,
+    resource_deps=rs_deps,
+    port_forwards=[
+      port_forward(3001, 3000, name='Indexer Admin')
+    ],
+    links=[
+      link('https://subquery.network/doc/indexer/welcome.html', 'SubQuery Indexer SDK'),
+    ]
+  )
+
+

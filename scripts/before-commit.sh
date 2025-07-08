@@ -8,14 +8,8 @@ set -e
 
 . scripts/shared.sh
 
-info_log "Building development for AMD64"
-docker buildx build -f docker/dev-node.dockerfile -t pocket-network/pocketdex:development --platform=linux/amd64 .
-
-info_log "Building development for ARM64"
-docker buildx build -f docker/dev-node.dockerfile -t pocket-network/pocketdex:development --platform=linux/arm64 .
-
 info_log "Building production for AMD64"
-docker buildx build -f docker/node.dockerfile -t pocket-network/pocketdex:development --platform=linux/amd64 .
+docker buildx build -f tilt/docker/indexer.dockerfile --build-arg BUILD_MODE=production --platform=linux/amd64 .
 
 info_log "Building production for ARM64"
-docker buildx build -f docker/node.dockerfile -t pocket-network/pocketdex:development --platform=linux/arm64 .
+docker buildx build -f tilt/docker/indexer.dockerfile --build-arg BUILD_MODE=production --platform=linux/arm64 .

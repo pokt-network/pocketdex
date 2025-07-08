@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indexer
+  labels:
+    app: explorer
+    component: indexer
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: explorer
+      component: indexer
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: explorer
+        component: indexer
+    spec:
+      containers:
+        - name: indexer
+          args:
+            - --subscription
+            - --unfinalized-blocks=false
+            - --allow-schema-migration
+            - --timeout=60000
+            - --store-cache-async=false
+            - --enable-cache=false
+            - --kyve-endpoint=false
+            - --query-limit=10000
+            - --pg-pool-min=50
+            - --pg-pool-max=75
+            - --pg-pool-acquire=5000
+            - --pg-pool-idle=10000
+            - --pg-pool-evict=15000
+          env:
+            # Database variables
+            - name: DB_SCHEMA
+              valueFrom:
+                secretKeyRef:
+                  key: "schema"
+                  name: "db-credentials"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  key: "user"
+                  name: "db-credentials"
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  key: "password"
+                  name: "db-credentials"
+            - name: DB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  key: "database"
+                  name: "db-credentials"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  key: "host"
+                  name: "db-credentials"
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  key: "port"
+                  name: "db-credentials"
+            # This one is set high since there are main/beta blocks up to 2GB
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=16384"
+            - name: NODE_ENV
+              value: "production"
+            - name: ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  key: "rpc_endpoint"
+                  name: "pokt-shannon"
+            - name: CHAIN_ID
+              valueFrom:
+                configMapKeyRef:
+                  key: "chain_id"
+                  name: "pokt-shannon"
+            - name: BATCH_SIZE
+              value: "1"
+            - name: START_BLOCK
+              value: "1"
+            - name: POCKETDEX_DB_BATCH_SIZE
+              value: "10000"
+            - name: POCKETDEX_DB_PAGE_LIMIT
+              value: "10000"
+            - name: POCKETDEX_DB_BULK_WRITE_CONCURRENCY
+              value: "10"
+            - name: POCKETDEX_GENESIS
+              valueFrom:
+                configMapKeyRef:
+                  key: "genesis"
+                  name: "pokt-shannon"
+          image: localhost:5001/indexer
+          imagePullPolicy: IfNotPresent
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 20

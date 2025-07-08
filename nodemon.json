@@ -19,5 +19,7 @@
   ],
   "ext": "ts,proto,graphql",
   "legacyWatch": true,
+  "restartable": "rs",
+  "signal": "SIGTERM",
   "delay": 2000
 }

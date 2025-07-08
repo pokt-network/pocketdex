@@ -1,0 +1,24 @@
+def deploy_query(
+  network='localnet',
+  kustomize_path='./tilt/apps/query',
+  # Ref to: https://docs.tilt.dev/api.html#api.kustomize
+  # use this to pass things like: ['--load-restrictor LoadRestrictionsNone, '--enable-helm']
+  kustomize_flags=[],
+  labels=[]
+):
+  kustomize_path = os.path.join(kustomize_path, 'overlays', network)
+  # load the right kustomization
+  k8s_yaml(kustomize(kustomize_path, flags=kustomize_flags))
+
+  # tag resources
+  k8s_resource(
+    workload='query',
+    resource_deps=['postgresql', 'commons', 'indexer'],
+    labels=labels,
+    port_forwards=[
+      port_forward(3000, 3000, name='GraphiQL Playground')
+    ],
+    links=[
+      link('https://github.com/graphql/graphiql/blob/main/packages/graphiql/README.md', 'GraphiQL Playground Docs'),
+    ]
+  )

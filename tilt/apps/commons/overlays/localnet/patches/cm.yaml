@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pokt-shannon
+data:
+  chain_id: "pocket"
+  # localnet genesis file - this avoids mount file
+  genesis: "http://static-server.default.svc.cluster.local/genesis.json"
+  rpc_endpoint: "http://validator-pocket-validator.default.svc.cluster.local:26657"

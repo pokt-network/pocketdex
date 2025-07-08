@@ -3,6 +3,8 @@ set -e
 
 . scripts/shared.sh
 
+echo "Entrypoint Args: $@"
+
 # prepare the env variables needed for subql node in a previous step to then based on WATCH env
 # attach the rest of the command
 # NOTE: this is needed because we exec the command with su - app which start a new session where the available
@@ -51,14 +53,14 @@ EOF
     info_log "NODE_ENV is set to 'development'. Running with Hot-Reload..."
 
     exec="./scripts/watch-exec.sh $@"
-    if ! jq --arg value "$exec" '. + {"exec": $value }' /app/nodemon.json > /tmp/temp.json; then
+    if ! jq --arg value "$exec" '. + {"exec": $value }' /home/app/nodemon.json > /tmp/temp.json; then
         error_log "Unable to inject exec command to nodemon.json" >&2
         exit 1
     fi
 
-    mv /tmp/temp.json /app/nodemon.json
+    mv /tmp/temp.json /home/app/nodemon.json
 
-    cmd="$cmd yarn exec nodemon --config nodemon.json"
+    cmd="$cmd yarn exec nodemon --exitcrash --config nodemon.json"
   else
     info_log "NODE_ENV is $NODE_ENV. Running the application without nodemon..."
     # move the dist folder to the mounted folder in run time

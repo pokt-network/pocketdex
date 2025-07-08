@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pokt-shannon
+data:
+  chain_id: "pocket"
+  genesis: "https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/mainnet/genesis.json"
+  rpc_endpoint: "https://shannon-grove-rpc.mainnet.poktroll.com"

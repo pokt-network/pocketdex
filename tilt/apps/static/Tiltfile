@@ -1,0 +1,29 @@
+load('ext://configmap', 'configmap_create')
+
+def deploy_static_server(
+  network='localnet',
+  kustomize_path='./tilt/apps/commons',
+  # Ref to: https://docs.tilt.dev/api.html#api.kustomize
+  # use this to pass things like: ['--load-restrictor LoadRestrictionsNone, '--enable-helm']
+  kustomize_flags=[],
+  genesis_file_path='./tilt/genesis.json',
+  labels=[]
+):
+  kustomize_path = os.path.join(kustomize_path, 'overlays', network)
+  # load the right kustomization
+  k8s_yaml(kustomize(kustomize_path, flags=kustomize_flags))
+
+  # create the configmap with the genesis file on it
+  configmap_create(
+      name='static-server',
+      # allow genesis.json been a path from env?
+      from_file=['genesis.json={}'.format(genesis_file_path)],
+  )
+
+  # tag resources
+  k8s_resource(
+    workload='static-server',
+    objects=['static-server:ConfigMap:default'],
+    labels=labels
+  )
+

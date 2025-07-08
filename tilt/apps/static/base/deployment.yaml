@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: static-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: static-server
+  template:
+    metadata:
+      labels:
+        app: static-server
+    spec:
+      containers:
+        - name: static
+          image: nginx:alpine
+          volumeMounts:
+            - name: config-volume
+              mountPath: /usr/share/nginx/html/genesis.json
+              subPath: genesis.json
+          ports:
+            - containerPort: 80
+      volumes:
+        - name: config-volume
+          configMap:
+            name: static-server
