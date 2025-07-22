@@ -57,11 +57,9 @@ export function supplierUnbondingReasonToJSON(object: SupplierUnbondingReason): 
 
 /** EventSupplierStaked is emitted when a supplier stake message is committed onchain. */
 export interface EventSupplierStaked {
-  supplier:
-    | Supplier
-    | undefined;
   /** The session end height of the last session in which the supplier was staked. */
   sessionEndHeight: number;
+  operatorAddress: string;
 }
 
 /**
@@ -112,30 +110,26 @@ export interface EventSupplierUnbondingCanceled {
  */
 export interface EventSupplierServiceConfigActivated {
   /**
-   * supplier contains the complete updated supplier information including the
-   * active service configurations in supplier.Services.
-   */
-  supplier:
-    | Supplier
-    | undefined;
-  /**
    * activation_height indicates the block height at which the new service
    * configurations became active.
    */
   activationHeight: number;
+  operatorAddress: string;
+  /** The Service ID for which the supplier is configured */
+  serviceId: string;
 }
 
 function createBaseEventSupplierStaked(): EventSupplierStaked {
-  return { supplier: undefined, sessionEndHeight: 0 };
+  return { sessionEndHeight: 0, operatorAddress: "" };
 }
 
 export const EventSupplierStaked: MessageFns<EventSupplierStaked> = {
   encode(message: EventSupplierStaked, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.supplier !== undefined) {
-      Supplier.encode(message.supplier, writer.uint32(10).fork()).join();
-    }
     if (message.sessionEndHeight !== 0) {
       writer.uint32(16).int64(message.sessionEndHeight);
+    }
+    if (message.operatorAddress !== "") {
+      writer.uint32(26).string(message.operatorAddress);
     }
     return writer;
   },
@@ -147,20 +141,20 @@ export const EventSupplierStaked: MessageFns<EventSupplierStaked> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.supplier = Supplier.decode(reader, reader.uint32());
-          continue;
-        }
         case 2: {
           if (tag !== 16) {
             break;
           }
 
           message.sessionEndHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.operatorAddress = reader.string();
           continue;
         }
       }
@@ -174,18 +168,18 @@ export const EventSupplierStaked: MessageFns<EventSupplierStaked> = {
 
   fromJSON(object: any): EventSupplierStaked {
     return {
-      supplier: isSet(object.supplier) ? Supplier.fromJSON(object.supplier) : undefined,
       sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
+      operatorAddress: isSet(object.operatorAddress) ? globalThis.String(object.operatorAddress) : "",
     };
   },
 
   toJSON(message: EventSupplierStaked): unknown {
     const obj: any = {};
-    if (message.supplier !== undefined) {
-      obj.supplier = Supplier.toJSON(message.supplier);
-    }
     if (message.sessionEndHeight !== 0) {
       obj.sessionEndHeight = Math.round(message.sessionEndHeight);
+    }
+    if (message.operatorAddress !== "") {
+      obj.operatorAddress = message.operatorAddress;
     }
     return obj;
   },
@@ -195,10 +189,8 @@ export const EventSupplierStaked: MessageFns<EventSupplierStaked> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventSupplierStaked>, I>>(object: I): EventSupplierStaked {
     const message = createBaseEventSupplierStaked();
-    message.supplier = (object.supplier !== undefined && object.supplier !== null)
-      ? Supplier.fromPartial(object.supplier)
-      : undefined;
     message.sessionEndHeight = object.sessionEndHeight ?? 0;
+    message.operatorAddress = object.operatorAddress ?? "";
     return message;
   },
 };
@@ -520,16 +512,19 @@ export const EventSupplierUnbondingCanceled: MessageFns<EventSupplierUnbondingCa
 };
 
 function createBaseEventSupplierServiceConfigActivated(): EventSupplierServiceConfigActivated {
-  return { supplier: undefined, activationHeight: 0 };
+  return { activationHeight: 0, operatorAddress: "", serviceId: "" };
 }
 
 export const EventSupplierServiceConfigActivated: MessageFns<EventSupplierServiceConfigActivated> = {
   encode(message: EventSupplierServiceConfigActivated, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.supplier !== undefined) {
-      Supplier.encode(message.supplier, writer.uint32(10).fork()).join();
-    }
     if (message.activationHeight !== 0) {
       writer.uint32(16).int64(message.activationHeight);
+    }
+    if (message.operatorAddress !== "") {
+      writer.uint32(26).string(message.operatorAddress);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(34).string(message.serviceId);
     }
     return writer;
   },
@@ -541,20 +536,28 @@ export const EventSupplierServiceConfigActivated: MessageFns<EventSupplierServic
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.supplier = Supplier.decode(reader, reader.uint32());
-          continue;
-        }
         case 2: {
           if (tag !== 16) {
             break;
           }
 
           message.activationHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.operatorAddress = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.serviceId = reader.string();
           continue;
         }
       }
@@ -568,18 +571,22 @@ export const EventSupplierServiceConfigActivated: MessageFns<EventSupplierServic
 
   fromJSON(object: any): EventSupplierServiceConfigActivated {
     return {
-      supplier: isSet(object.supplier) ? Supplier.fromJSON(object.supplier) : undefined,
       activationHeight: isSet(object.activationHeight) ? globalThis.Number(object.activationHeight) : 0,
+      operatorAddress: isSet(object.operatorAddress) ? globalThis.String(object.operatorAddress) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
     };
   },
 
   toJSON(message: EventSupplierServiceConfigActivated): unknown {
     const obj: any = {};
-    if (message.supplier !== undefined) {
-      obj.supplier = Supplier.toJSON(message.supplier);
-    }
     if (message.activationHeight !== 0) {
       obj.activationHeight = Math.round(message.activationHeight);
+    }
+    if (message.operatorAddress !== "") {
+      obj.operatorAddress = message.operatorAddress;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
     }
     return obj;
   },
@@ -593,10 +600,9 @@ export const EventSupplierServiceConfigActivated: MessageFns<EventSupplierServic
     object: I,
   ): EventSupplierServiceConfigActivated {
     const message = createBaseEventSupplierServiceConfigActivated();
-    message.supplier = (object.supplier !== undefined && object.supplier !== null)
-      ? Supplier.fromPartial(object.supplier)
-      : undefined;
     message.activationHeight = object.activationHeight ?? 0;
+    message.operatorAddress = object.operatorAddress ?? "";
+    message.serviceId = object.serviceId ?? "";
     return message;
   },
 };

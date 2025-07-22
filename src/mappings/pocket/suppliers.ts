@@ -350,7 +350,7 @@ async function _handleUnstakeSupplierMsg(
 async function _handleEventSupplierServiceConfigActivated(
   event: CosmosEvent,
 ) {
-  let activationHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null;
+  let activationHeight: bigint | null = null, operatorAddress: string | undefined, serviceId: string | undefined;
 
   for (const {key, value} of event.event.attributes) {
     if (key === "activation_height") {
@@ -358,7 +358,11 @@ async function _handleEventSupplierServiceConfigActivated(
     }
 
     if (key === "supplier") {
-      supplierSdk = JSON.parse(value as unknown as string);
+      operatorAddress = (JSON.parse(value as unknown as string) as SupplierSDKType).operator_address;
+    }
+
+    if (key === "operator_address") {
+      operatorAddress = (value as string).replaceAll('"', '');
     }
   }
 
@@ -366,11 +370,27 @@ async function _handleEventSupplierServiceConfigActivated(
     throw new Error(`[handleEventSupplierServiceConfigActivated] activation_height not found in event`);
   }
 
-  if (!supplierSdk) {
-    throw new Error(`[handleEventSupplierServiceConfigActivated] supplier not found in event`);
+  if (!operatorAddress) {
+    throw new Error(`[handleEventSupplierServiceConfigActivated] operatorAddress not found in event`);
   }
 
-  const services = await fetchAllSupplierServiceConfigBySupplier(supplierSdk.operator_address);
+  let services: Array<SupplierServiceConfig> = []
+
+  if (serviceId) {
+    const service = await SupplierServiceConfig.get(
+      getStakeServiceId(operatorAddress, serviceId)
+    )
+
+    if (service) {
+      services = [
+        service
+      ]
+    }
+  }
+
+  if (services.length === 0) {
+    services = await fetchAllSupplierServiceConfigBySupplier(operatorAddress);
+  }
 
   const eventId = getEventId(event);
 

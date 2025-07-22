@@ -84,3 +84,63 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;`
 }
+
+export function getRewardsBySuppliersAndTime(dbSchema: string): string {
+  return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_rewards_of_addresses_by_suppliers_and_time(
+    addresses TEXT[],
+	  supplier_addresses TEXT[],
+    start_date TIMESTAMP,
+    end_date TIMESTAMP
+)
+RETURNS NUMERIC AS $$
+BEGIN
+    RETURN (
+        SELECT COALESCE(SUM(t.amount), 0)::NUMERIC
+        FROM ${dbSchema}.event_claim_settleds e
+        INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
+		    INNER JOIN ${dbSchema}.mod_to_acct_transfers t ON e.id = t.event_claim_settled_id
+        WHERE e.supplier_id = ANY(supplier_addresses) AND
+			    t.recipient_id = ANY(addresses) AND 
+			    b.timestamp BETWEEN start_date AND end_date
+    );
+END;
+$$ LANGUAGE plpgsql STABLE;`
+}
+
+export function getRewardsBySuppliersAndTimeGroupByDateAndAddress(dbSchema: string): string {
+  return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_rewards_by_suppliers_and_time_group_by_address_and_date(
+    addresses TEXT[],
+    supplier_addresses TEXT[],
+    start_date TIMESTAMP,
+    end_date TIMESTAMP,
+    trunc_interval TEXT  -- 'day' or 'hour'
+)
+RETURNS JSON AS $$
+BEGIN
+    RETURN (
+        SELECT json_agg(
+            json_build_object(
+                'address', address,
+                'date_truncated', date_truncated,
+                'total_amount', total_amount
+            )
+            ORDER BY date_truncated
+        )
+        FROM (
+            SELECT 
+                t.recipient_id as address,
+                date_trunc(trunc_interval, b.timestamp) AS date_truncated,
+                SUM(t.amount)::NUMERIC AS total_amount
+            FROM ${dbSchema}.event_claim_settleds e
+            INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
+            INNER JOIN ${dbSchema}.mod_to_acct_transfers t ON e.id = t.event_claim_settled_id
+            WHERE e.supplier_id = ANY(supplier_addresses) AND
+                t.recipient_id = ANY(addresses) AND
+                b.timestamp BETWEEN start_date AND end_date
+              GROUP BY address, date_truncated
+              ORDER BY date_truncated
+        ) subquery
+    );
+END;
+$$ LANGUAGE plpgsql STABLE;`
+}

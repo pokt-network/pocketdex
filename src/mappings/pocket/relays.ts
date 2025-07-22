@@ -2,6 +2,8 @@ import {
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
+import isEmpty from "lodash/isEmpty";
+import { claimProofStatusFromJSON } from "../../client/pocket/proof/types";
 import { claimExpirationReasonFromJSON } from "../../client/pocket/tokenomics/event";
 import {
   ClaimExpirationReason,
@@ -34,7 +36,7 @@ import {
   ProofRequirementReasonSDKType,
   ProofSDKType,
 } from "../../types/proto-interfaces/pocket/proof/types";
-import { ClaimExpirationReasonSDKType } from "../../types/proto-interfaces/pocket/tokenomics/event";
+import { ClaimExpirationReasonSDKType, } from "../../types/proto-interfaces/pocket/tokenomics/event";
 import {
   ClaimSettlementResultSDKType,
   settlementOpReasonFromJSON,
@@ -42,7 +44,7 @@ import {
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
 import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId, getEventId, messageId } from "../utils/ids";
-import { parseJson, stringify } from "../utils/json";
+import { stringify } from "../utils/json";
 import { getDenomAndAmount } from "../utils/primitives";
 
 // this can return undefined because older events do not have this attribute
@@ -163,6 +165,10 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     // @ts-ignore
     proofMissingPenalty: CoinSDKType = {};
 
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  const newClaim: ClaimSDKType = { session_header: {}}
+
   for (const attribute of attributes) {
     if (attribute.key === "proof") {
       proof = JSON.parse(attribute.value as string);
@@ -170,6 +176,29 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
 
     if (attribute.key === "claim") {
       claim = JSON.parse(attribute.value as string);
+    }
+
+    if (attribute.key === "supplier_operator_address") {
+      newClaim.supplier_operator_address = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "service_id") {
+      newClaim.session_header!.service_id = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "application_address") {
+      newClaim.session_header!.application_address = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "session_end_block_height") {
+      newClaim.session_header!.session_end_block_height = BigInt(parseAttribute(attribute.value));
+      newClaim.session_header!.session_start_block_height = BigInt(0);
+      newClaim.session_header!.session_id = "";
+    }
+
+    if (attribute.key === "claim_proof_status_int") {
+      newClaim.proof_validation_status = claimProofStatusFromJSON(Number(parseAttribute(attribute.value as string)))
+      proofValidationStatus = getClaimProofStatusFromSDK(newClaim.proof_validation_status);
     }
 
     if (attribute.key === "num_relays") {
@@ -209,8 +238,12 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
       proofValidationStatus = getClaimProofStatusFromSDK(parseAttribute(attribute.value as string));
     }
 
-    if (attribute.key === "proof_requirement") {
-      switch (proofRequirementReasonFromJSON(parseAttribute(attribute.value))) {
+    if (["proof_requirement_int", "proof_requirement"].includes(attribute.key as string)) {
+      const parsed = parseAttribute(attribute.value as string);
+
+      const value = attribute.key === "proof_requirement_int" ? parseInt(parsed) : parsed;
+
+      switch (proofRequirementReasonFromJSON(value)) {
         case ProofRequirementReasonSDKType.THRESHOLD:
           proofRequirement = ProofRequirementReason.THRESHOLD;
           break;
@@ -242,6 +275,10 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
         }
       }
     }
+  }
+
+  if (isEmpty(claim) && Object.keys(newClaim).length > 1) {
+    claim = newClaim;
   }
 
   return {
@@ -279,13 +316,8 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateCla
     numRelays
   } = getAttributes(eventClaimCreated.attributes)
 
-  const shared = {
-
-  };
-
   return {
     id: messageId(msg),
-    ...shared,
     transactionId: msg.tx.hash,
     blockId: getBlockId(msg.block),
     supplierId: supplierOperatorAddress,
@@ -341,6 +373,22 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
   const eventId = getEventId(event)
   const blockId = getBlockId(event.block)
 
+  let modToAcctTransfers: Array<ModToAcctTransferProps> = []
+
+  if (settlementResult?.mod_to_acct_transfers) {
+    modToAcctTransfers = settlementResult.mod_to_acct_transfers.map((item, index) => ({
+      id: `${eventId}-${index}`,
+      blockId,
+      eventClaimSettledId: eventId,
+      senderModule: item.SenderModule,
+      recipientId: item.RecipientAddress,
+      amount: BigInt(item.coin.amount),
+      denom: item.coin.denom,
+      opReason: getSettlementOpReasonFromSDK(item.op_reason),
+      relayId: '',
+    })) || []
+  }
+
   return [
     {
       supplierId: supplier_operator_address,
@@ -380,17 +428,7 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
       })) || [],
       rootHash: undefined,
     },
-    settlementResult?.mod_to_acct_transfers?.map((item, index) => ({
-      id: `${eventId}-${index}`,
-      blockId,
-      eventClaimSettledId: eventId,
-      senderModule: item.SenderModule,
-      recipientId: item.RecipientAddress,
-      amount: BigInt(item.coin.amount),
-      denom: item.coin.denom,
-      opReason: getSettlementOpReasonFromSDK(item.op_reason),
-      relayId: '',
-    })) || [],
+    modToAcctTransfers,
   ];
 }
 
@@ -650,14 +688,8 @@ async function _handleEventSupplierSlashed(event: CosmosEvent) {
     proofMissingPenalty,
   } = getAttributes(event.event.attributes);
 
-  if (!claim) {
+  if (!claim || !claim.session_header || Object.keys(claim).length === 0) {
     logger.warn(`[handleEventSupplierSlashed] claim not found in event, trying to handle with previous version`);
-    await _handleOldEventSupplierSlashed(event);
-    return;
-  }
-
-  if (!claim.session_header) {
-    logger.warn(`[handleEventSupplierSlashed] session_header not found in event, trying to handle with previous version`);
     await _handleOldEventSupplierSlashed(event);
     return;
   }
@@ -679,9 +711,9 @@ async function _handleEventSupplierSlashed(event: CosmosEvent) {
       // TODO: Create entity for session header
       applicationId: claim.session_header.application_address,
       serviceId: claim.session_header.service_id,
-      sessionId: claim.session_header.session_id,
-      sessionEndHeight: claim.session_header.session_end_block_height,
-      sessionStartHeight: claim.session_header.session_start_block_height,
+      sessionId: claim.session_header.session_id || "",
+      sessionEndHeight: BigInt(claim.session_header.session_end_block_height || "0"),
+      sessionStartHeight: BigInt(claim.session_header.session_start_block_height || "0"),
       blockId: getBlockId(event.block),
       eventId: getEventId(event),
       proofMissingPenalty: BigInt(proofMissingPenalty.amount),
@@ -734,7 +766,7 @@ function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidit
     applicationId: sessionHeader.application_address,
     serviceId: sessionHeader.service_id,
     sessionId: sessionHeader.session_id,
-    sessionStartHeight: BigInt(sessionHeader.session_start_block_height.toString()),
+    sessionStartHeight: BigInt(sessionHeader.session_start_block_height?.toString() || "0"),
     sessionEndHeight: BigInt(sessionHeader.session_end_block_height.toString()),
     proofValidationStatus: validationStatus,
     failureReason: failureReason,
