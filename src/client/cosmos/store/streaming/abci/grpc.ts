@@ -6,15 +6,15 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { RequestFinalizeBlock, ResponseCommit, ResponseFinalizeBlock } from "../../../../tendermint/abci/types";
+import { CommitResponse, FinalizeBlockRequest, FinalizeBlockResponse } from "../../../../cometbft/abci/v2/types";
 import { StoreKVPair } from "../../v1beta1/listening";
 
 export const protobufPackage = "cosmos.store.streaming.abci";
 
 /** ListenEndBlockRequest is the request type for the ListenEndBlock RPC method */
 export interface ListenFinalizeBlockRequest {
-  req: RequestFinalizeBlock | undefined;
-  res: ResponseFinalizeBlock | undefined;
+  req: FinalizeBlockRequest | undefined;
+  res: FinalizeBlockResponse | undefined;
 }
 
 /** ListenEndBlockResponse is the response type for the ListenEndBlock RPC method */
@@ -25,7 +25,7 @@ export interface ListenFinalizeBlockResponse {
 export interface ListenCommitRequest {
   /** explicitly pass in block height as ResponseCommit does not contain this info */
   blockHeight: number;
-  res: ResponseCommit | undefined;
+  res: CommitResponse | undefined;
   changeSet: StoreKVPair[];
 }
 
@@ -40,10 +40,10 @@ function createBaseListenFinalizeBlockRequest(): ListenFinalizeBlockRequest {
 export const ListenFinalizeBlockRequest: MessageFns<ListenFinalizeBlockRequest> = {
   encode(message: ListenFinalizeBlockRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.req !== undefined) {
-      RequestFinalizeBlock.encode(message.req, writer.uint32(10).fork()).join();
+      FinalizeBlockRequest.encode(message.req, writer.uint32(10).fork()).join();
     }
     if (message.res !== undefined) {
-      ResponseFinalizeBlock.encode(message.res, writer.uint32(18).fork()).join();
+      FinalizeBlockResponse.encode(message.res, writer.uint32(18).fork()).join();
     }
     return writer;
   },
@@ -60,7 +60,7 @@ export const ListenFinalizeBlockRequest: MessageFns<ListenFinalizeBlockRequest> 
             break;
           }
 
-          message.req = RequestFinalizeBlock.decode(reader, reader.uint32());
+          message.req = FinalizeBlockRequest.decode(reader, reader.uint32());
           continue;
         }
         case 2: {
@@ -68,7 +68,7 @@ export const ListenFinalizeBlockRequest: MessageFns<ListenFinalizeBlockRequest> 
             break;
           }
 
-          message.res = ResponseFinalizeBlock.decode(reader, reader.uint32());
+          message.res = FinalizeBlockResponse.decode(reader, reader.uint32());
           continue;
         }
       }
@@ -82,18 +82,18 @@ export const ListenFinalizeBlockRequest: MessageFns<ListenFinalizeBlockRequest> 
 
   fromJSON(object: any): ListenFinalizeBlockRequest {
     return {
-      req: isSet(object.req) ? RequestFinalizeBlock.fromJSON(object.req) : undefined,
-      res: isSet(object.res) ? ResponseFinalizeBlock.fromJSON(object.res) : undefined,
+      req: isSet(object.req) ? FinalizeBlockRequest.fromJSON(object.req) : undefined,
+      res: isSet(object.res) ? FinalizeBlockResponse.fromJSON(object.res) : undefined,
     };
   },
 
   toJSON(message: ListenFinalizeBlockRequest): unknown {
     const obj: any = {};
     if (message.req !== undefined) {
-      obj.req = RequestFinalizeBlock.toJSON(message.req);
+      obj.req = FinalizeBlockRequest.toJSON(message.req);
     }
     if (message.res !== undefined) {
-      obj.res = ResponseFinalizeBlock.toJSON(message.res);
+      obj.res = FinalizeBlockResponse.toJSON(message.res);
     }
     return obj;
   },
@@ -104,10 +104,10 @@ export const ListenFinalizeBlockRequest: MessageFns<ListenFinalizeBlockRequest> 
   fromPartial<I extends Exact<DeepPartial<ListenFinalizeBlockRequest>, I>>(object: I): ListenFinalizeBlockRequest {
     const message = createBaseListenFinalizeBlockRequest();
     message.req = (object.req !== undefined && object.req !== null)
-      ? RequestFinalizeBlock.fromPartial(object.req)
+      ? FinalizeBlockRequest.fromPartial(object.req)
       : undefined;
     message.res = (object.res !== undefined && object.res !== null)
-      ? ResponseFinalizeBlock.fromPartial(object.res)
+      ? FinalizeBlockResponse.fromPartial(object.res)
       : undefined;
     return message;
   },
@@ -166,7 +166,7 @@ export const ListenCommitRequest: MessageFns<ListenCommitRequest> = {
       writer.uint32(8).int64(message.blockHeight);
     }
     if (message.res !== undefined) {
-      ResponseCommit.encode(message.res, writer.uint32(18).fork()).join();
+      CommitResponse.encode(message.res, writer.uint32(18).fork()).join();
     }
     for (const v of message.changeSet) {
       StoreKVPair.encode(v!, writer.uint32(26).fork()).join();
@@ -194,7 +194,7 @@ export const ListenCommitRequest: MessageFns<ListenCommitRequest> = {
             break;
           }
 
-          message.res = ResponseCommit.decode(reader, reader.uint32());
+          message.res = CommitResponse.decode(reader, reader.uint32());
           continue;
         }
         case 3: {
@@ -217,7 +217,7 @@ export const ListenCommitRequest: MessageFns<ListenCommitRequest> = {
   fromJSON(object: any): ListenCommitRequest {
     return {
       blockHeight: isSet(object.blockHeight) ? globalThis.Number(object.blockHeight) : 0,
-      res: isSet(object.res) ? ResponseCommit.fromJSON(object.res) : undefined,
+      res: isSet(object.res) ? CommitResponse.fromJSON(object.res) : undefined,
       changeSet: globalThis.Array.isArray(object?.changeSet)
         ? object.changeSet.map((e: any) => StoreKVPair.fromJSON(e))
         : [],
@@ -230,7 +230,7 @@ export const ListenCommitRequest: MessageFns<ListenCommitRequest> = {
       obj.blockHeight = Math.round(message.blockHeight);
     }
     if (message.res !== undefined) {
-      obj.res = ResponseCommit.toJSON(message.res);
+      obj.res = CommitResponse.toJSON(message.res);
     }
     if (message.changeSet?.length) {
       obj.changeSet = message.changeSet.map((e) => StoreKVPair.toJSON(e));
@@ -245,7 +245,7 @@ export const ListenCommitRequest: MessageFns<ListenCommitRequest> = {
     const message = createBaseListenCommitRequest();
     message.blockHeight = object.blockHeight ?? 0;
     message.res = (object.res !== undefined && object.res !== null)
-      ? ResponseCommit.fromPartial(object.res)
+      ? CommitResponse.fromPartial(object.res)
       : undefined;
     message.changeSet = object.changeSet?.map((e) => StoreKVPair.fromPartial(e)) || [];
     return message;

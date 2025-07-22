@@ -6,8 +6,7 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Coin } from "../../cosmos/base/v1beta1/coin";
-import { Claim, ClaimProofStatus, claimProofStatusFromJSON, claimProofStatusToJSON, Proof } from "./types";
+import { Claim } from "./types";
 
 export const protobufPackage = "pocket.proof";
 
@@ -16,7 +15,7 @@ export interface EventClaimCreated {
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
 }
 
 /** TODO_TEST: Add coverage for claim updates. */
@@ -25,26 +24,25 @@ export interface EventClaimUpdated {
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
 }
 
+/** Next index: 8 */
 export interface EventProofSubmitted {
   claim: Claim | undefined;
-  proof: Proof | undefined;
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
 }
 
 /** TODO_TEST: Add coverage for proof updates. */
 export interface EventProofUpdated {
   claim: Claim | undefined;
-  proof: Proof | undefined;
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
 }
 
 /**
@@ -52,9 +50,8 @@ export interface EventProofUpdated {
  * EndBlocker.
  */
 export interface EventProofValidityChecked {
-  proof: Proof | undefined;
+  claim: Claim | undefined;
   blockHeight: number;
-  proofStatus: ClaimProofStatus;
   /**
    * reason is the string representation of the error that led to the proof being
    * marked as invalid (e.g. "invalid closest merkle proof", "invalid relay request signature")
@@ -63,13 +60,7 @@ export interface EventProofValidityChecked {
 }
 
 function createBaseEventClaimCreated(): EventClaimCreated {
-  return {
-    claim: undefined,
-    numRelays: 0,
-    numClaimedComputeUnits: 0,
-    numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
-  };
+  return { claim: undefined, numRelays: 0, numClaimedComputeUnits: 0, numEstimatedComputeUnits: 0, claimedUpokt: "" };
 }
 
 export const EventClaimCreated: MessageFns<EventClaimCreated> = {
@@ -86,8 +77,8 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
     }
     return writer;
   },
@@ -131,12 +122,12 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
           continue;
         }
       }
@@ -158,7 +149,7 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
     };
   },
 
@@ -176,8 +167,8 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
     }
     return obj;
   },
@@ -191,21 +182,13 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
     return message;
   },
 };
 
 function createBaseEventClaimUpdated(): EventClaimUpdated {
-  return {
-    claim: undefined,
-    numRelays: 0,
-    numClaimedComputeUnits: 0,
-    numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
-  };
+  return { claim: undefined, numRelays: 0, numClaimedComputeUnits: 0, numEstimatedComputeUnits: 0, claimedUpokt: "" };
 }
 
 export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
@@ -222,8 +205,8 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
     }
     return writer;
   },
@@ -267,12 +250,12 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
           continue;
         }
       }
@@ -294,7 +277,7 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
     };
   },
 
@@ -312,8 +295,8 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
     }
     return obj;
   },
@@ -327,31 +310,19 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
     return message;
   },
 };
 
 function createBaseEventProofSubmitted(): EventProofSubmitted {
-  return {
-    claim: undefined,
-    proof: undefined,
-    numRelays: 0,
-    numClaimedComputeUnits: 0,
-    numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
-  };
+  return { claim: undefined, numRelays: 0, numClaimedComputeUnits: 0, numEstimatedComputeUnits: 0, claimedUpokt: "" };
 }
 
 export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
   encode(message: EventProofSubmitted, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.claim !== undefined) {
       Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
-    if (message.proof !== undefined) {
-      Proof.encode(message.proof, writer.uint32(18).fork()).join();
     }
     if (message.numRelays !== 0) {
       writer.uint32(24).uint64(message.numRelays);
@@ -362,8 +333,8 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
     }
     return writer;
   },
@@ -383,14 +354,6 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
           message.claim = Claim.decode(reader, reader.uint32());
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.proof = Proof.decode(reader, reader.uint32());
-          continue;
-        }
         case 3: {
           if (tag !== 24) {
             break;
@@ -415,12 +378,12 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
           continue;
         }
       }
@@ -435,7 +398,6 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
   fromJSON(object: any): EventProofSubmitted {
     return {
       claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
-      proof: isSet(object.proof) ? Proof.fromJSON(object.proof) : undefined,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
         ? globalThis.Number(object.numClaimedComputeUnits)
@@ -443,7 +405,7 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
     };
   },
 
@@ -451,9 +413,6 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
     const obj: any = {};
     if (message.claim !== undefined) {
       obj.claim = Claim.toJSON(message.claim);
-    }
-    if (message.proof !== undefined) {
-      obj.proof = Proof.toJSON(message.proof);
     }
     if (message.numRelays !== 0) {
       obj.numRelays = Math.round(message.numRelays);
@@ -464,8 +423,8 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
     }
     return obj;
   },
@@ -476,35 +435,22 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
   fromPartial<I extends Exact<DeepPartial<EventProofSubmitted>, I>>(object: I): EventProofSubmitted {
     const message = createBaseEventProofSubmitted();
     message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
-    message.proof = (object.proof !== undefined && object.proof !== null) ? Proof.fromPartial(object.proof) : undefined;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
     return message;
   },
 };
 
 function createBaseEventProofUpdated(): EventProofUpdated {
-  return {
-    claim: undefined,
-    proof: undefined,
-    numRelays: 0,
-    numClaimedComputeUnits: 0,
-    numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
-  };
+  return { claim: undefined, numRelays: 0, numClaimedComputeUnits: 0, numEstimatedComputeUnits: 0, claimedUpokt: "" };
 }
 
 export const EventProofUpdated: MessageFns<EventProofUpdated> = {
   encode(message: EventProofUpdated, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.claim !== undefined) {
       Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
-    if (message.proof !== undefined) {
-      Proof.encode(message.proof, writer.uint32(18).fork()).join();
     }
     if (message.numRelays !== 0) {
       writer.uint32(24).uint64(message.numRelays);
@@ -515,8 +461,8 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
     }
     return writer;
   },
@@ -536,14 +482,6 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
           message.claim = Claim.decode(reader, reader.uint32());
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.proof = Proof.decode(reader, reader.uint32());
-          continue;
-        }
         case 3: {
           if (tag !== 24) {
             break;
@@ -568,12 +506,12 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
           continue;
         }
       }
@@ -588,7 +526,6 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
   fromJSON(object: any): EventProofUpdated {
     return {
       claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
-      proof: isSet(object.proof) ? Proof.fromJSON(object.proof) : undefined,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
         ? globalThis.Number(object.numClaimedComputeUnits)
@@ -596,7 +533,7 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
     };
   },
 
@@ -604,9 +541,6 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
     const obj: any = {};
     if (message.claim !== undefined) {
       obj.claim = Claim.toJSON(message.claim);
-    }
-    if (message.proof !== undefined) {
-      obj.proof = Proof.toJSON(message.proof);
     }
     if (message.numRelays !== 0) {
       obj.numRelays = Math.round(message.numRelays);
@@ -617,8 +551,8 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
     }
     return obj;
   },
@@ -629,31 +563,25 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
   fromPartial<I extends Exact<DeepPartial<EventProofUpdated>, I>>(object: I): EventProofUpdated {
     const message = createBaseEventProofUpdated();
     message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
-    message.proof = (object.proof !== undefined && object.proof !== null) ? Proof.fromPartial(object.proof) : undefined;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
     return message;
   },
 };
 
 function createBaseEventProofValidityChecked(): EventProofValidityChecked {
-  return { proof: undefined, blockHeight: 0, proofStatus: 0, failureReason: "" };
+  return { claim: undefined, blockHeight: 0, failureReason: "" };
 }
 
 export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = {
   encode(message: EventProofValidityChecked, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.proof !== undefined) {
-      Proof.encode(message.proof, writer.uint32(10).fork()).join();
+    if (message.claim !== undefined) {
+      Claim.encode(message.claim, writer.uint32(42).fork()).join();
     }
     if (message.blockHeight !== 0) {
       writer.uint32(16).uint64(message.blockHeight);
-    }
-    if (message.proofStatus !== 0) {
-      writer.uint32(24).int32(message.proofStatus);
     }
     if (message.failureReason !== "") {
       writer.uint32(34).string(message.failureReason);
@@ -668,12 +596,12 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
+        case 5: {
+          if (tag !== 42) {
             break;
           }
 
-          message.proof = Proof.decode(reader, reader.uint32());
+          message.claim = Claim.decode(reader, reader.uint32());
           continue;
         }
         case 2: {
@@ -682,14 +610,6 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
           }
 
           message.blockHeight = longToNumber(reader.uint64());
-          continue;
-        }
-        case 3: {
-          if (tag !== 24) {
-            break;
-          }
-
-          message.proofStatus = reader.int32() as any;
           continue;
         }
         case 4: {
@@ -711,23 +631,19 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
 
   fromJSON(object: any): EventProofValidityChecked {
     return {
-      proof: isSet(object.proof) ? Proof.fromJSON(object.proof) : undefined,
+      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
       blockHeight: isSet(object.blockHeight) ? globalThis.Number(object.blockHeight) : 0,
-      proofStatus: isSet(object.proofStatus) ? claimProofStatusFromJSON(object.proofStatus) : 0,
       failureReason: isSet(object.failureReason) ? globalThis.String(object.failureReason) : "",
     };
   },
 
   toJSON(message: EventProofValidityChecked): unknown {
     const obj: any = {};
-    if (message.proof !== undefined) {
-      obj.proof = Proof.toJSON(message.proof);
+    if (message.claim !== undefined) {
+      obj.claim = Claim.toJSON(message.claim);
     }
     if (message.blockHeight !== 0) {
       obj.blockHeight = Math.round(message.blockHeight);
-    }
-    if (message.proofStatus !== 0) {
-      obj.proofStatus = claimProofStatusToJSON(message.proofStatus);
     }
     if (message.failureReason !== "") {
       obj.failureReason = message.failureReason;
@@ -740,9 +656,8 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
   },
   fromPartial<I extends Exact<DeepPartial<EventProofValidityChecked>, I>>(object: I): EventProofValidityChecked {
     const message = createBaseEventProofValidityChecked();
-    message.proof = (object.proof !== undefined && object.proof !== null) ? Proof.fromPartial(object.proof) : undefined;
+    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
     message.blockHeight = object.blockHeight ?? 0;
-    message.proofStatus = object.proofStatus ?? 0;
     message.failureReason = object.failureReason ?? "";
     return message;
   },

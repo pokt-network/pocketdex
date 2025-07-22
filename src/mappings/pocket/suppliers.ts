@@ -43,6 +43,7 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { getDenomAndAmount } from "../utils/primitives";
 import {
   Ed25519,
   pubKeyToAddress,
@@ -235,7 +236,7 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
         }
 
         if (attribute.key === 'claimed_balance') {
-          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+          const coin: CoinSDKType = getDenomAndAmount(attribute.value as string);
 
           balanceCoin = {
             denom: coin.denom,
@@ -248,7 +249,7 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
         }
 
         if (attribute.key === 'claimed_supplier_stake') {
-          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+          const coin: CoinSDKType = getDenomAndAmount(attribute.value as string);
 
           stakeCoin = {
             denom: coin.denom,

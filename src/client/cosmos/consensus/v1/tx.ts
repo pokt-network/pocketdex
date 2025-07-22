@@ -6,7 +6,14 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { ABCIParams, BlockParams, EvidenceParams, ValidatorParams } from "../../../tendermint/types/params";
+import {
+  ABCIParams,
+  BlockParams,
+  EvidenceParams,
+  FeatureParams,
+  SynchronyParams,
+  ValidatorParams,
+} from "../../../cometbft/types/v2/params";
 
 export const protobufPackage = "cosmos.consensus.v1";
 
@@ -23,8 +30,13 @@ export interface MsgUpdateParams {
    */
   block: BlockParams | undefined;
   evidence: EvidenceParams | undefined;
-  validator: ValidatorParams | undefined;
+  validator:
+    | ValidatorParams
+    | undefined;
+  /** @deprecated */
   abci: ABCIParams | undefined;
+  synchrony: SynchronyParams | undefined;
+  feature: FeatureParams | undefined;
 }
 
 /**
@@ -35,7 +47,15 @@ export interface MsgUpdateParamsResponse {
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
-  return { authority: "", block: undefined, evidence: undefined, validator: undefined, abci: undefined };
+  return {
+    authority: "",
+    block: undefined,
+    evidence: undefined,
+    validator: undefined,
+    abci: undefined,
+    synchrony: undefined,
+    feature: undefined,
+  };
 }
 
 export const MsgUpdateParams: MessageFns<MsgUpdateParams> = {
@@ -54,6 +74,12 @@ export const MsgUpdateParams: MessageFns<MsgUpdateParams> = {
     }
     if (message.abci !== undefined) {
       ABCIParams.encode(message.abci, writer.uint32(42).fork()).join();
+    }
+    if (message.synchrony !== undefined) {
+      SynchronyParams.encode(message.synchrony, writer.uint32(50).fork()).join();
+    }
+    if (message.feature !== undefined) {
+      FeatureParams.encode(message.feature, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -105,6 +131,22 @@ export const MsgUpdateParams: MessageFns<MsgUpdateParams> = {
           message.abci = ABCIParams.decode(reader, reader.uint32());
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.synchrony = SynchronyParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.feature = FeatureParams.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -121,6 +163,8 @@ export const MsgUpdateParams: MessageFns<MsgUpdateParams> = {
       evidence: isSet(object.evidence) ? EvidenceParams.fromJSON(object.evidence) : undefined,
       validator: isSet(object.validator) ? ValidatorParams.fromJSON(object.validator) : undefined,
       abci: isSet(object.abci) ? ABCIParams.fromJSON(object.abci) : undefined,
+      synchrony: isSet(object.synchrony) ? SynchronyParams.fromJSON(object.synchrony) : undefined,
+      feature: isSet(object.feature) ? FeatureParams.fromJSON(object.feature) : undefined,
     };
   },
 
@@ -140,6 +184,12 @@ export const MsgUpdateParams: MessageFns<MsgUpdateParams> = {
     }
     if (message.abci !== undefined) {
       obj.abci = ABCIParams.toJSON(message.abci);
+    }
+    if (message.synchrony !== undefined) {
+      obj.synchrony = SynchronyParams.toJSON(message.synchrony);
+    }
+    if (message.feature !== undefined) {
+      obj.feature = FeatureParams.toJSON(message.feature);
     }
     return obj;
   },
@@ -161,6 +211,12 @@ export const MsgUpdateParams: MessageFns<MsgUpdateParams> = {
       : undefined;
     message.abci = (object.abci !== undefined && object.abci !== null)
       ? ABCIParams.fromPartial(object.abci)
+      : undefined;
+    message.synchrony = (object.synchrony !== undefined && object.synchrony !== null)
+      ? SynchronyParams.fromPartial(object.synchrony)
+      : undefined;
+    message.feature = (object.feature !== undefined && object.feature !== null)
+      ? FeatureParams.fromPartial(object.feature)
       : undefined;
     return message;
   },

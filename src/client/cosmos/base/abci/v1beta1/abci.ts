@@ -6,9 +6,9 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
+import { Event } from "../../../../cometbft/abci/v2/types";
+import { Block } from "../../../../cometbft/types/v2/block";
 import { Any } from "../../../../google/protobuf/any";
-import { Event } from "../../../../tendermint/abci/types";
-import { Block } from "../../../../tendermint/types/block";
 
 export const protobufPackage = "cosmos.base.abci.v1beta1";
 

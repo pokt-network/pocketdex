@@ -43,6 +43,7 @@ import {
 import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId, getEventId, messageId } from "../utils/ids";
 import { parseJson, stringify } from "../utils/json";
+import { getDenomAndAmount } from "../utils/primitives";
 
 // this can return undefined because older events do not have this attribute
 function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
@@ -189,7 +190,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     }
 
     if (attribute.key === "claimed_upokt") {
-      claimed = JSON.parse(attribute.value as string);
+      claimed = getDenomAndAmount(attribute.value as string);
     }
 
     if (attribute.key === "settlement_result") {
@@ -197,7 +198,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     }
 
     if (attribute.key === "proof_missing_penalty") {
-      proofMissingPenalty = JSON.parse(attribute.value as string);
+      proofMissingPenalty = getDenomAndAmount(attribute.value as string);
     }
 
     if (attribute.key === 'failure_reason') {
@@ -511,11 +512,11 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
     }
 
     if (attribute.key === "expected_burn") {
-      expectedBurn = parseJson(attribute.value as string);
+      expectedBurn = getDenomAndAmount(attribute.value as string);
     }
 
     if (attribute.key === "effective_burn") {
-      effectiveBurn = parseJson(attribute.value as string);
+      effectiveBurn = getDenomAndAmount(attribute.value as string);
     }
   }
 
@@ -553,7 +554,7 @@ function _handleEventApplicationReimbursementRequest(event: CosmosEvent): EventA
 
   for (const { key, value } of event.event.attributes) {
     if (key === "amount") {
-      coin = parseJson(value as string);
+      coin = getDenomAndAmount(value as string);
       continue;
     }
 
@@ -598,7 +599,7 @@ async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "slashing_amount") {
-      slashingCoin = JSON.parse(attribute.value as string);
+      slashingCoin = getDenomAndAmount(attribute.value as string);
     }
 
     if (attribute.key === "supplier_operator_addr") {

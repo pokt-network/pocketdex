@@ -2,15 +2,16 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/types/block.proto
+// source: cometbft/types/v2/block.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { EvidenceList } from "./evidence";
 import { Commit, Data, Header } from "./types";
 
-export const protobufPackage = "tendermint.types";
+export const protobufPackage = "cometbft.types.v2";
 
+/** Block defines the structure of a block in the CometBFT blockchain. */
 export interface Block {
   header: Header | undefined;
   data: Data | undefined;

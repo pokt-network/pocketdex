@@ -8,7 +8,6 @@
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Coin } from "../../cosmos/base/v1beta1/coin";
 import { Params } from "./params";
-import { Gateway } from "./types";
 
 export const protobufPackage = "pocket.gateway";
 
@@ -38,7 +37,6 @@ export interface MsgStakeGateway {
 }
 
 export interface MsgStakeGatewayResponse {
-  gateway: Gateway | undefined;
 }
 
 export interface MsgUnstakeGateway {
@@ -47,7 +45,6 @@ export interface MsgUnstakeGateway {
 }
 
 export interface MsgUnstakeGatewayResponse {
-  gateway: Gateway | undefined;
 }
 
 /** MsgUpdateParam is the Msg/UpdateParam request type to update a single param. */
@@ -59,7 +56,6 @@ export interface MsgUpdateParam {
 }
 
 export interface MsgUpdateParamResponse {
-  params: Params | undefined;
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
@@ -260,14 +256,11 @@ export const MsgStakeGateway: MessageFns<MsgStakeGateway> = {
 };
 
 function createBaseMsgStakeGatewayResponse(): MsgStakeGatewayResponse {
-  return { gateway: undefined };
+  return {};
 }
 
 export const MsgStakeGatewayResponse: MessageFns<MsgStakeGatewayResponse> = {
-  encode(message: MsgStakeGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.gateway !== undefined) {
-      Gateway.encode(message.gateway, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgStakeGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -278,14 +271,6 @@ export const MsgStakeGatewayResponse: MessageFns<MsgStakeGatewayResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.gateway = Gateway.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -295,26 +280,20 @@ export const MsgStakeGatewayResponse: MessageFns<MsgStakeGatewayResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgStakeGatewayResponse {
-    return { gateway: isSet(object.gateway) ? Gateway.fromJSON(object.gateway) : undefined };
+  fromJSON(_: any): MsgStakeGatewayResponse {
+    return {};
   },
 
-  toJSON(message: MsgStakeGatewayResponse): unknown {
+  toJSON(_: MsgStakeGatewayResponse): unknown {
     const obj: any = {};
-    if (message.gateway !== undefined) {
-      obj.gateway = Gateway.toJSON(message.gateway);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgStakeGatewayResponse>, I>>(base?: I): MsgStakeGatewayResponse {
     return MsgStakeGatewayResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgStakeGatewayResponse>, I>>(object: I): MsgStakeGatewayResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgStakeGatewayResponse>, I>>(_: I): MsgStakeGatewayResponse {
     const message = createBaseMsgStakeGatewayResponse();
-    message.gateway = (object.gateway !== undefined && object.gateway !== null)
-      ? Gateway.fromPartial(object.gateway)
-      : undefined;
     return message;
   },
 };
@@ -378,14 +357,11 @@ export const MsgUnstakeGateway: MessageFns<MsgUnstakeGateway> = {
 };
 
 function createBaseMsgUnstakeGatewayResponse(): MsgUnstakeGatewayResponse {
-  return { gateway: undefined };
+  return {};
 }
 
 export const MsgUnstakeGatewayResponse: MessageFns<MsgUnstakeGatewayResponse> = {
-  encode(message: MsgUnstakeGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.gateway !== undefined) {
-      Gateway.encode(message.gateway, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUnstakeGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -396,14 +372,6 @@ export const MsgUnstakeGatewayResponse: MessageFns<MsgUnstakeGatewayResponse> = 
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.gateway = Gateway.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -413,26 +381,20 @@ export const MsgUnstakeGatewayResponse: MessageFns<MsgUnstakeGatewayResponse> = 
     return message;
   },
 
-  fromJSON(object: any): MsgUnstakeGatewayResponse {
-    return { gateway: isSet(object.gateway) ? Gateway.fromJSON(object.gateway) : undefined };
+  fromJSON(_: any): MsgUnstakeGatewayResponse {
+    return {};
   },
 
-  toJSON(message: MsgUnstakeGatewayResponse): unknown {
+  toJSON(_: MsgUnstakeGatewayResponse): unknown {
     const obj: any = {};
-    if (message.gateway !== undefined) {
-      obj.gateway = Gateway.toJSON(message.gateway);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUnstakeGatewayResponse>, I>>(base?: I): MsgUnstakeGatewayResponse {
     return MsgUnstakeGatewayResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUnstakeGatewayResponse>, I>>(object: I): MsgUnstakeGatewayResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUnstakeGatewayResponse>, I>>(_: I): MsgUnstakeGatewayResponse {
     const message = createBaseMsgUnstakeGatewayResponse();
-    message.gateway = (object.gateway !== undefined && object.gateway !== null)
-      ? Gateway.fromPartial(object.gateway)
-      : undefined;
     return message;
   },
 };
@@ -532,14 +494,11 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
 };
 
 function createBaseMsgUpdateParamResponse(): MsgUpdateParamResponse {
-  return { params: undefined };
+  return {};
 }
 
 export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
-  encode(message: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.params !== undefined) {
-      Params.encode(message.params, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -550,14 +509,6 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.params = Params.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -567,26 +518,20 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgUpdateParamResponse {
-    return { params: isSet(object.params) ? Params.fromJSON(object.params) : undefined };
+  fromJSON(_: any): MsgUpdateParamResponse {
+    return {};
   },
 
-  toJSON(message: MsgUpdateParamResponse): unknown {
+  toJSON(_: MsgUpdateParamResponse): unknown {
     const obj: any = {};
-    if (message.params !== undefined) {
-      obj.params = Params.toJSON(message.params);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(base?: I): MsgUpdateParamResponse {
     return MsgUpdateParamResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(object: I): MsgUpdateParamResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(_: I): MsgUpdateParamResponse {
     const message = createBaseMsgUpdateParamResponse();
-    message.params = (object.params !== undefined && object.params !== null)
-      ? Params.fromPartial(object.params)
-      : undefined;
     return message;
   },
 };

@@ -11,68 +11,87 @@ export const protobufPackage = "pocket.tokenomics";
 
 /** Params defines the parameters for the tokenomics module. */
 export interface Params {
+  /** dao_reward_address is where the DAO's portion of claims submitted are distributed. */
+  daoRewardAddress: string;
   /**
-   * mint_allocation_percentages represents the distribution of newly minted tokens,
-   * at the end of claim settlement, as a result of the Global Mint TLM.
+   * mint_allocation_percentages represents the distribution of newly minted tokens.
+   * GlobalMintTLM: Only used by the GlobalMintTLM at the end of claim settlement.
    */
   mintAllocationPercentages:
     | MintAllocationPercentages
     | undefined;
   /**
-   * dao_reward_address is the address to which mint_allocation_dao percentage of the
-   * minted tokens are at the end of claim settlement.
+   * global_inflation_per_claim is the percentage of a claim's claimable uPOKT amount to be minted on settlement.
+   * GlobalMintTLM: Only used by the GlobalMintTLM at the end of claim settlement.
    */
-  daoRewardAddress: string;
-  /** global_inflation_per_claim is the percentage of a claim's claimable uPOKT amount which will be minted on settlement. */
   globalInflationPerClaim: number;
+  /**
+   * mint_equals_burn_claim_distribution controls how the settlement amount is distributed
+   * when global inflation is disabled (global_inflation_per_claim = 0).
+   * MintEqualsBurnTLM: Only used by the MintEqualsBurnTLM at the end of claim settlement.
+   */
+  mintEqualsBurnClaimDistribution: MintEqualsBurnClaimDistribution | undefined;
 }
 
 /**
- * MintAllocationPercentages represents the distribution of newly minted tokens,
- * at the end of claim settlement, as a result of the Global Mint TLM.
+ * MintAllocationPercentages captures the distribution of newly minted tokens.
+ * The sum of all new tokens minted must equal 1.
+ * GlobalMintTLM: Only used by the GlobalMintTLM at the end of claim settlement.
+ * TODO_DISTANT_FUTURE: Remove this once global inflation is disabled in perpetuity.
  */
 export interface MintAllocationPercentages {
-  /**
-   * dao is the percentage of the minted tokens which are sent
-   * to the DAO reward address during claim settlement.
-   */
+  /** dao - % of newley minted tokens sent to the DAO reward address. */
   dao: number;
-  /**
-   * proposer is the percentage of the minted tokens which are sent
-   * to the block proposer account address during claim settlement.
-   */
+  /** proposer - % of newley minted tokens sent to the block proposer (i.e. validator0 account address. */
   proposer: number;
-  /**
-   * supplier is the percentage of the minted tokens which are sent
-   * to the block supplier account address during claim settlement.
-   */
+  /** supplier - % of newley minted tokens sent to the block supplier account address. */
   supplier: number;
-  /**
-   * source_owner is the percentage of the minted tokens which are sent
-   * to the service source owner account address during claim settlement.
-   */
+  /** source_owner - % of newley minted tokens sent to the service source owner account address. */
   sourceOwner: number;
-  /**
-   * allocation_application is the percentage of the minted tokens which are sent
-   * to the application account address during claim settlement.
-   */
+  /** application - % of newley minted tokens sent to the application account address. */
+  application: number;
+}
+
+/**
+ * MintEqualsBurnClaimDistribution captures the distribution of claimable tokens.
+ * The sum of all tokens being burnt from the application's stake must equal 1.
+ * GlobalMintEqualsBurnTLM: Only used by the GlobalMintEqualsBurnTLM at the end of claim settlement.
+ */
+export interface MintEqualsBurnClaimDistribution {
+  /** dao - % of claimable tokens sent to the DAO reward address. */
+  dao: number;
+  /** proposer - % of claimable tokens sent to the block proposer (i.e. validator0) account address. */
+  proposer: number;
+  /** supplier - % of claimable tokens sent to the block supplier account address. */
+  supplier: number;
+  /** source_owner - % of claimable tokens sent to the service source owner account address. */
+  sourceOwner: number;
+  /** application - % of claimable tokens sent to the application account address. */
   application: number;
 }
 
 function createBaseParams(): Params {
-  return { mintAllocationPercentages: undefined, daoRewardAddress: "", globalInflationPerClaim: 0 };
+  return {
+    daoRewardAddress: "",
+    mintAllocationPercentages: undefined,
+    globalInflationPerClaim: 0,
+    mintEqualsBurnClaimDistribution: undefined,
+  };
 }
 
 export const Params: MessageFns<Params> = {
   encode(message: Params, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.mintAllocationPercentages !== undefined) {
-      MintAllocationPercentages.encode(message.mintAllocationPercentages, writer.uint32(10).fork()).join();
-    }
     if (message.daoRewardAddress !== "") {
       writer.uint32(50).string(message.daoRewardAddress);
     }
+    if (message.mintAllocationPercentages !== undefined) {
+      MintAllocationPercentages.encode(message.mintAllocationPercentages, writer.uint32(10).fork()).join();
+    }
     if (message.globalInflationPerClaim !== 0) {
       writer.uint32(57).double(message.globalInflationPerClaim);
+    }
+    if (message.mintEqualsBurnClaimDistribution !== undefined) {
+      MintEqualsBurnClaimDistribution.encode(message.mintEqualsBurnClaimDistribution, writer.uint32(66).fork()).join();
     }
     return writer;
   },
@@ -84,14 +103,6 @@ export const Params: MessageFns<Params> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.mintAllocationPercentages = MintAllocationPercentages.decode(reader, reader.uint32());
-          continue;
-        }
         case 6: {
           if (tag !== 50) {
             break;
@@ -100,12 +111,28 @@ export const Params: MessageFns<Params> = {
           message.daoRewardAddress = reader.string();
           continue;
         }
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.mintAllocationPercentages = MintAllocationPercentages.decode(reader, reader.uint32());
+          continue;
+        }
         case 7: {
           if (tag !== 57) {
             break;
           }
 
           message.globalInflationPerClaim = reader.double();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.mintEqualsBurnClaimDistribution = MintEqualsBurnClaimDistribution.decode(reader, reader.uint32());
           continue;
         }
       }
@@ -119,26 +146,34 @@ export const Params: MessageFns<Params> = {
 
   fromJSON(object: any): Params {
     return {
+      daoRewardAddress: isSet(object.daoRewardAddress) ? globalThis.String(object.daoRewardAddress) : "",
       mintAllocationPercentages: isSet(object.mintAllocationPercentages)
         ? MintAllocationPercentages.fromJSON(object.mintAllocationPercentages)
         : undefined,
-      daoRewardAddress: isSet(object.daoRewardAddress) ? globalThis.String(object.daoRewardAddress) : "",
       globalInflationPerClaim: isSet(object.globalInflationPerClaim)
         ? globalThis.Number(object.globalInflationPerClaim)
         : 0,
+      mintEqualsBurnClaimDistribution: isSet(object.mintEqualsBurnClaimDistribution)
+        ? MintEqualsBurnClaimDistribution.fromJSON(object.mintEqualsBurnClaimDistribution)
+        : undefined,
     };
   },
 
   toJSON(message: Params): unknown {
     const obj: any = {};
-    if (message.mintAllocationPercentages !== undefined) {
-      obj.mintAllocationPercentages = MintAllocationPercentages.toJSON(message.mintAllocationPercentages);
-    }
     if (message.daoRewardAddress !== "") {
       obj.daoRewardAddress = message.daoRewardAddress;
     }
+    if (message.mintAllocationPercentages !== undefined) {
+      obj.mintAllocationPercentages = MintAllocationPercentages.toJSON(message.mintAllocationPercentages);
+    }
     if (message.globalInflationPerClaim !== 0) {
       obj.globalInflationPerClaim = message.globalInflationPerClaim;
+    }
+    if (message.mintEqualsBurnClaimDistribution !== undefined) {
+      obj.mintEqualsBurnClaimDistribution = MintEqualsBurnClaimDistribution.toJSON(
+        message.mintEqualsBurnClaimDistribution,
+      );
     }
     return obj;
   },
@@ -148,12 +183,16 @@ export const Params: MessageFns<Params> = {
   },
   fromPartial<I extends Exact<DeepPartial<Params>, I>>(object: I): Params {
     const message = createBaseParams();
+    message.daoRewardAddress = object.daoRewardAddress ?? "";
     message.mintAllocationPercentages =
       (object.mintAllocationPercentages !== undefined && object.mintAllocationPercentages !== null)
         ? MintAllocationPercentages.fromPartial(object.mintAllocationPercentages)
         : undefined;
-    message.daoRewardAddress = object.daoRewardAddress ?? "";
     message.globalInflationPerClaim = object.globalInflationPerClaim ?? 0;
+    message.mintEqualsBurnClaimDistribution =
+      (object.mintEqualsBurnClaimDistribution !== undefined && object.mintEqualsBurnClaimDistribution !== null)
+        ? MintEqualsBurnClaimDistribution.fromPartial(object.mintEqualsBurnClaimDistribution)
+        : undefined;
     return message;
   },
 };
@@ -273,6 +312,132 @@ export const MintAllocationPercentages: MessageFns<MintAllocationPercentages> = 
   },
   fromPartial<I extends Exact<DeepPartial<MintAllocationPercentages>, I>>(object: I): MintAllocationPercentages {
     const message = createBaseMintAllocationPercentages();
+    message.dao = object.dao ?? 0;
+    message.proposer = object.proposer ?? 0;
+    message.supplier = object.supplier ?? 0;
+    message.sourceOwner = object.sourceOwner ?? 0;
+    message.application = object.application ?? 0;
+    return message;
+  },
+};
+
+function createBaseMintEqualsBurnClaimDistribution(): MintEqualsBurnClaimDistribution {
+  return { dao: 0, proposer: 0, supplier: 0, sourceOwner: 0, application: 0 };
+}
+
+export const MintEqualsBurnClaimDistribution: MessageFns<MintEqualsBurnClaimDistribution> = {
+  encode(message: MintEqualsBurnClaimDistribution, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.dao !== 0) {
+      writer.uint32(9).double(message.dao);
+    }
+    if (message.proposer !== 0) {
+      writer.uint32(17).double(message.proposer);
+    }
+    if (message.supplier !== 0) {
+      writer.uint32(25).double(message.supplier);
+    }
+    if (message.sourceOwner !== 0) {
+      writer.uint32(33).double(message.sourceOwner);
+    }
+    if (message.application !== 0) {
+      writer.uint32(41).double(message.application);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MintEqualsBurnClaimDistribution {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMintEqualsBurnClaimDistribution();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 9) {
+            break;
+          }
+
+          message.dao = reader.double();
+          continue;
+        }
+        case 2: {
+          if (tag !== 17) {
+            break;
+          }
+
+          message.proposer = reader.double();
+          continue;
+        }
+        case 3: {
+          if (tag !== 25) {
+            break;
+          }
+
+          message.supplier = reader.double();
+          continue;
+        }
+        case 4: {
+          if (tag !== 33) {
+            break;
+          }
+
+          message.sourceOwner = reader.double();
+          continue;
+        }
+        case 5: {
+          if (tag !== 41) {
+            break;
+          }
+
+          message.application = reader.double();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MintEqualsBurnClaimDistribution {
+    return {
+      dao: isSet(object.dao) ? globalThis.Number(object.dao) : 0,
+      proposer: isSet(object.proposer) ? globalThis.Number(object.proposer) : 0,
+      supplier: isSet(object.supplier) ? globalThis.Number(object.supplier) : 0,
+      sourceOwner: isSet(object.sourceOwner) ? globalThis.Number(object.sourceOwner) : 0,
+      application: isSet(object.application) ? globalThis.Number(object.application) : 0,
+    };
+  },
+
+  toJSON(message: MintEqualsBurnClaimDistribution): unknown {
+    const obj: any = {};
+    if (message.dao !== 0) {
+      obj.dao = message.dao;
+    }
+    if (message.proposer !== 0) {
+      obj.proposer = message.proposer;
+    }
+    if (message.supplier !== 0) {
+      obj.supplier = message.supplier;
+    }
+    if (message.sourceOwner !== 0) {
+      obj.sourceOwner = message.sourceOwner;
+    }
+    if (message.application !== 0) {
+      obj.application = message.application;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MintEqualsBurnClaimDistribution>, I>>(base?: I): MintEqualsBurnClaimDistribution {
+    return MintEqualsBurnClaimDistribution.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MintEqualsBurnClaimDistribution>, I>>(
+    object: I,
+  ): MintEqualsBurnClaimDistribution {
+    const message = createBaseMintEqualsBurnClaimDistribution();
     message.dao = object.dao ?? 0;
     message.proposer = object.proposer ?? 0;
     message.supplier = object.supplier ?? 0;

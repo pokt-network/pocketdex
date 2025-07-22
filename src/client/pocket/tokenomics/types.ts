@@ -14,28 +14,34 @@ export const protobufPackage = "pocket.tokenomics";
 /** SettlementOpReason is a distinct, tlm-specific causal reason for a given operation. */
 export enum SettlementOpReason {
   /**
-   * UNSPECIFIED - UNSPECIFIED is the default value for SettlementOpReason, it is used as a field
-   * type for objects which need to distinguish whether a SettlementOpReason has been specified it or not.
+   * UNSPECIFIED - UNSPECIFIED is the default value for SettlementOpReason
+   * It is used as a field type for objects which need to distinguish whether a SettlementOpReason has been specified it or not.
    */
   UNSPECIFIED = 0,
-  /** TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT - Value transfer (credit/debit) */
+  /** UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER - All TLMs: Penalization: Slash, burn, etc... */
+  UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER = 11,
+  UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN = 12,
+  /** TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT - MintEqualsBurnTlm: Value transfer (credit/debit aka mint/burn) */
   TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT = 1,
   TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN = 2,
-  /** TLM_GLOBAL_MINT_INFLATION - Inflation */
-  TLM_GLOBAL_MINT_INFLATION = 3,
-  /** TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION - Reward distribution */
+  TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT = 19,
+  /** TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION - MintEqualsBurnTlm: Reward distribution */
   TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION = 4,
+  TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION = 15,
+  TLM_RELAY_BURN_EQUALS_MINT_PROPOSER_REWARD_DISTRIBUTION = 16,
+  TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION = 17,
+  TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION = 18,
+  /** TLM_GLOBAL_MINT_INFLATION - GlobalMintTLM: Inflation */
+  TLM_GLOBAL_MINT_INFLATION = 3,
+  /** TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION - GlobalMintTLM: Reward distribution */
   TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION = 5,
   TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION = 6,
   TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION = 7,
   TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION = 8,
   TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION = 9,
-  /** TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER - Self-servicing mitigation */
+  /** TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER - GlobalMintTLM: Self-servicing mitigation */
   TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER = 10,
-  /** UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER - Penalization */
-  UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER = 11,
-  UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN = 12,
-  /** TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER - Module accounting */
+  /** TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER - GlobalMintTLM: Module accounting */
   TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER = 13,
   TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER = 14,
   UNRECOGNIZED = -1,
@@ -46,18 +52,39 @@ export function settlementOpReasonFromJSON(object: any): SettlementOpReason {
     case 0:
     case "UNSPECIFIED":
       return SettlementOpReason.UNSPECIFIED;
+    case 11:
+    case "UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER":
+      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER;
+    case 12:
+    case "UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN":
+      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN;
     case 1:
     case "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT":
       return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT;
     case 2:
     case "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN":
       return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN;
-    case 3:
-    case "TLM_GLOBAL_MINT_INFLATION":
-      return SettlementOpReason.TLM_GLOBAL_MINT_INFLATION;
+    case 19:
+    case "TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT":
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT;
     case 4:
     case "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION":
       return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION;
+    case 15:
+    case "TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION":
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION;
+    case 16:
+    case "TLM_RELAY_BURN_EQUALS_MINT_PROPOSER_REWARD_DISTRIBUTION":
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_PROPOSER_REWARD_DISTRIBUTION;
+    case 17:
+    case "TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION":
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION;
+    case 18:
+    case "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION":
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION;
+    case 3:
+    case "TLM_GLOBAL_MINT_INFLATION":
+      return SettlementOpReason.TLM_GLOBAL_MINT_INFLATION;
     case 5:
     case "TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION":
       return SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION;
@@ -76,12 +103,6 @@ export function settlementOpReasonFromJSON(object: any): SettlementOpReason {
     case 10:
     case "TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER":
       return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER;
-    case 11:
-    case "UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER":
-      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER;
-    case 12:
-    case "UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN":
-      return SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN;
     case 13:
     case "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER":
       return SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER;
@@ -99,14 +120,28 @@ export function settlementOpReasonToJSON(object: SettlementOpReason): string {
   switch (object) {
     case SettlementOpReason.UNSPECIFIED:
       return "UNSPECIFIED";
+    case SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER:
+      return "UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER";
+    case SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN:
+      return "UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN";
     case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT:
       return "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT";
     case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN:
       return "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN";
-    case SettlementOpReason.TLM_GLOBAL_MINT_INFLATION:
-      return "TLM_GLOBAL_MINT_INFLATION";
+    case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT:
+      return "TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT";
     case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION:
       return "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION";
+    case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION:
+      return "TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION";
+    case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_PROPOSER_REWARD_DISTRIBUTION:
+      return "TLM_RELAY_BURN_EQUALS_MINT_PROPOSER_REWARD_DISTRIBUTION";
+    case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION:
+      return "TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION";
+    case SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION:
+      return "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION";
+    case SettlementOpReason.TLM_GLOBAL_MINT_INFLATION:
+      return "TLM_GLOBAL_MINT_INFLATION";
     case SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION:
       return "TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION";
     case SettlementOpReason.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION:
@@ -119,10 +154,6 @@ export function settlementOpReasonToJSON(object: SettlementOpReason): string {
       return "TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION";
     case SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER:
       return "TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER";
-    case SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER:
-      return "UNSPECIFIED_TLM_SUPPLIER_SLASH_MODULE_TRANSFER";
-    case SettlementOpReason.UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN:
-      return "UNSPECIFIED_TLM_SUPPLIER_SLASH_STAKE_BURN";
     case SettlementOpReason.TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER:
       return "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER";
     case SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER:
@@ -133,7 +164,7 @@ export function settlementOpReasonToJSON(object: SettlementOpReason): string {
   }
 }
 
-/** SettlementResult holds mint, burn, and transfer operations that result from a single claim settlement. */
+/** ClaimSettlementResult holds the result of a single claim settlement: mint, burn, and transfer operations. */
 export interface ClaimSettlementResult {
   claim: Claim | undefined;
   mints: MintBurnOp[];
@@ -142,14 +173,14 @@ export interface ClaimSettlementResult {
   modToAcctTransfers: ModToAcctTransfer[];
 }
 
-/** MintBurnOperation holds the parameters of a mint or burn operation. */
+/** MintBurnOp holds the parameters of a single mint or burn operation. */
 export interface MintBurnOp {
   opReason: SettlementOpReason;
   DestinationModule: string;
   coin: Coin | undefined;
 }
 
-/** ModToAcctTransfer holds the parameters of a module to account transfer operation. */
+/** ModToAcctTransfer holds the parameters of a single module to account transfer operation. */
 export interface ModToAcctTransfer {
   opReason: SettlementOpReason;
   SenderModule: string;
@@ -158,7 +189,7 @@ export interface ModToAcctTransfer {
   coin: Coin | undefined;
 }
 
-/** ModToModTransfer holds the parameters of a module to module transfer operation. */
+/** ModToModTransfer holds the parameters of a single module to module transfer operation. */
 export interface ModToModTransfer {
   opReason: SettlementOpReason;
   SenderModule: string;

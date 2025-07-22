@@ -2,24 +2,26 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/types/types.proto
+// source: cometbft/types/v2/types.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Timestamp } from "../../google/protobuf/timestamp";
-import { Proof } from "../crypto/proof";
-import { Consensus } from "../version/types";
+import { Timestamp } from "../../../google/protobuf/timestamp";
+import { Proof } from "../../crypto/v1/proof";
+import { Consensus } from "../../version/v1/types";
 import { BlockIDFlag, blockIDFlagFromJSON, blockIDFlagToJSON, ValidatorSet } from "./validator";
 
-export const protobufPackage = "tendermint.types";
+export const protobufPackage = "cometbft.types.v2";
 
 /** SignedMsgType is a type of signed message in the consensus. */
 export enum SignedMsgType {
+  /** SIGNED_MSG_TYPE_UNKNOWN - Unknown */
   SIGNED_MSG_TYPE_UNKNOWN = 0,
-  /** SIGNED_MSG_TYPE_PREVOTE - Votes */
+  /** SIGNED_MSG_TYPE_PREVOTE - Prevote */
   SIGNED_MSG_TYPE_PREVOTE = 1,
+  /** SIGNED_MSG_TYPE_PRECOMMIT - Precommit */
   SIGNED_MSG_TYPE_PRECOMMIT = 2,
-  /** SIGNED_MSG_TYPE_PROPOSAL - Proposals */
+  /** SIGNED_MSG_TYPE_PROPOSAL - Proposal */
   SIGNED_MSG_TYPE_PROPOSAL = 32,
   UNRECOGNIZED = -1,
 }
@@ -61,19 +63,20 @@ export function signedMsgTypeToJSON(object: SignedMsgType): string {
   }
 }
 
-/** PartsetHeader */
+/** Header of the parts set for a block. */
 export interface PartSetHeader {
   total: number;
   hash: Uint8Array;
 }
 
+/** Part of the block. */
 export interface Part {
   index: number;
   bytes: Uint8Array;
   proof: Proof | undefined;
 }
 
-/** BlockID */
+/** BlockID defines the unique ID of a block as its hash and its `PartSetHeader`. */
 export interface BlockID {
   hash: Uint8Array;
   partSetHeader: PartSetHeader | undefined;
@@ -125,6 +128,8 @@ export interface Data {
 /**
  * Vote represents a prevote or precommit vote from validators for
  * consensus.
+ * For precommit messages, the message contains vote extensions (replay-protected and non-replay-protected)
+ * and their signatures.
  */
 export interface Vote {
   type: SignedMsgType;
@@ -151,6 +156,17 @@ export interface Vote {
    * Only valid for precommit messages.
    */
   extensionSignature: Uint8Array;
+  /**
+   * Non-Replay-Protected (NRP) vote extension provided by the application.
+   * Only valid for precommit messages.
+   */
+  nonRpExtension: Uint8Array;
+  /**
+   * Non-Replay-Protected (NRP) vote extension signature by the validator if
+   * they participated in consensus for the associated block.
+   * Only valid for precommit messages.
+   */
+  nonRpExtensionSignature: Uint8Array;
 }
 
 /** Commit contains the evidence that a block was committed by a set of validators. */
@@ -169,6 +185,7 @@ export interface CommitSig {
   signature: Uint8Array;
 }
 
+/** ExtendedCommit is a Commit with ExtendedCommitSig. */
 export interface ExtendedCommit {
   height: number;
   round: number;
@@ -178,7 +195,10 @@ export interface ExtendedCommit {
 
 /**
  * ExtendedCommitSig retains all the same fields as CommitSig but adds vote
- * extension-related fields. We use two signatures to ensure backwards compatibility.
+ * extension-related fields, where:
+ * 'extension' and 'extension_signature' are used for replay-protected vote extensions.
+ * 'non_rp_extension' and 'non_rp_extension_signature' are used for non-replay-protected vote extensions.
+ * We use two signatures to ensure backwards compatibility.
  * That is the digest of the original signature is still the same in prior versions
  */
 export interface ExtendedCommitSig {
@@ -190,8 +210,13 @@ export interface ExtendedCommitSig {
   extension: Uint8Array;
   /** Vote extension signature */
   extensionSignature: Uint8Array;
+  /** Non-Replay-Protected vote extension data */
+  nonRpExtension: Uint8Array;
+  /** Non-Replay-Protected vote extension signature */
+  nonRpExtensionSignature: Uint8Array;
 }
 
+/** Block proposal. */
 export interface Proposal {
   type: SignedMsgType;
   height: number;
@@ -202,16 +227,19 @@ export interface Proposal {
   signature: Uint8Array;
 }
 
+/** SignedHeader contains a Header(H) and Commit(H+1) with signatures of validators who signed it. */
 export interface SignedHeader {
   header: Header | undefined;
   commit: Commit | undefined;
 }
 
+/** LightBlock is a combination of SignedHeader and ValidatorSet. It is used by light clients. */
 export interface LightBlock {
   signedHeader: SignedHeader | undefined;
   validatorSet: ValidatorSet | undefined;
 }
 
+/** BlockMeta contains meta information about a block. */
 export interface BlockMeta {
   blockId: BlockID | undefined;
   blockSize: number;
@@ -831,6 +859,8 @@ function createBaseVote(): Vote {
     signature: new Uint8Array(0),
     extension: new Uint8Array(0),
     extensionSignature: new Uint8Array(0),
+    nonRpExtension: new Uint8Array(0),
+    nonRpExtensionSignature: new Uint8Array(0),
   };
 }
 
@@ -865,6 +895,12 @@ export const Vote: MessageFns<Vote> = {
     }
     if (message.extensionSignature.length !== 0) {
       writer.uint32(82).bytes(message.extensionSignature);
+    }
+    if (message.nonRpExtension.length !== 0) {
+      writer.uint32(90).bytes(message.nonRpExtension);
+    }
+    if (message.nonRpExtensionSignature.length !== 0) {
+      writer.uint32(98).bytes(message.nonRpExtensionSignature);
     }
     return writer;
   },
@@ -956,6 +992,22 @@ export const Vote: MessageFns<Vote> = {
           message.extensionSignature = reader.bytes();
           continue;
         }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.nonRpExtension = reader.bytes();
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.nonRpExtensionSignature = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -978,6 +1030,10 @@ export const Vote: MessageFns<Vote> = {
       extension: isSet(object.extension) ? bytesFromBase64(object.extension) : new Uint8Array(0),
       extensionSignature: isSet(object.extensionSignature)
         ? bytesFromBase64(object.extensionSignature)
+        : new Uint8Array(0),
+      nonRpExtension: isSet(object.nonRpExtension) ? bytesFromBase64(object.nonRpExtension) : new Uint8Array(0),
+      nonRpExtensionSignature: isSet(object.nonRpExtensionSignature)
+        ? bytesFromBase64(object.nonRpExtensionSignature)
         : new Uint8Array(0),
     };
   },
@@ -1014,6 +1070,12 @@ export const Vote: MessageFns<Vote> = {
     if (message.extensionSignature.length !== 0) {
       obj.extensionSignature = base64FromBytes(message.extensionSignature);
     }
+    if (message.nonRpExtension.length !== 0) {
+      obj.nonRpExtension = base64FromBytes(message.nonRpExtension);
+    }
+    if (message.nonRpExtensionSignature.length !== 0) {
+      obj.nonRpExtensionSignature = base64FromBytes(message.nonRpExtensionSignature);
+    }
     return obj;
   },
 
@@ -1034,6 +1096,8 @@ export const Vote: MessageFns<Vote> = {
     message.signature = object.signature ?? new Uint8Array(0);
     message.extension = object.extension ?? new Uint8Array(0);
     message.extensionSignature = object.extensionSignature ?? new Uint8Array(0);
+    message.nonRpExtension = object.nonRpExtension ?? new Uint8Array(0);
+    message.nonRpExtensionSignature = object.nonRpExtensionSignature ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1378,6 +1442,8 @@ function createBaseExtendedCommitSig(): ExtendedCommitSig {
     signature: new Uint8Array(0),
     extension: new Uint8Array(0),
     extensionSignature: new Uint8Array(0),
+    nonRpExtension: new Uint8Array(0),
+    nonRpExtensionSignature: new Uint8Array(0),
   };
 }
 
@@ -1400,6 +1466,12 @@ export const ExtendedCommitSig: MessageFns<ExtendedCommitSig> = {
     }
     if (message.extensionSignature.length !== 0) {
       writer.uint32(50).bytes(message.extensionSignature);
+    }
+    if (message.nonRpExtension.length !== 0) {
+      writer.uint32(58).bytes(message.nonRpExtension);
+    }
+    if (message.nonRpExtensionSignature.length !== 0) {
+      writer.uint32(66).bytes(message.nonRpExtensionSignature);
     }
     return writer;
   },
@@ -1459,6 +1531,22 @@ export const ExtendedCommitSig: MessageFns<ExtendedCommitSig> = {
           message.extensionSignature = reader.bytes();
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.nonRpExtension = reader.bytes();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.nonRpExtensionSignature = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1477,6 +1565,10 @@ export const ExtendedCommitSig: MessageFns<ExtendedCommitSig> = {
       extension: isSet(object.extension) ? bytesFromBase64(object.extension) : new Uint8Array(0),
       extensionSignature: isSet(object.extensionSignature)
         ? bytesFromBase64(object.extensionSignature)
+        : new Uint8Array(0),
+      nonRpExtension: isSet(object.nonRpExtension) ? bytesFromBase64(object.nonRpExtension) : new Uint8Array(0),
+      nonRpExtensionSignature: isSet(object.nonRpExtensionSignature)
+        ? bytesFromBase64(object.nonRpExtensionSignature)
         : new Uint8Array(0),
     };
   },
@@ -1501,6 +1593,12 @@ export const ExtendedCommitSig: MessageFns<ExtendedCommitSig> = {
     if (message.extensionSignature.length !== 0) {
       obj.extensionSignature = base64FromBytes(message.extensionSignature);
     }
+    if (message.nonRpExtension.length !== 0) {
+      obj.nonRpExtension = base64FromBytes(message.nonRpExtension);
+    }
+    if (message.nonRpExtensionSignature.length !== 0) {
+      obj.nonRpExtensionSignature = base64FromBytes(message.nonRpExtensionSignature);
+    }
     return obj;
   },
 
@@ -1515,6 +1613,8 @@ export const ExtendedCommitSig: MessageFns<ExtendedCommitSig> = {
     message.signature = object.signature ?? new Uint8Array(0);
     message.extension = object.extension ?? new Uint8Array(0);
     message.extensionSignature = object.extensionSignature ?? new Uint8Array(0);
+    message.nonRpExtension = object.nonRpExtension ?? new Uint8Array(0);
+    message.nonRpExtensionSignature = object.nonRpExtensionSignature ?? new Uint8Array(0);
     return message;
   },
 };

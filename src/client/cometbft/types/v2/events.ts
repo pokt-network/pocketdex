@@ -2,39 +2,42 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/libs/bits/types.proto
+// source: cometbft/types/v2/events.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
-export const protobufPackage = "tendermint.libs.bits";
+export const protobufPackage = "cometbft.types.v2";
 
-export interface BitArray {
-  bits: number;
-  elems: number[];
+/** EventDataRoundState is emitted with each new round step. */
+export interface EventDataRoundState {
+  height: number;
+  round: number;
+  step: string;
 }
 
-function createBaseBitArray(): BitArray {
-  return { bits: 0, elems: [] };
+function createBaseEventDataRoundState(): EventDataRoundState {
+  return { height: 0, round: 0, step: "" };
 }
 
-export const BitArray: MessageFns<BitArray> = {
-  encode(message: BitArray, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.bits !== 0) {
-      writer.uint32(8).int64(message.bits);
+export const EventDataRoundState: MessageFns<EventDataRoundState> = {
+  encode(message: EventDataRoundState, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.height !== 0) {
+      writer.uint32(8).int64(message.height);
     }
-    writer.uint32(18).fork();
-    for (const v of message.elems) {
-      writer.uint64(v);
+    if (message.round !== 0) {
+      writer.uint32(16).int32(message.round);
     }
-    writer.join();
+    if (message.step !== "") {
+      writer.uint32(26).string(message.step);
+    }
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): BitArray {
+  decode(input: BinaryReader | Uint8Array, length?: number): EventDataRoundState {
     const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
     let end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseBitArray();
+    const message = createBaseEventDataRoundState();
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
@@ -43,26 +46,24 @@ export const BitArray: MessageFns<BitArray> = {
             break;
           }
 
-          message.bits = longToNumber(reader.int64());
+          message.height = longToNumber(reader.int64());
           continue;
         }
         case 2: {
-          if (tag === 16) {
-            message.elems.push(longToNumber(reader.uint64()));
-
-            continue;
+          if (tag !== 16) {
+            break;
           }
 
-          if (tag === 18) {
-            const end2 = reader.uint32() + reader.pos;
-            while (reader.pos < end2) {
-              message.elems.push(longToNumber(reader.uint64()));
-            }
-
-            continue;
+          message.round = reader.int32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
           }
 
-          break;
+          message.step = reader.string();
+          continue;
         }
       }
       if ((tag & 7) === 4 || tag === 0) {
@@ -73,31 +74,36 @@ export const BitArray: MessageFns<BitArray> = {
     return message;
   },
 
-  fromJSON(object: any): BitArray {
+  fromJSON(object: any): EventDataRoundState {
     return {
-      bits: isSet(object.bits) ? globalThis.Number(object.bits) : 0,
-      elems: globalThis.Array.isArray(object?.elems) ? object.elems.map((e: any) => globalThis.Number(e)) : [],
+      height: isSet(object.height) ? globalThis.Number(object.height) : 0,
+      round: isSet(object.round) ? globalThis.Number(object.round) : 0,
+      step: isSet(object.step) ? globalThis.String(object.step) : "",
     };
   },
 
-  toJSON(message: BitArray): unknown {
+  toJSON(message: EventDataRoundState): unknown {
     const obj: any = {};
-    if (message.bits !== 0) {
-      obj.bits = Math.round(message.bits);
+    if (message.height !== 0) {
+      obj.height = Math.round(message.height);
     }
-    if (message.elems?.length) {
-      obj.elems = message.elems.map((e) => Math.round(e));
+    if (message.round !== 0) {
+      obj.round = Math.round(message.round);
+    }
+    if (message.step !== "") {
+      obj.step = message.step;
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<BitArray>, I>>(base?: I): BitArray {
-    return BitArray.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<EventDataRoundState>, I>>(base?: I): EventDataRoundState {
+    return EventDataRoundState.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<BitArray>, I>>(object: I): BitArray {
-    const message = createBaseBitArray();
-    message.bits = object.bits ?? 0;
-    message.elems = object.elems?.map((e) => e) || [];
+  fromPartial<I extends Exact<DeepPartial<EventDataRoundState>, I>>(object: I): EventDataRoundState {
+    const message = createBaseEventDataRoundState();
+    message.height = object.height ?? 0;
+    message.round = object.round ?? 0;
+    message.step = object.step ?? "";
     return message;
   },
 };

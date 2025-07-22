@@ -2,23 +2,23 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/types/validator.proto
+// source: cometbft/types/v2/validator.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { PublicKey } from "../crypto/keys";
+import { PublicKey } from "../../crypto/v1/keys";
 
-export const protobufPackage = "tendermint.types";
+export const protobufPackage = "cometbft.types.v2";
 
 /** BlockIdFlag indicates which BlockID the signature is for */
 export enum BlockIDFlag {
-  /** BLOCK_ID_FLAG_UNKNOWN - indicates an error condition */
+  /** BLOCK_ID_FLAG_UNKNOWN - Indicates an error condition */
   BLOCK_ID_FLAG_UNKNOWN = 0,
-  /** BLOCK_ID_FLAG_ABSENT - the vote was not received */
+  /** BLOCK_ID_FLAG_ABSENT - The vote was not received */
   BLOCK_ID_FLAG_ABSENT = 1,
-  /** BLOCK_ID_FLAG_COMMIT - voted for the block that received the majority */
+  /** BLOCK_ID_FLAG_COMMIT - Voted for the block that received the majority */
   BLOCK_ID_FLAG_COMMIT = 2,
-  /** BLOCK_ID_FLAG_NIL - voted for nil */
+  /** BLOCK_ID_FLAG_NIL - Voted for nil */
   BLOCK_ID_FLAG_NIL = 3,
   UNRECOGNIZED = -1,
 }
@@ -60,19 +60,29 @@ export function blockIDFlagToJSON(object: BlockIDFlag): string {
   }
 }
 
+/** ValidatorSet defines a set of validators. */
 export interface ValidatorSet {
   validators: Validator[];
   proposer: Validator | undefined;
   totalVotingPower: number;
 }
 
+/** Validator represents a node participating in the consensus protocol. */
 export interface Validator {
   address: Uint8Array;
+  /** @deprecated */
   pubKey: PublicKey | undefined;
   votingPower: number;
   proposerPriority: number;
+  pubKeyBytes: Uint8Array;
+  pubKeyType: string;
 }
 
+/**
+ * SimpleValidator is a Validator, which is serialized and hashed in consensus.
+ * Address is removed because it's redundant with the pubkey.
+ * Proposer priority is removed because it changes every round.
+ */
 export interface SimpleValidator {
   pubKey: PublicKey | undefined;
   votingPower: number;
@@ -175,7 +185,14 @@ export const ValidatorSet: MessageFns<ValidatorSet> = {
 };
 
 function createBaseValidator(): Validator {
-  return { address: new Uint8Array(0), pubKey: undefined, votingPower: 0, proposerPriority: 0 };
+  return {
+    address: new Uint8Array(0),
+    pubKey: undefined,
+    votingPower: 0,
+    proposerPriority: 0,
+    pubKeyBytes: new Uint8Array(0),
+    pubKeyType: "",
+  };
 }
 
 export const Validator: MessageFns<Validator> = {
@@ -191,6 +208,12 @@ export const Validator: MessageFns<Validator> = {
     }
     if (message.proposerPriority !== 0) {
       writer.uint32(32).int64(message.proposerPriority);
+    }
+    if (message.pubKeyBytes.length !== 0) {
+      writer.uint32(42).bytes(message.pubKeyBytes);
+    }
+    if (message.pubKeyType !== "") {
+      writer.uint32(50).string(message.pubKeyType);
     }
     return writer;
   },
@@ -234,6 +257,22 @@ export const Validator: MessageFns<Validator> = {
           message.proposerPriority = longToNumber(reader.int64());
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.pubKeyBytes = reader.bytes();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.pubKeyType = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -249,6 +288,8 @@ export const Validator: MessageFns<Validator> = {
       pubKey: isSet(object.pubKey) ? PublicKey.fromJSON(object.pubKey) : undefined,
       votingPower: isSet(object.votingPower) ? globalThis.Number(object.votingPower) : 0,
       proposerPriority: isSet(object.proposerPriority) ? globalThis.Number(object.proposerPriority) : 0,
+      pubKeyBytes: isSet(object.pubKeyBytes) ? bytesFromBase64(object.pubKeyBytes) : new Uint8Array(0),
+      pubKeyType: isSet(object.pubKeyType) ? globalThis.String(object.pubKeyType) : "",
     };
   },
 
@@ -266,6 +307,12 @@ export const Validator: MessageFns<Validator> = {
     if (message.proposerPriority !== 0) {
       obj.proposerPriority = Math.round(message.proposerPriority);
     }
+    if (message.pubKeyBytes.length !== 0) {
+      obj.pubKeyBytes = base64FromBytes(message.pubKeyBytes);
+    }
+    if (message.pubKeyType !== "") {
+      obj.pubKeyType = message.pubKeyType;
+    }
     return obj;
   },
 
@@ -280,6 +327,8 @@ export const Validator: MessageFns<Validator> = {
       : undefined;
     message.votingPower = object.votingPower ?? 0;
     message.proposerPriority = object.proposerPriority ?? 0;
+    message.pubKeyBytes = object.pubKeyBytes ?? new Uint8Array(0);
+    message.pubKeyType = object.pubKeyType ?? "";
     return message;
   },
 };

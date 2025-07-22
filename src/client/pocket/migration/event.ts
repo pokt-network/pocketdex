@@ -6,7 +6,6 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Coin } from "../../cosmos/base/v1beta1/coin";
 import { Application } from "../application/types";
 import { Supplier } from "../shared/supplier";
 import {
@@ -44,14 +43,12 @@ export interface EventImportMorseClaimableAccounts {
 export interface EventMorseAccountClaimed {
   /** Shannon session end height in which the claim was committed */
   sessionEndHeight: number;
-  /** Unstaked balance claimed from Morse */
-  claimedBalance:
-    | Coin
-    | undefined;
   /** bech32-encoded Shannon address to mint claimed balance */
   shannonDestAddress: string;
   /** Hex-encoded Morse account address whose balance was claimed */
   morseSrcAddress: string;
+  /** Unstaked balance claimed from Morse */
+  claimedBalance: string;
 }
 
 /**
@@ -61,24 +58,22 @@ export interface EventMorseAccountClaimed {
 export interface EventMorseApplicationClaimed {
   /** Shannon session end height in which the claim was committed */
   sessionEndHeight: number;
-  /** Unstaked balance claimed from Morse */
-  claimedBalance:
-    | Coin
-    | undefined;
   /** Hex-encoded Morse account address whose balance was claimed */
   morseSrcAddress: string;
-  /**
-   * Application stake claimed as a result of the claim
-   * - Equivalent to Morse application staked amount
-   */
-  claimedApplicationStake:
-    | Coin
-    | undefined;
   /**
    * Application staked as a result of the claim
    * - Mirrors Morse application stake
    */
-  application: Application | undefined;
+  application:
+    | Application
+    | undefined;
+  /** Unstaked balance claimed from Morse */
+  claimedBalance: string;
+  /**
+   * Application stake claimed as a result of the claim
+   * - Equivalent to Morse application staked amount
+   */
+  claimedApplicationStake: string;
 }
 
 /**
@@ -89,9 +84,7 @@ export interface EventMorseSupplierClaimed {
   /** Shannon session end height in which the claim was committed */
   sessionEndHeight: number;
   /** Unstaked balance claimed from Morse */
-  claimedBalance:
-    | Coin
-    | undefined;
+  claimedBalance: string;
   /**
    * The hex-encoded address of the Morse non-custodial (i.e. operator) account.
    * - Unstaked balance was migrated 1:1
@@ -122,9 +115,7 @@ export interface EventMorseSupplierClaimed {
    * Supplier stake claimed as a result of the claim
    * - Equivalent to Morse supplier staked amount
    */
-  claimedSupplierStake:
-    | Coin
-    | undefined;
+  claimedSupplierStake: string;
   /**
    * Supplier staked as a result of the claim
    * - Mirrors Morse supplier stake
@@ -144,9 +135,7 @@ export interface EventMorseAccountRecovered {
    * - Includes both unstaked and staked balances (consolidated)
    * - Auto-liquidates both unstaked and staked balances at once
    */
-  recoveredBalance:
-    | Coin
-    | undefined;
+  recoveredBalance: string;
   /** The bech32-encoded address of the Shannon account to which the recovered balance was minted. */
   shannonDestAddress: string;
   /**
@@ -258,7 +247,7 @@ export const EventImportMorseClaimableAccounts: MessageFns<EventImportMorseClaim
 };
 
 function createBaseEventMorseAccountClaimed(): EventMorseAccountClaimed {
-  return { sessionEndHeight: 0, claimedBalance: undefined, shannonDestAddress: "", morseSrcAddress: "" };
+  return { sessionEndHeight: 0, shannonDestAddress: "", morseSrcAddress: "", claimedBalance: "" };
 }
 
 export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
@@ -266,14 +255,14 @@ export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
     if (message.sessionEndHeight !== 0) {
       writer.uint32(8).int64(message.sessionEndHeight);
     }
-    if (message.claimedBalance !== undefined) {
-      Coin.encode(message.claimedBalance, writer.uint32(18).fork()).join();
-    }
     if (message.shannonDestAddress !== "") {
       writer.uint32(26).string(message.shannonDestAddress);
     }
     if (message.morseSrcAddress !== "") {
       writer.uint32(34).string(message.morseSrcAddress);
+    }
+    if (message.claimedBalance !== "") {
+      writer.uint32(42).string(message.claimedBalance);
     }
     return writer;
   },
@@ -293,14 +282,6 @@ export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
           message.sessionEndHeight = longToNumber(reader.int64());
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.claimedBalance = Coin.decode(reader, reader.uint32());
-          continue;
-        }
         case 3: {
           if (tag !== 26) {
             break;
@@ -317,6 +298,14 @@ export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
           message.morseSrcAddress = reader.string();
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.claimedBalance = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -329,9 +318,9 @@ export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
   fromJSON(object: any): EventMorseAccountClaimed {
     return {
       sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
-      claimedBalance: isSet(object.claimedBalance) ? Coin.fromJSON(object.claimedBalance) : undefined,
       shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
       morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
+      claimedBalance: isSet(object.claimedBalance) ? globalThis.String(object.claimedBalance) : "",
     };
   },
 
@@ -340,14 +329,14 @@ export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
     if (message.sessionEndHeight !== 0) {
       obj.sessionEndHeight = Math.round(message.sessionEndHeight);
     }
-    if (message.claimedBalance !== undefined) {
-      obj.claimedBalance = Coin.toJSON(message.claimedBalance);
-    }
     if (message.shannonDestAddress !== "") {
       obj.shannonDestAddress = message.shannonDestAddress;
     }
     if (message.morseSrcAddress !== "") {
       obj.morseSrcAddress = message.morseSrcAddress;
+    }
+    if (message.claimedBalance !== "") {
+      obj.claimedBalance = message.claimedBalance;
     }
     return obj;
   },
@@ -358,11 +347,9 @@ export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
   fromPartial<I extends Exact<DeepPartial<EventMorseAccountClaimed>, I>>(object: I): EventMorseAccountClaimed {
     const message = createBaseEventMorseAccountClaimed();
     message.sessionEndHeight = object.sessionEndHeight ?? 0;
-    message.claimedBalance = (object.claimedBalance !== undefined && object.claimedBalance !== null)
-      ? Coin.fromPartial(object.claimedBalance)
-      : undefined;
     message.shannonDestAddress = object.shannonDestAddress ?? "";
     message.morseSrcAddress = object.morseSrcAddress ?? "";
+    message.claimedBalance = object.claimedBalance ?? "";
     return message;
   },
 };
@@ -370,10 +357,10 @@ export const EventMorseAccountClaimed: MessageFns<EventMorseAccountClaimed> = {
 function createBaseEventMorseApplicationClaimed(): EventMorseApplicationClaimed {
   return {
     sessionEndHeight: 0,
-    claimedBalance: undefined,
     morseSrcAddress: "",
-    claimedApplicationStake: undefined,
     application: undefined,
+    claimedBalance: "",
+    claimedApplicationStake: "",
   };
 }
 
@@ -382,17 +369,17 @@ export const EventMorseApplicationClaimed: MessageFns<EventMorseApplicationClaim
     if (message.sessionEndHeight !== 0) {
       writer.uint32(8).int64(message.sessionEndHeight);
     }
-    if (message.claimedBalance !== undefined) {
-      Coin.encode(message.claimedBalance, writer.uint32(18).fork()).join();
-    }
     if (message.morseSrcAddress !== "") {
       writer.uint32(26).string(message.morseSrcAddress);
     }
-    if (message.claimedApplicationStake !== undefined) {
-      Coin.encode(message.claimedApplicationStake, writer.uint32(34).fork()).join();
-    }
     if (message.application !== undefined) {
       Application.encode(message.application, writer.uint32(42).fork()).join();
+    }
+    if (message.claimedBalance !== "") {
+      writer.uint32(50).string(message.claimedBalance);
+    }
+    if (message.claimedApplicationStake !== "") {
+      writer.uint32(58).string(message.claimedApplicationStake);
     }
     return writer;
   },
@@ -412,14 +399,6 @@ export const EventMorseApplicationClaimed: MessageFns<EventMorseApplicationClaim
           message.sessionEndHeight = longToNumber(reader.int64());
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.claimedBalance = Coin.decode(reader, reader.uint32());
-          continue;
-        }
         case 3: {
           if (tag !== 26) {
             break;
@@ -428,20 +407,28 @@ export const EventMorseApplicationClaimed: MessageFns<EventMorseApplicationClaim
           message.morseSrcAddress = reader.string();
           continue;
         }
-        case 4: {
-          if (tag !== 34) {
-            break;
-          }
-
-          message.claimedApplicationStake = Coin.decode(reader, reader.uint32());
-          continue;
-        }
         case 5: {
           if (tag !== 42) {
             break;
           }
 
           message.application = Application.decode(reader, reader.uint32());
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.claimedBalance = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.claimedApplicationStake = reader.string();
           continue;
         }
       }
@@ -456,12 +443,12 @@ export const EventMorseApplicationClaimed: MessageFns<EventMorseApplicationClaim
   fromJSON(object: any): EventMorseApplicationClaimed {
     return {
       sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
-      claimedBalance: isSet(object.claimedBalance) ? Coin.fromJSON(object.claimedBalance) : undefined,
       morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
-      claimedApplicationStake: isSet(object.claimedApplicationStake)
-        ? Coin.fromJSON(object.claimedApplicationStake)
-        : undefined,
       application: isSet(object.application) ? Application.fromJSON(object.application) : undefined,
+      claimedBalance: isSet(object.claimedBalance) ? globalThis.String(object.claimedBalance) : "",
+      claimedApplicationStake: isSet(object.claimedApplicationStake)
+        ? globalThis.String(object.claimedApplicationStake)
+        : "",
     };
   },
 
@@ -470,17 +457,17 @@ export const EventMorseApplicationClaimed: MessageFns<EventMorseApplicationClaim
     if (message.sessionEndHeight !== 0) {
       obj.sessionEndHeight = Math.round(message.sessionEndHeight);
     }
-    if (message.claimedBalance !== undefined) {
-      obj.claimedBalance = Coin.toJSON(message.claimedBalance);
-    }
     if (message.morseSrcAddress !== "") {
       obj.morseSrcAddress = message.morseSrcAddress;
     }
-    if (message.claimedApplicationStake !== undefined) {
-      obj.claimedApplicationStake = Coin.toJSON(message.claimedApplicationStake);
-    }
     if (message.application !== undefined) {
       obj.application = Application.toJSON(message.application);
+    }
+    if (message.claimedBalance !== "") {
+      obj.claimedBalance = message.claimedBalance;
+    }
+    if (message.claimedApplicationStake !== "") {
+      obj.claimedApplicationStake = message.claimedApplicationStake;
     }
     return obj;
   },
@@ -491,17 +478,12 @@ export const EventMorseApplicationClaimed: MessageFns<EventMorseApplicationClaim
   fromPartial<I extends Exact<DeepPartial<EventMorseApplicationClaimed>, I>>(object: I): EventMorseApplicationClaimed {
     const message = createBaseEventMorseApplicationClaimed();
     message.sessionEndHeight = object.sessionEndHeight ?? 0;
-    message.claimedBalance = (object.claimedBalance !== undefined && object.claimedBalance !== null)
-      ? Coin.fromPartial(object.claimedBalance)
-      : undefined;
     message.morseSrcAddress = object.morseSrcAddress ?? "";
-    message.claimedApplicationStake =
-      (object.claimedApplicationStake !== undefined && object.claimedApplicationStake !== null)
-        ? Coin.fromPartial(object.claimedApplicationStake)
-        : undefined;
     message.application = (object.application !== undefined && object.application !== null)
       ? Application.fromPartial(object.application)
       : undefined;
+    message.claimedBalance = object.claimedBalance ?? "";
+    message.claimedApplicationStake = object.claimedApplicationStake ?? "";
     return message;
   },
 };
@@ -509,11 +491,11 @@ export const EventMorseApplicationClaimed: MessageFns<EventMorseApplicationClaim
 function createBaseEventMorseSupplierClaimed(): EventMorseSupplierClaimed {
   return {
     sessionEndHeight: 0,
-    claimedBalance: undefined,
+    claimedBalance: "",
     morseNodeAddress: "",
     morseOutputAddress: "",
     claimSignerType: 0,
-    claimedSupplierStake: undefined,
+    claimedSupplierStake: "",
     supplier: undefined,
   };
 }
@@ -523,8 +505,8 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     if (message.sessionEndHeight !== 0) {
       writer.uint32(8).int64(message.sessionEndHeight);
     }
-    if (message.claimedBalance !== undefined) {
-      Coin.encode(message.claimedBalance, writer.uint32(18).fork()).join();
+    if (message.claimedBalance !== "") {
+      writer.uint32(74).string(message.claimedBalance);
     }
     if (message.morseNodeAddress !== "") {
       writer.uint32(66).string(message.morseNodeAddress);
@@ -535,8 +517,8 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     if (message.claimSignerType !== 0) {
       writer.uint32(56).int32(message.claimSignerType);
     }
-    if (message.claimedSupplierStake !== undefined) {
-      Coin.encode(message.claimedSupplierStake, writer.uint32(34).fork()).join();
+    if (message.claimedSupplierStake !== "") {
+      writer.uint32(82).string(message.claimedSupplierStake);
     }
     if (message.supplier !== undefined) {
       Supplier.encode(message.supplier, writer.uint32(42).fork()).join();
@@ -559,12 +541,12 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
           message.sessionEndHeight = longToNumber(reader.int64());
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
+        case 9: {
+          if (tag !== 74) {
             break;
           }
 
-          message.claimedBalance = Coin.decode(reader, reader.uint32());
+          message.claimedBalance = reader.string();
           continue;
         }
         case 8: {
@@ -591,12 +573,12 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
           message.claimSignerType = reader.int32() as any;
           continue;
         }
-        case 4: {
-          if (tag !== 34) {
+        case 10: {
+          if (tag !== 82) {
             break;
           }
 
-          message.claimedSupplierStake = Coin.decode(reader, reader.uint32());
+          message.claimedSupplierStake = reader.string();
           continue;
         }
         case 5: {
@@ -619,11 +601,11 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
   fromJSON(object: any): EventMorseSupplierClaimed {
     return {
       sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
-      claimedBalance: isSet(object.claimedBalance) ? Coin.fromJSON(object.claimedBalance) : undefined,
+      claimedBalance: isSet(object.claimedBalance) ? globalThis.String(object.claimedBalance) : "",
       morseNodeAddress: isSet(object.morseNodeAddress) ? globalThis.String(object.morseNodeAddress) : "",
       morseOutputAddress: isSet(object.morseOutputAddress) ? globalThis.String(object.morseOutputAddress) : "",
       claimSignerType: isSet(object.claimSignerType) ? morseSupplierClaimSignerTypeFromJSON(object.claimSignerType) : 0,
-      claimedSupplierStake: isSet(object.claimedSupplierStake) ? Coin.fromJSON(object.claimedSupplierStake) : undefined,
+      claimedSupplierStake: isSet(object.claimedSupplierStake) ? globalThis.String(object.claimedSupplierStake) : "",
       supplier: isSet(object.supplier) ? Supplier.fromJSON(object.supplier) : undefined,
     };
   },
@@ -633,8 +615,8 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     if (message.sessionEndHeight !== 0) {
       obj.sessionEndHeight = Math.round(message.sessionEndHeight);
     }
-    if (message.claimedBalance !== undefined) {
-      obj.claimedBalance = Coin.toJSON(message.claimedBalance);
+    if (message.claimedBalance !== "") {
+      obj.claimedBalance = message.claimedBalance;
     }
     if (message.morseNodeAddress !== "") {
       obj.morseNodeAddress = message.morseNodeAddress;
@@ -645,8 +627,8 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
     if (message.claimSignerType !== 0) {
       obj.claimSignerType = morseSupplierClaimSignerTypeToJSON(message.claimSignerType);
     }
-    if (message.claimedSupplierStake !== undefined) {
-      obj.claimedSupplierStake = Coin.toJSON(message.claimedSupplierStake);
+    if (message.claimedSupplierStake !== "") {
+      obj.claimedSupplierStake = message.claimedSupplierStake;
     }
     if (message.supplier !== undefined) {
       obj.supplier = Supplier.toJSON(message.supplier);
@@ -660,15 +642,11 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
   fromPartial<I extends Exact<DeepPartial<EventMorseSupplierClaimed>, I>>(object: I): EventMorseSupplierClaimed {
     const message = createBaseEventMorseSupplierClaimed();
     message.sessionEndHeight = object.sessionEndHeight ?? 0;
-    message.claimedBalance = (object.claimedBalance !== undefined && object.claimedBalance !== null)
-      ? Coin.fromPartial(object.claimedBalance)
-      : undefined;
+    message.claimedBalance = object.claimedBalance ?? "";
     message.morseNodeAddress = object.morseNodeAddress ?? "";
     message.morseOutputAddress = object.morseOutputAddress ?? "";
     message.claimSignerType = object.claimSignerType ?? 0;
-    message.claimedSupplierStake = (object.claimedSupplierStake !== undefined && object.claimedSupplierStake !== null)
-      ? Coin.fromPartial(object.claimedSupplierStake)
-      : undefined;
+    message.claimedSupplierStake = object.claimedSupplierStake ?? "";
     message.supplier = (object.supplier !== undefined && object.supplier !== null)
       ? Supplier.fromPartial(object.supplier)
       : undefined;
@@ -677,7 +655,7 @@ export const EventMorseSupplierClaimed: MessageFns<EventMorseSupplierClaimed> = 
 };
 
 function createBaseEventMorseAccountRecovered(): EventMorseAccountRecovered {
-  return { sessionEndHeight: 0, recoveredBalance: undefined, shannonDestAddress: "", morseSrcAddress: "" };
+  return { sessionEndHeight: 0, recoveredBalance: "", shannonDestAddress: "", morseSrcAddress: "" };
 }
 
 export const EventMorseAccountRecovered: MessageFns<EventMorseAccountRecovered> = {
@@ -685,8 +663,8 @@ export const EventMorseAccountRecovered: MessageFns<EventMorseAccountRecovered> 
     if (message.sessionEndHeight !== 0) {
       writer.uint32(8).int64(message.sessionEndHeight);
     }
-    if (message.recoveredBalance !== undefined) {
-      Coin.encode(message.recoveredBalance, writer.uint32(18).fork()).join();
+    if (message.recoveredBalance !== "") {
+      writer.uint32(42).string(message.recoveredBalance);
     }
     if (message.shannonDestAddress !== "") {
       writer.uint32(26).string(message.shannonDestAddress);
@@ -712,12 +690,12 @@ export const EventMorseAccountRecovered: MessageFns<EventMorseAccountRecovered> 
           message.sessionEndHeight = longToNumber(reader.int64());
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
+        case 5: {
+          if (tag !== 42) {
             break;
           }
 
-          message.recoveredBalance = Coin.decode(reader, reader.uint32());
+          message.recoveredBalance = reader.string();
           continue;
         }
         case 3: {
@@ -748,7 +726,7 @@ export const EventMorseAccountRecovered: MessageFns<EventMorseAccountRecovered> 
   fromJSON(object: any): EventMorseAccountRecovered {
     return {
       sessionEndHeight: isSet(object.sessionEndHeight) ? globalThis.Number(object.sessionEndHeight) : 0,
-      recoveredBalance: isSet(object.recoveredBalance) ? Coin.fromJSON(object.recoveredBalance) : undefined,
+      recoveredBalance: isSet(object.recoveredBalance) ? globalThis.String(object.recoveredBalance) : "",
       shannonDestAddress: isSet(object.shannonDestAddress) ? globalThis.String(object.shannonDestAddress) : "",
       morseSrcAddress: isSet(object.morseSrcAddress) ? globalThis.String(object.morseSrcAddress) : "",
     };
@@ -759,8 +737,8 @@ export const EventMorseAccountRecovered: MessageFns<EventMorseAccountRecovered> 
     if (message.sessionEndHeight !== 0) {
       obj.sessionEndHeight = Math.round(message.sessionEndHeight);
     }
-    if (message.recoveredBalance !== undefined) {
-      obj.recoveredBalance = Coin.toJSON(message.recoveredBalance);
+    if (message.recoveredBalance !== "") {
+      obj.recoveredBalance = message.recoveredBalance;
     }
     if (message.shannonDestAddress !== "") {
       obj.shannonDestAddress = message.shannonDestAddress;
@@ -777,9 +755,7 @@ export const EventMorseAccountRecovered: MessageFns<EventMorseAccountRecovered> 
   fromPartial<I extends Exact<DeepPartial<EventMorseAccountRecovered>, I>>(object: I): EventMorseAccountRecovered {
     const message = createBaseEventMorseAccountRecovered();
     message.sessionEndHeight = object.sessionEndHeight ?? 0;
-    message.recoveredBalance = (object.recoveredBalance !== undefined && object.recoveredBalance !== null)
-      ? Coin.fromPartial(object.recoveredBalance)
-      : undefined;
+    message.recoveredBalance = object.recoveredBalance ?? "";
     message.shannonDestAddress = object.shannonDestAddress ?? "";
     message.morseSrcAddress = object.morseSrcAddress ?? "";
     return message;

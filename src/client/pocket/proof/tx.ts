@@ -9,7 +9,6 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Coin } from "../../cosmos/base/v1beta1/coin";
 import { SessionHeader } from "../session/types";
 import { Params } from "./params";
-import { Claim, Proof } from "./types";
 
 export const protobufPackage = "pocket.proof";
 
@@ -50,7 +49,6 @@ export interface MsgUpdateParam {
  * MsgUpdateParam message after a single param update.
  */
 export interface MsgUpdateParamResponse {
-  params: Params | undefined;
 }
 
 export interface MsgCreateClaim {
@@ -63,7 +61,6 @@ export interface MsgCreateClaim {
 }
 
 export interface MsgCreateClaimResponse {
-  claim: Claim | undefined;
 }
 
 export interface MsgSubmitProof {
@@ -76,7 +73,6 @@ export interface MsgSubmitProof {
 }
 
 export interface MsgSubmitProofResponse {
-  proof: Proof | undefined;
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
@@ -327,14 +323,11 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
 };
 
 function createBaseMsgUpdateParamResponse(): MsgUpdateParamResponse {
-  return { params: undefined };
+  return {};
 }
 
 export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
-  encode(message: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.params !== undefined) {
-      Params.encode(message.params, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -345,14 +338,6 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.params = Params.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -362,26 +347,20 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgUpdateParamResponse {
-    return { params: isSet(object.params) ? Params.fromJSON(object.params) : undefined };
+  fromJSON(_: any): MsgUpdateParamResponse {
+    return {};
   },
 
-  toJSON(message: MsgUpdateParamResponse): unknown {
+  toJSON(_: MsgUpdateParamResponse): unknown {
     const obj: any = {};
-    if (message.params !== undefined) {
-      obj.params = Params.toJSON(message.params);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(base?: I): MsgUpdateParamResponse {
     return MsgUpdateParamResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(object: I): MsgUpdateParamResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(_: I): MsgUpdateParamResponse {
     const message = createBaseMsgUpdateParamResponse();
-    message.params = (object.params !== undefined && object.params !== null)
-      ? Params.fromPartial(object.params)
-      : undefined;
     return message;
   },
 };
@@ -483,14 +462,11 @@ export const MsgCreateClaim: MessageFns<MsgCreateClaim> = {
 };
 
 function createBaseMsgCreateClaimResponse(): MsgCreateClaimResponse {
-  return { claim: undefined };
+  return {};
 }
 
 export const MsgCreateClaimResponse: MessageFns<MsgCreateClaimResponse> = {
-  encode(message: MsgCreateClaimResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgCreateClaimResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -501,14 +477,6 @@ export const MsgCreateClaimResponse: MessageFns<MsgCreateClaimResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.claim = Claim.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -518,24 +486,20 @@ export const MsgCreateClaimResponse: MessageFns<MsgCreateClaimResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgCreateClaimResponse {
-    return { claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined };
+  fromJSON(_: any): MsgCreateClaimResponse {
+    return {};
   },
 
-  toJSON(message: MsgCreateClaimResponse): unknown {
+  toJSON(_: MsgCreateClaimResponse): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgCreateClaimResponse>, I>>(base?: I): MsgCreateClaimResponse {
     return MsgCreateClaimResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgCreateClaimResponse>, I>>(object: I): MsgCreateClaimResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgCreateClaimResponse>, I>>(_: I): MsgCreateClaimResponse {
     const message = createBaseMsgCreateClaimResponse();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
     return message;
   },
 };
@@ -637,14 +601,11 @@ export const MsgSubmitProof: MessageFns<MsgSubmitProof> = {
 };
 
 function createBaseMsgSubmitProofResponse(): MsgSubmitProofResponse {
-  return { proof: undefined };
+  return {};
 }
 
 export const MsgSubmitProofResponse: MessageFns<MsgSubmitProofResponse> = {
-  encode(message: MsgSubmitProofResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.proof !== undefined) {
-      Proof.encode(message.proof, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgSubmitProofResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -655,14 +616,6 @@ export const MsgSubmitProofResponse: MessageFns<MsgSubmitProofResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.proof = Proof.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -672,24 +625,20 @@ export const MsgSubmitProofResponse: MessageFns<MsgSubmitProofResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgSubmitProofResponse {
-    return { proof: isSet(object.proof) ? Proof.fromJSON(object.proof) : undefined };
+  fromJSON(_: any): MsgSubmitProofResponse {
+    return {};
   },
 
-  toJSON(message: MsgSubmitProofResponse): unknown {
+  toJSON(_: MsgSubmitProofResponse): unknown {
     const obj: any = {};
-    if (message.proof !== undefined) {
-      obj.proof = Proof.toJSON(message.proof);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgSubmitProofResponse>, I>>(base?: I): MsgSubmitProofResponse {
     return MsgSubmitProofResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgSubmitProofResponse>, I>>(object: I): MsgSubmitProofResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgSubmitProofResponse>, I>>(_: I): MsgSubmitProofResponse {
     const message = createBaseMsgSubmitProofResponse();
-    message.proof = (object.proof !== undefined && object.proof !== null) ? Proof.fromPartial(object.proof) : undefined;
     return message;
   },
 };

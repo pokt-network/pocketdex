@@ -6,10 +6,10 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
+import { EvidenceList } from "../../../../cometbft/types/v2/evidence";
+import { BlockID, Commit, Data } from "../../../../cometbft/types/v2/types";
+import { Consensus } from "../../../../cometbft/version/v1/types";
 import { Timestamp } from "../../../../google/protobuf/timestamp";
-import { EvidenceList } from "../../../../tendermint/types/evidence";
-import { BlockID, Commit, Data } from "../../../../tendermint/types/types";
-import { Consensus } from "../../../../tendermint/version/types";
 
 export const protobufPackage = "cosmos.base.tendermint.v1beta1";
 

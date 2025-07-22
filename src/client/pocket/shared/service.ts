@@ -21,6 +21,8 @@ export enum RPCType {
   JSON_RPC = 3,
   /** REST - REST */
   REST = 4,
+  /** COMET_BFT - CometBFT (REST + JSON-RPC) */
+  COMET_BFT = 5,
   UNRECOGNIZED = -1,
 }
 
@@ -41,6 +43,9 @@ export function rPCTypeFromJSON(object: any): RPCType {
     case 4:
     case "REST":
       return RPCType.REST;
+    case 5:
+    case "COMET_BFT":
+      return RPCType.COMET_BFT;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -60,6 +65,8 @@ export function rPCTypeToJSON(object: RPCType): string {
       return "JSON_RPC";
     case RPCType.REST:
       return "REST";
+    case RPCType.COMET_BFT:
+      return "COMET_BFT";
     case RPCType.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

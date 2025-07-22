@@ -2,13 +2,14 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/crypto/proof.proto
+// source: cometbft/crypto/v1/proof.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
-export const protobufPackage = "tendermint.crypto";
+export const protobufPackage = "cometbft.crypto.v1";
 
+/** Proof is a Merkle proof. */
 export interface Proof {
   total: number;
   index: number;
@@ -16,6 +17,7 @@ export interface Proof {
   aunts: Uint8Array[];
 }
 
+/** ValueOp is a Merkle proof for a single key. */
 export interface ValueOp {
   /** Encoded in ProofOp.Key. */
   key: Uint8Array;
@@ -23,6 +25,7 @@ export interface ValueOp {
   proof: Proof | undefined;
 }
 
+/** DominoOp always returns the given output. */
 export interface DominoOp {
   key: string;
   input: string;
@@ -31,7 +34,7 @@ export interface DominoOp {
 
 /**
  * ProofOp defines an operation used for calculating Merkle root
- * The data could be arbitrary format, providing nessecary data
+ * The data could be arbitrary format, providing necessary data
  * for example neighbouring node hash
  */
 export interface ProofOp {

@@ -2,13 +2,14 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/types/params.proto
+// source: cometbft/types/v2/params.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Duration } from "../../google/protobuf/duration";
+import { Duration } from "../../../google/protobuf/duration";
+import { Int64Value } from "../../../google/protobuf/wrappers";
 
-export const protobufPackage = "tendermint.types";
+export const protobufPackage = "cometbft.types.v2";
 
 /**
  * ConsensusParams contains consensus critical parameters that determine the
@@ -18,61 +19,83 @@ export interface ConsensusParams {
   block: BlockParams | undefined;
   evidence: EvidenceParams | undefined;
   validator: ValidatorParams | undefined;
-  version: VersionParams | undefined;
+  version:
+    | VersionParams
+    | undefined;
+  /**
+   * Use FeatureParams.vote_extensions_enable_height instead
+   *
+   * @deprecated
+   */
   abci: ABCIParams | undefined;
+  synchrony: SynchronyParams | undefined;
+  feature: FeatureParams | undefined;
 }
 
-/** BlockParams contains limits on the block size. */
+/** BlockParams define limits on the block size and gas. */
 export interface BlockParams {
   /**
-   * Max block size, in bytes.
-   * Note: must be greater than 0
+   * Maximum size of a block, in bytes.
+   *
+   * Must be greater or equal to -1 and cannot be greater than the hard-coded
+   * maximum block size, which is 100MB.
+   *
+   * If set to -1, the limit is the hard-coded maximum block size.
    */
   maxBytes: number;
   /**
-   * Max gas per block.
-   * Note: must be greater or equal to -1
+   * Maximum gas wanted by transactions included in a block.
+   *
+   * Must be greater or equal to -1. If set to -1, no limit is enforced.
    */
   maxGas: number;
 }
 
-/** EvidenceParams determine how we handle evidence of malfeasance. */
+/** EvidenceParams determine the validity of evidences of Byzantine behavior. */
 export interface EvidenceParams {
   /**
-   * Max age of evidence, in blocks.
+   * Maximum age of evidence, in blocks.
    *
-   * The basic formula for calculating this is: MaxAgeDuration / {average block
-   * time}.
+   * The recommended formula for calculating it is max_age_duration / {average
+   * block time}.
    */
   maxAgeNumBlocks: number;
   /**
-   * Max age of evidence, in time.
+   * Maximum age of evidence, in time.
    *
-   * It should correspond with an app's "unbonding period" or other similar
-   * mechanism for handling [Nothing-At-Stake
-   * attacks](https://github.com/ethereum/wiki/wiki/Proof-of-Stake-FAQ#what-is-the-nothing-at-stake-problem-and-how-can-it-be-fixed).
+   * The recommended value of is should correspond to the application's
+   * "unbonding period" or other similar mechanism for handling
+   * Nothing-At-Stake attacks.
+   * See:
+   * https://github.com/ethereum/wiki/wiki/Proof-of-Stake-FAQ#what-is-the-nothing-at-stake-problem-and-how-can-it-be-fixed.
    */
   maxAgeDuration:
     | Duration
     | undefined;
   /**
-   * This sets the maximum size of total evidence in bytes that can be committed in a single block.
-   * and should fall comfortably under the max block bytes.
-   * Default is 1048576 or 1MB
+   * Maximum size in bytes of evidence allowed to be included in a block.
+   *
+   * It should fall comfortably under the maximum size of a block.
    */
   maxBytes: number;
 }
 
 /**
  * ValidatorParams restrict the public key types validators can use.
- * NOTE: uses ABCI pubkey naming, not Amino names.
+ *
+ * NOTE: uses ABCI public keys naming, not Amino names.
  */
 export interface ValidatorParams {
   pubKeyTypes: string[];
 }
 
-/** VersionParams contains the ABCI application version. */
+/** VersionParams contain the version of specific components of CometBFT. */
 export interface VersionParams {
+  /**
+   * The ABCI application version.
+   *
+   * It was named app_version in CometBFT 0.34.
+   */
   app: number;
 }
 
@@ -86,24 +109,90 @@ export interface HashedParams {
   blockMaxGas: number;
 }
 
-/** ABCIParams configure functionality specific to the Application Blockchain Interface. */
+/**
+ * SynchronyParams determine the validity of block timestamps.
+ *
+ * These parameters are part of the Proposer-Based Timestamps (PBTS) algorithm.
+ * For more information on the relationship of the synchrony parameters to
+ * block timestamps validity, refer to the PBTS specification:
+ * https://github.com/tendermint/spec/blob/master/spec/consensus/proposer-based-timestamp/README.md
+ */
+export interface SynchronyParams {
+  /**
+   * Bound for how skewed a proposer's clock may be from any validator on the
+   * network while still producing valid proposals.
+   */
+  precision:
+    | Duration
+    | undefined;
+  /**
+   * Bound for how long a proposal message may take to reach all validators on
+   * a network and still be considered valid.
+   */
+  messageDelay: Duration | undefined;
+}
+
+/** FeatureParams configure the height from which features of CometBFT are enabled. */
+export interface FeatureParams {
+  /**
+   * Height during which vote extensions will be enabled.
+   *
+   * A value of 0 means vote extensions are disabled. A value > 0 denotes
+   * the height at which vote extensions will be (or have been) enabled.
+   *
+   * During the specified height, and for all subsequent heights, precommit
+   * messages that do not contain valid extension data will be considered
+   * invalid. Prior to this height, or when this height is set to 0, vote
+   * extensions will not be used or accepted by validators on the network.
+   *
+   * Once enabled, vote extensions will be created by the application in
+   * ExtendVote, validated by the application in VerifyVoteExtension, and
+   * used by the application in PrepareProposal, when proposing the next block.
+   *
+   * Cannot be set to heights lower or equal to the current blockchain height.
+   */
+  voteExtensionsEnableHeight:
+    | number
+    | undefined;
+  /**
+   * Height at which Proposer-Based Timestamps (PBTS) will be enabled.
+   *
+   * A value of 0 means PBTS is disabled. A value > 0 denotes the height at
+   * which PBTS will be (or has been) enabled.
+   *
+   * From the specified height, and for all subsequent heights, the PBTS
+   * algorithm will be used to produce and validate block timestamps. Prior to
+   * this height, or when this height is set to 0, the legacy BFT Time
+   * algorithm is used to produce and validate timestamps.
+   *
+   * Cannot be set to heights lower or equal to the current blockchain height.
+   */
+  pbtsEnableHeight: number | undefined;
+}
+
+/**
+ * ABCIParams is deprecated and its contents moved to FeatureParams
+ *
+ * @deprecated
+ */
 export interface ABCIParams {
   /**
-   * vote_extensions_enable_height configures the first height during which
-   * vote extensions will be enabled. During this specified height, and for all
-   * subsequent heights, precommit messages that do not contain valid extension data
-   * will be considered invalid. Prior to this height, vote extensions will not
-   * be used or accepted by validators on the network.
-   *
-   * Once enabled, vote extensions will be created by the application in ExtendVote,
-   * passed to the application for validation in VerifyVoteExtension and given
-   * to the application to use when proposing a block during PrepareProposal.
+   * vote_extensions_enable_height has been deprecated.
+   * Instead, use FeatureParams.vote_extensions_enable_height.
    */
   voteExtensionsEnableHeight: number;
 }
 
 function createBaseConsensusParams(): ConsensusParams {
-  return { block: undefined, evidence: undefined, validator: undefined, version: undefined, abci: undefined };
+  return {
+    block: undefined,
+    evidence: undefined,
+    validator: undefined,
+    version: undefined,
+    abci: undefined,
+    synchrony: undefined,
+    feature: undefined,
+  };
 }
 
 export const ConsensusParams: MessageFns<ConsensusParams> = {
@@ -122,6 +211,12 @@ export const ConsensusParams: MessageFns<ConsensusParams> = {
     }
     if (message.abci !== undefined) {
       ABCIParams.encode(message.abci, writer.uint32(42).fork()).join();
+    }
+    if (message.synchrony !== undefined) {
+      SynchronyParams.encode(message.synchrony, writer.uint32(50).fork()).join();
+    }
+    if (message.feature !== undefined) {
+      FeatureParams.encode(message.feature, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -173,6 +268,22 @@ export const ConsensusParams: MessageFns<ConsensusParams> = {
           message.abci = ABCIParams.decode(reader, reader.uint32());
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.synchrony = SynchronyParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.feature = FeatureParams.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -189,6 +300,8 @@ export const ConsensusParams: MessageFns<ConsensusParams> = {
       validator: isSet(object.validator) ? ValidatorParams.fromJSON(object.validator) : undefined,
       version: isSet(object.version) ? VersionParams.fromJSON(object.version) : undefined,
       abci: isSet(object.abci) ? ABCIParams.fromJSON(object.abci) : undefined,
+      synchrony: isSet(object.synchrony) ? SynchronyParams.fromJSON(object.synchrony) : undefined,
+      feature: isSet(object.feature) ? FeatureParams.fromJSON(object.feature) : undefined,
     };
   },
 
@@ -208,6 +321,12 @@ export const ConsensusParams: MessageFns<ConsensusParams> = {
     }
     if (message.abci !== undefined) {
       obj.abci = ABCIParams.toJSON(message.abci);
+    }
+    if (message.synchrony !== undefined) {
+      obj.synchrony = SynchronyParams.toJSON(message.synchrony);
+    }
+    if (message.feature !== undefined) {
+      obj.feature = FeatureParams.toJSON(message.feature);
     }
     return obj;
   },
@@ -231,6 +350,12 @@ export const ConsensusParams: MessageFns<ConsensusParams> = {
       : undefined;
     message.abci = (object.abci !== undefined && object.abci !== null)
       ? ABCIParams.fromPartial(object.abci)
+      : undefined;
+    message.synchrony = (object.synchrony !== undefined && object.synchrony !== null)
+      ? SynchronyParams.fromPartial(object.synchrony)
+      : undefined;
+    message.feature = (object.feature !== undefined && object.feature !== null)
+      ? FeatureParams.fromPartial(object.feature)
       : undefined;
     return message;
   },
@@ -598,6 +723,164 @@ export const HashedParams: MessageFns<HashedParams> = {
     const message = createBaseHashedParams();
     message.blockMaxBytes = object.blockMaxBytes ?? 0;
     message.blockMaxGas = object.blockMaxGas ?? 0;
+    return message;
+  },
+};
+
+function createBaseSynchronyParams(): SynchronyParams {
+  return { precision: undefined, messageDelay: undefined };
+}
+
+export const SynchronyParams: MessageFns<SynchronyParams> = {
+  encode(message: SynchronyParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.precision !== undefined) {
+      Duration.encode(message.precision, writer.uint32(10).fork()).join();
+    }
+    if (message.messageDelay !== undefined) {
+      Duration.encode(message.messageDelay, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SynchronyParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSynchronyParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.precision = Duration.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.messageDelay = Duration.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SynchronyParams {
+    return {
+      precision: isSet(object.precision) ? Duration.fromJSON(object.precision) : undefined,
+      messageDelay: isSet(object.messageDelay) ? Duration.fromJSON(object.messageDelay) : undefined,
+    };
+  },
+
+  toJSON(message: SynchronyParams): unknown {
+    const obj: any = {};
+    if (message.precision !== undefined) {
+      obj.precision = Duration.toJSON(message.precision);
+    }
+    if (message.messageDelay !== undefined) {
+      obj.messageDelay = Duration.toJSON(message.messageDelay);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SynchronyParams>, I>>(base?: I): SynchronyParams {
+    return SynchronyParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SynchronyParams>, I>>(object: I): SynchronyParams {
+    const message = createBaseSynchronyParams();
+    message.precision = (object.precision !== undefined && object.precision !== null)
+      ? Duration.fromPartial(object.precision)
+      : undefined;
+    message.messageDelay = (object.messageDelay !== undefined && object.messageDelay !== null)
+      ? Duration.fromPartial(object.messageDelay)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseFeatureParams(): FeatureParams {
+  return { voteExtensionsEnableHeight: undefined, pbtsEnableHeight: undefined };
+}
+
+export const FeatureParams: MessageFns<FeatureParams> = {
+  encode(message: FeatureParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.voteExtensionsEnableHeight !== undefined) {
+      Int64Value.encode({ value: message.voteExtensionsEnableHeight! }, writer.uint32(10).fork()).join();
+    }
+    if (message.pbtsEnableHeight !== undefined) {
+      Int64Value.encode({ value: message.pbtsEnableHeight! }, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): FeatureParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseFeatureParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.voteExtensionsEnableHeight = Int64Value.decode(reader, reader.uint32()).value;
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.pbtsEnableHeight = Int64Value.decode(reader, reader.uint32()).value;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): FeatureParams {
+    return {
+      voteExtensionsEnableHeight: isSet(object.voteExtensionsEnableHeight)
+        ? Number(object.voteExtensionsEnableHeight)
+        : undefined,
+      pbtsEnableHeight: isSet(object.pbtsEnableHeight) ? Number(object.pbtsEnableHeight) : undefined,
+    };
+  },
+
+  toJSON(message: FeatureParams): unknown {
+    const obj: any = {};
+    if (message.voteExtensionsEnableHeight !== undefined) {
+      obj.voteExtensionsEnableHeight = message.voteExtensionsEnableHeight;
+    }
+    if (message.pbtsEnableHeight !== undefined) {
+      obj.pbtsEnableHeight = message.pbtsEnableHeight;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<FeatureParams>, I>>(base?: I): FeatureParams {
+    return FeatureParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<FeatureParams>, I>>(object: I): FeatureParams {
+    const message = createBaseFeatureParams();
+    message.voteExtensionsEnableHeight = object.voteExtensionsEnableHeight ?? undefined;
+    message.pbtsEnableHeight = object.pbtsEnableHeight ?? undefined;
     return message;
   },
 };

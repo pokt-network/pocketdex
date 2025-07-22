@@ -2,21 +2,22 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/crypto/keys.proto
+// source: cometbft/crypto/v1/keys.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
-export const protobufPackage = "tendermint.crypto";
+export const protobufPackage = "cometbft.crypto.v1";
 
-/** PublicKey defines the keys available for use with Validators */
+/** PublicKey is a ED25519 or a secp256k1 public key. */
 export interface PublicKey {
   ed25519?: Uint8Array | undefined;
   secp256k1?: Uint8Array | undefined;
+  bls12381?: Uint8Array | undefined;
 }
 
 function createBasePublicKey(): PublicKey {
-  return { ed25519: undefined, secp256k1: undefined };
+  return { ed25519: undefined, secp256k1: undefined, bls12381: undefined };
 }
 
 export const PublicKey: MessageFns<PublicKey> = {
@@ -26,6 +27,9 @@ export const PublicKey: MessageFns<PublicKey> = {
     }
     if (message.secp256k1 !== undefined) {
       writer.uint32(18).bytes(message.secp256k1);
+    }
+    if (message.bls12381 !== undefined) {
+      writer.uint32(26).bytes(message.bls12381);
     }
     return writer;
   },
@@ -53,6 +57,14 @@ export const PublicKey: MessageFns<PublicKey> = {
           message.secp256k1 = reader.bytes();
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.bls12381 = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -66,6 +78,7 @@ export const PublicKey: MessageFns<PublicKey> = {
     return {
       ed25519: isSet(object.ed25519) ? bytesFromBase64(object.ed25519) : undefined,
       secp256k1: isSet(object.secp256k1) ? bytesFromBase64(object.secp256k1) : undefined,
+      bls12381: isSet(object.bls12381) ? bytesFromBase64(object.bls12381) : undefined,
     };
   },
 
@@ -77,6 +90,9 @@ export const PublicKey: MessageFns<PublicKey> = {
     if (message.secp256k1 !== undefined) {
       obj.secp256k1 = base64FromBytes(message.secp256k1);
     }
+    if (message.bls12381 !== undefined) {
+      obj.bls12381 = base64FromBytes(message.bls12381);
+    }
     return obj;
   },
 
@@ -87,6 +103,7 @@ export const PublicKey: MessageFns<PublicKey> = {
     const message = createBasePublicKey();
     message.ed25519 = object.ed25519 ?? undefined;
     message.secp256k1 = object.secp256k1 ?? undefined;
+    message.bls12381 = object.bls12381 ?? undefined;
     return message;
   },
 };

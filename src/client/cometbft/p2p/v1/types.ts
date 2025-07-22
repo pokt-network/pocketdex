@@ -2,25 +2,31 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/p2p/types.proto
+// source: cometbft/p2p/v1/types.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
-export const protobufPackage = "tendermint.p2p";
+export const protobufPackage = "cometbft.p2p.v1";
 
+/** NetAddress represents a peer's network address. */
 export interface NetAddress {
   id: string;
   ip: string;
   port: number;
 }
 
+/** ProtocolVersion represents the current p2p protocol version. */
 export interface ProtocolVersion {
   p2p: number;
   block: number;
   app: number;
 }
 
+/**
+ * DefaultNodeInfo is a basic node's information sent to other peers during the
+ * p2p handshake.
+ */
 export interface DefaultNodeInfo {
   protocolVersion: ProtocolVersion | undefined;
   defaultNodeId: string;
@@ -32,6 +38,7 @@ export interface DefaultNodeInfo {
   other: DefaultNodeInfoOther | undefined;
 }
 
+/** DefaultNodeInfoOther is the misc. application specific data. */
 export interface DefaultNodeInfoOther {
   txIndex: string;
   rpcAddress: string;
