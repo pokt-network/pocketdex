@@ -41,6 +41,7 @@ import {
   ClaimSettlementResultSDKType,
   settlementOpReasonFromJSON,
   SettlementOpReasonSDKType,
+  SettlementOpReason as SettlementOpReasonSdk
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
 import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId, getEventId, messageId } from "../utils/ids";
@@ -163,7 +164,8 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     settlementResult: ClaimSettlementResultSDKType | null = null,
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
-    proofMissingPenalty: CoinSDKType = {};
+    proofMissingPenalty: CoinSDKType = {},
+    rewardDistribution: Record<string, string> | undefined;
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
@@ -224,6 +226,10 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
 
     if (attribute.key === "settlement_result") {
       settlementResult = JSON.parse(attribute.value as string);
+    }
+
+    if (attribute.key === "reward_distribution") {
+      rewardDistribution = JSON.parse(attribute.value as string);
     }
 
     if (attribute.key === "proof_missing_penalty") {
@@ -294,6 +300,7 @@ function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     failureReason,
     proofValidationStatus,
     settlementResult,
+    rewardDistribution,
   };
 }
 
@@ -365,6 +372,7 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
     numEstimatedComputedUnits,
     numRelays,
     proofRequirement,
+    rewardDistribution,
     settlementResult,
   } = getAttributes(event.event.attributes);
 
@@ -373,10 +381,14 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
   const eventId = getEventId(event)
   const blockId = getBlockId(event.block)
 
-  let modToAcctTransfers: Array<ModToAcctTransferProps> = []
+  let
+    modToAcctTransfers: Array<ModToAcctTransferProps> = [],
+    mints: EventClaimSettledProps['mints'] = [],
+    burns: EventClaimSettledProps['burns'] = [],
+    modToModTransfers: EventClaimSettledProps['modToModTransfers'] = [];
 
-  if (settlementResult?.mod_to_acct_transfers) {
-    modToAcctTransfers = settlementResult.mod_to_acct_transfers.map((item, index) => ({
+  if (settlementResult) {
+    modToAcctTransfers = settlementResult.mod_to_acct_transfers?.map((item, index) => ({
       id: `${eventId}-${index}`,
       blockId,
       eventClaimSettledId: eventId,
@@ -387,6 +399,87 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
       opReason: getSettlementOpReasonFromSDK(item.op_reason),
       relayId: '',
     })) || []
+
+    mints = settlementResult.mints?.map(mint => ({
+      opReason: settlementOpReasonFromJSON(mint.op_reason),
+      destinationModule: mint.DestinationModule,
+      amount: BigInt(mint.coin.amount),
+      denom: mint.coin.denom,
+    })) || []
+
+    burns = settlementResult.burns?.map(burn => ({
+      opReason: settlementOpReasonFromJSON(burn.op_reason),
+      destinationModule: burn.DestinationModule,
+      amount: BigInt(burn.coin.amount),
+      denom: burn.coin.denom,
+    })) || []
+
+    modToModTransfers = settlementResult.mod_to_mod_transfers?.map((item) => ({
+      opReason: settlementOpReasonFromJSON(item.op_reason),
+      senderModule: item.SenderModule,
+      recipientModule: item.RecipientModule,
+      amount: BigInt(item.coin.amount),
+      denom: item.coin.denom,
+    })) || []
+  } else if (rewardDistribution) {
+    let totalFromRewardDistribution = BigInt(0);
+
+    modToAcctTransfers = Object.entries(rewardDistribution).map(([address, coinString], index) => {
+      const coin = getDenomAndAmount(coinString)
+      const coinAmount = BigInt(coin.amount)
+      totalFromRewardDistribution = totalFromRewardDistribution + coinAmount;
+
+      return {
+        id: `${eventId}-${index}`,
+        blockId,
+        eventClaimSettledId: eventId,
+        senderModule: '',
+        recipientId: address,
+        opReason: SettlementOpReason.UNSPECIFIED,
+        relayId: '',
+        denom: coin.denom,
+        amount: coinAmount,
+      }
+    })
+
+    burns = [
+      {
+        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN),
+        destinationModule: '',
+        // we are assuming here that mint = burn is always true, if this changes in the future, then we need to update this
+        amount: BigInt(claimed.amount),
+        denom: claimed.denom,
+      }
+    ]
+
+    // it seems that global mint is being minted twice, one due to inflation and the other due to application reimbursement
+    // see: https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L57
+    // so in order to get the inflation mint we need to divide the difference between the total of the reward_distribution
+    // and the claimed upokt
+    const totalMint = totalFromRewardDistribution - BigInt(claimed.amount);
+    const globalMint = totalMint / BigInt(2)
+
+    mints = [
+      {
+        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_INFLATION),
+        destinationModule: '',
+        amount: globalMint,
+        denom: claimed.denom,
+      },
+      {
+        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER),
+        destinationModule: '',
+        amount: globalMint,
+        denom: claimed.denom,
+      },
+      {
+        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT),
+        destinationModule: '',
+        // we are assuming here that mint = burn is always true, if this changes in the future, then we need to update this
+        amount: BigInt(claimed.amount),
+        denom: claimed.denom,
+      }
+    ]
   }
 
   return [
@@ -407,25 +500,9 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
       blockId: blockId,
       id: eventId,
       proofRequirement,
-      mints: settlementResult?.mints?.map(mint => ({
-        opReason: settlementOpReasonFromJSON(mint.op_reason),
-        destinationModule: mint.DestinationModule,
-        amount: BigInt(mint.coin.amount),
-        denom: mint.coin.denom,
-      })) || [],
-      burns: settlementResult?.burns?.map(burn => ({
-        opReason: settlementOpReasonFromJSON(burn.op_reason),
-        destinationModule: burn.DestinationModule,
-        amount: BigInt(burn.coin.amount),
-        denom: burn.coin.denom,
-      })) || [],
-      modToModTransfers: settlementResult?.mod_to_mod_transfers?.map((item) => ({
-        opReason: settlementOpReasonFromJSON(item.op_reason),
-        senderModule: item.SenderModule,
-        recipientModule: item.RecipientModule,
-        amount: BigInt(item.coin.amount),
-        denom: item.coin.denom,
-      })) || [],
+      mints,
+      burns,
+      modToModTransfers,
       rootHash: undefined,
     },
     modToAcctTransfers,

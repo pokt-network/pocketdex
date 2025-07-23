@@ -131,16 +131,24 @@ export function filterMsgByTxStatus(messages: Array<CosmosMessage>): {
 
 // This receives a string like `121upokt` and return { denom: "upokt", amount: "121" }
 export function getDenomAndAmount(coinAndDenom: string): CoinSDKType {
-  const parsed: string | CoinSDKType = JSON.parse(coinAndDenom);
+  let parsed: string | CoinSDKType
+
+  try {
+    parsed = JSON.parse(coinAndDenom);
+  } catch (e) {
+    parsed = coinAndDenom;
+  }
 
   if (typeof parsed === 'object') {
     return parsed
   } else {
-    const [amount, denom] = coinAndDenom.split(/^(\d+)([a-zA-Z]+)$/);
+    const match = parsed.match(/^(\d+)([a-zA-Z]+)$/);
 
-    if (!amount || !denom) {
+    if (!match) {
       throw new Error(`Invalid coinAndDenom=${coinAndDenom}`);
     }
+
+    const [, amount, denom] = match;
 
     return {
       amount,
