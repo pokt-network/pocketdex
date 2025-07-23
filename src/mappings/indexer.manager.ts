@@ -555,6 +555,10 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
         if (attribute.key === "claim") {
           return JSON.parse(attribute.value as string).supplier_operator_address
         }
+
+        if (attribute.key === "supplier_operator_address") {
+          return attribute.value as string
+        }
       }
 
       return null
