@@ -526,8 +526,13 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
 
   const eventGetId = (attributes: CosmosEvent["event"]["attributes"]) => {
     for (const attribute of attributes) {
-      if (attribute.key !== "supplier") continue
-      return JSON.parse(attribute.value as string).operator_address
+      if (attribute.key === "supplier") {
+        return JSON.parse(attribute.value as string).operator_address
+      }
+
+      if (attribute.key === "operator_address") {
+        return attribute.value as string
+      }
     }
 
     return null
