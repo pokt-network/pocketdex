@@ -45,7 +45,7 @@ import {
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
 import { optimizedBulkCreate } from "../utils/db";
 import { getBlockId, getEventId, messageId } from "../utils/ids";
-import { stringify } from "../utils/json";
+import { parseJson, stringify } from "../utils/json";
 import { getDenomAndAmount } from "../utils/primitives";
 
 // this can return undefined because older events do not have this attribute
@@ -310,7 +310,47 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateCla
   const serviceId = sessionHeader?.serviceId || "";
   const sessionId = sessionHeader?.sessionId || "";
 
-  const eventClaimCreated = msg.tx.tx.events.find(event => event.type === "pocket.proof.EventClaimCreated");
+  // here we are looking for the right event because transactions
+  // can have more than one claim
+  const eventClaimCreated = msg.tx.tx.events.find(event => {
+    if (event.type === "pocket.proof.EventClaimCreated") {
+      let supplier = '',
+        app = '',
+        service = ''
+
+      for (const {key, value} of event.attributes) {
+        if (key === 'service_id') {
+          service = parseAttribute(value)
+        }
+
+        if (key === 'application_address') {
+          app = parseAttribute(value)
+        }
+
+        if (key === 'supplier_operator_address') {
+          supplier = parseAttribute(value)
+        }
+
+        if (key === 'claim') {
+          const claim: ClaimSDKType = parseJson(value as string)
+
+          app = claim.session_header?.application_address || ""
+          service = claim.session_header?.service_id || ""
+          supplier = claim.supplier_operator_address || ""
+        }
+
+        if (service && app && supplier) {
+          break
+        }
+      }
+
+      return service === serviceId &&
+        app === applicationId &&
+        supplier === supplierOperatorAddress;
+    }
+
+    return false
+  });
 
   if (!eventClaimCreated) {
     throw new Error(`EventClaimCreated not found for msg MsgCreateClaim ${msg.idx} ${msg.tx.hash} ${msg.block.block.header.height}`);
