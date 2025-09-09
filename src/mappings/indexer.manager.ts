@@ -28,7 +28,6 @@ import { handleAddBlockReports } from "./pocket/reports";
 import {
   handleBlock,
   handleGenesis,
-  handleMessages,
   handleTransactions,
 } from "./primitives";
 import {
@@ -420,7 +419,20 @@ async function indexStakeEntity(allData: Array<CosmosEvent | CosmosMessage>, get
       if (!getEntityId) throw new Error(`getIdFromEventAttribute not found for event type ${datum.event.type}`)
       let entityId = getEntityId(datum.event.attributes)
 
-      if (!entityId) throw new Error(`entityId not found for event type ${datum.event.type}`)
+      if (!entityId) {
+        /*
+        [
+        {"key":"application_address","value":"\"pokt16wwc45wjc4ulne7wmaawxhju00vwf900lscfld\""},
+        {"key":"claim_proof_status_int","value":"2"},
+        {"key":"proof_missing_penalty","value":"\"1upokt\""},
+        {"key":"service_id","value":"\"hey\""},
+        {"key":"session_end_block_height","value":"\"363540\""},
+        {"key":"supplier_operator_address","value":"\"pokt1wua234ulad3vkcsqmasu845mn4ugu9aa6jcv23\""},
+        {"key":"mode","value":"EndBlock"}]
+         */
+        logger.error(`entityId not found for event type=${datum.event.type} attributes=${stringify(datum.event.attributes)}`);
+        throw new Error(`entityId not found for event type ${datum.event.type}`);
+      }
 
       if (Array.isArray(entityId)) {
         entitiesUpdatedAtSameDatum.push(entityId)
@@ -551,9 +563,20 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
     "pocket.supplier.EventSupplierUnbondingEnd": eventGetId,
     "pocket.supplier.EventSupplierServiceConfigActivated": eventGetId,
     "pocket.tokenomics.EventSupplierSlashed": (attributes) => {
+      /*
+        [
+          {"key":"application_address","value":"\"pokt16wwc45wjc4ulne7wmaawxhju00vwf900lscfld\""},
+          {"key":"claim_proof_status_int","value":"2"},
+          {"key":"proof_missing_penalty","value":"\"1upokt\""},
+          {"key":"service_id","value":"\"hey\""},
+          {"key":"session_end_block_height","value":"\"363540\""},
+          {"key":"supplier_operator_address","value":"\"pokt1wua234ulad3vkcsqmasu845mn4ugu9aa6jcv23\""},
+          {"key":"mode","value":"EndBlock"}
+        ]
+       */
       for (const attribute of attributes) {
         // in the previous version of this event this is the key to get the supplierId
-        if (attribute.key === "supplier_operator_addr") {
+        if (attribute.key === "supplier_operator_addr" || attribute.key === "supplier_operator_address") {
           return attribute.value as string
         }
 
