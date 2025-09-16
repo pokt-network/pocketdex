@@ -144,27 +144,40 @@ export async function updateBalances(
   const BalanceModel = getStoreModel('Balance')
   const sequelize = getSequelize("Balance")
 
-  await Promise.all([
-    optimizedBulkCreate("Balance", balancesToSaveWithOptimize),
-    BalanceModel.model.update(
-      {
-        __block_range: sequelize.fn(
-          "int8range",
-          sequelize.fn("lower", sequelize.col("_block_range")),
-          blockId,
-          '[)'
-        ),
-      },
-      {
-        hooks: false,
-        where: {
-          id: { [Symbol.for("in")]: Object.keys(currentBalancesMap) },
-          __block_range: { [Symbol.for("contains")]: blockId },
-        },
-        transaction: store.context.transaction,
-      }
+  const promises: Array<Promise<unknown>> = []
+
+  if (balancesToSaveWithOptimize.length > 0) {
+    promises.push(
+      optimizedBulkCreate("Balance", balancesToSaveWithOptimize)
     )
-  ])
+  }
+
+  if (Object.keys(currentBalancesMap).length > 0) {
+    promises.push(
+      BalanceModel.model.update(
+        {
+          __block_range: sequelize.fn(
+            "int8range",
+            sequelize.fn("lower", sequelize.col("_block_range")),
+            blockId,
+            '[)'
+          ),
+        },
+        {
+          hooks: false,
+          where: {
+            id: { [Symbol.for("in")]: Object.keys(currentBalancesMap) },
+            __block_range: { [Symbol.for("contains")]: blockId },
+          },
+          transaction: store.context.transaction,
+        }
+      )
+    )
+  }
+
+  if (promises.length > 0) {
+    await Promise.all(promises)
+  }
 }
 
 export function getBalanceChanges(events: CosmosEvent[]): {
