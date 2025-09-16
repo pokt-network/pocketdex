@@ -31,7 +31,6 @@ import { MsgStakeApplicationServiceProps } from "../../types/models/MsgStakeAppl
 import { MsgStakeGatewayProps } from "../../types/models/MsgStakeGateway";
 import { MsgStakeSupplierProps } from "../../types/models/MsgStakeSupplier";
 import { MsgStakeSupplierServiceProps } from "../../types/models/MsgStakeSupplierService";
-import type { NativeBalanceChangeProps } from "../../types/models/NativeBalanceChange";
 import type { ParamProps } from "../../types/models/Param";
 import type { ServiceProps } from "../../types/models/Service";
 import type { SupplierProps } from "../../types/models/Supplier";
@@ -192,7 +191,6 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
 
   const accounts: Array<EnforceAccountExistenceParams> = [];
   // const mAccounts: Array<ModuleAccountProps> = [];
-  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
   const genesisBalances: Array<GenesisBalanceProps> = [];
   const balances: Array<BalanceProps> = [];
 
@@ -209,15 +207,6 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
 
     for (const { amount, denom } of mAccount.balances) {
       const id = getBalanceId(address, denom);
-
-      nativeBalanceChanges.push({
-        id,
-        balanceOffset: BigInt(amount),
-        denom,
-        accountId: address,
-        eventId: "genesis",
-        blockId: getBlockId(block),
-      });
 
       genesisBalances.push({
         id,
@@ -239,7 +228,6 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
   await Promise.all([
     enforceAccountsExists(accounts),
     optimizedBulkCreate("GenesisBalance", genesisBalances),
-    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
   ]);
 }
@@ -301,7 +289,6 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
     accounts.add(account.address);
   }
 
-  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
   const genesisBalances: Array<GenesisBalanceProps> = [];
   const balances: Array<BalanceProps> = [];
 
@@ -309,15 +296,6 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
     accounts.add(balance.address);
     for (const { amount, denom } of balance.coins) {
       const id = getBalanceId(balance.address, denom);
-
-      nativeBalanceChanges.push({
-        id,
-        balanceOffset: BigInt(amount),
-        denom,
-        accountId: balance.address,
-        eventId: "genesis",
-        blockId: getBlockId(block),
-      });
 
       genesisBalances.push({
         id,
@@ -345,7 +323,6 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
       })),
     ),
     optimizedBulkCreate("GenesisBalance", genesisBalances),
-    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
     store.bulkCreate("Balance", balances),
   ]);
 }

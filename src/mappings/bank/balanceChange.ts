@@ -1,7 +1,5 @@
 import {
   CosmosEvent,
-  CosmosEventKind,
-  CosmosMessage,
 } from "@subql/types-cosmos";
 import { findIndex } from "lodash";
 import { parseCoins } from "../../cosmjs/utils";
@@ -10,18 +8,13 @@ import {
   EventAttribute,
 } from "../../types";
 import { AccountProps } from "../../types/models/Account";
+import type { BalanceProps } from "../../types/models/Balance";
 import { ModuleAccountProps } from "../../types/models/ModuleAccount";
-import { NativeBalanceChangeProps } from "../../types/models/NativeBalanceChange";
-import { optimizedBulkCreate } from "../utils/db";
+import { fetchPaginatedRecords, getSequelize, getStoreModel, optimizedBulkCreate } from "../utils/db";
 import {
   generateDeterministicUUID,
-  getBalanceId,
   getBlockId,
-  getBlockIdAsString,
-  getEventId,
-  messageId,
 } from "../utils/ids";
-import { isEventOfMessageKind } from "../utils/primitives";
 
 export interface EnforceAccountExistenceParams {
   account: AccountProps,
@@ -110,55 +103,76 @@ export async function enforceAccountsExists(accounts: Array<EnforceAccountExiste
 export const CoinReceiveType = "coin_received";
 export const CoinSpentType = "coin_spent";
 
-export function generateNativeBalanceChangeId(event: CosmosEvent): string {
-  switch (event.kind) {
-    case CosmosEventKind.Transaction:
-      return `${event.tx?.hash}-event-${event.idx}`;
-    case CosmosEventKind.Message:
-      return `${messageId(event.msg as CosmosMessage)}-event-${event.idx}`;
-    case CosmosEventKind.BeginBlock:
-    case CosmosEventKind.EndBlock:
-    case CosmosEventKind.FinalizeBlock:
-      return `${getBlockIdAsString(event.block)}-${event.idx}`;
-    default:
-      throw new Error(`Unknown event kind=${event.kind}`);
-  }
-}
+export async function updateBalances(
+  addressDenomEntries: Array<[string, bigint]>,
+  blockId: ReturnType<typeof getBlockId>
+): Promise<void> {
+  const ids = addressDenomEntries.map(([id]) => id)
 
-export async function handleNativeBalanceChangesForAddressAndDenom(address: string, denom: string, changes: Array<NativeBalanceChangeProps>, blockId: ReturnType<typeof getBlockId>): Promise<void> {
-  const id = getBalanceId(address, denom);
-  // get latest balance
-  let balance = await Balance.get(id);
-  if (!balance) {
-    balance = Balance.create({
-      id: getBalanceId(address, denom),
+  const currentBalancesMap: Record<string, bigint> = await fetchPaginatedRecords<Balance>({
+    fetchFn: (options) => Balance.getByFields(
+      [
+        ['id', 'in', ids],
+      ],
+      options
+    )
+  })
+    .then((balances: Array<Balance>) => balances.reduce((acc, record) => ({
+      ...acc,
+      [record.id]: record.amount
+    }),
+    {}
+  ))
+
+  const balancesToSaveWithOptimize: Array<BalanceProps> = []
+
+  for (const [id, change] of addressDenomEntries) {
+    const [address, denom] = id.split('-')
+    const balance = (currentBalancesMap[id] || BigInt(0)) + change
+
+    const props: BalanceProps = {
+      id,
       accountId: address,
       denom,
-      amount: BigInt(0),
+      amount: balance,
       lastUpdatedBlockId: blockId,
-    });
-  } else {
-    balance.lastUpdatedBlockId = blockId;
+    }
+
+    balancesToSaveWithOptimize.push(props)
   }
 
-  // apply all the changes on this block
-  for (const change of changes) {
-    balance.amount += BigInt(change.balanceOffset);
-  }
+  const BalanceModel = getStoreModel('Balance')
+  const sequelize = getSequelize("Balance")
 
-  // save once per address-denom
-  await balance.save();
+  await Promise.all([
+    optimizedBulkCreate("Balance", balancesToSaveWithOptimize),
+    BalanceModel.model.update(
+      {
+        __block_range: sequelize.fn(
+          "int8range",
+          sequelize.fn("lower", sequelize.col("_block_range")),
+          blockId,
+          '[)'
+        ),
+      },
+      {
+        hooks: false,
+        where: {
+          id: { [Symbol.for("in")]: Object.keys(currentBalancesMap) },
+          __block_range: { [Symbol.for("contains")]: blockId },
+        },
+        transaction: store.context.transaction,
+      }
+    )
+  ])
 }
 
-
-export function getBalanceChanges(events: CosmosEvent[], blockId: ReturnType<typeof getBlockId>): {
-  nativeBalanceChanges: Array<NativeBalanceChangeProps>,
-  addressDenomMap: Record<string, Array<NativeBalanceChangeProps>>,
+export function getBalanceChanges(events: CosmosEvent[]): {
+  addressDenomMap: Record<string, bigint>,
   uniqueAddressSet: Set<string>,
 } {
-  const addressDenomMap: Record<string, Array<NativeBalanceChangeProps>> = {};
+  const addressDenomMap: Record<string, bigint> = {};
   const uniqueAddressSet = new Set<string>();
-  const nativeBalanceChanges: Array<NativeBalanceChangeProps> = [];
 
   for (const event of events) {
     const keyIndex = findIndex((event.event.attributes as Array<EventAttribute>), (attr) => attr.key === "receiver" || attr.key === "spender");
@@ -188,27 +202,15 @@ export function getBalanceChanges(events: CosmosEvent[], blockId: ReturnType<typ
     const coin = parseCoins(amountStr)[0];
     const coins = BigInt(coin.amount);
     const amount = attribute.key === "spender" ? BigInt(0) - coins : coins;
-    const id = generateNativeBalanceChangeId(event);
 
     const mapId = `${address}-${coin.denom}`;
-    if (!addressDenomMap[mapId]) addressDenomMap[mapId] = [];
 
-    const nativeBalanceChange = {
-      id,
-      balanceOffset: amount.valueOf(),
-      denom: coin.denom,
-      accountId: address,
-      eventId: getEventId(event),
-      blockId: blockId,
-      transactionId: event.tx?.hash || undefined,
-      messageId: isEventOfMessageKind(event) ? messageId(event.msg as CosmosMessage) : undefined,
-    };
-    nativeBalanceChanges.push(nativeBalanceChange);
-    addressDenomMap[mapId].push(nativeBalanceChange);
+    if (!addressDenomMap[mapId]) addressDenomMap[mapId] = BigInt(0);
+
+    addressDenomMap[mapId] += amount
   }
 
   return {
-    nativeBalanceChanges,
     addressDenomMap,
     uniqueAddressSet,
   };

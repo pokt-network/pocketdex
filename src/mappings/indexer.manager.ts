@@ -14,8 +14,8 @@ import {
   enforceAccountsExists,
   getBalanceChanges,
   handleModuleAccounts,
-  handleNativeBalanceChangesForAddressAndDenom,
   handleSupply,
+  updateBalances,
 } from "./bank";
 import { PREFIX } from "./constants";
 import { createDbFunctions } from "./dbFunctions";
@@ -38,7 +38,6 @@ import {
   GetIdFromEventAttribute,
   RecordGetId,
 } from "./types/stake";
-import { optimizedBulkCreate } from "./utils/db";
 import { getBlockId } from "./utils/ids";
 import { stringify } from "./utils/json";
 import { profilerWrap } from "./utils/performance";
@@ -104,33 +103,18 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
 
   const blockId = getBlockId(block);
 
-  const { addressDenomMap, nativeBalanceChanges, uniqueAddressSet } = getBalanceChanges(
-    balanceModificationEvents,
-    blockId,
-  );
+  const { addressDenomMap, uniqueAddressSet } = getBalanceChanges(balanceModificationEvents);
 
   const addressDenomArray = Object.entries(addressDenomMap)
-
-  while (addressDenomArray.length > 0) {
-    const items = addressDenomArray.splice(0, 10)
-
-    await Promise.all(
-      items.map(([addressDenom, changes]) => {
-        const [address, denom] = addressDenom.split("-");
-        return handleNativeBalanceChangesForAddressAndDenom(address, denom, changes, blockId);
-      })
-    )
-  }
 
   const msgTypes = [
     "/cosmos.bank.v1beta1.MsgSend",
   ];
 
   await Promise.all([
+    updateBalances(addressDenomArray, blockId),
     // create a native transfer entity
     ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.All),
-    // track native balance changes
-    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
     // ensure accounts exists in bulk
     enforceAccountsExists(Array.from(uniqueAddressSet).map(address => ({
       account: {
