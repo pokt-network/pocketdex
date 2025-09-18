@@ -144,39 +144,45 @@ export async function updateBalances(
   const BalanceModel = getStoreModel('Balance')
   const sequelize = getSequelize("Balance")
 
-  const promises: Array<Promise<unknown>> = []
-
-  if (balancesToSaveWithOptimize.length > 0) {
-    promises.push(
-      optimizedBulkCreate("Balance", balancesToSaveWithOptimize)
-    )
-  }
+  const blockHeight = store.context.getHistoricalUnit()
 
   if (Object.keys(currentBalancesMap).length > 0) {
-    promises.push(
-      BalanceModel.model.update(
-        {
-          __block_range: sequelize.fn(
-            "int8range",
-            sequelize.fn("lower", sequelize.col("_block_range")),
-            blockId,
-            '[)'
-          ),
+    // remove existing records of changes for this block
+    // if they exist before saving records
+    await BalanceModel.model.destroy({
+      where: {
+        // @ts-ignore
+        last_updated_block_id: blockId,
+      },
+      transaction: store.context.transaction,
+    })
+
+    await BalanceModel.model.update(
+      {
+        __block_range: sequelize.fn(
+          "int8range",
+          sequelize.fn("lower", sequelize.col("_block_range")),
+          blockId,
+          '[)'
+        ),
+      },
+      {
+        hooks: false,
+        where: {
+          id: { [Symbol.for("in")]: Object.keys(currentBalancesMap) },
+          __block_range: { [Symbol.for("contains")]: blockId },
         },
-        {
-          hooks: false,
-          where: {
-            id: { [Symbol.for("in")]: Object.keys(currentBalancesMap) },
-            __block_range: { [Symbol.for("contains")]: blockId },
-          },
-          transaction: store.context.transaction,
-        }
-      )
+        transaction: store.context.transaction,
+      }
     )
   }
 
-  if (promises.length > 0) {
-    await Promise.all(promises)
+  if (balancesToSaveWithOptimize.length > 0) {
+    await optimizedBulkCreate("Balance", balancesToSaveWithOptimize, (doc) => ({
+        ...doc,
+        __block_range: [blockHeight, null],
+      })
+    )
   }
 }
 
