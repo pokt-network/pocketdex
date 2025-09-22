@@ -2,16 +2,17 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/types/evidence.proto
+// source: cometbft/types/v2/evidence.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Timestamp } from "../../google/protobuf/timestamp";
+import { Timestamp } from "../../../google/protobuf/timestamp";
 import { LightBlock, Vote } from "./types";
 import { Validator } from "./validator";
 
-export const protobufPackage = "tendermint.types";
+export const protobufPackage = "cometbft.types.v2";
 
+/** Evidence is a generic type for wrapping evidence of misbehavior by a validator. */
 export interface Evidence {
   duplicateVoteEvidence?: DuplicateVoteEvidence | undefined;
   lightClientAttackEvidence?: LightClientAttackEvidence | undefined;
@@ -35,6 +36,7 @@ export interface LightClientAttackEvidence {
   timestamp: Date | undefined;
 }
 
+/** EvidenceList is a list of evidence. */
 export interface EvidenceList {
   evidence: Evidence[];
 }

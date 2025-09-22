@@ -156,7 +156,10 @@ export interface Claim {
   sessionHeader:
     | SessionHeader
     | undefined;
-  /** Root hash from smt.SMST#Root(). */
+  /**
+   * Root hash from smt.SMST#Root().
+   * TODO_UP_NEXT(@bryanchriswhite, #1497): Dehydrate the claim's root hash from onchain events.
+   */
   rootHash: Uint8Array;
   /** Important: This field MUST only be set by proofKeeper#EnsureValidProofSignaturesAndClosestPath */
   proofValidationStatus: ClaimProofStatus;

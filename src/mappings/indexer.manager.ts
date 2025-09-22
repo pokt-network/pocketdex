@@ -14,8 +14,8 @@ import {
   enforceAccountsExists,
   getBalanceChanges,
   handleModuleAccounts,
-  handleNativeBalanceChangesForAddressAndDenom,
   handleSupply,
+  updateBalances,
 } from "./bank";
 import { PREFIX } from "./constants";
 import { createDbFunctions } from "./dbFunctions";
@@ -28,7 +28,6 @@ import { handleAddBlockReports } from "./pocket/reports";
 import {
   handleBlock,
   handleGenesis,
-  handleMessages,
   handleTransactions,
 } from "./primitives";
 import {
@@ -39,7 +38,6 @@ import {
   GetIdFromEventAttribute,
   RecordGetId,
 } from "./types/stake";
-import { optimizedBulkCreate } from "./utils/db";
 import { getBlockId } from "./utils/ids";
 import { stringify } from "./utils/json";
 import { profilerWrap } from "./utils/performance";
@@ -105,33 +103,18 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
 
   const blockId = getBlockId(block);
 
-  const { addressDenomMap, nativeBalanceChanges, uniqueAddressSet } = getBalanceChanges(
-    balanceModificationEvents,
-    blockId,
-  );
+  const { addressDenomMap, uniqueAddressSet } = getBalanceChanges(balanceModificationEvents);
 
   const addressDenomArray = Object.entries(addressDenomMap)
-
-  while (addressDenomArray.length > 0) {
-    const items = addressDenomArray.splice(0, 10)
-
-    await Promise.all(
-      items.map(([addressDenom, changes]) => {
-        const [address, denom] = addressDenom.split("-");
-        return handleNativeBalanceChangesForAddressAndDenom(address, denom, changes, blockId);
-      })
-    )
-  }
 
   const msgTypes = [
     "/cosmos.bank.v1beta1.MsgSend",
   ];
 
   await Promise.all([
+    updateBalances(addressDenomArray, blockId),
     // create a native transfer entity
     ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.All),
-    // track native balance changes
-    optimizedBulkCreate("NativeBalanceChange", nativeBalanceChanges),
     // ensure accounts exists in bulk
     enforceAccountsExists(Array.from(uniqueAddressSet).map(address => ({
       account: {
@@ -420,7 +403,20 @@ async function indexStakeEntity(allData: Array<CosmosEvent | CosmosMessage>, get
       if (!getEntityId) throw new Error(`getIdFromEventAttribute not found for event type ${datum.event.type}`)
       let entityId = getEntityId(datum.event.attributes)
 
-      if (!entityId) throw new Error(`entityId not found for event type ${datum.event.type}`)
+      if (!entityId) {
+        /*
+        [
+        {"key":"application_address","value":"\"pokt16wwc45wjc4ulne7wmaawxhju00vwf900lscfld\""},
+        {"key":"claim_proof_status_int","value":"2"},
+        {"key":"proof_missing_penalty","value":"\"1upokt\""},
+        {"key":"service_id","value":"\"hey\""},
+        {"key":"session_end_block_height","value":"\"363540\""},
+        {"key":"supplier_operator_address","value":"\"pokt1wua234ulad3vkcsqmasu845mn4ugu9aa6jcv23\""},
+        {"key":"mode","value":"EndBlock"}]
+         */
+        logger.error(`entityId not found for event type=${datum.event.type} attributes=${stringify(datum.event.attributes)}`);
+        throw new Error(`entityId not found for event type ${datum.event.type}`);
+      }
 
       if (Array.isArray(entityId)) {
         entitiesUpdatedAtSameDatum.push(entityId)
@@ -526,8 +522,13 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
 
   const eventGetId = (attributes: CosmosEvent["event"]["attributes"]) => {
     for (const attribute of attributes) {
-      if (attribute.key !== "supplier") continue
-      return JSON.parse(attribute.value as string).operator_address
+      if (attribute.key === "supplier") {
+        return JSON.parse(attribute.value as string).operator_address
+      }
+
+      if (attribute.key === "operator_address") {
+        return attribute.value as string
+      }
     }
 
     return null
@@ -546,14 +547,29 @@ async function indexSupplier(msgByType: MessageByType, eventByType: EventByType)
     "pocket.supplier.EventSupplierUnbondingEnd": eventGetId,
     "pocket.supplier.EventSupplierServiceConfigActivated": eventGetId,
     "pocket.tokenomics.EventSupplierSlashed": (attributes) => {
+      /*
+        [
+          {"key":"application_address","value":"\"pokt16wwc45wjc4ulne7wmaawxhju00vwf900lscfld\""},
+          {"key":"claim_proof_status_int","value":"2"},
+          {"key":"proof_missing_penalty","value":"\"1upokt\""},
+          {"key":"service_id","value":"\"hey\""},
+          {"key":"session_end_block_height","value":"\"363540\""},
+          {"key":"supplier_operator_address","value":"\"pokt1wua234ulad3vkcsqmasu845mn4ugu9aa6jcv23\""},
+          {"key":"mode","value":"EndBlock"}
+        ]
+       */
       for (const attribute of attributes) {
         // in the previous version of this event this is the key to get the supplierId
-        if (attribute.key === "supplier_operator_addr") {
+        if (attribute.key === "supplier_operator_addr" || attribute.key === "supplier_operator_address") {
           return attribute.value as string
         }
 
         if (attribute.key === "claim") {
           return JSON.parse(attribute.value as string).supplier_operator_address
+        }
+
+        if (attribute.key === "supplier_operator_address") {
+          return attribute.value as string
         }
       }
 

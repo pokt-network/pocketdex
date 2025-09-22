@@ -6,7 +6,7 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { MintAllocationPercentages, Params } from "./params";
+import { MintAllocationPercentages, MintEqualsBurnClaimDistribution, Params } from "./params";
 
 export const protobufPackage = "pocket.tokenomics";
 
@@ -14,41 +14,28 @@ export const protobufPackage = "pocket.tokenomics";
 export interface MsgUpdateParams {
   /** authority is the address that controls the module (defaults to x/gov unless overwritten). */
   authority: string;
-  /**
-   * params defines the x/tokenomics parameters to update.
-   * NOTE: All parameters must be supplied.
-   */
+  /** params defines the tokenomics parameters to update. */
   params: Params | undefined;
 }
 
-/**
- * MsgUpdateParamsResponse defines the response structure for executing a
- * MsgUpdateParams message.
- */
+/** MsgUpdateParamsResponse defines the response structure for executing a MsgUpdateParams message. */
 export interface MsgUpdateParamsResponse {
-  params: Params | undefined;
 }
 
 /** MsgUpdateParam is the Msg/UpdateParam request type to update a single param. */
 export interface MsgUpdateParam {
   /** authority is the address that controls the module (defaults to x/gov unless overwritten). */
   authority: string;
-  /**
-   * The (name, as_type) tuple must match the corresponding name and type as
-   * specified in the `Params` message in `proof/params.proto.`
-   */
+  /** The (name, as_type) tuple must match the corresponding name and type as specified in the `Params` message in `proof/params.proto.` */
   name: string;
   asMintAllocationPercentages?: MintAllocationPercentages | undefined;
   asString?: string | undefined;
   asFloat?: number | undefined;
+  asMintEqualsBurnClaimDistribution?: MintEqualsBurnClaimDistribution | undefined;
 }
 
-/**
- * MsgUpdateParamResponse defines the response structure for executing a
- * MsgUpdateParam message after a single param update.
- */
+/** MsgUpdateParamResponse defines the response structure for executing a MsgUpdateParam message after a single param update. */
 export interface MsgUpdateParamResponse {
-  params: Params | undefined;
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
@@ -130,14 +117,11 @@ export const MsgUpdateParams: MessageFns<MsgUpdateParams> = {
 };
 
 function createBaseMsgUpdateParamsResponse(): MsgUpdateParamsResponse {
-  return { params: undefined };
+  return {};
 }
 
 export const MsgUpdateParamsResponse: MessageFns<MsgUpdateParamsResponse> = {
-  encode(message: MsgUpdateParamsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.params !== undefined) {
-      Params.encode(message.params, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUpdateParamsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -148,14 +132,6 @@ export const MsgUpdateParamsResponse: MessageFns<MsgUpdateParamsResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.params = Params.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -165,32 +141,33 @@ export const MsgUpdateParamsResponse: MessageFns<MsgUpdateParamsResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgUpdateParamsResponse {
-    return { params: isSet(object.params) ? Params.fromJSON(object.params) : undefined };
+  fromJSON(_: any): MsgUpdateParamsResponse {
+    return {};
   },
 
-  toJSON(message: MsgUpdateParamsResponse): unknown {
+  toJSON(_: MsgUpdateParamsResponse): unknown {
     const obj: any = {};
-    if (message.params !== undefined) {
-      obj.params = Params.toJSON(message.params);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUpdateParamsResponse>, I>>(base?: I): MsgUpdateParamsResponse {
     return MsgUpdateParamsResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamsResponse>, I>>(object: I): MsgUpdateParamsResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamsResponse>, I>>(_: I): MsgUpdateParamsResponse {
     const message = createBaseMsgUpdateParamsResponse();
-    message.params = (object.params !== undefined && object.params !== null)
-      ? Params.fromPartial(object.params)
-      : undefined;
     return message;
   },
 };
 
 function createBaseMsgUpdateParam(): MsgUpdateParam {
-  return { authority: "", name: "", asMintAllocationPercentages: undefined, asString: undefined, asFloat: undefined };
+  return {
+    authority: "",
+    name: "",
+    asMintAllocationPercentages: undefined,
+    asString: undefined,
+    asFloat: undefined,
+    asMintEqualsBurnClaimDistribution: undefined,
+  };
 }
 
 export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
@@ -209,6 +186,10 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
     }
     if (message.asFloat !== undefined) {
       writer.uint32(41).double(message.asFloat);
+    }
+    if (message.asMintEqualsBurnClaimDistribution !== undefined) {
+      MintEqualsBurnClaimDistribution.encode(message.asMintEqualsBurnClaimDistribution, writer.uint32(50).fork())
+        .join();
     }
     return writer;
   },
@@ -260,6 +241,14 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
           message.asFloat = reader.double();
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.asMintEqualsBurnClaimDistribution = MintEqualsBurnClaimDistribution.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -278,6 +267,9 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
         : undefined,
       asString: isSet(object.asString) ? globalThis.String(object.asString) : undefined,
       asFloat: isSet(object.asFloat) ? globalThis.Number(object.asFloat) : undefined,
+      asMintEqualsBurnClaimDistribution: isSet(object.asMintEqualsBurnClaimDistribution)
+        ? MintEqualsBurnClaimDistribution.fromJSON(object.asMintEqualsBurnClaimDistribution)
+        : undefined,
     };
   },
 
@@ -298,6 +290,11 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
     if (message.asFloat !== undefined) {
       obj.asFloat = message.asFloat;
     }
+    if (message.asMintEqualsBurnClaimDistribution !== undefined) {
+      obj.asMintEqualsBurnClaimDistribution = MintEqualsBurnClaimDistribution.toJSON(
+        message.asMintEqualsBurnClaimDistribution,
+      );
+    }
     return obj;
   },
 
@@ -314,19 +311,20 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
         : undefined;
     message.asString = object.asString ?? undefined;
     message.asFloat = object.asFloat ?? undefined;
+    message.asMintEqualsBurnClaimDistribution =
+      (object.asMintEqualsBurnClaimDistribution !== undefined && object.asMintEqualsBurnClaimDistribution !== null)
+        ? MintEqualsBurnClaimDistribution.fromPartial(object.asMintEqualsBurnClaimDistribution)
+        : undefined;
     return message;
   },
 };
 
 function createBaseMsgUpdateParamResponse(): MsgUpdateParamResponse {
-  return { params: undefined };
+  return {};
 }
 
 export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
-  encode(message: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.params !== undefined) {
-      Params.encode(message.params, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -337,14 +335,6 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.params = Params.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -354,26 +344,20 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgUpdateParamResponse {
-    return { params: isSet(object.params) ? Params.fromJSON(object.params) : undefined };
+  fromJSON(_: any): MsgUpdateParamResponse {
+    return {};
   },
 
-  toJSON(message: MsgUpdateParamResponse): unknown {
+  toJSON(_: MsgUpdateParamResponse): unknown {
     const obj: any = {};
-    if (message.params !== undefined) {
-      obj.params = Params.toJSON(message.params);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(base?: I): MsgUpdateParamResponse {
     return MsgUpdateParamResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(object: I): MsgUpdateParamResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(_: I): MsgUpdateParamResponse {
     const message = createBaseMsgUpdateParamResponse();
-    message.params = (object.params !== undefined && object.params !== null)
-      ? Params.fromPartial(object.params)
-      : undefined;
     return message;
   },
 };

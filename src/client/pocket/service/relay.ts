@@ -11,64 +11,96 @@ import { SessionHeader } from "../session/types";
 export const protobufPackage = "pocket.service";
 
 /**
- * Relay contains both the RelayRequest (signed by the Application) and the RelayResponse (signed by the Supplier).
- * The serialized tuple is inserted into the SMST leaves as values in the Claim/Proof lifecycle.
+ * Relay message
+ *
+ * - Contains both the RelayRequest (signed by the Application) and RelayResponse (signed by the Supplier).
+ * - The serialized tuple is stored in SMST leaves as values during the Claim/Proof lifecycle.
  */
 export interface Relay {
   req: RelayRequest | undefined;
   res: RelayResponse | undefined;
 }
 
-/** RelayRequestMetadata contains the metadata for a RelayRequest. */
+/**
+ * RelayRequestMetadata
+ *
+ * Contains metadata for a RelayRequest.
+ */
 export interface RelayRequestMetadata {
   /** Session header associated with the relay. */
   sessionHeader:
     | SessionHeader
     | undefined;
   /**
-   * The request signature is a serialized ring signature that may have been
-   * by either the application itself or one of the gateways that the
-   * application has delegated to. The signature is made using the ring of the
-   * application in both cases.
+   * Signature for the request:
+   * - Serialized ring signature, created by either the application itself or a delegated gateway.
+   * - Always uses the application's ring.
    */
   signature: Uint8Array;
   /**
-   * TODO_MAINNET: make sure we're checking/verifying this address onchain (if needed).
-   * Relevant conversation: https://github.com/pokt-network/poktroll/pull/567#discussion_r1628722168
+   * TODO_MAINNET: Ensure this address is checked/verified onchain if needed.
+   * See: https://github.com/pokt-network/poktroll/pull/567#discussion_r1628722168
    *
-   * The supplier operator address the relay is sent to. It is being used on the
-   * RelayMiner to route to the correct supplier.
+   * Supplier operator address:
+   * - The Bech32 address of the supplier operator the relay is sent to.
+   * - Used by the RelayMiner to route to the correct supplier.
    */
   supplierOperatorAddress: string;
 }
 
-/** RelayRequest holds the request details for a relay. */
+/**
+ * RelayRequest
+ *
+ * Holds the request details for a relay.
+ */
 export interface RelayRequest {
   meta:
     | RelayRequestMetadata
     | undefined;
   /**
-   * payload is the serialized payload for the request.
-   * The payload is passed directly to the service and as such can be any
-   * format that the service supports: JSON-RPC, REST, gRPC, etc.
+   * Serialized request payload:
+   * - Passed directly to the service.
+   * - Can be any supported format: JSON-RPC, REST, gRPC, etc.
    */
   payload: Uint8Array;
 }
 
-/** RelayResponse contains the response details for a RelayRequest. */
+/**
+ * RelayResponse
+ *
+ * Contains the response details for a RelayRequest.
+ */
 export interface RelayResponse {
   meta:
     | RelayResponseMetadata
     | undefined;
   /**
-   * payload is the serialized payload for the response.
-   * The payload is passed directly from the service and as such can be any
-   * format the service responds with: JSON-RPC, REST, gRPC, etc.
+   * Serialized response payload:
+   * - Passed directly from the service.
+   * - Can be any supported format: JSON-RPC, REST, gRPC, etc.
+   * - Used when communicating between applications, gatewways, and relayminers
+   * - Omitted when inserting relays into the SMST, and therefore in onchain proofs,
+   *   in order to minimize onchain proof size.
    */
   payload: Uint8Array;
+  /**
+   * SHA256 hash of the response payload.
+   * This field is used for proof verification without requiring the full payload.
+   * The hash ensures response integrity while reducing on-chain storage requirements.
+   */
+  payloadHash: Uint8Array;
+  /**
+   * Error returned by the RelayMiner, if applicable.
+   * - If no error occurred, this field is empty.
+   */
+  relayMinerError: RelayMinerError | undefined;
 }
 
-/** RelayResponseMetadata contains the metadata for a RelayResponse. */
+/**
+ * RelayResponseMetadata
+ *
+ * Contains metadata for a RelayResponse.
+ */
 export interface RelayResponseMetadata {
   /** Session header associated with the relay. */
   sessionHeader:
@@ -76,6 +108,34 @@ export interface RelayResponseMetadata {
     | undefined;
   /** Signature of the supplier's operator on the response. */
   supplierOperatorSignature: Uint8Array;
+}
+
+/**
+ * RelayMinerError
+ *
+ * Contains error details returned by the RelayMiner.
+ */
+export interface RelayMinerError {
+  /**
+   * Registered codespace for the error (groups errors by source/module, e.g. `relayer_proxy`).
+   * See: https://github.com/pokt-network/poktroll/blob/main/pkg/relayer/proxy/errors.go#L8
+   */
+  codespace: string;
+  /**
+   * Specific registered error code (e.g. `1` for `ErrRelayerProxyInvalidSession`)
+   * See: https://github.com/pokt-network/poktroll/blob/main/pkg/relayer/proxy/errors.go#L9
+   */
+  code: number;
+  /**
+   * Human-readable, concise error description.
+   * Example `invalid session in relayer request` for `ErrRelayerProxyInvalidSession`.
+   */
+  description: string;
+  /**
+   * Detailed error message (may include additional context).
+   * Example: ErrRelayerProxyInvalidSession.Wrapf("application %q has %d service configs", ...)
+   */
+  message: string;
 }
 
 function createBaseRelay(): Relay {
@@ -329,7 +389,7 @@ export const RelayRequest: MessageFns<RelayRequest> = {
 };
 
 function createBaseRelayResponse(): RelayResponse {
-  return { meta: undefined, payload: new Uint8Array(0) };
+  return { meta: undefined, payload: new Uint8Array(0), payloadHash: new Uint8Array(0), relayMinerError: undefined };
 }
 
 export const RelayResponse: MessageFns<RelayResponse> = {
@@ -339,6 +399,12 @@ export const RelayResponse: MessageFns<RelayResponse> = {
     }
     if (message.payload.length !== 0) {
       writer.uint32(18).bytes(message.payload);
+    }
+    if (message.payloadHash.length !== 0) {
+      writer.uint32(34).bytes(message.payloadHash);
+    }
+    if (message.relayMinerError !== undefined) {
+      RelayMinerError.encode(message.relayMinerError, writer.uint32(26).fork()).join();
     }
     return writer;
   },
@@ -366,6 +432,22 @@ export const RelayResponse: MessageFns<RelayResponse> = {
           message.payload = reader.bytes();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.payloadHash = reader.bytes();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.relayMinerError = RelayMinerError.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -379,6 +461,8 @@ export const RelayResponse: MessageFns<RelayResponse> = {
     return {
       meta: isSet(object.meta) ? RelayResponseMetadata.fromJSON(object.meta) : undefined,
       payload: isSet(object.payload) ? bytesFromBase64(object.payload) : new Uint8Array(0),
+      payloadHash: isSet(object.payloadHash) ? bytesFromBase64(object.payloadHash) : new Uint8Array(0),
+      relayMinerError: isSet(object.relayMinerError) ? RelayMinerError.fromJSON(object.relayMinerError) : undefined,
     };
   },
 
@@ -389,6 +473,12 @@ export const RelayResponse: MessageFns<RelayResponse> = {
     }
     if (message.payload.length !== 0) {
       obj.payload = base64FromBytes(message.payload);
+    }
+    if (message.payloadHash.length !== 0) {
+      obj.payloadHash = base64FromBytes(message.payloadHash);
+    }
+    if (message.relayMinerError !== undefined) {
+      obj.relayMinerError = RelayMinerError.toJSON(message.relayMinerError);
     }
     return obj;
   },
@@ -402,6 +492,10 @@ export const RelayResponse: MessageFns<RelayResponse> = {
       ? RelayResponseMetadata.fromPartial(object.meta)
       : undefined;
     message.payload = object.payload ?? new Uint8Array(0);
+    message.payloadHash = object.payloadHash ?? new Uint8Array(0);
+    message.relayMinerError = (object.relayMinerError !== undefined && object.relayMinerError !== null)
+      ? RelayMinerError.fromPartial(object.relayMinerError)
+      : undefined;
     return message;
   },
 };
@@ -482,6 +576,114 @@ export const RelayResponseMetadata: MessageFns<RelayResponseMetadata> = {
       ? SessionHeader.fromPartial(object.sessionHeader)
       : undefined;
     message.supplierOperatorSignature = object.supplierOperatorSignature ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseRelayMinerError(): RelayMinerError {
+  return { codespace: "", code: 0, description: "", message: "" };
+}
+
+export const RelayMinerError: MessageFns<RelayMinerError> = {
+  encode(message: RelayMinerError, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.codespace !== "") {
+      writer.uint32(10).string(message.codespace);
+    }
+    if (message.code !== 0) {
+      writer.uint32(16).uint32(message.code);
+    }
+    if (message.description !== "") {
+      writer.uint32(26).string(message.description);
+    }
+    if (message.message !== "") {
+      writer.uint32(34).string(message.message);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RelayMinerError {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseRelayMinerError();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.codespace = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.code = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.description = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.message = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): RelayMinerError {
+    return {
+      codespace: isSet(object.codespace) ? globalThis.String(object.codespace) : "",
+      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
+      description: isSet(object.description) ? globalThis.String(object.description) : "",
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+    };
+  },
+
+  toJSON(message: RelayMinerError): unknown {
+    const obj: any = {};
+    if (message.codespace !== "") {
+      obj.codespace = message.codespace;
+    }
+    if (message.code !== 0) {
+      obj.code = Math.round(message.code);
+    }
+    if (message.description !== "") {
+      obj.description = message.description;
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RelayMinerError>, I>>(base?: I): RelayMinerError {
+    return RelayMinerError.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RelayMinerError>, I>>(object: I): RelayMinerError {
+    const message = createBaseRelayMinerError();
+    message.codespace = object.codespace ?? "";
+    message.code = object.code ?? 0;
+    message.description = object.description ?? "";
+    message.message = object.message ?? "";
     return message;
   },
 };

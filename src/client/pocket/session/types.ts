@@ -26,8 +26,8 @@ export interface SessionHeader {
   sessionStartBlockHeight: number;
   /**
    * Note that`session_end_block_height` is a derivative of (`start` + `num_blocks_per_session`)
-   * as goverened by onchain params at the time of the session start.
-   * It is stored as an additional field to simplofy business logic in case
+   * as governed by onchain params at the time of the session start.
+   * It is stored as an additional field to simplify business logic in case
    * the number of blocks_per_session changes during the session.
    */
   sessionEndBlockHeight: number;
@@ -35,14 +35,14 @@ export interface SessionHeader {
 
 /**
  * Session is a fully hydrated session object that contains all the information for the Session
- * and its parcipants.
+ * and its participants.
  */
 export interface Session {
   /** The header of the session containing lightweight data */
   header:
     | SessionHeader
     | undefined;
-  /** A unique pseudoranom ID for this session */
+  /** A unique pseudorandom ID for this session */
   sessionId: string;
   /** The session number since genesis */
   sessionNumber: number;

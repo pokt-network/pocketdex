@@ -6,7 +6,7 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { RequestFinalizeBlock, ResponseCommit, ResponseFinalizeBlock } from "../../../tendermint/abci/types";
+import { CommitResponse, FinalizeBlockRequest, FinalizeBlockResponse } from "../../../cometbft/abci/v2/types";
 
 export const protobufPackage = "cosmos.store.v1beta1";
 
@@ -29,12 +29,12 @@ export interface StoreKVPair {
  * the file streamer dump them into files together with the state changes.
  */
 export interface BlockMetadata {
-  responseCommit: ResponseCommit | undefined;
+  responseCommit: CommitResponse | undefined;
   requestFinalizeBlock:
-    | RequestFinalizeBlock
+    | FinalizeBlockRequest
     | undefined;
   /** TODO: should we renumber this? */
-  responseFinalizeBlock: ResponseFinalizeBlock | undefined;
+  responseFinalizeBlock: FinalizeBlockResponse | undefined;
 }
 
 function createBaseStoreKVPair(): StoreKVPair {
@@ -152,13 +152,13 @@ function createBaseBlockMetadata(): BlockMetadata {
 export const BlockMetadata: MessageFns<BlockMetadata> = {
   encode(message: BlockMetadata, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.responseCommit !== undefined) {
-      ResponseCommit.encode(message.responseCommit, writer.uint32(50).fork()).join();
+      CommitResponse.encode(message.responseCommit, writer.uint32(50).fork()).join();
     }
     if (message.requestFinalizeBlock !== undefined) {
-      RequestFinalizeBlock.encode(message.requestFinalizeBlock, writer.uint32(58).fork()).join();
+      FinalizeBlockRequest.encode(message.requestFinalizeBlock, writer.uint32(58).fork()).join();
     }
     if (message.responseFinalizeBlock !== undefined) {
-      ResponseFinalizeBlock.encode(message.responseFinalizeBlock, writer.uint32(66).fork()).join();
+      FinalizeBlockResponse.encode(message.responseFinalizeBlock, writer.uint32(66).fork()).join();
     }
     return writer;
   },
@@ -175,7 +175,7 @@ export const BlockMetadata: MessageFns<BlockMetadata> = {
             break;
           }
 
-          message.responseCommit = ResponseCommit.decode(reader, reader.uint32());
+          message.responseCommit = CommitResponse.decode(reader, reader.uint32());
           continue;
         }
         case 7: {
@@ -183,7 +183,7 @@ export const BlockMetadata: MessageFns<BlockMetadata> = {
             break;
           }
 
-          message.requestFinalizeBlock = RequestFinalizeBlock.decode(reader, reader.uint32());
+          message.requestFinalizeBlock = FinalizeBlockRequest.decode(reader, reader.uint32());
           continue;
         }
         case 8: {
@@ -191,7 +191,7 @@ export const BlockMetadata: MessageFns<BlockMetadata> = {
             break;
           }
 
-          message.responseFinalizeBlock = ResponseFinalizeBlock.decode(reader, reader.uint32());
+          message.responseFinalizeBlock = FinalizeBlockResponse.decode(reader, reader.uint32());
           continue;
         }
       }
@@ -205,12 +205,12 @@ export const BlockMetadata: MessageFns<BlockMetadata> = {
 
   fromJSON(object: any): BlockMetadata {
     return {
-      responseCommit: isSet(object.responseCommit) ? ResponseCommit.fromJSON(object.responseCommit) : undefined,
+      responseCommit: isSet(object.responseCommit) ? CommitResponse.fromJSON(object.responseCommit) : undefined,
       requestFinalizeBlock: isSet(object.requestFinalizeBlock)
-        ? RequestFinalizeBlock.fromJSON(object.requestFinalizeBlock)
+        ? FinalizeBlockRequest.fromJSON(object.requestFinalizeBlock)
         : undefined,
       responseFinalizeBlock: isSet(object.responseFinalizeBlock)
-        ? ResponseFinalizeBlock.fromJSON(object.responseFinalizeBlock)
+        ? FinalizeBlockResponse.fromJSON(object.responseFinalizeBlock)
         : undefined,
     };
   },
@@ -218,13 +218,13 @@ export const BlockMetadata: MessageFns<BlockMetadata> = {
   toJSON(message: BlockMetadata): unknown {
     const obj: any = {};
     if (message.responseCommit !== undefined) {
-      obj.responseCommit = ResponseCommit.toJSON(message.responseCommit);
+      obj.responseCommit = CommitResponse.toJSON(message.responseCommit);
     }
     if (message.requestFinalizeBlock !== undefined) {
-      obj.requestFinalizeBlock = RequestFinalizeBlock.toJSON(message.requestFinalizeBlock);
+      obj.requestFinalizeBlock = FinalizeBlockRequest.toJSON(message.requestFinalizeBlock);
     }
     if (message.responseFinalizeBlock !== undefined) {
-      obj.responseFinalizeBlock = ResponseFinalizeBlock.toJSON(message.responseFinalizeBlock);
+      obj.responseFinalizeBlock = FinalizeBlockResponse.toJSON(message.responseFinalizeBlock);
     }
     return obj;
   },
@@ -235,14 +235,14 @@ export const BlockMetadata: MessageFns<BlockMetadata> = {
   fromPartial<I extends Exact<DeepPartial<BlockMetadata>, I>>(object: I): BlockMetadata {
     const message = createBaseBlockMetadata();
     message.responseCommit = (object.responseCommit !== undefined && object.responseCommit !== null)
-      ? ResponseCommit.fromPartial(object.responseCommit)
+      ? CommitResponse.fromPartial(object.responseCommit)
       : undefined;
     message.requestFinalizeBlock = (object.requestFinalizeBlock !== undefined && object.requestFinalizeBlock !== null)
-      ? RequestFinalizeBlock.fromPartial(object.requestFinalizeBlock)
+      ? FinalizeBlockRequest.fromPartial(object.requestFinalizeBlock)
       : undefined;
     message.responseFinalizeBlock =
       (object.responseFinalizeBlock !== undefined && object.responseFinalizeBlock !== null)
-        ? ResponseFinalizeBlock.fromPartial(object.responseFinalizeBlock)
+        ? FinalizeBlockResponse.fromPartial(object.responseFinalizeBlock)
         : undefined;
     return message;
   },

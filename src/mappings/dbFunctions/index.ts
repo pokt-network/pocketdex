@@ -26,9 +26,12 @@ import {
   getRewardsByAddressesAndTime,
   getRewardsByAddressesAndTimeGroupByDate,
   getRewardsByAddressesAndTimeGroupByDateAndAddress,
+  getRewardsBySuppliersAndTime,
+  getRewardsBySuppliersAndTimeGroupByDateAndAddress,
 } from "./rewardsByAddressesAndTime";
-import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByAddressesAndTimes";
+import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByServicesAddressesAndTime";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
+import { getTotalSupplyByDay } from "./supply";
 
 const functionsCreatedCacheKey = 'functionsCreated';
 
@@ -65,6 +68,9 @@ export async function createDbFunctions(): Promise<void> {
     getRewardsByAddressesAndTimeGroupByDateAndAddress,
     getRewardsByDelegatorAddressesAndTimesGroupByServiceFn,
     getRewardsByDate,
+    getRewardsBySuppliersAndTime,
+    getRewardsBySuppliersAndTimeGroupByDateAndAddress,
+    getTotalSupplyByDay,
   )
 
   // these are the function used to generate the aggregated data saved by block

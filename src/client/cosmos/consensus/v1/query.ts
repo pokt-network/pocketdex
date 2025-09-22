@@ -6,7 +6,7 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { ConsensusParams } from "../../../tendermint/types/params";
+import { ConsensusParams } from "../../../cometbft/types/v2/params";
 
 export const protobufPackage = "cosmos.consensus.v1";
 

@@ -14,6 +14,7 @@ import type { MsgClaimMorseAccount } from "../../types/proto-interfaces/pocket/m
 import type { EncodedMsg } from "../types";
 import { getStoreModel } from "../utils/db";
 import { messageId } from "../utils/ids";
+import { getDenomAndAmount } from "../utils/primitives";
 import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
 
 function _handleMsgClaimMorseAccount(
@@ -28,7 +29,7 @@ function _handleMsgClaimMorseAccount(
     if (event.type === 'pocket.migration.EventMorseAccountClaimed') {
       for (const attribute of event.attributes) {
         if (attribute.key === 'claimed_balance') {
-          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+          const coin: CoinSDKType = getDenomAndAmount(attribute.value as string);
 
           balanceCoin = {
             denom: coin.denom,
@@ -92,7 +93,7 @@ export function handleMsgRecoverMorseAccount({
 
       for (const attribute of event.attributes) {
         if (attribute.key === 'recovered_balance') {
-          coin = JSON.parse(attribute.value as string);
+          coin = getDenomAndAmount(attribute.value as string);
         }
 
         if (attribute.key === 'morse_src_address') {

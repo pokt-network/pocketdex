@@ -47,6 +47,7 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { getDenomAndAmount } from "../utils/primitives";
 import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
 import { updateMorseClaimableAccounts } from "./migration";
 import { fetchAllApplicationGatewayByApplicationId, fetchAllApplicationServiceByApplicationId } from "./pagination";
@@ -193,7 +194,7 @@ async function _handleMsgClaimMorseApplication(
     if (event.type === 'pocket.migration.EventMorseApplicationClaimed') {
       for (const attribute of event.attributes) {
         if (attribute.key === 'claimed_balance') {
-          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+          const coin: CoinSDKType = getDenomAndAmount(attribute.value as string);
 
           balanceCoin = {
             denom: coin.denom,
@@ -202,7 +203,7 @@ async function _handleMsgClaimMorseApplication(
         }
 
         if (attribute.key === 'claimed_application_stake') {
-          const coin: CoinSDKType = JSON.parse(attribute.value as string);
+          const coin: CoinSDKType = getDenomAndAmount(attribute.value as string);
 
           stakeCoin = {
             denom: coin.denom,

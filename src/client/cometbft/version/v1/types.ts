@@ -2,12 +2,12 @@
 // versions:
 //   protoc-gen-ts_proto  v2.6.1
 //   protoc               unknown
-// source: tendermint/version/types.proto
+// source: cometbft/version/v1/types.proto
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
-export const protobufPackage = "tendermint.version";
+export const protobufPackage = "cometbft.version.v1";
 
 /**
  * App includes the protocol and software version for the application.

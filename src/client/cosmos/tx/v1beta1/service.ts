@@ -6,8 +6,8 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Block } from "../../../tendermint/types/block";
-import { BlockID } from "../../../tendermint/types/types";
+import { Block } from "../../../cometbft/types/v2/block";
+import { BlockID } from "../../../cometbft/types/v2/types";
 import { GasInfo, Result, TxResponse } from "../../base/abci/v1beta1/abci";
 import { PageRequest, PageResponse } from "../../base/query/v1beta1/pagination";
 import { Tx } from "./tx";

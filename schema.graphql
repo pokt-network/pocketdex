@@ -410,21 +410,9 @@ type Account @entity {
   # not always needed, but will be sometimes than an account is a module account and will be nice
   # been able to load/filter by this probably
   module: ModuleAccount
-  nativeBalanceChanges: [NativeBalanceChange]! @derivedFrom(field: "account")
   genesisBalances: [GenesisBalance] @derivedFrom(field: "account")
   balances: [Balance] @derivedFrom(field: "account")
   services: [Service] @derivedFrom(field: "owner")
-}
-
-type NativeBalanceChange @entity {
-  id: ID!
-  balanceOffset: BigInt!
-  denom: String! @index
-  account: Account!
-  event: Event!
-  block: Block!
-  transaction: Transaction
-  message: Message
 }
 
 # Msg Doc: https://docs.cosmos.network/main/build/modules/staking#msgcreatevalidator

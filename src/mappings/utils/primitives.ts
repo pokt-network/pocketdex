@@ -8,6 +8,7 @@ import {
   EventKind,
   TxStatus,
 } from "../../types";
+import type { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 
 export function getEventKind(event: CosmosEvent): EventKind {
   let kind: EventKind;
@@ -126,4 +127,32 @@ export function filterMsgByTxStatus(messages: Array<CosmosMessage>): {
   }
 
   return { success, error };
+}
+
+// This receives a string like `121upokt` and return { denom: "upokt", amount: "121" }
+export function getDenomAndAmount(coinAndDenom: string): CoinSDKType {
+  let parsed: string | CoinSDKType
+
+  try {
+    parsed = JSON.parse(coinAndDenom);
+  } catch (e) {
+    parsed = coinAndDenom;
+  }
+
+  if (typeof parsed === 'object') {
+    return parsed
+  } else {
+    const match = parsed.match(/^(\d+)([a-zA-Z]+)$/);
+
+    if (!match) {
+      throw new Error(`Invalid coinAndDenom=${coinAndDenom}`);
+    }
+
+    const [, amount, denom] = match;
+
+    return {
+      amount,
+      denom,
+    }
+  }
 }

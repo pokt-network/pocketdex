@@ -36,7 +36,6 @@ export interface MsgUpdateParam {
 }
 
 export interface MsgUpdateParamResponse {
-  params: Params | undefined;
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
@@ -253,14 +252,11 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
 };
 
 function createBaseMsgUpdateParamResponse(): MsgUpdateParamResponse {
-  return { params: undefined };
+  return {};
 }
 
 export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
-  encode(message: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.params !== undefined) {
-      Params.encode(message.params, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -271,14 +267,6 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.params = Params.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -288,26 +276,20 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgUpdateParamResponse {
-    return { params: isSet(object.params) ? Params.fromJSON(object.params) : undefined };
+  fromJSON(_: any): MsgUpdateParamResponse {
+    return {};
   },
 
-  toJSON(message: MsgUpdateParamResponse): unknown {
+  toJSON(_: MsgUpdateParamResponse): unknown {
     const obj: any = {};
-    if (message.params !== undefined) {
-      obj.params = Params.toJSON(message.params);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(base?: I): MsgUpdateParamResponse {
     return MsgUpdateParamResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(object: I): MsgUpdateParamResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(_: I): MsgUpdateParamResponse {
     const message = createBaseMsgUpdateParamResponse();
-    message.params = (object.params !== undefined && object.params !== null)
-      ? Params.fromPartial(object.params)
-      : undefined;
     return message;
   },
 };

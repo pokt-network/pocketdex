@@ -25,6 +25,12 @@ export interface QueryParamsResponse {
 export interface QueryGetSupplierRequest {
   /** TODO_TECHDEBT: Add the ability to query for a supplier by owner_id */
   operatorAddress: string;
+  /**
+   * if true, return a dehydrated version of the supplier.
+   * Why? This enables smaller response payloads to reduce payload size.
+   * Example: Removes service_config_history and rev_share details from the response. See the implementation for more details.
+   */
+  dehydrated: boolean;
 }
 
 export interface QueryGetSupplierResponse {
@@ -36,7 +42,15 @@ export interface QueryAllSuppliersRequest {
     | PageRequest
     | undefined;
   /** unique service identifier to filter by */
-  serviceId?: string | undefined;
+  serviceId?:
+    | string
+    | undefined;
+  /**
+   * if true, return a dehydrated version of the supplier.
+   * Why? This enables smaller response payloads to reduce pagination of the supplier list.
+   * Example: Removes service_config_history and rev_share details from the response. See the implementation for more details.
+   */
+  dehydrated: boolean;
 }
 
 export interface QueryAllSuppliersResponse {
@@ -148,13 +162,16 @@ export const QueryParamsResponse: MessageFns<QueryParamsResponse> = {
 };
 
 function createBaseQueryGetSupplierRequest(): QueryGetSupplierRequest {
-  return { operatorAddress: "" };
+  return { operatorAddress: "", dehydrated: false };
 }
 
 export const QueryGetSupplierRequest: MessageFns<QueryGetSupplierRequest> = {
   encode(message: QueryGetSupplierRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.operatorAddress !== "") {
       writer.uint32(10).string(message.operatorAddress);
+    }
+    if (message.dehydrated !== false) {
+      writer.uint32(16).bool(message.dehydrated);
     }
     return writer;
   },
@@ -174,6 +191,14 @@ export const QueryGetSupplierRequest: MessageFns<QueryGetSupplierRequest> = {
           message.operatorAddress = reader.string();
           continue;
         }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.dehydrated = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -184,13 +209,19 @@ export const QueryGetSupplierRequest: MessageFns<QueryGetSupplierRequest> = {
   },
 
   fromJSON(object: any): QueryGetSupplierRequest {
-    return { operatorAddress: isSet(object.operatorAddress) ? globalThis.String(object.operatorAddress) : "" };
+    return {
+      operatorAddress: isSet(object.operatorAddress) ? globalThis.String(object.operatorAddress) : "",
+      dehydrated: isSet(object.dehydrated) ? globalThis.Boolean(object.dehydrated) : false,
+    };
   },
 
   toJSON(message: QueryGetSupplierRequest): unknown {
     const obj: any = {};
     if (message.operatorAddress !== "") {
       obj.operatorAddress = message.operatorAddress;
+    }
+    if (message.dehydrated !== false) {
+      obj.dehydrated = message.dehydrated;
     }
     return obj;
   },
@@ -201,6 +232,7 @@ export const QueryGetSupplierRequest: MessageFns<QueryGetSupplierRequest> = {
   fromPartial<I extends Exact<DeepPartial<QueryGetSupplierRequest>, I>>(object: I): QueryGetSupplierRequest {
     const message = createBaseQueryGetSupplierRequest();
     message.operatorAddress = object.operatorAddress ?? "";
+    message.dehydrated = object.dehydrated ?? false;
     return message;
   },
 };
@@ -266,7 +298,7 @@ export const QueryGetSupplierResponse: MessageFns<QueryGetSupplierResponse> = {
 };
 
 function createBaseQueryAllSuppliersRequest(): QueryAllSuppliersRequest {
-  return { pagination: undefined, serviceId: undefined };
+  return { pagination: undefined, serviceId: undefined, dehydrated: false };
 }
 
 export const QueryAllSuppliersRequest: MessageFns<QueryAllSuppliersRequest> = {
@@ -276,6 +308,9 @@ export const QueryAllSuppliersRequest: MessageFns<QueryAllSuppliersRequest> = {
     }
     if (message.serviceId !== undefined) {
       writer.uint32(18).string(message.serviceId);
+    }
+    if (message.dehydrated !== false) {
+      writer.uint32(24).bool(message.dehydrated);
     }
     return writer;
   },
@@ -303,6 +338,14 @@ export const QueryAllSuppliersRequest: MessageFns<QueryAllSuppliersRequest> = {
           message.serviceId = reader.string();
           continue;
         }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.dehydrated = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -316,6 +359,7 @@ export const QueryAllSuppliersRequest: MessageFns<QueryAllSuppliersRequest> = {
     return {
       pagination: isSet(object.pagination) ? PageRequest.fromJSON(object.pagination) : undefined,
       serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : undefined,
+      dehydrated: isSet(object.dehydrated) ? globalThis.Boolean(object.dehydrated) : false,
     };
   },
 
@@ -326,6 +370,9 @@ export const QueryAllSuppliersRequest: MessageFns<QueryAllSuppliersRequest> = {
     }
     if (message.serviceId !== undefined) {
       obj.serviceId = message.serviceId;
+    }
+    if (message.dehydrated !== false) {
+      obj.dehydrated = message.dehydrated;
     }
     return obj;
   },
@@ -339,6 +386,7 @@ export const QueryAllSuppliersRequest: MessageFns<QueryAllSuppliersRequest> = {
       ? PageRequest.fromPartial(object.pagination)
       : undefined;
     message.serviceId = object.serviceId ?? undefined;
+    message.dehydrated = object.dehydrated ?? false;
     return message;
   },
 };

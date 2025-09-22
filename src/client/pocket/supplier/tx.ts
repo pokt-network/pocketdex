@@ -8,7 +8,6 @@
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Coin } from "../../cosmos/base/v1beta1/coin";
 import { SupplierServiceConfig } from "../shared/service";
-import { Supplier } from "../shared/supplier";
 import { Params } from "./params";
 
 export const protobufPackage = "pocket.supplier";
@@ -47,7 +46,6 @@ export interface MsgStakeSupplier {
 }
 
 export interface MsgStakeSupplierResponse {
-  supplier: Supplier | undefined;
 }
 
 export interface MsgUnstakeSupplier {
@@ -58,7 +56,6 @@ export interface MsgUnstakeSupplier {
 }
 
 export interface MsgUnstakeSupplierResponse {
-  supplier: Supplier | undefined;
 }
 
 /** MsgUpdateParam is the Msg/UpdateParam request type to update a single param. */
@@ -70,7 +67,6 @@ export interface MsgUpdateParam {
 }
 
 export interface MsgUpdateParamResponse {
-  params: Params | undefined;
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
@@ -321,14 +317,11 @@ export const MsgStakeSupplier: MessageFns<MsgStakeSupplier> = {
 };
 
 function createBaseMsgStakeSupplierResponse(): MsgStakeSupplierResponse {
-  return { supplier: undefined };
+  return {};
 }
 
 export const MsgStakeSupplierResponse: MessageFns<MsgStakeSupplierResponse> = {
-  encode(message: MsgStakeSupplierResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.supplier !== undefined) {
-      Supplier.encode(message.supplier, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgStakeSupplierResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -339,14 +332,6 @@ export const MsgStakeSupplierResponse: MessageFns<MsgStakeSupplierResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.supplier = Supplier.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -356,26 +341,20 @@ export const MsgStakeSupplierResponse: MessageFns<MsgStakeSupplierResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgStakeSupplierResponse {
-    return { supplier: isSet(object.supplier) ? Supplier.fromJSON(object.supplier) : undefined };
+  fromJSON(_: any): MsgStakeSupplierResponse {
+    return {};
   },
 
-  toJSON(message: MsgStakeSupplierResponse): unknown {
+  toJSON(_: MsgStakeSupplierResponse): unknown {
     const obj: any = {};
-    if (message.supplier !== undefined) {
-      obj.supplier = Supplier.toJSON(message.supplier);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgStakeSupplierResponse>, I>>(base?: I): MsgStakeSupplierResponse {
     return MsgStakeSupplierResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgStakeSupplierResponse>, I>>(object: I): MsgStakeSupplierResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgStakeSupplierResponse>, I>>(_: I): MsgStakeSupplierResponse {
     const message = createBaseMsgStakeSupplierResponse();
-    message.supplier = (object.supplier !== undefined && object.supplier !== null)
-      ? Supplier.fromPartial(object.supplier)
-      : undefined;
     return message;
   },
 };
@@ -457,14 +436,11 @@ export const MsgUnstakeSupplier: MessageFns<MsgUnstakeSupplier> = {
 };
 
 function createBaseMsgUnstakeSupplierResponse(): MsgUnstakeSupplierResponse {
-  return { supplier: undefined };
+  return {};
 }
 
 export const MsgUnstakeSupplierResponse: MessageFns<MsgUnstakeSupplierResponse> = {
-  encode(message: MsgUnstakeSupplierResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.supplier !== undefined) {
-      Supplier.encode(message.supplier, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUnstakeSupplierResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -475,14 +451,6 @@ export const MsgUnstakeSupplierResponse: MessageFns<MsgUnstakeSupplierResponse> 
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.supplier = Supplier.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -492,26 +460,20 @@ export const MsgUnstakeSupplierResponse: MessageFns<MsgUnstakeSupplierResponse> 
     return message;
   },
 
-  fromJSON(object: any): MsgUnstakeSupplierResponse {
-    return { supplier: isSet(object.supplier) ? Supplier.fromJSON(object.supplier) : undefined };
+  fromJSON(_: any): MsgUnstakeSupplierResponse {
+    return {};
   },
 
-  toJSON(message: MsgUnstakeSupplierResponse): unknown {
+  toJSON(_: MsgUnstakeSupplierResponse): unknown {
     const obj: any = {};
-    if (message.supplier !== undefined) {
-      obj.supplier = Supplier.toJSON(message.supplier);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUnstakeSupplierResponse>, I>>(base?: I): MsgUnstakeSupplierResponse {
     return MsgUnstakeSupplierResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUnstakeSupplierResponse>, I>>(object: I): MsgUnstakeSupplierResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUnstakeSupplierResponse>, I>>(_: I): MsgUnstakeSupplierResponse {
     const message = createBaseMsgUnstakeSupplierResponse();
-    message.supplier = (object.supplier !== undefined && object.supplier !== null)
-      ? Supplier.fromPartial(object.supplier)
-      : undefined;
     return message;
   },
 };
@@ -611,14 +573,11 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
 };
 
 function createBaseMsgUpdateParamResponse(): MsgUpdateParamResponse {
-  return { params: undefined };
+  return {};
 }
 
 export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
-  encode(message: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.params !== undefined) {
-      Params.encode(message.params, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -629,14 +588,6 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.params = Params.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -646,26 +597,20 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgUpdateParamResponse {
-    return { params: isSet(object.params) ? Params.fromJSON(object.params) : undefined };
+  fromJSON(_: any): MsgUpdateParamResponse {
+    return {};
   },
 
-  toJSON(message: MsgUpdateParamResponse): unknown {
+  toJSON(_: MsgUpdateParamResponse): unknown {
     const obj: any = {};
-    if (message.params !== undefined) {
-      obj.params = Params.toJSON(message.params);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(base?: I): MsgUpdateParamResponse {
     return MsgUpdateParamResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(object: I): MsgUpdateParamResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(_: I): MsgUpdateParamResponse {
     const message = createBaseMsgUpdateParamResponse();
-    message.params = (object.params !== undefined && object.params !== null)
-      ? Params.fromPartial(object.params)
-      : undefined;
     return message;
   },
 };

@@ -6,10 +6,10 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
+import { DefaultNodeInfo } from "../../../../cometbft/p2p/v1/types";
+import { Block } from "../../../../cometbft/types/v2/block";
+import { BlockID } from "../../../../cometbft/types/v2/types";
 import { Any } from "../../../../google/protobuf/any";
-import { DefaultNodeInfo } from "../../../../tendermint/p2p/types";
-import { Block } from "../../../../tendermint/types/block";
-import { BlockID } from "../../../../tendermint/types/types";
 import { PageRequest, PageResponse } from "../../query/v1beta1/pagination";
 import { Block as Block1 } from "./types";
 

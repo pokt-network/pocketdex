@@ -6,21 +6,16 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Coin } from "../../cosmos/base/v1beta1/coin";
-import {
-  Claim,
-  ProofRequirementReason,
-  proofRequirementReasonFromJSON,
-  proofRequirementReasonToJSON,
-} from "../proof/types";
-import { ClaimSettlementResult } from "./types";
 
 export const protobufPackage = "pocket.tokenomics";
 
+/** TODO_CONSIDERATION: Consider prefixing these enums with CLAIM_EXPIRATION_REASON_ */
 export enum ClaimExpirationReason {
   /** EXPIRATION_REASON_UNSPECIFIED - Default value, means may be valid */
   EXPIRATION_REASON_UNSPECIFIED = 0,
+  /** PROOF_MISSING - A proof was required but not submitted */
   PROOF_MISSING = 1,
+  /** PROOF_INVALID - A proof was submitted but was invalid */
   PROOF_INVALID = 2,
   UNRECOGNIZED = -1,
 }
@@ -58,137 +53,235 @@ export function claimExpirationReasonToJSON(object: ClaimExpirationReason): stri
 }
 
 /**
- * EventClaimExpired is an event emitted during settlement whenever a claim requiring
- * an onchain proof doesn't have one. The claim cannot be settled, leading to that work
- * never being rewarded.
+ * EventClaimExpired is emitted during settlement when a claim expires.
+ * This is likely the result of a claim requiring an onchain proof not being submitted.
+ * The claim cannot be settled, leading to that work never being rewarded.
  */
 export interface EventClaimExpired {
-  claim:
-    | Claim
-    | undefined;
   /** The reason why the claim expired, leading to a Supplier being penalized (i.e. burn). */
   expirationReason: ClaimExpirationReason;
   /** Number of relays claimed to be in the session tree. */
   numRelays: number;
   /**
-   * Number of compute units claimed as a function of the number of relays
-   * and the compute units per relay for the particular service.
+   * Number of compute units claimed in the session tree.
+   * It is a function of the number of relays in the session tree and onchain parameters.
    */
   numClaimedComputeUnits: number;
   /**
-   * Number of estimated compute units claimed as a function of the number of claimed
-   * compute units and the relay difficulty multiplier for the particular service.
+   * Number of total estimated compute units of work done.
+   * It is a function of the number of claimed compute units and the relay difficulty multiplier.
    */
   numEstimatedComputeUnits: number;
   /**
-   * The uPOKT coin claimed to be rewarded for the work done as a function of
-   * the number of estimated compute units and the compute units to token multiplier.
+   * The amount of uPOKT claimed for the work done.
+   * It is a function of the number of estimated compute units and the compute units to token multiplier.
    */
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier whose claim expired. */
+  supplierOperatorAddress: string;
 }
 
 /**
- * EventClaimSettled is an event emitted whenever a claim is settled.
- * The proof_required determines whether the claim requires a proof that has been submitted or not
+ * EventClaimSettled is emitted during settlement whenever a claim is successfully settled.
+ * It may or may not require a proof depending on various on-chain parameters and other factors.
  */
 export interface EventClaimSettled {
-  claim:
-    | Claim
-    | undefined;
-  /** The reason why the claim was settled, leading to a Supplier being rewarded (i.e. mint). */
-  proofRequirement: ProofRequirementReason;
+  /**
+   * Whether a proof was required for the claim to be settled.
+   * DEV_NOTE: This field uses the integer representation of the ProofRequirementReason
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   NOT_REQUIRED = 0;
+   *   PROBABILISTIC = 1;
+   *   THRESHOLD = 2;
+   */
+  proofRequirementInt: number;
   /** Number of relays claimed to be in the session tree. */
   numRelays: number;
   /**
-   * Number of compute units claimed as a function of the number of relays
-   * and the compute units per relay for the particular service.
+   * Number of compute units claimed in the session tree.
+   * It is a function of the number of relays in the session tree and onchain parameters.
    */
   numClaimedComputeUnits: number;
   /**
-   * Number of estimated compute units claimed as a function of the number of claimed
-   * compute units and the relay difficulty multiplier for the particular service.
+   * Number of estimated compute units claimed in the session tree.
+   * It is a function of the number of claimed compute units and the relay difficulty multiplier for the particular service.
    */
   numEstimatedComputeUnits: number;
   /**
    * The uPOKT coin claimed to be rewarded for the work done as a function of
    * the number of estimated compute units and the compute units to token multiplier.
    */
-  claimedUpokt:
-    | Coin
-    | undefined;
-  /** SettlementResult holds mint, burn, and transfer operations on a per-claim basis. */
-  settlementResult: ClaimSettlementResult | undefined;
+  claimedUpokt: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier who submitted the claim. */
+  supplierOperatorAddress: string;
+  /** A map of addresses to token amounts corresponding to the distribution of the reward tokens. */
+  rewardDistribution: { [key: string]: string };
+}
+
+export interface EventClaimSettled_RewardDistributionEntry {
+  key: string;
+  value: string;
 }
 
 /**
- * EventApplicationOverserviced is emitted when an application has less stake than
- * what a supplier is claiming (i.e. amount available for burning is insufficient).
- * This means the following will ALWAYS be strictly true: effective_burn < expected_burn.
+ * EventApplicationOverserviced is emitted when an Application's stake cannot cover the Supplier's claim.
+ * This means the following will ALWAYS be strictly true:  effective_burn < expected_burn
+ * - Number of tokens burnt from app stake < Number of tokens burnt from supplier stake
  */
 export interface EventApplicationOverserviced {
+  /** The application address consuming onchain services */
   applicationAddr: string;
+  /** The supplier operator address providing onchain services */
   supplierOperatorAddr: string;
   /**
-   * Expected burn is the amount the supplier is claiming for work done
-   * to service the application during the session.
-   * This is usually the amount in the Claim submitted.
+   * Expected number of tokens to be burnt from the application's stake.
+   * A function of the actual amount of work claimed to be done.
    */
-  expectedBurn:
-    | Coin
-    | undefined;
+  expectedBurn: string;
   /**
-   * Effective burn is the amount that is actually being paid to the supplier
-   * for the work done. It is less than the expected burn (claim amount) and
-   * is a function of the relay mining algorithm.
-   * E.g. The application's stake divided by the number of suppliers in a session.
+   * Actual number of tokens burnt from the application's stake.
+   * A function of the amount that could be covered (less than) relative to the amount of work claimed to be done.
    */
-  effectiveBurn: Coin | undefined;
+  effectiveBurn: string;
 }
 
 /**
- * EventSupplierSlashed is emitted when a supplier is slashed for not providing,
- * or provided invalid required proofs for claims.
+ * EventSupplierSlashed is emitted when a supplier is slashed.
+ * This can happen for in cases such as missing or invalid proofs for submitted claims.
  */
 export interface EventSupplierSlashed {
-  claim:
-    | Claim
-    | undefined;
   /**
-   * Amount slashed from the supplier's stake due to the expired claims.
-   * This is a function of the number of expired claims and proof missing penalty.
+   * Amount slashed from the supplier's stake.
+   * A function of the claim size, supplier stake, and various onchain parameters.
    */
-  proofMissingPenalty: Coin | undefined;
+  proofMissingPenalty: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier that was slashed. */
+  supplierOperatorAddress: string;
 }
 
 /**
- * EventApplicationReimbursementRequest is emitted when an application requests
- * a reimbursement.
+ * EventClaimDiscarded is emitted when a claim is discarded due to unexpected situations.
+ * It is used to prevent chain halts in favor of some missing claims.
+ */
+export interface EventClaimDiscarded {
+  /** The error that caused the claim to be discarded. */
+  error: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier whose claim was discarded. */
+  supplierOperatorAddress: string;
+}
+
+/**
+ * EventApplicationReimbursementRequest is emitted when an application requests a reimbursement from the DAO.
+ * It is intended to prevent self dealing attacks when global inflation is enabled.
+ * TODO_DISTANT_FUTURE: Remove this once global inflation is disabled in perpetuity.
  */
 export interface EventApplicationReimbursementRequest {
+  /** The application address consuming onchain services requesting reimbursement. */
   applicationAddr: string;
+  /** The supplier operator address providing onchain services */
   supplierOperatorAddr: string;
+  /** The supplier owner address providing onchain services */
   supplierOwnerAddr: string;
+  /** The service ID associated with the session where a claim was submitted. */
   serviceId: string;
+  /** The session ID associated with the session where a claim was submitted. */
   sessionId: string;
-  amount: Coin | undefined;
+  /** The amount of uPOKT to be reimbursed to the application. */
+  amount: string;
 }
 
 function createBaseEventClaimExpired(): EventClaimExpired {
   return {
-    claim: undefined,
     expirationReason: 0,
     numRelays: 0,
     numClaimedComputeUnits: 0,
     numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
+    claimedUpokt: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
   };
 }
 
 export const EventClaimExpired: MessageFns<EventClaimExpired> = {
   encode(message: EventClaimExpired, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
     if (message.expirationReason !== 0) {
       writer.uint32(16).int32(message.expirationReason);
     }
@@ -201,8 +294,23 @@ export const EventClaimExpired: MessageFns<EventClaimExpired> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(66).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(74).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(80).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(88).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(98).string(message.supplierOperatorAddress);
     }
     return writer;
   },
@@ -214,14 +322,6 @@ export const EventClaimExpired: MessageFns<EventClaimExpired> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.claim = Claim.decode(reader, reader.uint32());
-          continue;
-        }
         case 2: {
           if (tag !== 16) {
             break;
@@ -254,12 +354,52 @@ export const EventClaimExpired: MessageFns<EventClaimExpired> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
           continue;
         }
       }
@@ -273,7 +413,6 @@ export const EventClaimExpired: MessageFns<EventClaimExpired> = {
 
   fromJSON(object: any): EventClaimExpired {
     return {
-      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
       expirationReason: isSet(object.expirationReason) ? claimExpirationReasonFromJSON(object.expirationReason) : 0,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
@@ -282,15 +421,19 @@ export const EventClaimExpired: MessageFns<EventClaimExpired> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
     };
   },
 
   toJSON(message: EventClaimExpired): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
-    }
     if (message.expirationReason !== 0) {
       obj.expirationReason = claimExpirationReasonToJSON(message.expirationReason);
     }
@@ -303,8 +446,23 @@ export const EventClaimExpired: MessageFns<EventClaimExpired> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
     }
     return obj;
   },
@@ -314,37 +472,40 @@ export const EventClaimExpired: MessageFns<EventClaimExpired> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventClaimExpired>, I>>(object: I): EventClaimExpired {
     const message = createBaseEventClaimExpired();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
     message.expirationReason = object.expirationReason ?? 0;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
     return message;
   },
 };
 
 function createBaseEventClaimSettled(): EventClaimSettled {
   return {
-    claim: undefined,
-    proofRequirement: 0,
+    proofRequirementInt: 0,
     numRelays: 0,
     numClaimedComputeUnits: 0,
     numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
-    settlementResult: undefined,
+    claimedUpokt: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
+    rewardDistribution: {},
   };
 }
 
 export const EventClaimSettled: MessageFns<EventClaimSettled> = {
   encode(message: EventClaimSettled, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
-    if (message.proofRequirement !== 0) {
-      writer.uint32(16).int32(message.proofRequirement);
+    if (message.proofRequirementInt !== 0) {
+      writer.uint32(16).int32(message.proofRequirementInt);
     }
     if (message.numRelays !== 0) {
       writer.uint32(24).uint64(message.numRelays);
@@ -355,12 +516,27 @@ export const EventClaimSettled: MessageFns<EventClaimSettled> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(66).string(message.claimedUpokt);
     }
-    if (message.settlementResult !== undefined) {
-      ClaimSettlementResult.encode(message.settlementResult, writer.uint32(58).fork()).join();
+    if (message.serviceId !== "") {
+      writer.uint32(74).string(message.serviceId);
     }
+    if (message.applicationAddress !== "") {
+      writer.uint32(82).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(88).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(96).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(106).string(message.supplierOperatorAddress);
+    }
+    Object.entries(message.rewardDistribution).forEach(([key, value]) => {
+      EventClaimSettled_RewardDistributionEntry.encode({ key: key as any, value }, writer.uint32(114).fork()).join();
+    });
     return writer;
   },
 
@@ -371,20 +547,12 @@ export const EventClaimSettled: MessageFns<EventClaimSettled> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.claim = Claim.decode(reader, reader.uint32());
-          continue;
-        }
         case 2: {
           if (tag !== 16) {
             break;
           }
 
-          message.proofRequirement = reader.int32() as any;
+          message.proofRequirementInt = reader.int32();
           continue;
         }
         case 3: {
@@ -411,20 +579,63 @@ export const EventClaimSettled: MessageFns<EventClaimSettled> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 8: {
+          if (tag !== 66) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
           continue;
         }
-        case 7: {
-          if (tag !== 58) {
+        case 9: {
+          if (tag !== 74) {
             break;
           }
 
-          message.settlementResult = ClaimSettlementResult.decode(reader, reader.uint32());
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
+          continue;
+        }
+        case 14: {
+          if (tag !== 114) {
+            break;
+          }
+
+          const entry14 = EventClaimSettled_RewardDistributionEntry.decode(reader, reader.uint32());
+          if (entry14.value !== undefined) {
+            message.rewardDistribution[entry14.key] = entry14.value;
+          }
           continue;
         }
       }
@@ -438,8 +649,7 @@ export const EventClaimSettled: MessageFns<EventClaimSettled> = {
 
   fromJSON(object: any): EventClaimSettled {
     return {
-      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
-      proofRequirement: isSet(object.proofRequirement) ? proofRequirementReasonFromJSON(object.proofRequirement) : 0,
+      proofRequirementInt: isSet(object.proofRequirementInt) ? globalThis.Number(object.proofRequirementInt) : 0,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
         ? globalThis.Number(object.numClaimedComputeUnits)
@@ -447,20 +657,27 @@ export const EventClaimSettled: MessageFns<EventClaimSettled> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
-      settlementResult: isSet(object.settlementResult)
-        ? ClaimSettlementResult.fromJSON(object.settlementResult)
-        : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
+      rewardDistribution: isObject(object.rewardDistribution)
+        ? Object.entries(object.rewardDistribution).reduce<{ [key: string]: string }>((acc, [key, value]) => {
+          acc[key] = String(value);
+          return acc;
+        }, {})
+        : {},
     };
   },
 
   toJSON(message: EventClaimSettled): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
-    }
-    if (message.proofRequirement !== 0) {
-      obj.proofRequirement = proofRequirementReasonToJSON(message.proofRequirement);
+    if (message.proofRequirementInt !== 0) {
+      obj.proofRequirementInt = Math.round(message.proofRequirementInt);
     }
     if (message.numRelays !== 0) {
       obj.numRelays = Math.round(message.numRelays);
@@ -471,11 +688,32 @@ export const EventClaimSettled: MessageFns<EventClaimSettled> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
     }
-    if (message.settlementResult !== undefined) {
-      obj.settlementResult = ClaimSettlementResult.toJSON(message.settlementResult);
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
+    }
+    if (message.rewardDistribution) {
+      const entries = Object.entries(message.rewardDistribution);
+      if (entries.length > 0) {
+        obj.rewardDistribution = {};
+        entries.forEach(([k, v]) => {
+          obj.rewardDistribution[k] = v;
+        });
+      }
     }
     return obj;
   },
@@ -485,23 +723,111 @@ export const EventClaimSettled: MessageFns<EventClaimSettled> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventClaimSettled>, I>>(object: I): EventClaimSettled {
     const message = createBaseEventClaimSettled();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
-    message.proofRequirement = object.proofRequirement ?? 0;
+    message.proofRequirementInt = object.proofRequirementInt ?? 0;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
-    message.settlementResult = (object.settlementResult !== undefined && object.settlementResult !== null)
-      ? ClaimSettlementResult.fromPartial(object.settlementResult)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
+    message.rewardDistribution = Object.entries(object.rewardDistribution ?? {}).reduce<{ [key: string]: string }>(
+      (acc, [key, value]) => {
+        if (value !== undefined) {
+          acc[key] = globalThis.String(value);
+        }
+        return acc;
+      },
+      {},
+    );
+    return message;
+  },
+};
+
+function createBaseEventClaimSettled_RewardDistributionEntry(): EventClaimSettled_RewardDistributionEntry {
+  return { key: "", value: "" };
+}
+
+export const EventClaimSettled_RewardDistributionEntry: MessageFns<EventClaimSettled_RewardDistributionEntry> = {
+  encode(message: EventClaimSettled_RewardDistributionEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EventClaimSettled_RewardDistributionEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEventClaimSettled_RewardDistributionEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EventClaimSettled_RewardDistributionEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: EventClaimSettled_RewardDistributionEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EventClaimSettled_RewardDistributionEntry>, I>>(
+    base?: I,
+  ): EventClaimSettled_RewardDistributionEntry {
+    return EventClaimSettled_RewardDistributionEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EventClaimSettled_RewardDistributionEntry>, I>>(
+    object: I,
+  ): EventClaimSettled_RewardDistributionEntry {
+    const message = createBaseEventClaimSettled_RewardDistributionEntry();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
     return message;
   },
 };
 
 function createBaseEventApplicationOverserviced(): EventApplicationOverserviced {
-  return { applicationAddr: "", supplierOperatorAddr: "", expectedBurn: undefined, effectiveBurn: undefined };
+  return { applicationAddr: "", supplierOperatorAddr: "", expectedBurn: "", effectiveBurn: "" };
 }
 
 export const EventApplicationOverserviced: MessageFns<EventApplicationOverserviced> = {
@@ -512,11 +838,11 @@ export const EventApplicationOverserviced: MessageFns<EventApplicationOverservic
     if (message.supplierOperatorAddr !== "") {
       writer.uint32(18).string(message.supplierOperatorAddr);
     }
-    if (message.expectedBurn !== undefined) {
-      Coin.encode(message.expectedBurn, writer.uint32(26).fork()).join();
+    if (message.expectedBurn !== "") {
+      writer.uint32(42).string(message.expectedBurn);
     }
-    if (message.effectiveBurn !== undefined) {
-      Coin.encode(message.effectiveBurn, writer.uint32(34).fork()).join();
+    if (message.effectiveBurn !== "") {
+      writer.uint32(50).string(message.effectiveBurn);
     }
     return writer;
   },
@@ -544,20 +870,20 @@ export const EventApplicationOverserviced: MessageFns<EventApplicationOverservic
           message.supplierOperatorAddr = reader.string();
           continue;
         }
-        case 3: {
-          if (tag !== 26) {
+        case 5: {
+          if (tag !== 42) {
             break;
           }
 
-          message.expectedBurn = Coin.decode(reader, reader.uint32());
+          message.expectedBurn = reader.string();
           continue;
         }
-        case 4: {
-          if (tag !== 34) {
+        case 6: {
+          if (tag !== 50) {
             break;
           }
 
-          message.effectiveBurn = Coin.decode(reader, reader.uint32());
+          message.effectiveBurn = reader.string();
           continue;
         }
       }
@@ -573,8 +899,8 @@ export const EventApplicationOverserviced: MessageFns<EventApplicationOverservic
     return {
       applicationAddr: isSet(object.applicationAddr) ? globalThis.String(object.applicationAddr) : "",
       supplierOperatorAddr: isSet(object.supplierOperatorAddr) ? globalThis.String(object.supplierOperatorAddr) : "",
-      expectedBurn: isSet(object.expectedBurn) ? Coin.fromJSON(object.expectedBurn) : undefined,
-      effectiveBurn: isSet(object.effectiveBurn) ? Coin.fromJSON(object.effectiveBurn) : undefined,
+      expectedBurn: isSet(object.expectedBurn) ? globalThis.String(object.expectedBurn) : "",
+      effectiveBurn: isSet(object.effectiveBurn) ? globalThis.String(object.effectiveBurn) : "",
     };
   },
 
@@ -586,11 +912,11 @@ export const EventApplicationOverserviced: MessageFns<EventApplicationOverservic
     if (message.supplierOperatorAddr !== "") {
       obj.supplierOperatorAddr = message.supplierOperatorAddr;
     }
-    if (message.expectedBurn !== undefined) {
-      obj.expectedBurn = Coin.toJSON(message.expectedBurn);
+    if (message.expectedBurn !== "") {
+      obj.expectedBurn = message.expectedBurn;
     }
-    if (message.effectiveBurn !== undefined) {
-      obj.effectiveBurn = Coin.toJSON(message.effectiveBurn);
+    if (message.effectiveBurn !== "") {
+      obj.effectiveBurn = message.effectiveBurn;
     }
     return obj;
   },
@@ -602,27 +928,42 @@ export const EventApplicationOverserviced: MessageFns<EventApplicationOverservic
     const message = createBaseEventApplicationOverserviced();
     message.applicationAddr = object.applicationAddr ?? "";
     message.supplierOperatorAddr = object.supplierOperatorAddr ?? "";
-    message.expectedBurn = (object.expectedBurn !== undefined && object.expectedBurn !== null)
-      ? Coin.fromPartial(object.expectedBurn)
-      : undefined;
-    message.effectiveBurn = (object.effectiveBurn !== undefined && object.effectiveBurn !== null)
-      ? Coin.fromPartial(object.effectiveBurn)
-      : undefined;
+    message.expectedBurn = object.expectedBurn ?? "";
+    message.effectiveBurn = object.effectiveBurn ?? "";
     return message;
   },
 };
 
 function createBaseEventSupplierSlashed(): EventSupplierSlashed {
-  return { claim: undefined, proofMissingPenalty: undefined };
+  return {
+    proofMissingPenalty: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
+  };
 }
 
 export const EventSupplierSlashed: MessageFns<EventSupplierSlashed> = {
   encode(message: EventSupplierSlashed, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
+    if (message.proofMissingPenalty !== "") {
+      writer.uint32(26).string(message.proofMissingPenalty);
     }
-    if (message.proofMissingPenalty !== undefined) {
-      Coin.encode(message.proofMissingPenalty, writer.uint32(18).fork()).join();
+    if (message.serviceId !== "") {
+      writer.uint32(34).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(42).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(48).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(56).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(66).string(message.supplierOperatorAddress);
     }
     return writer;
   },
@@ -634,20 +975,52 @@ export const EventSupplierSlashed: MessageFns<EventSupplierSlashed> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
+        case 3: {
+          if (tag !== 26) {
             break;
           }
 
-          message.claim = Claim.decode(reader, reader.uint32());
+          message.proofMissingPenalty = reader.string();
           continue;
         }
-        case 2: {
-          if (tag !== 18) {
+        case 4: {
+          if (tag !== 34) {
             break;
           }
 
-          message.proofMissingPenalty = Coin.decode(reader, reader.uint32());
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
           continue;
         }
       }
@@ -661,18 +1034,36 @@ export const EventSupplierSlashed: MessageFns<EventSupplierSlashed> = {
 
   fromJSON(object: any): EventSupplierSlashed {
     return {
-      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
-      proofMissingPenalty: isSet(object.proofMissingPenalty) ? Coin.fromJSON(object.proofMissingPenalty) : undefined,
+      proofMissingPenalty: isSet(object.proofMissingPenalty) ? globalThis.String(object.proofMissingPenalty) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
     };
   },
 
   toJSON(message: EventSupplierSlashed): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
+    if (message.proofMissingPenalty !== "") {
+      obj.proofMissingPenalty = message.proofMissingPenalty;
     }
-    if (message.proofMissingPenalty !== undefined) {
-      obj.proofMissingPenalty = Coin.toJSON(message.proofMissingPenalty);
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
     }
     return obj;
   },
@@ -682,10 +1073,161 @@ export const EventSupplierSlashed: MessageFns<EventSupplierSlashed> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventSupplierSlashed>, I>>(object: I): EventSupplierSlashed {
     const message = createBaseEventSupplierSlashed();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
-    message.proofMissingPenalty = (object.proofMissingPenalty !== undefined && object.proofMissingPenalty !== null)
-      ? Coin.fromPartial(object.proofMissingPenalty)
-      : undefined;
+    message.proofMissingPenalty = object.proofMissingPenalty ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
+    return message;
+  },
+};
+
+function createBaseEventClaimDiscarded(): EventClaimDiscarded {
+  return {
+    error: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
+  };
+}
+
+export const EventClaimDiscarded: MessageFns<EventClaimDiscarded> = {
+  encode(message: EventClaimDiscarded, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.error !== "") {
+      writer.uint32(18).string(message.error);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(26).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(34).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(40).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(48).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(58).string(message.supplierOperatorAddress);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EventClaimDiscarded {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEventClaimDiscarded();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.error = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EventClaimDiscarded {
+    return {
+      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
+    };
+  },
+
+  toJSON(message: EventClaimDiscarded): unknown {
+    const obj: any = {};
+    if (message.error !== "") {
+      obj.error = message.error;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EventClaimDiscarded>, I>>(base?: I): EventClaimDiscarded {
+    return EventClaimDiscarded.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EventClaimDiscarded>, I>>(object: I): EventClaimDiscarded {
+    const message = createBaseEventClaimDiscarded();
+    message.error = object.error ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
     return message;
   },
 };
@@ -697,7 +1239,7 @@ function createBaseEventApplicationReimbursementRequest(): EventApplicationReimb
     supplierOwnerAddr: "",
     serviceId: "",
     sessionId: "",
-    amount: undefined,
+    amount: "",
   };
 }
 
@@ -718,8 +1260,8 @@ export const EventApplicationReimbursementRequest: MessageFns<EventApplicationRe
     if (message.sessionId !== "") {
       writer.uint32(42).string(message.sessionId);
     }
-    if (message.amount !== undefined) {
-      Coin.encode(message.amount, writer.uint32(50).fork()).join();
+    if (message.amount !== "") {
+      writer.uint32(58).string(message.amount);
     }
     return writer;
   },
@@ -771,12 +1313,12 @@ export const EventApplicationReimbursementRequest: MessageFns<EventApplicationRe
           message.sessionId = reader.string();
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.amount = Coin.decode(reader, reader.uint32());
+          message.amount = reader.string();
           continue;
         }
       }
@@ -795,7 +1337,7 @@ export const EventApplicationReimbursementRequest: MessageFns<EventApplicationRe
       supplierOwnerAddr: isSet(object.supplierOwnerAddr) ? globalThis.String(object.supplierOwnerAddr) : "",
       serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
       sessionId: isSet(object.sessionId) ? globalThis.String(object.sessionId) : "",
-      amount: isSet(object.amount) ? Coin.fromJSON(object.amount) : undefined,
+      amount: isSet(object.amount) ? globalThis.String(object.amount) : "",
     };
   },
 
@@ -816,8 +1358,8 @@ export const EventApplicationReimbursementRequest: MessageFns<EventApplicationRe
     if (message.sessionId !== "") {
       obj.sessionId = message.sessionId;
     }
-    if (message.amount !== undefined) {
-      obj.amount = Coin.toJSON(message.amount);
+    if (message.amount !== "") {
+      obj.amount = message.amount;
     }
     return obj;
   },
@@ -836,9 +1378,7 @@ export const EventApplicationReimbursementRequest: MessageFns<EventApplicationRe
     message.supplierOwnerAddr = object.supplierOwnerAddr ?? "";
     message.serviceId = object.serviceId ?? "";
     message.sessionId = object.sessionId ?? "";
-    message.amount = (object.amount !== undefined && object.amount !== null)
-      ? Coin.fromPartial(object.amount)
-      : undefined;
+    message.amount = object.amount ?? "";
     return message;
   },
 };
@@ -864,6 +1404,10 @@ function longToNumber(int64: { toString(): string }): number {
     throw new globalThis.Error("Value is smaller than Number.MIN_SAFE_INTEGER");
   }
   return num;
+}
+
+function isObject(value: any): boolean {
+  return typeof value === "object" && value !== null;
 }
 
 function isSet(value: any): boolean {

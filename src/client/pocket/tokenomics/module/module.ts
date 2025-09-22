@@ -11,7 +11,10 @@ export const protobufPackage = "pocket.tokenomics.module";
 
 /** Module is the config object for the module. */
 export interface Module {
-  /** authority defines the custom module authority. If not set, defaults to the governance module. */
+  /**
+   * authority defines the custom module authority.
+   * If not set, defaults to the governance module.
+   */
   authority: string;
 }
 

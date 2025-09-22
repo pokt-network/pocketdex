@@ -6,45 +6,119 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Coin } from "../../cosmos/base/v1beta1/coin";
-import { Claim, ClaimProofStatus, claimProofStatusFromJSON, claimProofStatusToJSON, Proof } from "./types";
 
 export const protobufPackage = "pocket.proof";
 
+/** Next index: 13 */
 export interface EventClaimCreated {
-  claim: Claim | undefined;
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier which submitted the claim. */
+  supplierOperatorAddress: string;
 }
 
 /** TODO_TEST: Add coverage for claim updates. */
 export interface EventClaimUpdated {
-  claim: Claim | undefined;
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier which updated the claim. */
+  supplierOperatorAddress: string;
 }
 
+/** Next index: 13 */
 export interface EventProofSubmitted {
-  claim: Claim | undefined;
-  proof: Proof | undefined;
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier which submitted the proof. */
+  supplierOperatorAddress: string;
 }
 
 /** TODO_TEST: Add coverage for proof updates. */
 export interface EventProofUpdated {
-  claim: Claim | undefined;
-  proof: Proof | undefined;
   numRelays: number;
   numClaimedComputeUnits: number;
   numEstimatedComputeUnits: number;
-  claimedUpokt: Coin | undefined;
+  claimedUpokt: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier which updated the proof. */
+  supplierOperatorAddress: string;
 }
 
 /**
@@ -52,31 +126,50 @@ export interface EventProofUpdated {
  * EndBlocker.
  */
 export interface EventProofValidityChecked {
-  proof: Proof | undefined;
   blockHeight: number;
-  proofStatus: ClaimProofStatus;
   /**
    * reason is the string representation of the error that led to the proof being
    * marked as invalid (e.g. "invalid closest merkle proof", "invalid relay request signature")
    */
   failureReason: string;
+  /** The Service ID to which the claim corresponds. */
+  serviceId: string;
+  /** The address of the application which participated in the claimed session. */
+  applicationAddress: string;
+  /** The end block height of the session to which the claim corresponds. */
+  sessionEndBlockHeight: number;
+  /**
+   * The validation status of the claim.
+   * DEV_NOTE: This field uses the integer representation of the ClaimProofStatus
+   * enum to minimize onchain disk utilization. This is necessary because event
+   * data is not always protobuf-encoded in the various places and formats that it
+   * appears in onchain leveldb databases.
+   * Enum values:
+   *   PENDING_VALIDATION = 0;
+   *   VALIDATED = 1;
+   *   INVALID = 2;
+   */
+  claimProofStatusInt: number;
+  /** The operator address of the supplier whose proof was checked. */
+  supplierOperatorAddress: string;
 }
 
 function createBaseEventClaimCreated(): EventClaimCreated {
   return {
-    claim: undefined,
     numRelays: 0,
     numClaimedComputeUnits: 0,
     numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
+    claimedUpokt: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
   };
 }
 
 export const EventClaimCreated: MessageFns<EventClaimCreated> = {
   encode(message: EventClaimCreated, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
     if (message.numRelays !== 0) {
       writer.uint32(16).uint64(message.numRelays);
     }
@@ -86,8 +179,23 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(66).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(74).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(80).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(88).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(98).string(message.supplierOperatorAddress);
     }
     return writer;
   },
@@ -99,14 +207,6 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.claim = Claim.decode(reader, reader.uint32());
-          continue;
-        }
         case 2: {
           if (tag !== 16) {
             break;
@@ -131,12 +231,52 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
           continue;
         }
       }
@@ -150,7 +290,6 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
 
   fromJSON(object: any): EventClaimCreated {
     return {
-      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
         ? globalThis.Number(object.numClaimedComputeUnits)
@@ -158,15 +297,19 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
     };
   },
 
   toJSON(message: EventClaimCreated): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
-    }
     if (message.numRelays !== 0) {
       obj.numRelays = Math.round(message.numRelays);
     }
@@ -176,8 +319,23 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
     }
     return obj;
   },
@@ -187,32 +345,35 @@ export const EventClaimCreated: MessageFns<EventClaimCreated> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventClaimCreated>, I>>(object: I): EventClaimCreated {
     const message = createBaseEventClaimCreated();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
     return message;
   },
 };
 
 function createBaseEventClaimUpdated(): EventClaimUpdated {
   return {
-    claim: undefined,
     numRelays: 0,
     numClaimedComputeUnits: 0,
     numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
+    claimedUpokt: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
   };
 }
 
 export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
   encode(message: EventClaimUpdated, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
     if (message.numRelays !== 0) {
       writer.uint32(16).uint64(message.numRelays);
     }
@@ -222,8 +383,23 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(66).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(74).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(80).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(88).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(98).string(message.supplierOperatorAddress);
     }
     return writer;
   },
@@ -235,14 +411,6 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.claim = Claim.decode(reader, reader.uint32());
-          continue;
-        }
         case 2: {
           if (tag !== 16) {
             break;
@@ -267,12 +435,52 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
           continue;
         }
       }
@@ -286,7 +494,6 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
 
   fromJSON(object: any): EventClaimUpdated {
     return {
-      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
         ? globalThis.Number(object.numClaimedComputeUnits)
@@ -294,15 +501,19 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
     };
   },
 
   toJSON(message: EventClaimUpdated): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
-    }
     if (message.numRelays !== 0) {
       obj.numRelays = Math.round(message.numRelays);
     }
@@ -312,8 +523,23 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
     }
     return obj;
   },
@@ -323,36 +549,35 @@ export const EventClaimUpdated: MessageFns<EventClaimUpdated> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventClaimUpdated>, I>>(object: I): EventClaimUpdated {
     const message = createBaseEventClaimUpdated();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
     return message;
   },
 };
 
 function createBaseEventProofSubmitted(): EventProofSubmitted {
   return {
-    claim: undefined,
-    proof: undefined,
     numRelays: 0,
     numClaimedComputeUnits: 0,
     numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
+    claimedUpokt: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
   };
 }
 
 export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
   encode(message: EventProofSubmitted, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
-    if (message.proof !== undefined) {
-      Proof.encode(message.proof, writer.uint32(18).fork()).join();
-    }
     if (message.numRelays !== 0) {
       writer.uint32(24).uint64(message.numRelays);
     }
@@ -362,8 +587,23 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(66).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(74).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(80).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(88).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(98).string(message.supplierOperatorAddress);
     }
     return writer;
   },
@@ -375,22 +615,6 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.claim = Claim.decode(reader, reader.uint32());
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.proof = Proof.decode(reader, reader.uint32());
-          continue;
-        }
         case 3: {
           if (tag !== 24) {
             break;
@@ -415,12 +639,52 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
           continue;
         }
       }
@@ -434,8 +698,6 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
 
   fromJSON(object: any): EventProofSubmitted {
     return {
-      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
-      proof: isSet(object.proof) ? Proof.fromJSON(object.proof) : undefined,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
         ? globalThis.Number(object.numClaimedComputeUnits)
@@ -443,18 +705,19 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
     };
   },
 
   toJSON(message: EventProofSubmitted): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
-    }
-    if (message.proof !== undefined) {
-      obj.proof = Proof.toJSON(message.proof);
-    }
     if (message.numRelays !== 0) {
       obj.numRelays = Math.round(message.numRelays);
     }
@@ -464,8 +727,23 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
     }
     return obj;
   },
@@ -475,37 +753,35 @@ export const EventProofSubmitted: MessageFns<EventProofSubmitted> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventProofSubmitted>, I>>(object: I): EventProofSubmitted {
     const message = createBaseEventProofSubmitted();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
-    message.proof = (object.proof !== undefined && object.proof !== null) ? Proof.fromPartial(object.proof) : undefined;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
     return message;
   },
 };
 
 function createBaseEventProofUpdated(): EventProofUpdated {
   return {
-    claim: undefined,
-    proof: undefined,
     numRelays: 0,
     numClaimedComputeUnits: 0,
     numEstimatedComputeUnits: 0,
-    claimedUpokt: undefined,
+    claimedUpokt: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
   };
 }
 
 export const EventProofUpdated: MessageFns<EventProofUpdated> = {
   encode(message: EventProofUpdated, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.claim !== undefined) {
-      Claim.encode(message.claim, writer.uint32(10).fork()).join();
-    }
-    if (message.proof !== undefined) {
-      Proof.encode(message.proof, writer.uint32(18).fork()).join();
-    }
     if (message.numRelays !== 0) {
       writer.uint32(24).uint64(message.numRelays);
     }
@@ -515,8 +791,23 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       writer.uint32(40).uint64(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      Coin.encode(message.claimedUpokt, writer.uint32(50).fork()).join();
+    if (message.claimedUpokt !== "") {
+      writer.uint32(58).string(message.claimedUpokt);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(66).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(74).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(80).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(88).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(98).string(message.supplierOperatorAddress);
     }
     return writer;
   },
@@ -528,22 +819,6 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.claim = Claim.decode(reader, reader.uint32());
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.proof = Proof.decode(reader, reader.uint32());
-          continue;
-        }
         case 3: {
           if (tag !== 24) {
             break;
@@ -568,12 +843,52 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
           message.numEstimatedComputeUnits = longToNumber(reader.uint64());
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.claimedUpokt = Coin.decode(reader, reader.uint32());
+          message.claimedUpokt = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
           continue;
         }
       }
@@ -587,8 +902,6 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
 
   fromJSON(object: any): EventProofUpdated {
     return {
-      claim: isSet(object.claim) ? Claim.fromJSON(object.claim) : undefined,
-      proof: isSet(object.proof) ? Proof.fromJSON(object.proof) : undefined,
       numRelays: isSet(object.numRelays) ? globalThis.Number(object.numRelays) : 0,
       numClaimedComputeUnits: isSet(object.numClaimedComputeUnits)
         ? globalThis.Number(object.numClaimedComputeUnits)
@@ -596,18 +909,19 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
       numEstimatedComputeUnits: isSet(object.numEstimatedComputeUnits)
         ? globalThis.Number(object.numEstimatedComputeUnits)
         : 0,
-      claimedUpokt: isSet(object.claimedUpokt) ? Coin.fromJSON(object.claimedUpokt) : undefined,
+      claimedUpokt: isSet(object.claimedUpokt) ? globalThis.String(object.claimedUpokt) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
     };
   },
 
   toJSON(message: EventProofUpdated): unknown {
     const obj: any = {};
-    if (message.claim !== undefined) {
-      obj.claim = Claim.toJSON(message.claim);
-    }
-    if (message.proof !== undefined) {
-      obj.proof = Proof.toJSON(message.proof);
-    }
     if (message.numRelays !== 0) {
       obj.numRelays = Math.round(message.numRelays);
     }
@@ -617,8 +931,23 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
     if (message.numEstimatedComputeUnits !== 0) {
       obj.numEstimatedComputeUnits = Math.round(message.numEstimatedComputeUnits);
     }
-    if (message.claimedUpokt !== undefined) {
-      obj.claimedUpokt = Coin.toJSON(message.claimedUpokt);
+    if (message.claimedUpokt !== "") {
+      obj.claimedUpokt = message.claimedUpokt;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
     }
     return obj;
   },
@@ -628,35 +957,53 @@ export const EventProofUpdated: MessageFns<EventProofUpdated> = {
   },
   fromPartial<I extends Exact<DeepPartial<EventProofUpdated>, I>>(object: I): EventProofUpdated {
     const message = createBaseEventProofUpdated();
-    message.claim = (object.claim !== undefined && object.claim !== null) ? Claim.fromPartial(object.claim) : undefined;
-    message.proof = (object.proof !== undefined && object.proof !== null) ? Proof.fromPartial(object.proof) : undefined;
     message.numRelays = object.numRelays ?? 0;
     message.numClaimedComputeUnits = object.numClaimedComputeUnits ?? 0;
     message.numEstimatedComputeUnits = object.numEstimatedComputeUnits ?? 0;
-    message.claimedUpokt = (object.claimedUpokt !== undefined && object.claimedUpokt !== null)
-      ? Coin.fromPartial(object.claimedUpokt)
-      : undefined;
+    message.claimedUpokt = object.claimedUpokt ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
     return message;
   },
 };
 
 function createBaseEventProofValidityChecked(): EventProofValidityChecked {
-  return { proof: undefined, blockHeight: 0, proofStatus: 0, failureReason: "" };
+  return {
+    blockHeight: 0,
+    failureReason: "",
+    serviceId: "",
+    applicationAddress: "",
+    sessionEndBlockHeight: 0,
+    claimProofStatusInt: 0,
+    supplierOperatorAddress: "",
+  };
 }
 
 export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = {
   encode(message: EventProofValidityChecked, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.proof !== undefined) {
-      Proof.encode(message.proof, writer.uint32(10).fork()).join();
-    }
     if (message.blockHeight !== 0) {
       writer.uint32(16).uint64(message.blockHeight);
     }
-    if (message.proofStatus !== 0) {
-      writer.uint32(24).int32(message.proofStatus);
-    }
     if (message.failureReason !== "") {
       writer.uint32(34).string(message.failureReason);
+    }
+    if (message.serviceId !== "") {
+      writer.uint32(66).string(message.serviceId);
+    }
+    if (message.applicationAddress !== "") {
+      writer.uint32(74).string(message.applicationAddress);
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      writer.uint32(80).int64(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      writer.uint32(88).int32(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      writer.uint32(98).string(message.supplierOperatorAddress);
     }
     return writer;
   },
@@ -668,14 +1015,6 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.proof = Proof.decode(reader, reader.uint32());
-          continue;
-        }
         case 2: {
           if (tag !== 16) {
             break;
@@ -684,20 +1023,52 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
           message.blockHeight = longToNumber(reader.uint64());
           continue;
         }
-        case 3: {
-          if (tag !== 24) {
-            break;
-          }
-
-          message.proofStatus = reader.int32() as any;
-          continue;
-        }
         case 4: {
           if (tag !== 34) {
             break;
           }
 
           message.failureReason = reader.string();
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.serviceId = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.applicationAddress = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.sessionEndBlockHeight = longToNumber(reader.int64());
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.claimProofStatusInt = reader.int32();
+          continue;
+        }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.supplierOperatorAddress = reader.string();
           continue;
         }
       }
@@ -711,26 +1082,40 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
 
   fromJSON(object: any): EventProofValidityChecked {
     return {
-      proof: isSet(object.proof) ? Proof.fromJSON(object.proof) : undefined,
       blockHeight: isSet(object.blockHeight) ? globalThis.Number(object.blockHeight) : 0,
-      proofStatus: isSet(object.proofStatus) ? claimProofStatusFromJSON(object.proofStatus) : 0,
       failureReason: isSet(object.failureReason) ? globalThis.String(object.failureReason) : "",
+      serviceId: isSet(object.serviceId) ? globalThis.String(object.serviceId) : "",
+      applicationAddress: isSet(object.applicationAddress) ? globalThis.String(object.applicationAddress) : "",
+      sessionEndBlockHeight: isSet(object.sessionEndBlockHeight) ? globalThis.Number(object.sessionEndBlockHeight) : 0,
+      claimProofStatusInt: isSet(object.claimProofStatusInt) ? globalThis.Number(object.claimProofStatusInt) : 0,
+      supplierOperatorAddress: isSet(object.supplierOperatorAddress)
+        ? globalThis.String(object.supplierOperatorAddress)
+        : "",
     };
   },
 
   toJSON(message: EventProofValidityChecked): unknown {
     const obj: any = {};
-    if (message.proof !== undefined) {
-      obj.proof = Proof.toJSON(message.proof);
-    }
     if (message.blockHeight !== 0) {
       obj.blockHeight = Math.round(message.blockHeight);
     }
-    if (message.proofStatus !== 0) {
-      obj.proofStatus = claimProofStatusToJSON(message.proofStatus);
-    }
     if (message.failureReason !== "") {
       obj.failureReason = message.failureReason;
+    }
+    if (message.serviceId !== "") {
+      obj.serviceId = message.serviceId;
+    }
+    if (message.applicationAddress !== "") {
+      obj.applicationAddress = message.applicationAddress;
+    }
+    if (message.sessionEndBlockHeight !== 0) {
+      obj.sessionEndBlockHeight = Math.round(message.sessionEndBlockHeight);
+    }
+    if (message.claimProofStatusInt !== 0) {
+      obj.claimProofStatusInt = Math.round(message.claimProofStatusInt);
+    }
+    if (message.supplierOperatorAddress !== "") {
+      obj.supplierOperatorAddress = message.supplierOperatorAddress;
     }
     return obj;
   },
@@ -740,10 +1125,13 @@ export const EventProofValidityChecked: MessageFns<EventProofValidityChecked> = 
   },
   fromPartial<I extends Exact<DeepPartial<EventProofValidityChecked>, I>>(object: I): EventProofValidityChecked {
     const message = createBaseEventProofValidityChecked();
-    message.proof = (object.proof !== undefined && object.proof !== null) ? Proof.fromPartial(object.proof) : undefined;
     message.blockHeight = object.blockHeight ?? 0;
-    message.proofStatus = object.proofStatus ?? 0;
     message.failureReason = object.failureReason ?? "";
+    message.serviceId = object.serviceId ?? "";
+    message.applicationAddress = object.applicationAddress ?? "";
+    message.sessionEndBlockHeight = object.sessionEndBlockHeight ?? 0;
+    message.claimProofStatusInt = object.claimProofStatusInt ?? 0;
+    message.supplierOperatorAddress = object.supplierOperatorAddress ?? "";
     return message;
   },
 };

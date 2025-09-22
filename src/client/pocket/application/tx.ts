@@ -9,7 +9,6 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Coin } from "../../cosmos/base/v1beta1/coin";
 import { ApplicationServiceConfig } from "../shared/service";
 import { Params } from "./params";
-import { Application } from "./types";
 
 export const protobufPackage = "pocket.application";
 
@@ -43,7 +42,6 @@ export interface MsgStakeApplication {
 }
 
 export interface MsgStakeApplicationResponse {
-  application: Application | undefined;
 }
 
 export interface MsgUnstakeApplication {
@@ -51,7 +49,6 @@ export interface MsgUnstakeApplication {
 }
 
 export interface MsgUnstakeApplicationResponse {
-  application: Application | undefined;
 }
 
 export interface MsgDelegateToGateway {
@@ -62,7 +59,6 @@ export interface MsgDelegateToGateway {
 }
 
 export interface MsgDelegateToGatewayResponse {
-  application: Application | undefined;
 }
 
 export interface MsgUndelegateFromGateway {
@@ -73,7 +69,6 @@ export interface MsgUndelegateFromGateway {
 }
 
 export interface MsgUndelegateFromGatewayResponse {
-  application: Application | undefined;
 }
 
 export interface MsgTransferApplication {
@@ -82,7 +77,6 @@ export interface MsgTransferApplication {
 }
 
 export interface MsgTransferApplicationResponse {
-  application: Application | undefined;
 }
 
 export interface MsgUpdateParam {
@@ -94,7 +88,6 @@ export interface MsgUpdateParam {
 }
 
 export interface MsgUpdateParamResponse {
-  params: Params | undefined;
 }
 
 function createBaseMsgUpdateParams(): MsgUpdateParams {
@@ -313,14 +306,11 @@ export const MsgStakeApplication: MessageFns<MsgStakeApplication> = {
 };
 
 function createBaseMsgStakeApplicationResponse(): MsgStakeApplicationResponse {
-  return { application: undefined };
+  return {};
 }
 
 export const MsgStakeApplicationResponse: MessageFns<MsgStakeApplicationResponse> = {
-  encode(message: MsgStakeApplicationResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.application !== undefined) {
-      Application.encode(message.application, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgStakeApplicationResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -331,14 +321,6 @@ export const MsgStakeApplicationResponse: MessageFns<MsgStakeApplicationResponse
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.application = Application.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -348,26 +330,20 @@ export const MsgStakeApplicationResponse: MessageFns<MsgStakeApplicationResponse
     return message;
   },
 
-  fromJSON(object: any): MsgStakeApplicationResponse {
-    return { application: isSet(object.application) ? Application.fromJSON(object.application) : undefined };
+  fromJSON(_: any): MsgStakeApplicationResponse {
+    return {};
   },
 
-  toJSON(message: MsgStakeApplicationResponse): unknown {
+  toJSON(_: MsgStakeApplicationResponse): unknown {
     const obj: any = {};
-    if (message.application !== undefined) {
-      obj.application = Application.toJSON(message.application);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgStakeApplicationResponse>, I>>(base?: I): MsgStakeApplicationResponse {
     return MsgStakeApplicationResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgStakeApplicationResponse>, I>>(object: I): MsgStakeApplicationResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgStakeApplicationResponse>, I>>(_: I): MsgStakeApplicationResponse {
     const message = createBaseMsgStakeApplicationResponse();
-    message.application = (object.application !== undefined && object.application !== null)
-      ? Application.fromPartial(object.application)
-      : undefined;
     return message;
   },
 };
@@ -431,14 +407,11 @@ export const MsgUnstakeApplication: MessageFns<MsgUnstakeApplication> = {
 };
 
 function createBaseMsgUnstakeApplicationResponse(): MsgUnstakeApplicationResponse {
-  return { application: undefined };
+  return {};
 }
 
 export const MsgUnstakeApplicationResponse: MessageFns<MsgUnstakeApplicationResponse> = {
-  encode(message: MsgUnstakeApplicationResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.application !== undefined) {
-      Application.encode(message.application, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUnstakeApplicationResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -449,14 +422,6 @@ export const MsgUnstakeApplicationResponse: MessageFns<MsgUnstakeApplicationResp
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.application = Application.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -466,28 +431,20 @@ export const MsgUnstakeApplicationResponse: MessageFns<MsgUnstakeApplicationResp
     return message;
   },
 
-  fromJSON(object: any): MsgUnstakeApplicationResponse {
-    return { application: isSet(object.application) ? Application.fromJSON(object.application) : undefined };
+  fromJSON(_: any): MsgUnstakeApplicationResponse {
+    return {};
   },
 
-  toJSON(message: MsgUnstakeApplicationResponse): unknown {
+  toJSON(_: MsgUnstakeApplicationResponse): unknown {
     const obj: any = {};
-    if (message.application !== undefined) {
-      obj.application = Application.toJSON(message.application);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUnstakeApplicationResponse>, I>>(base?: I): MsgUnstakeApplicationResponse {
     return MsgUnstakeApplicationResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUnstakeApplicationResponse>, I>>(
-    object: I,
-  ): MsgUnstakeApplicationResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUnstakeApplicationResponse>, I>>(_: I): MsgUnstakeApplicationResponse {
     const message = createBaseMsgUnstakeApplicationResponse();
-    message.application = (object.application !== undefined && object.application !== null)
-      ? Application.fromPartial(object.application)
-      : undefined;
     return message;
   },
 };
@@ -569,14 +526,11 @@ export const MsgDelegateToGateway: MessageFns<MsgDelegateToGateway> = {
 };
 
 function createBaseMsgDelegateToGatewayResponse(): MsgDelegateToGatewayResponse {
-  return { application: undefined };
+  return {};
 }
 
 export const MsgDelegateToGatewayResponse: MessageFns<MsgDelegateToGatewayResponse> = {
-  encode(message: MsgDelegateToGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.application !== undefined) {
-      Application.encode(message.application, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgDelegateToGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -587,14 +541,6 @@ export const MsgDelegateToGatewayResponse: MessageFns<MsgDelegateToGatewayRespon
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.application = Application.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -604,26 +550,20 @@ export const MsgDelegateToGatewayResponse: MessageFns<MsgDelegateToGatewayRespon
     return message;
   },
 
-  fromJSON(object: any): MsgDelegateToGatewayResponse {
-    return { application: isSet(object.application) ? Application.fromJSON(object.application) : undefined };
+  fromJSON(_: any): MsgDelegateToGatewayResponse {
+    return {};
   },
 
-  toJSON(message: MsgDelegateToGatewayResponse): unknown {
+  toJSON(_: MsgDelegateToGatewayResponse): unknown {
     const obj: any = {};
-    if (message.application !== undefined) {
-      obj.application = Application.toJSON(message.application);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgDelegateToGatewayResponse>, I>>(base?: I): MsgDelegateToGatewayResponse {
     return MsgDelegateToGatewayResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgDelegateToGatewayResponse>, I>>(object: I): MsgDelegateToGatewayResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgDelegateToGatewayResponse>, I>>(_: I): MsgDelegateToGatewayResponse {
     const message = createBaseMsgDelegateToGatewayResponse();
-    message.application = (object.application !== undefined && object.application !== null)
-      ? Application.fromPartial(object.application)
-      : undefined;
     return message;
   },
 };
@@ -705,14 +645,11 @@ export const MsgUndelegateFromGateway: MessageFns<MsgUndelegateFromGateway> = {
 };
 
 function createBaseMsgUndelegateFromGatewayResponse(): MsgUndelegateFromGatewayResponse {
-  return { application: undefined };
+  return {};
 }
 
 export const MsgUndelegateFromGatewayResponse: MessageFns<MsgUndelegateFromGatewayResponse> = {
-  encode(message: MsgUndelegateFromGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.application !== undefined) {
-      Application.encode(message.application, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUndelegateFromGatewayResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -723,14 +660,6 @@ export const MsgUndelegateFromGatewayResponse: MessageFns<MsgUndelegateFromGatew
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.application = Application.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -740,15 +669,12 @@ export const MsgUndelegateFromGatewayResponse: MessageFns<MsgUndelegateFromGatew
     return message;
   },
 
-  fromJSON(object: any): MsgUndelegateFromGatewayResponse {
-    return { application: isSet(object.application) ? Application.fromJSON(object.application) : undefined };
+  fromJSON(_: any): MsgUndelegateFromGatewayResponse {
+    return {};
   },
 
-  toJSON(message: MsgUndelegateFromGatewayResponse): unknown {
+  toJSON(_: MsgUndelegateFromGatewayResponse): unknown {
     const obj: any = {};
-    if (message.application !== undefined) {
-      obj.application = Application.toJSON(message.application);
-    }
     return obj;
   },
 
@@ -758,12 +684,9 @@ export const MsgUndelegateFromGatewayResponse: MessageFns<MsgUndelegateFromGatew
     return MsgUndelegateFromGatewayResponse.fromPartial(base ?? ({} as any));
   },
   fromPartial<I extends Exact<DeepPartial<MsgUndelegateFromGatewayResponse>, I>>(
-    object: I,
+    _: I,
   ): MsgUndelegateFromGatewayResponse {
     const message = createBaseMsgUndelegateFromGatewayResponse();
-    message.application = (object.application !== undefined && object.application !== null)
-      ? Application.fromPartial(object.application)
-      : undefined;
     return message;
   },
 };
@@ -845,14 +768,11 @@ export const MsgTransferApplication: MessageFns<MsgTransferApplication> = {
 };
 
 function createBaseMsgTransferApplicationResponse(): MsgTransferApplicationResponse {
-  return { application: undefined };
+  return {};
 }
 
 export const MsgTransferApplicationResponse: MessageFns<MsgTransferApplicationResponse> = {
-  encode(message: MsgTransferApplicationResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.application !== undefined) {
-      Application.encode(message.application, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgTransferApplicationResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -863,14 +783,6 @@ export const MsgTransferApplicationResponse: MessageFns<MsgTransferApplicationRe
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.application = Application.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -880,28 +792,20 @@ export const MsgTransferApplicationResponse: MessageFns<MsgTransferApplicationRe
     return message;
   },
 
-  fromJSON(object: any): MsgTransferApplicationResponse {
-    return { application: isSet(object.application) ? Application.fromJSON(object.application) : undefined };
+  fromJSON(_: any): MsgTransferApplicationResponse {
+    return {};
   },
 
-  toJSON(message: MsgTransferApplicationResponse): unknown {
+  toJSON(_: MsgTransferApplicationResponse): unknown {
     const obj: any = {};
-    if (message.application !== undefined) {
-      obj.application = Application.toJSON(message.application);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgTransferApplicationResponse>, I>>(base?: I): MsgTransferApplicationResponse {
     return MsgTransferApplicationResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgTransferApplicationResponse>, I>>(
-    object: I,
-  ): MsgTransferApplicationResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgTransferApplicationResponse>, I>>(_: I): MsgTransferApplicationResponse {
     const message = createBaseMsgTransferApplicationResponse();
-    message.application = (object.application !== undefined && object.application !== null)
-      ? Application.fromPartial(object.application)
-      : undefined;
     return message;
   },
 };
@@ -1017,14 +921,11 @@ export const MsgUpdateParam: MessageFns<MsgUpdateParam> = {
 };
 
 function createBaseMsgUpdateParamResponse(): MsgUpdateParamResponse {
-  return { params: undefined };
+  return {};
 }
 
 export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
-  encode(message: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.params !== undefined) {
-      Params.encode(message.params, writer.uint32(10).fork()).join();
-    }
+  encode(_: MsgUpdateParamResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -1035,14 +936,6 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.params = Params.decode(reader, reader.uint32());
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1052,26 +945,20 @@ export const MsgUpdateParamResponse: MessageFns<MsgUpdateParamResponse> = {
     return message;
   },
 
-  fromJSON(object: any): MsgUpdateParamResponse {
-    return { params: isSet(object.params) ? Params.fromJSON(object.params) : undefined };
+  fromJSON(_: any): MsgUpdateParamResponse {
+    return {};
   },
 
-  toJSON(message: MsgUpdateParamResponse): unknown {
+  toJSON(_: MsgUpdateParamResponse): unknown {
     const obj: any = {};
-    if (message.params !== undefined) {
-      obj.params = Params.toJSON(message.params);
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(base?: I): MsgUpdateParamResponse {
     return MsgUpdateParamResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(object: I): MsgUpdateParamResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgUpdateParamResponse>, I>>(_: I): MsgUpdateParamResponse {
     const message = createBaseMsgUpdateParamResponse();
-    message.params = (object.params !== undefined && object.params !== null)
-      ? Params.fromPartial(object.params)
-      : undefined;
     return message;
   },
 };
