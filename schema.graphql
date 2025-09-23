@@ -1139,35 +1139,6 @@ type EventProofValidityChecked @entity {
   event: Event!
 }
 
-# Entity used to store summarized data related to relays by block and service
-type RelayByBlockAndService @entity {
-  id: ID!
-  relays: BigInt!
-  computedUnits: BigInt!
-  claimedUpokt: BigInt!
-  amount: Int!
-  block: Block!
-  service: Service!
-}
-
-# Entity used to store summarized data related to staked suppliers by block and service
-type StakedSuppliersByBlockAndService @entity {
-  id: ID!
-  tokens: BigInt!
-  amount: Int!
-  block: Block!
-  service: Service!
-}
-
-# Entity used to store summarized data related to staked apps by block and service
-type StakedAppsByBlockAndService @entity {
-  id: ID!
-  tokens: BigInt!
-  amount: Int!
-  block: Block!
-  service: Service!
-}
-
 type Supply @entity {
   id: ID!
   denom: String! @index
