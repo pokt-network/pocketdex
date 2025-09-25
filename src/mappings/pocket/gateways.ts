@@ -43,6 +43,9 @@ async function _handleGatewayMsgStake(
     stakeDenom: stake.denom,
     accountId: msg.msg.decodedMsg.address,
     stakeStatus: StakeStatus.Staked,
+    unstakingEndHeight: undefined,
+    unstakingEndBlockId: undefined,
+    unstakingBeginBlockId: undefined,
   });
 
   const msgId = messageId(msg);
@@ -143,7 +146,7 @@ async function _handleGatewayUnstakeEvent(
 }
 
 async function _handleEventGatewayUnbondingBegin(event: CosmosEvent) {
-  let unstakingEndHeight: bigint | null = null, sessionEndHeight: bigint | null = null, gatewaySdk: GatewaySDKType | null = null;
+  let unstakingEndHeight: bigint | null = null, sessionEndHeight: bigint | null = null, gatewayAddress: string | null = null;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
@@ -154,8 +157,13 @@ async function _handleEventGatewayUnbondingBegin(event: CosmosEvent) {
       sessionEndHeight = BigInt((attribute.value as unknown as string).replaceAll("\"", ""));
     }
 
+    if (attribute.key === "gateway_address") {
+      gatewayAddress = (attribute.value as string).replaceAll("\"", "");
+    }
+
+    // older versions of this event included this attribute
     if (attribute.key === "gateway") {
-      gatewaySdk = JSON.parse(attribute.value as unknown as string);
+      gatewayAddress = (JSON.parse(attribute.value as string) as GatewaySDKType).address;
     }
   }
 
@@ -167,14 +175,14 @@ async function _handleEventGatewayUnbondingBegin(event: CosmosEvent) {
     throw new Error(`[handleEventGatewayUnbondingBegin] sessionEndHeight not found in event`);
   }
 
-  if (!gatewaySdk) {
-    throw new Error(`[handleEventGatewayUnbondingBegin] gateway not found in event`);
+  if (!gatewayAddress) {
+    throw new Error(`[handleEventGatewayUnbondingBegin] gatewayAddress not found in event`);
   }
 
-  const gateway = await Gateway.get(gatewaySdk.address);
+  const gateway = await Gateway.get(gatewayAddress);
 
   if (!gateway) {
-    throw new Error(`[handleEventGatewayUnbondingBegin] gateway not found for address ${gatewaySdk.address}`);
+    throw new Error(`[handleEventGatewayUnbondingBegin] gateway not found for address ${gatewayAddress}`);
   }
 
   gateway.unstakingEndHeight = unstakingEndHeight;
@@ -196,7 +204,7 @@ async function _handleEventGatewayUnbondingBegin(event: CosmosEvent) {
 }
 
 async function _handleEventGatewayUnbondingEnd(event: CosmosEvent) {
-  let unstakingEndHeight: bigint | null = null, sessionEndHeight: bigint | null = null, gatewaySdk: GatewaySDKType | null = null;
+  let unstakingEndHeight: bigint | null = null, sessionEndHeight: bigint | null = null, gatewayAddress: string | null = null;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
@@ -207,8 +215,13 @@ async function _handleEventGatewayUnbondingEnd(event: CosmosEvent) {
       sessionEndHeight = BigInt((attribute.value as unknown as string).replaceAll("\"", ""));
     }
 
+    if (attribute.key === "gateway_address") {
+      gatewayAddress = (attribute.value as string).replaceAll("\"", "");
+    }
+
+    // older versions of this event included this attribute
     if (attribute.key === "gateway") {
-      gatewaySdk = JSON.parse(attribute.value as unknown as string);
+      gatewayAddress = (JSON.parse(attribute.value as string) as GatewaySDKType).address;
     }
   }
 
@@ -220,17 +233,17 @@ async function _handleEventGatewayUnbondingEnd(event: CosmosEvent) {
     throw new Error(`[handleEventGatewayUnbondingEnd] sessionEndHeight not found in event`);
   }
 
-  if (!gatewaySdk) {
-    throw new Error(`[handleEventGatewayUnbondingEnd] gateway not found in event`);
+  if (!gatewayAddress) {
+    throw new Error(`[handleEventGatewayUnbondingEnd] gatewayAddress not found in event`);
   }
 
   const [gateway, undelegates] = await Promise.all([
-    Gateway.get(gatewaySdk.address),
-    getUndelegatesForUnstakedGateway(gatewaySdk.address)
+    Gateway.get(gatewayAddress),
+    getUndelegatesForUnstakedGateway(gatewayAddress)
   ]);
 
   if (!gateway) {
-    throw new Error(`[handleEventGatewayUnbondingEnd] gateway not found for address ${gatewaySdk.address}`);
+    throw new Error(`[handleEventGatewayUnbondingEnd] gateway not found for address ${gatewayAddress}`);
   }
 
   gateway.unstakingEndBlockId = unstakingEndHeight;
