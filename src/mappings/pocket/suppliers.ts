@@ -226,7 +226,7 @@ async function _handleSupplierStakeMsg(msg: CosmosMessage<MsgStakeSupplier>) {
 async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupplier>) {
   const msgId = messageId(msg);
 
-  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null, supplier: SupplierSDKType | null = null, claimSignerType: string | null = null;
+  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null, claimSignerType: string | null = null;
 
   for (const event of msg.tx.tx.events) {
     if (event.type === 'pocket.migration.EventMorseSupplierClaimed') {
@@ -242,10 +242,6 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
             denom: coin.denom,
             amount: coin.amount,
           }
-        }
-
-        if (attribute.key === 'supplier') {
-          supplier = JSON.parse(attribute.value as string);
         }
 
         if (attribute.key === 'claimed_supplier_stake') {
@@ -268,13 +264,7 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
     throw new Error(`[handleMsgClaimMorseSupplier] balance coin not found in event`);
   }
 
-  if (!supplier) {
-    throw new Error(`[handleMsgClaimMorseSupplier] supplier not found in event`);
-  }
-
-  if (!supplier.stake) {
-    throw new Error(`[handleMsgClaimMorseSupplier] supplier stake not found in event`);
-  }
+  const supplier = await Supplier.get(msg.msg.decodedMsg.shannonOperatorAddress);
 
   const promises = await _stakeSupplier({
     msgId,
@@ -283,7 +273,10 @@ async function _handleMsgClaimMorseSupplier(msg: CosmosMessage<MsgClaimMorseSupp
     ownerAddress: msg.msg.decodedMsg.shannonOwnerAddress,
     services: msg.msg.decodedMsg.services,
     // we are using this stake because the migration allows migrating a supplier to an existing one, just adding the stake
-    stake: supplier.stake,
+    stake: {
+      amount: (BigInt(stakeCoin.amount) + BigInt(supplier?.stakeAmount?.toString() || '0')).toString(),
+      denom: stakeCoin.denom,
+    },
     serviceMsgIdKey: 'claimMsgId',
   });
 
@@ -446,11 +439,11 @@ async function _handleSupplierUnbondingBeginEvent(
   "value":"\"55070\"","index":true
   },{"key":"mode","value":"EndBlock","index":true}]}
    */
-  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason: null | number = null;
+  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, operatorAddress: string | undefined, reason: null | number = null;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "supplier") {
-      supplierSdk = JSON.parse(attribute.value as unknown as string);
+      operatorAddress = (JSON.parse(attribute.value as string) as SupplierSDKType).operator_address;
       continue
     }
 
@@ -467,13 +460,15 @@ async function _handleSupplierUnbondingBeginEvent(
     if (attribute.key === "reason") {
       reason = supplierUnbondingReasonFromJSON(parsedValue);
     }
+
+    if (attribute.key === "operator_address") {
+      operatorAddress = parsedValue;
+    }
   }
 
-  if (!supplierSdk) {
-    throw new Error(`[handleSupplierUnbondingBeginEvent] supplier not provided in event`);
+  if (!operatorAddress) {
+    throw new Error(`[handleSupplierUnbondingBeginEvent] operatorAddress not provided in event`);
   }
-
-  const operatorAddress = supplierSdk.operator_address;
 
   const supplier = await Supplier.get(operatorAddress);
 
@@ -516,11 +511,11 @@ async function _handleSupplierUnbondingBeginEvent(
 async function _handleSupplierUnbondingEndEvent(
   event: CosmosEvent,
 ) {
-  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, supplierSdk: SupplierSDKType | null = null, reason: null | number = null;
+  let unbondingHeight: bigint | null = null, sessionEndHeight: bigint | null = null, operatorAddress: string | undefined, reason: null | number = null;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "supplier") {
-      supplierSdk = JSON.parse(attribute.value as unknown as string);
+      operatorAddress = (JSON.parse(attribute.value as string) as SupplierSDKType).operator_address;
       continue
     }
 
@@ -537,16 +532,20 @@ async function _handleSupplierUnbondingEndEvent(
     if (attribute.key === "reason") {
       reason = supplierUnbondingReasonFromJSON(parsedValue);
     }
+
+    if (attribute.key === "operator_address") {
+      operatorAddress = parsedValue;
+    }
   }
 
-  if (!supplierSdk) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not provided in event`);
+  if (!operatorAddress) {
+    throw new Error(`[handleSupplierUnbondingEndEvent] operatorAddress not provided in event`);
   }
 
-  const supplier = await Supplier.get(supplierSdk.operator_address);
+  const supplier = await Supplier.get(operatorAddress);
 
   if (!supplier) {
-    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${supplierSdk.operator_address}`);
+    throw new Error(`[handleSupplierUnbondingEndEvent] supplier not found for operator address ${operatorAddress}`);
   }
 
   if (!unbondingHeight) {
@@ -567,7 +566,7 @@ async function _handleSupplierUnbondingEndEvent(
 
   supplier.stakeStatus = StakeStatus.Unstaked;
 
-  const supplierServices = (await fetchAllSupplierServiceConfigBySupplier(supplierSdk.operator_address) || []).map(item => item.id);
+  const supplierServices = (await fetchAllSupplierServiceConfigBySupplier(operatorAddress) || []).map(item => item.id);
 
   const eventId = getEventId(event);
 
@@ -578,7 +577,7 @@ async function _handleSupplierUnbondingEndEvent(
       sessionEndHeight: sessionEndHeight || BigInt(0),
       reason: reason !== null ? getSupplierUnbondingReasonFromSDK(reason) : SupplierUnbondingReason.UNSPECIFIED,
       blockId: getBlockId(event.block),
-      supplierId: supplierSdk.operator_address,
+      supplierId: operatorAddress,
       eventId,
     }).save(),
     supplier.save(),
