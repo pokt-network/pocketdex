@@ -91,58 +91,55 @@ $$ LANGUAGE plpgsql;
 `
 }
 
-//TODO: check index exists before running alter table, it will throw an error if exists
-// This will two things:
-// 1- An unique index by block_id and service_id to enable upsert operation
-// 2- A function that receives the height (id) and upsert the values of that block
-// for the table staked_apps_by_block_and_services
-export function upsertAppsByBlockAndServiceFn(dbSchema: string): string {
-  return `DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'staked_apps_by_block_and_services_block_service_key'
-      AND conrelid = '${dbSchema}.staked_apps_by_block_and_services'::regclass
-  ) THEN
-    ALTER TABLE ${dbSchema}.staked_apps_by_block_and_services
-    ADD CONSTRAINT staked_apps_by_block_and_services_block_service_key
-    UNIQUE (block_id, service_id);
-  END IF;
-END;
-$$;
+export const upsertAppsByBlockAndServicesFnName = 'upsert_staked_apps_by_block_and_services'
 
-CREATE OR REPLACE FUNCTION ${dbSchema}.upsert_staked_apps_by_block_and_services(p_block_id bigint)
+// Here we are creating a table outside SubQuery to avoid unnecessary indexes
+export function upsertAppsByBlockAndServiceFn(dbSchema: string): string {
+  return `
+CREATE TABLE IF NOT EXISTS ${dbSchema}.staked_apps_by_block_and_services
+(
+    tokens numeric NOT NULL,
+    amount integer NOT NULL,
+    block_id numeric NOT NULL,
+    service_id text NOT NULL,
+    _id uuid NOT NULL,
+    CONSTRAINT apps_by_block_and_services_pkey PRIMARY KEY (_id)
+);
+
+COMMENT ON TABLE ${dbSchema}.staked_apps_by_block_and_services
+    IS '@foreignKey (block_id) REFERENCES blocks (id)';
+    
+CREATE INDEX IF NOT EXISTS idx_apps_services_block_id
+    ON ${dbSchema}.staked_apps_by_block_and_services USING btree
+    (block_id ASC NULLS LAST)
+    TABLESPACE pg_default;
+
+CREATE OR REPLACE FUNCTION ${dbSchema}.${upsertAppsByBlockAndServicesFnName}(p_block_id bigint)
 RETURNS void AS $$
 BEGIN
+  -- Delete existing rows for this block
+  DELETE FROM ${dbSchema}.staked_apps_by_block_and_services
+  WHERE block_id = p_block_id;
+
   INSERT INTO ${dbSchema}.staked_apps_by_block_and_services (
     _id,
-    id,
     block_id,
     service_id,
     amount,
-    tokens,
-    _block_range
+    tokens
   )
   SELECT
     uuid_generate_v4(),  -- _id (UUID)
-    CONCAT(p_block_id::text, '-', ss.service_id) AS id,
     p_block_id,
     ss.service_id,
     COUNT(*) AS amount,
-    SUM(s.stake_amount) AS tokens,
-    int8range(p_block_id, NULL) AS _block_range  -- open-ended: [block_id,)
+    SUM(s.stake_amount) AS tokens
   FROM ${dbSchema}.applications s
   INNER JOIN ${dbSchema}.application_services ss ON ss.application_id = s.id
   WHERE s.stake_status = 'Staked'
     AND s._block_range @> p_block_id
     AND ss._block_range @> p_block_id
-  GROUP BY ss.service_id
-  ON CONFLICT (block_id, service_id) DO UPDATE
-  SET
-    amount = EXCLUDED.amount,
-    tokens = EXCLUDED.tokens,
-    _block_range = EXCLUDED._block_range;
+  GROUP BY ss.service_id;
 END;
 $$ LANGUAGE plpgsql;
 `

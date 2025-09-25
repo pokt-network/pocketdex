@@ -20,11 +20,6 @@ BEGIN
   PERFORM ${dbSchema}.update_block_unstaking_apps(p_block_id);
   PERFORM ${dbSchema}.update_block_unstaking_suppliers(p_block_id);
   PERFORM ${dbSchema}.update_block_unstaking_validators(p_block_id);
-
-  -- Per-service upserts
-  PERFORM ${dbSchema}.upsert_relays_by_block_and_services(p_block_id);
-  PERFORM ${dbSchema}.upsert_staked_apps_by_block_and_services(p_block_id);
-  PERFORM ${dbSchema}.upsert_staked_suppliers_by_block_and_services(p_block_id);
 END;
 $$ LANGUAGE plpgsql;
 `

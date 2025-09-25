@@ -20,6 +20,7 @@ export async function handleBlock(block: CosmosBlock): Promise<void> {
   const { header: { chainId, time } } = block.block;
   const timestamp = new Date(time.getTime());
 
+  const dateBeforeProcessBlock = new Date();
   // CosmosBlock has hash and addresses as Uint8array which is not the expected value on the graphql schema/db model,
   // so here we get a parsed version of its data that match the expected values base on words ending
   const processedBlock = processBlockJson(
@@ -28,6 +29,8 @@ export async function handleBlock(block: CosmosBlock): Promise<void> {
     PREFIX,
   ) as ConvertedBlockJson;
 
+  logger.info(`[handleBlock] block processed in ${new Date().getTime() - dateBeforeProcessBlock.getTime()}ms`);
+
   const blockMetadata = BlockMetadata.create({
     id,
     blockId: processedBlock.blockId as unknown as BlockId,
@@ -35,7 +38,11 @@ export async function handleBlock(block: CosmosBlock): Promise<void> {
     lastCommit: processedBlock.block.lastCommit as unknown as BlockLastCommit,
   });
 
+  const dateBeforeGetSize = new Date();
+
   const size = getBlockByteSize(block);
+
+  logger.info(`[handleBlock] block size computed in ${new Date().getTime() - dateBeforeGetSize.getTime()}ms`);
 
   const blockEntity = Block.create({
     id,

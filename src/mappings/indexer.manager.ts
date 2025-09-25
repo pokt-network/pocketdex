@@ -86,11 +86,8 @@ function handleByType(typeUrl: string | Array<string>, byTypeMap: MessageByType 
 // anything primitive types
 async function indexPrimitives(block: CosmosBlock) {
   await profilerWrap(handleGenesis, "indexPrimitives", "handleGenesis")(block);
-
-  await Promise.all([
-    profilerWrap(handleBlock, "indexPrimitives", "handleGenesis")(block),
-    profilerWrap(handleSupply, "indexPrimitives", "handleSupply")(block),
-  ]);
+  await profilerWrap(handleBlock, "indexPrimitives", "handleBlock")(block);
+  await profilerWrap(handleSupply, "indexPrimitives", "handleSupply")(block);
 }
 
 // anything that modifies balances

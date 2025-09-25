@@ -9,6 +9,7 @@ import {
   getBlockId,
 } from "../utils/ids";
 import getQueryClient from "../utils/query_client";
+import { retryOnFail } from "../utils/retry";
 import { enforceAccountsExists } from "./balanceChange";
 
 export type ExtendedAccount = ModuleAccount & {
@@ -60,7 +61,16 @@ export async function queryModuleAccounts(block: CosmosBlock): Promise<Array<Ext
 export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<string>> {
   const blockId = getBlockId(block);
   const moduleAccountsSet: Set<string> = new Set();
-  const moduleAccounts = await queryModuleAccounts(block);
+
+  // retry for 15 seconds with a delay of 100 milliseconds every time it fails
+  const moduleAccounts = await retryOnFail(
+    async () => {
+      return queryModuleAccounts(block);
+    },
+    150,
+    100,
+  )
+
   const accounts = [];
 
   for (const moduleAccount of moduleAccounts) {
