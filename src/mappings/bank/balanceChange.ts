@@ -1,6 +1,4 @@
-import {
-  CosmosEvent,
-} from "@subql/types-cosmos";
+import { CosmosEvent } from "@subql/types-cosmos";
 import { findIndex } from "lodash";
 import { parseCoins } from "../../cosmjs/utils";
 import {
@@ -10,7 +8,12 @@ import {
 import { AccountProps } from "../../types/models/Account";
 import type { BalanceProps } from "../../types/models/Balance";
 import { ModuleAccountProps } from "../../types/models/ModuleAccount";
-import { fetchPaginatedRecords, getSequelize, getStoreModel, optimizedBulkCreate } from "../utils/db";
+import {
+  fetchPaginatedRecords,
+  getSequelize,
+  getStoreModel,
+  optimizedBulkCreate,
+} from "../utils/db";
 import {
   generateDeterministicUUID,
   getBlockId,
@@ -103,26 +106,41 @@ export async function enforceAccountsExists(accounts: Array<EnforceAccountExiste
 export const CoinReceiveType = "coin_received";
 export const CoinSpentType = "coin_spent";
 
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  if (size <= 0) throw new Error("size must be > 0");
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 export async function updateBalances(
   addressDenomEntries: Array<[string, bigint]>,
   blockId: ReturnType<typeof getBlockId>
 ): Promise<void> {
   const ids = addressDenomEntries.map(([id]) => id)
 
-  const currentBalancesMap: Record<string, bigint> = await fetchPaginatedRecords<Balance>({
-    fetchFn: (options) => Balance.getByFields(
-      [
-        ['id', 'in', ids],
-      ],
-      options
-    )
-  })
-    .then((balances: Array<Balance>) => balances.reduce((acc, record) => ({
-      ...acc,
-      [record.id]: record.amount
-    }),
-    {}
-  ))
+  const batches = chunkArray(ids, 1000);
+
+  const balances = [];
+
+  for (const batch of batches) {
+    const balancesBatch = await fetchPaginatedRecords<Balance>({
+      fetchFn: (options) => Balance.getByFields(
+        [
+          ["id", "in", batch],
+        ],
+        options,
+      ),
+    });
+    balances.push(...balancesBatch);
+  }
+
+  const currentBalancesMap: Record<string, bigint> = balances.reduce((acc, record) => ({
+    ...acc,
+    [record.id]: record.amount,
+  }), {});
 
   const balancesToSaveWithOptimize: Array<BalanceProps> = []
 
