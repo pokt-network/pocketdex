@@ -652,6 +652,10 @@ async function _handleApplicationUnbondingBeginEvent(
       reason = applicationUnbondingReasonFromJSON((attribute.value as unknown as string).replaceAll("\"", ""));
     }
 
+    if (!msg && attribute.key === "application_address") {
+      address = (attribute.value as string).replaceAll("\"", "")
+    }
+
     if (!msg && attribute.key === "application") {
       // now this is a block event?
       const application: ApplicationSDKType = parseJson(attribute.value as unknown as string);
