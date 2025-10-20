@@ -1,5 +1,9 @@
 import { toHex } from "@cosmjs/encoding";
-import { CosmosEvent, CosmosMessage, CosmosTransaction } from "@subql/types-cosmos";
+import {
+  CosmosEvent,
+  CosmosMessage,
+  CosmosTransaction,
+} from "@subql/types-cosmos";
 import { Coin } from "../../client/cosmos/base/v1beta1/coin";
 import {
   ApplicationUnbondingReason as ApplicationUnbondingReasonSDKType,
@@ -7,7 +11,8 @@ import {
 } from "../../client/pocket/application/event";
 import {
   Application,
-  ApplicationGateway, ApplicationUnbondingReason,
+  ApplicationGateway,
+  ApplicationUnbondingReason,
   EventApplicationUnbondingBegin as EventApplicationUnbondingBeginEntity,
   EventApplicationUnbondingEnd as EventApplicationUnbondingEndEntity,
   EventTransferBegin as EventTransferBeginEntity,
@@ -37,8 +42,12 @@ import {
 } from "../../types/proto-interfaces/pocket/application/tx";
 import { ApplicationSDKType } from "../../types/proto-interfaces/pocket/application/types";
 import { MsgClaimMorseApplication } from "../../types/proto-interfaces/pocket/migration/tx";
-import {ApplicationServiceConfig as ApplicationServiceConfigType} from "../../types/proto-interfaces/pocket/shared/service"
-import { getSequelize, getStoreModel, optimizedBulkCreate } from "../utils/db";
+import { ApplicationServiceConfig as ApplicationServiceConfigType } from "../../types/proto-interfaces/pocket/shared/service";
+import {
+  getSequelize,
+  getStoreModel,
+  optimizedBulkCreate,
+} from "../utils/db";
 import {
   getAppDelegatedToGatewayId,
   getBlockId,
@@ -47,10 +56,17 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { parseJson } from "../utils/json";
 import { getDenomAndAmount } from "../utils/primitives";
-import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
+import {
+  Ed25519,
+  pubKeyToAddress,
+} from "../utils/pub_key";
 import { updateMorseClaimableAccounts } from "./migration";
-import { fetchAllApplicationGatewayByApplicationId, fetchAllApplicationServiceByApplicationId } from "./pagination";
+import {
+  fetchAllApplicationGatewayByApplicationId,
+  fetchAllApplicationServiceByApplicationId,
+} from "./pagination";
 
 function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
   switch (item) {
@@ -553,7 +569,41 @@ async function _handleTransferApplicationErrorEvent(
 async function _handleApplicationUnbondingBeginEvent(
   event: CosmosEvent,
 ) {
+  /**
+   * {
+   * "type":"pocket.application.EventApplicationUnbondingBegin",
+   * "attributes":[
+   *  {
+   *    "key":"application",
+   *    "value":"{\"address\":\"pokt1jz6hcaz3pjrshw9atqelktuzf8zkklqr0jj2mn\",\"stake\":{\"denom\":\"upokt\",\"amount\":\"979738\"},\"service_configs\":[{\"service_id\":\"avax\"}],\"delegatee_gateway_addresses\":[\"pokt1lf0kekv9zcv9v3wy4v6jx2wh7v4665s8e0sl9s\"],\"pending_undelegations\":{},\"unstake_session_end_height\":\"461280\",\"pending_transfer\":null}",
+   *    "index":false
+   *  },
+   *  {
+   *    "key":"reason",
+   *    "value":"\"APPLICATION_UNBONDING_REASON_BELOW_MIN_STAKE\"",
+   *    "index":false
+   *    },
+   *    {
+   *    "key":"session_end_height",
+   *    "value":"\"461280\"",
+   *    "index":false
+   *    },
+   *    {
+   *    "key":"unbonding_end_height",
+   *    "value":"\"461340\"",
+   *    "index":false
+   *    },
+   *    {
+   *    "key":"mode",
+   *    "value":"EndBlock",
+   *    "index":false
+   *    }
+   *    ]
+   *    }
+   */
   const msg = event.msg as CosmosMessage<MsgUnstakeApplication>;
+
+  let address = msg ? msg.msg.decodedMsg.address : "";
 
   let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason: number | null = null;
 
@@ -569,6 +619,12 @@ async function _handleApplicationUnbondingBeginEvent(
     if (attribute.key === "reason") {
       reason = applicationUnbondingReasonFromJSON((attribute.value as unknown as string).replaceAll("\"", ""));
     }
+
+    if (!msg && attribute.key === "application") {
+      // now this is a block event?
+      const application: ApplicationSDKType = parseJson(attribute.value as unknown as string);
+      address = application.address;
+    }
   }
 
   if (unstakingEndHeight === BigInt(0)) {
@@ -583,10 +639,14 @@ async function _handleApplicationUnbondingBeginEvent(
     throw new Error(`[handleApplicationUnbondingBeginEvent] reason not found in event`);
   }
 
-  const application = await Application.get(msg.msg.decodedMsg.address);
+  if (address === "") {
+    throw new Error(`[handleApplicationUnbondingBeginEvent] address not found in event`);
+  }
+
+  const application = await Application.get(address);
 
   if (!application) {
-    throw new Error(`[handleApplicationUnbondingBeginEvent] application not found for operator address ${msg.msg.decodedMsg.address}`);
+    throw new Error(`[handleApplicationUnbondingBeginEvent] application not found for operator address ${address}`);
   }
 
   application.unstakingEndHeight = unstakingEndHeight;
@@ -599,7 +659,7 @@ async function _handleApplicationUnbondingBeginEvent(
     application.save(),
     EventApplicationUnbondingBeginEntity.create({
       id: eventId,
-      applicationId: msg.msg.decodedMsg.address,
+      applicationId: address,
       blockId: getBlockId(event.block),
       unstakingEndHeight,
       sessionEndHeight,
