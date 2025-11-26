@@ -18,3 +18,7 @@ export function sanitize(value: unknown): string {
   // otherwise return it as a stringifies object
   return stringify(value);
 }
+
+export function parseAttribute(attribute: unknown = ""): string {
+  return (attribute as string).replaceAll("\"", "");
+}

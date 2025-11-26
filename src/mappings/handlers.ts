@@ -31,19 +31,10 @@ import {
   handleEventClaimUpdated,
   handleEventProofUpdated,
   handleEventProofValidityChecked,
-  handleEventSupplierSlashed,
   handleMsgCreateClaim,
   handleMsgSubmitProof,
 } from "./pocket/relays";
 import { handleEventRelayMiningDifficultyUpdated, handleMsgAddService } from "./pocket/services";
-import {
-  handleEventSupplierServiceConfigActivated,
-  handleMsgClaimMorseSupplier,
-  handleSupplierStakeMsg,
-  handleSupplierUnbondingBeginEvent,
-  handleSupplierUnbondingEndEvent,
-  handleUnstakeSupplierMsg,
-} from "./pocket/suppliers";
 import {
   handleValidatorCommission,
   handleValidatorMsgCreate,
@@ -68,7 +59,6 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   // this is currently being handle inside Authz handler
   "/pocket.migration.MsgRecoverMorseAccount": noOp,
   "/pocket.migration.MsgClaimMorseApplication": handleMsgClaimMorseApplication,
-  "/pocket.migration.MsgClaimMorseSupplier": handleMsgClaimMorseSupplier,
   // bank
   "/cosmos.bank.v1beta1.MsgSend": handleNativeTransfer,
   // validator
@@ -83,9 +73,10 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   "/pocket.application.MsgTransferApplication": handleTransferApplicationMsg,
   // service
   "/pocket.service.MsgAddService": handleMsgAddService,
-  // supplier
-  "/pocket.supplier.MsgStakeSupplier": handleSupplierStakeMsg,
-  "/pocket.supplier.MsgUnstakeSupplier": handleUnstakeSupplierMsg,
+  // supplier - handled by batch processing in indexSupplier (called from indexStake)
+  "/pocket.supplier.MsgStakeSupplier": noOp,// - now handled in indexSupplier
+  "/pocket.supplier.MsgUnstakeSupplier": noOp,// - now handled in indexSupplier
+  "/pocket.migration.MsgClaimMorseSupplier": noOp,// - now handled in indexSupplier
   // gateway
   "/pocket.gateway.MsgStakeGateway": handleGatewayMsgStake,
   "/pocket.gateway.MsgUnstakeGateway": handleGatewayMsgUnstake,
@@ -117,10 +108,10 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "pocket.application.EventTransferError": handleTransferApplicationErrorEvent,
   "pocket.application.EventApplicationUnbondingBegin": handleApplicationUnbondingBeginEvent,
   "pocket.application.EventApplicationUnbondingEnd": handleApplicationUnbondingEndEvent,
-  // supplier
-  "pocket.supplier.EventSupplierServiceConfigActivated": handleEventSupplierServiceConfigActivated,
-  "pocket.supplier.EventSupplierUnbondingBegin": handleSupplierUnbondingBeginEvent,
-  "pocket.supplier.EventSupplierUnbondingEnd": handleSupplierUnbondingEndEvent,
+  // supplier - handled by batch processing in indexSupplier (called from indexStake)
+  "pocket.supplier.EventSupplierServiceConfigActivated": noOp, // - now handled in indexSupplier
+  "pocket.supplier.EventSupplierUnbondingBegin": noOp, // - now handled in indexSupplier
+  "pocket.supplier.EventSupplierUnbondingEnd": noOp, // - now handled in indexSupplier
   // service
   "pocket.service.EventRelayMiningDifficultyUpdated": handleEventRelayMiningDifficultyUpdated,
   // gateway
@@ -130,7 +121,7 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   // relay
   "pocket.tokenomics.EventClaimSettled": handleEventClaimSettled,
   "pocket.tokenomics.EventClaimExpired": handleEventClaimExpired,
-  "pocket.tokenomics.EventSupplierSlashed": handleEventSupplierSlashed,
+  "pocket.tokenomics.EventSupplierSlashed": noOp, // - now handled in indexSupplier
   "pocket.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
   "pocket.tokenomics.EventApplicationReimbursementRequest": handleEventApplicationReimbursementRequest,
   "pocket.proof.EventClaimUpdated": handleEventClaimUpdated,

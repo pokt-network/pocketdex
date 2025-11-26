@@ -57,7 +57,7 @@ import {
 import { getDenomAndAmount } from "../utils/primitives";
 
 // this can return undefined because older events do not have this attribute
-function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
+export function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
   if (!item) return undefined;
 
   switch (item) {
@@ -151,7 +151,7 @@ function parseAttribute(attribute: unknown = ""): string {
 }
 
 // eslint-disable-next-line complexity
-function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
+export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
@@ -890,121 +890,6 @@ function _handleEventApplicationReimbursementRequest(event: CosmosEvent): EventA
   }
 }
 
-async function _handleOldEventSupplierSlashed(event: CosmosEvent) {
-  let slashingCoin: CoinSDKType | null = null, operatorAddress = "";
-
-  for (const attribute of event.event.attributes) {
-    if (attribute.key === "slashing_amount") {
-      slashingCoin = getDenomAndAmount(attribute.value as string);
-      if (!slashingCoin) {
-        throw new Error(`[handleEventSupplierSlashed] event attribute key=${attribute.key} value=${attribute.value} is not a valid coin`);
-      }
-    }
-
-    if (attribute.key === "proof_missing_penalty") {
-      /*
-        [
-        {"key":"application_address","value":"\"pokt16wwc45wjc4ulne7wmaawxhju00vwf900lscfld\""},
-        {"key":"claim_proof_status_int","value":"2"},
-        {"key":"proof_missing_penalty","value":"\"1upokt\""},
-        {"key":"service_id","value":"\"hey\""},
-        {"key":"session_end_block_height","value":"\"363540\""},
-        {"key":"supplier_operator_address","value":"\"pokt1wua234ulad3vkcsqmasu845mn4ugu9aa6jcv23\""},
-        {"key":"mode","value":"EndBlock"}
-        ]
-     */
-      const coins = parseCoins(parseAttribute(attribute.value));
-      if (!coins.length) {
-        throw new Error(`[handleEventSupplierSlashed] event attribute key=${attribute.key} value=${attribute.value} is not a valid coin`);
-      }
-    }
-
-    if (attribute.key === "supplier_operator_addr" || attribute.key === "supplier_operator_address") {
-      operatorAddress = parseAttribute(attribute.value);
-    }
-  }
-
-  if (!slashingCoin) {
-    throw new Error(`[handleEventSupplierSlashed] slashingCoin not found in event`);
-  }
-
-  if (!operatorAddress) {
-    logger.error(`[handleEventSupplierSlashed] operatorAddress not found in event=${event.kind} attributes=${stringify(event.event.attributes)}`);
-    throw new Error(`[handleEventSupplierSlashed] operatorAddress not found in event`);
-  }
-
-  const supplier = await Supplier.get(operatorAddress);
-
-  if (!supplier) {
-    throw new Error(`[handleEventSupplierSlashed] supplier not found for operator address ${operatorAddress}`);
-  }
-
-  supplier.stakeAmount -= BigInt(slashingCoin.amount);
-
-  await Promise.all([
-    supplier.save(),
-    EventSupplierSlashed.create({
-      id: getEventId(event),
-      supplierId: operatorAddress,
-      blockId: getBlockId(event.block),
-      eventId: getEventId(event),
-      proofMissingPenalty: BigInt(slashingCoin.amount),
-      proofMissingPenaltyDenom: slashingCoin.denom,
-      previousStakeAmount: supplier.stakeAmount,
-      afterStakeAmount: supplier.stakeAmount,
-      // in alpha this event does not have the values below, so we are setting them to empty values for now
-      applicationId: "",
-      serviceId: "",
-      sessionId: "",
-      sessionStartHeight: BigInt(0),
-      sessionEndHeight: BigInt(0),
-    }).save(),
-  ]);
-}
-
-async function _handleEventSupplierSlashed(event: CosmosEvent) {
-  const {
-    claim,
-    proofMissingPenalty,
-  } = getAttributes(event.event.attributes);
-
-  if (!claim || !claim.session_header || Object.keys(claim).length === 0) {
-    logger.warn(`[handleEventSupplierSlashed] claim not found in event, trying to handle with previous version`);
-    await _handleOldEventSupplierSlashed(event);
-    return;
-  }
-
-  const supplier = await Supplier.get(claim.supplier_operator_address);
-
-  if (!supplier) {
-    throw new Error(`[handleEventSupplierSlashed] supplier not found for address: ${claim.supplier_operator_address}`);
-  }
-
-  const previousStakeAmount = supplier.stakeAmount.valueOf();
-  supplier.stakeAmount -= BigInt(proofMissingPenalty.amount);
-
-  await Promise.all([
-    supplier.save(),
-    EventSupplierSlashed.create({
-      id: getEventId(event),
-      supplierId: claim.supplier_operator_address,
-      // TODO: Create entity for session header
-      applicationId: claim.session_header.application_address,
-      serviceId: claim.session_header.service_id,
-      sessionId: claim.session_header.session_id || "",
-      sessionEndHeight: BigInt(claim.session_header.session_end_block_height || "0"),
-      sessionStartHeight: BigInt(claim.session_header.session_start_block_height || "0"),
-      blockId: getBlockId(event.block),
-      eventId: getEventId(event),
-      proofMissingPenalty: BigInt(proofMissingPenalty.amount),
-      proofMissingPenaltyDenom: proofMissingPenalty.denom,
-      previousStakeAmount,
-      afterStakeAmount: supplier.stakeAmount,
-      proofValidationStatus: getClaimProofStatusFromSDK(claim.proof_validation_status),
-    }).save(),
-  ]);
-}
-
 // eslint-disable-next-line complexity
 function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidityCheckedProps {
   let supplierOperatorAddress = "",
@@ -1156,10 +1041,6 @@ export async function handleEventApplicationReimbursementRequest(events: Array<C
   const eventsUpdated = events.map(_handleEventApplicationReimbursementRequest);
 
   await optimizedBulkCreate("EventApplicationReimbursementRequest", eventsUpdated);
-}
-
-export async function handleEventSupplierSlashed(events: Array<CosmosEvent>): Promise<void> {
-  await Promise.all(events.map(_handleEventSupplierSlashed));
 }
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {

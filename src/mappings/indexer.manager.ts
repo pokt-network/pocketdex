@@ -25,6 +25,7 @@ import {
   MsgHandlers,
 } from "./handlers";
 import { handleAddBlockReports } from "./pocket/reports";
+import { indexSupplier } from "./pocket/suppliers";
 import {
   handleBlock,
   handleGenesis,
@@ -499,80 +500,6 @@ async function indexStakeEntity(allData: Array<CosmosEvent | CosmosMessage>, get
       }
     })
   )
-}
-
-// any supplier msg or event
-async function indexSupplier(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
-  const msgTypes = [
-    "/pocket.supplier.MsgUnstakeSupplier",
-    "/pocket.migration.MsgClaimMorseSupplier",
-    "/pocket.supplier.MsgStakeSupplier",
-  ];
-  const eventTypes = [
-    "pocket.supplier.EventSupplierUnbondingBegin",
-    "pocket.supplier.EventSupplierUnbondingEnd",
-    "pocket.supplier.EventSupplierServiceConfigActivated",
-    // this is here because it modifies the staked tokens of the supplier
-    "pocket.tokenomics.EventSupplierSlashed"
-  ];
-
-
-  const eventGetId = (attributes: CosmosEvent["event"]["attributes"]) => {
-    for (const attribute of attributes) {
-      if (attribute.key === "supplier") {
-        return JSON.parse(attribute.value as string).operator_address
-      }
-
-      if (attribute.key === "operator_address") {
-        return attribute.value as string
-      }
-    }
-
-    return null
-  }
-
-  await indexStakeEntity(
-    [
-      ...msgTypes.map(type => msgByType[type]).flat(),
-      ...eventTypes.map(type => eventByType[type]).flat()
-    ],
-  {
-    "/pocket.supplier.MsgUnstakeSupplier": "operatorAddress",
-    "/pocket.supplier.MsgStakeSupplier": "operatorAddress",
-    "/pocket.migration.MsgClaimMorseSupplier": "shannonOperatorAddress",
-    "pocket.supplier.EventSupplierUnbondingBegin": eventGetId,
-    "pocket.supplier.EventSupplierUnbondingEnd": eventGetId,
-    "pocket.supplier.EventSupplierServiceConfigActivated": eventGetId,
-    "pocket.tokenomics.EventSupplierSlashed": (attributes) => {
-      /*
-        [
-          {"key":"application_address","value":"\"pokt16wwc45wjc4ulne7wmaawxhju00vwf900lscfld\""},
-          {"key":"claim_proof_status_int","value":"2"},
-          {"key":"proof_missing_penalty","value":"\"1upokt\""},
-          {"key":"service_id","value":"\"hey\""},
-          {"key":"session_end_block_height","value":"\"363540\""},
-          {"key":"supplier_operator_address","value":"\"pokt1wua234ulad3vkcsqmasu845mn4ugu9aa6jcv23\""},
-          {"key":"mode","value":"EndBlock"}
-        ]
-       */
-      for (const attribute of attributes) {
-        // in the previous version of this event this is the key to get the supplierId
-        if (attribute.key === "supplier_operator_addr" || attribute.key === "supplier_operator_address") {
-          return attribute.value as string
-        }
-
-        if (attribute.key === "claim") {
-          return JSON.parse(attribute.value as string).supplier_operator_address
-        }
-
-        if (attribute.key === "supplier_operator_address") {
-          return attribute.value as string
-        }
-      }
-
-      return null
-    }
-  })
 }
 
 // any message or event related to stake (supplier, gateway, application, service)
