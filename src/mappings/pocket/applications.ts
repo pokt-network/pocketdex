@@ -125,6 +125,10 @@ async function _stakeApplication<T extends StakeApplicationProps['serviceMsgIdKe
     stakeStatus: StakeStatus.Staked,
     transferringToId: prevApp?.transferringToId,
     transferEndHeight: prevApp?.transferEndHeight,
+    unstakingBeginBlockId: undefined,
+    unstakingEndBlockId: undefined,
+    unstakingReason: undefined,
+    unstakingEndHeight: undefined,
   };
 
   // used to create the services that came in the stake message
@@ -204,7 +208,7 @@ async function _handleMsgClaimMorseApplication(
   const msgId = messageId(msg);
   const { shannonDestAddress, } = msg.msg.decodedMsg;
 
-  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null, app: ApplicationSDKType | null = null;
+  let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null;
 
   for (const event of msg.tx.tx.events) {
     if (event.type === 'pocket.migration.EventMorseApplicationClaimed') {
@@ -226,10 +230,6 @@ async function _handleMsgClaimMorseApplication(
             amount: coin.amount,
           }
         }
-
-        if (attribute.key === 'application') {
-          app = JSON.parse(attribute.value as string);
-        }
       }
     }
   }
@@ -242,13 +242,7 @@ async function _handleMsgClaimMorseApplication(
     throw new Error(`[handleMsgClaimMorseApplication] balance coin not found in event`);
   }
 
-  if (!app) {
-    throw new Error(`[handleMsgClaimMorseApplication] app not found in event`);
-  }
-
-  if (!app.stake) {
-    throw new Error(`[handleMsgClaimMorseApplication] app stake not found in event`);
-  }
+  const app = await Application.get(msg.msg.decodedMsg.shannonDestAddress);
 
   const stakeAmount = BigInt(stakeCoin.amount);
   const stakeDenom = stakeCoin.denom;
@@ -283,8 +277,8 @@ async function _handleMsgClaimMorseApplication(
       address: shannonDestAddress,
       msgId,
       services: [msg.msg.decodedMsg.serviceConfig!],
-      stakeAmount: BigInt(app.stake.amount),
-      stakeDenom: app.stake.denom,
+      stakeAmount: stakeAmount + BigInt(app?.stakeAmount?.toString() || "0"),
+      stakeDenom: stakeDenom,
       serviceMsgIdKey: 'claimMsgId'
     }),
   ];
@@ -430,7 +424,22 @@ async function _handleTransferApplicationBeginEvent(
 async function _handleTransferApplicationEndEvent(
   event: CosmosEvent,
 ) {
-  let sourceAddress = event.event.attributes.find(attribute => attribute.key === "source_address")?.value as unknown as string;
+  let sourceAddress: string | undefined, destinationAppAddress: string | undefined
+
+  for (const attribute of event.event.attributes) {
+    if (attribute.key === "source_address") {
+      sourceAddress = (attribute.value as string).replaceAll("\"", "");
+    }
+
+    if (attribute.key === "destination_address") {
+      destinationAppAddress = (attribute.value as string).replaceAll("\"", "");
+    }
+
+    // Older versions of this event included the whole destination application
+    if (attribute.key === "destination_application") {
+      destinationAppAddress = (JSON.parse(attribute.value as string) as ApplicationSDKType).address;
+    }
+  }
 
   if (!sourceAddress) {
     throw new Error(`[handleTransferApplicationEndEvent] event.event.attributes not found`);
@@ -439,7 +448,27 @@ async function _handleTransferApplicationEndEvent(
   // the source address is surrounded by quotes
   sourceAddress = sourceAddress.replaceAll("\"", "");
 
-  const sourceApplication = await Application.get(sourceAddress);
+  if (!destinationAppAddress) {
+    throw new Error(`[handleTransferApplicationMsg] destination application not in event`);
+  }
+
+  destinationAppAddress = destinationAppAddress.replaceAll("\"", "");
+
+  const results = await Promise.all([
+    Application.get(sourceAddress),
+    Application.get(destinationAppAddress),
+    fetchAllApplicationServiceByApplicationId(sourceAddress),
+    fetchAllApplicationGatewayByApplicationId(sourceAddress),
+  ])
+
+  const [
+    sourceApplication,
+    ,
+    sourceApplicationServices,
+    sourceApplicationGateways,
+  ] = results;
+
+  let destinationApplication = results[1]
 
   if (!sourceApplication) {
     throw new Error(`[handleTransferApplicationMsg] source application not found for address ${sourceAddress}`);
@@ -452,44 +481,42 @@ async function _handleTransferApplicationEndEvent(
   sourceApplication.stakeStatus = StakeStatus.Unstaked;
   sourceApplication.unstakingReason = ApplicationUnbondingReason.TRANSFER;
   sourceApplication.unstakingEndBlockId = getBlockId(event.block);
+  sourceApplication.destinationApplicationId = destinationAppAddress;
 
-  const destinationAppStringified = event.event.attributes.find(attribute => attribute.key === "destination_application")?.value as string;
-
-  if (!destinationAppStringified) {
-    throw new Error(`[handleTransferApplicationMsg] destination application not in event`);
+  if (destinationApplication && destinationApplication.stakeStatus === StakeStatus.Staked) {
+    destinationApplication.stakeAmount = sourceApplication.stakeAmount.valueOf() + destinationApplication.stakeAmount.valueOf();
+  } else {
+    destinationApplication = Application.create({
+      id: destinationAppAddress,
+      accountId: destinationAppAddress,
+      stakeAmount: sourceApplication.stakeAmount.valueOf(),
+      stakeDenom: sourceApplication.stakeDenom,
+      stakeStatus: StakeStatus.Staked,
+      unstakingEndHeight: undefined,
+      unstakingReason: undefined,
+      unstakingEndBlockId: undefined,
+      unstakingBeginBlockId: undefined,
+    })
   }
 
-  const destinationApp: Required<ApplicationSDKType> = JSON.parse(destinationAppStringified);
+  destinationApplication.sourceApplicationId = sourceAddress
+  destinationApplication.transferredFromAtId = getBlockId(event.block)
+  destinationApplication.unstakingBeginBlockId = sourceApplication.unstakingBeginBlockId
+  destinationApplication.unstakingEndBlockId = destinationApplication.unstakingEndBlockId ?
+    destinationApplication.unstakingEndBlockId :
+    prevUnstakingEndBlockId
 
-  sourceApplication.destinationApplicationId = destinationApp.address;
-
-  const { delegatee_gateway_addresses, service_configs } = destinationApp;
-  const stake = destinationApp.stake as Required<typeof destinationApp.stake>;
-
-  const destinationApplication = Application.create({
-    id: destinationApp.address,
-    accountId: destinationApp.address,
-    stakeAmount: BigInt(stake.amount),
-    stakeDenom: stake.denom,
-    stakeStatus: StakeStatus.Staked,
-    sourceApplicationId: sourceAddress,
-    transferredFromAtId: getBlockId(event.block),
-    unstakingEndBlockId: prevUnstakingEndBlockId,
-    unstakingBeginBlockId: sourceApplication.unstakingBeginBlockId,
-  });
-
-  const appDelegatedToGateways: Array<ApplicationGatewayProps> = delegatee_gateway_addresses.map(gateway => ({
-    id: getAppDelegatedToGatewayId(destinationApplication.id, gateway),
+  const appDelegatedToGateways: Array<ApplicationGatewayProps> = sourceApplicationGateways.map(gateway => ({
+    id: getAppDelegatedToGatewayId(destinationApplication.id, gateway.gatewayId),
     applicationId: destinationApplication.id,
-    gatewayId: gateway,
+    gatewayId: gateway.gatewayId,
   }));
 
-  const sourceApplicationServices = await fetchAllApplicationServiceByApplicationId(sourceAddress);
-  const sourceApplicationGateways = await fetchAllApplicationGatewayByApplicationId(sourceAddress);
-  const newApplicationServices: Array<ApplicationServiceProps> = service_configs?.map(service => ({
-    id: getStakeServiceId(destinationApp.address, service.service_id),
-    serviceId: service.service_id,
-    applicationId: destinationApp.address,
+
+  const newApplicationServices: Array<ApplicationServiceProps> = sourceApplicationServices.map(service => ({
+    id: getStakeServiceId(destinationApplication.id, service.serviceId),
+    serviceId: service.serviceId,
+    applicationId: destinationApplication.id,
   })) || [];
 
   const eventId = getEventId(event);
@@ -500,7 +527,7 @@ async function _handleTransferApplicationEndEvent(
     EventTransferEndEntity.create({
       id: eventId,
       sourceId: sourceAddress,
-      destinationId: destinationApp.address,
+      destinationId: destinationApplication.id,
       blockId: getBlockId(event.block),
       eventId,
     }).save(),
@@ -523,6 +550,11 @@ async function _handleTransferApplicationErrorEvent(
 
     if (attribute.key === "destination_address") {
       destinationAddress = (attribute.value as unknown as string).replaceAll("\"", "");
+    }
+
+    // Older versions of this event included the whole destination application
+    if (attribute.key === "destination_application") {
+      destinationAddress = (JSON.parse(attribute.value as string) as ApplicationSDKType).address;
     }
 
     if (attribute.key === "error") {
@@ -620,6 +652,10 @@ async function _handleApplicationUnbondingBeginEvent(
       reason = applicationUnbondingReasonFromJSON((attribute.value as unknown as string).replaceAll("\"", ""));
     }
 
+    if (!msg && attribute.key === "application_address") {
+      address = (attribute.value as string).replaceAll("\"", "")
+    }
+
     if (!msg && attribute.key === "application") {
       // now this is a block event?
       const application: ApplicationSDKType = parseJson(attribute.value as unknown as string);
@@ -673,7 +709,7 @@ async function _handleApplicationUnbondingEndEvent(
   event: CosmosEvent,
 ) {
   let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason: number | null = null,
-    applicationSdk: ApplicationSDKType | undefined;
+    applicationAddress: string | undefined;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "unbonding_end_height") {
@@ -688,8 +724,13 @@ async function _handleApplicationUnbondingEndEvent(
       reason = applicationUnbondingReasonFromJSON((attribute.value as unknown as string).replaceAll("\"", ""));
     }
 
+    if (attribute.key === "application_address") {
+      applicationAddress = (attribute.value as string).replaceAll("\"", "")
+    }
+
+    // Older versions of this event included the whole application
     if (attribute.key === "application") {
-      applicationSdk = JSON.parse(attribute.value as unknown as string);
+      applicationAddress = (JSON.parse(attribute.value as unknown as string) as ApplicationSDKType).address;
     }
   }
 
@@ -705,21 +746,21 @@ async function _handleApplicationUnbondingEndEvent(
     throw new Error(`[handleApplicationUnbondingEndEvent] reason not found in event`);
   }
 
-  if (!applicationSdk) {
-    throw new Error(`[handleApplicationUnbondingEndEvent] application not found in event`);
+  if (!applicationAddress) {
+    throw new Error(`[handleApplicationUnbondingEndEvent] applicationAddress not found in event`);
   }
 
-  const application = await Application.get(applicationSdk.address);
+  const application = await Application.get(applicationAddress);
 
   if (!application) {
-    throw new Error(`[handleApplicationUnbondingEndEvent] application not found for address ${applicationSdk.address}`);
+    throw new Error(`[handleApplicationUnbondingEndEvent] application not found for address ${applicationAddress}`);
   }
 
   application.unstakingEndBlockId = getBlockId(event.block);
   application.stakeStatus = StakeStatus.Unstaked;
   application.unstakingReason = getAppUnbondingReasonFromSDK(reason);
 
-  const applicationServices = (await fetchAllApplicationServiceByApplicationId(applicationSdk.address)).map(item => item.id);
+  const applicationServices = (await fetchAllApplicationServiceByApplicationId(applicationAddress)).map(item => item.id);
 
   const eventId = getEventId(event);
 
@@ -730,7 +771,7 @@ async function _handleApplicationUnbondingEndEvent(
       sessionEndHeight,
       unstakingEndHeight,
       reason,
-      applicationId: applicationSdk.address,
+      applicationId: applicationAddress,
       eventId,
     }).save(),
     application.save(),
