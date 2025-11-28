@@ -1213,7 +1213,7 @@ async function performSupplierDatabaseOperations(data: {
 }
 
 // Helper: Sort events and messages by transaction order
-function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<CosmosEvent | CosmosMessage> {
+export function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<CosmosEvent | CosmosMessage> {
   const allEvents: Array<CosmosEvent> = [];
   const allMsgs: Array<CosmosMessage> = [];
 

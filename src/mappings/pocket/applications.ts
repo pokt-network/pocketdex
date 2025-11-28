@@ -60,14 +60,14 @@ import {
 } from "../utils/ids";
 import { parseAttribute, parseJson } from "../utils/json";
 import {
-  filterEventsByTxStatus, filterMsgByTxStatus,
-  getDenomAndAmount, isEventOfFinalizedBlockKind,
+  getDenomAndAmount,
 } from "../utils/primitives";
 import {
   Ed25519,
   pubKeyToAddress,
 } from "../utils/pub_key";
 import { _handleUpdateParam } from "./params";
+import { sortEventsAndMsgs } from "./suppliers";
 
 function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
   switch (item) {
@@ -138,11 +138,28 @@ function _handleAppMsgStake(
   services: Array<ApplicationServiceProps>,
   servicesToRemove: Array<string>,
 } {
-  if (!msg.msg.decodedMsg.stake) {
-    throw new Error(`[handleAppMsgStake] stake not provided in msg`);
+  // the MsgStakeApplication can come without the stake field, so we need to get the previous stake
+  let stake = msg.msg.decodedMsg.stake;
+
+  if (!stake) {
+    const previousApp = record[msg.msg.decodedMsg.address]?.application;
+
+    if (!previousApp) {
+      throw new Error(`[handleSupplierStakeMsg] previous supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`);
+    }
+
+    stake = {
+      amount: previousApp.stakeAmount.toString(),
+      denom: previousApp.stakeDenom,
+    }
   }
 
-  const { address, services: rawServices, stake } = msg.msg.decodedMsg;
+  if (!stake) {
+    throw new Error(`[handleSupplierStakeMsg] stake not provided in msg`);
+  }
+
+
+  const { address, services: rawServices } = msg.msg.decodedMsg;
 
   const msgId = messageId(msg);
 
@@ -788,17 +805,13 @@ async function getGlobalInflationRate(): Promise<number> {
 
   if (globalInflationRate) return globalInflationRate
 
-  let currentGlobalInflationRateParam = await Param.get('tokenomics-global_inflation_per_claim')
+  const currentGlobalInflationRateParam = await Param.get('tokenomics-global_inflation_per_claim')
 
   if (!currentGlobalInflationRateParam) {
-    // @ts-ignore
-    currentGlobalInflationRateParam = {
-      value: '0.01'
-    }
-    // throw new Error(`[getGlobalInflationRate] tokenomics-global_inflation_per_claim param not found`)
+    throw new Error(`[getGlobalInflationRate] tokenomics-global_inflation_per_claim param not found`)
   }
 
-  const currentGlobalInflationRate = Number(currentGlobalInflationRateParam!.value.toString())
+  const currentGlobalInflationRate = Number(currentGlobalInflationRateParam.value.toString())
 
   await cache.set(globalInflationRateCacheKey, currentGlobalInflationRate)
 
@@ -1930,40 +1943,4 @@ export async function indexApplications(msgByType: MessageByType, eventByType: E
     unbondingBeginEvents,
     unbondingEndEvents
   });
-}
-
-
-function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<CosmosEvent | CosmosMessage> {
-  const allEvents: Array<CosmosEvent> = [], allMsgs: Array<CosmosMessage> = [];
-
-  for (const datum of allData) {
-    if ('event' in datum) {
-      allEvents.push(datum)
-    } else {
-      allMsgs.push(datum)
-    }
-  }
-
-  const {success: successfulEvents} = filterEventsByTxStatus(allEvents)
-
-  const {success: successfulMsgs} = filterMsgByTxStatus(allMsgs)
-
-  const finalizedEvents: Array<CosmosEvent> = []
-  const nonFinalizedData: Array<CosmosEvent | CosmosMessage & {rank: 0 | 1}> = []
-
-  for (const datum of [...successfulEvents, ...successfulMsgs]) {
-    if ('event' in datum && isEventOfFinalizedBlockKind(datum)) {
-      finalizedEvents.push(datum)
-    } else {
-      nonFinalizedData.push({
-        ...datum,
-        rank: 'event' in datum ? 1 : 0
-      })
-    }
-  }
-
-  return [
-    ...orderBy(nonFinalizedData, ['tx.idx', 'rank', 'idx'], ['asc', 'asc', 'asc']),
-    ...orderBy(finalizedEvents, ['idx'], ['asc'])
-  ]
 }
