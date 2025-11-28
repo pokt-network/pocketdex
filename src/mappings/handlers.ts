@@ -3,19 +3,6 @@ import { handleAuthzExec } from "./authz/exec";
 import { handleEventGrant, handleMsgGrant } from "./authz/grants";
 import { handleNativeTransfer } from "./bank";
 import {
-  handleApplicationUnbondingBeginEvent,
-  handleApplicationUnbondingEndEvent,
-  handleAppMsgStake,
-  handleDelegateToGatewayMsg,
-  handleMsgClaimMorseApplication,
-  handleTransferApplicationBeginEvent,
-  handleTransferApplicationEndEvent,
-  handleTransferApplicationErrorEvent,
-  handleTransferApplicationMsg,
-  handleUndelegateFromGatewayMsg,
-  handleUnstakeApplicationMsg,
-} from "./pocket/applications";
-import {
   handleGatewayMsgStake,
   handleGatewayMsgUnstake,
   handleGatewayUnstakeEvent,
@@ -58,19 +45,19 @@ export const MsgHandlers: Record<string, (messages: Array<CosmosMessage>) => Pro
   "/pocket.migration.MsgClaimMorseAccount": handleMsgClaimMorseAccount,
   // this is currently being handle inside Authz handler
   "/pocket.migration.MsgRecoverMorseAccount": noOp,
-  "/pocket.migration.MsgClaimMorseApplication": handleMsgClaimMorseApplication,
+  "/pocket.migration.MsgClaimMorseApplication": noOp,
   // bank
   "/cosmos.bank.v1beta1.MsgSend": handleNativeTransfer,
   // validator
   "/cosmos.staking.v1beta1.MsgCreateValidator": handleValidatorMsgCreate,
   // params
   "/cosmos.authz.v1beta1.MsgExec": handleAuthzExec,
-  // application
-  "/pocket.application.MsgStakeApplication": handleAppMsgStake,
-  "/pocket.application.MsgDelegateToGateway": handleDelegateToGatewayMsg,
-  "/pocket.application.MsgUndelegateFromGateway": handleUndelegateFromGatewayMsg,
-  "/pocket.application.MsgUnstakeApplication": handleUnstakeApplicationMsg,
-  "/pocket.application.MsgTransferApplication": handleTransferApplicationMsg,
+  // application - now handling app msgs in indexApplications (called from indexStake)
+  "/pocket.application.MsgStakeApplication": noOp,
+  "/pocket.application.MsgDelegateToGateway": noOp,
+  "/pocket.application.MsgUndelegateFromGateway": noOp,
+  "/pocket.application.MsgUnstakeApplication": noOp,
+  "/pocket.application.MsgTransferApplication": noOp,
   // service
   "/pocket.service.MsgAddService": handleMsgAddService,
   // supplier - handled by batch processing in indexSupplier (called from indexStake)
@@ -102,12 +89,12 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   //  This event is emitted when a validator or delegator claims their staking rewards.
   //  It happens when they trigger a manual withdrawal, moving rewards from the staking module to their balance.
   //  This is the moment where rewards are actually turned into spendable tokens.
-  // application
-  "pocket.application.EventTransferBegin": handleTransferApplicationBeginEvent,
-  "pocket.application.EventTransferEnd": handleTransferApplicationEndEvent,
-  "pocket.application.EventTransferError": handleTransferApplicationErrorEvent,
-  "pocket.application.EventApplicationUnbondingBegin": handleApplicationUnbondingBeginEvent,
-  "pocket.application.EventApplicationUnbondingEnd": handleApplicationUnbondingEndEvent,
+  // application - now handling app events in indexApplications (called from indexStake)
+  "pocket.application.EventTransferBegin": noOp,
+  "pocket.application.EventTransferEnd": noOp,
+  "pocket.application.EventTransferError": noOp,
+  "pocket.application.EventApplicationUnbondingBegin": noOp,
+  "pocket.application.EventApplicationUnbondingEnd": noOp,
   // supplier - handled by batch processing in indexSupplier (called from indexStake)
   "pocket.supplier.EventSupplierServiceConfigActivated": noOp, // - now handled in indexSupplier
   "pocket.supplier.EventSupplierUnbondingBegin": noOp, // - now handled in indexSupplier

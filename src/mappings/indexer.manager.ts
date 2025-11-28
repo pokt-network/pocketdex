@@ -24,6 +24,7 @@ import {
   EventHandlers,
   MsgHandlers,
 } from "./handlers";
+import { indexApplications } from "./pocket/applications";
 import { handleAddBlockReports } from "./pocket/reports";
 import { indexSupplier } from "./pocket/suppliers";
 import {
@@ -209,72 +210,6 @@ async function indexService(msgByType: MessageByType, eventByType: EventByType):
     ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
     ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
   ])
-}
-
-// any application msg or event
-async function indexApplications(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
-  const msgTypes = [
-    "/pocket.application.MsgDelegateToGateway",
-    "/pocket.application.MsgUndelegateFromGateway",
-    "/pocket.application.MsgUnstakeApplication",
-    "/pocket.application.MsgStakeApplication",
-    "/pocket.migration.MsgClaimMorseApplication",
-    "/pocket.application.MsgTransferApplication",
-  ];
-  const eventTypes = [
-    "pocket.application.EventTransferBegin",
-    "pocket.application.EventTransferEnd",
-    "pocket.application.EventTransferError",
-    "pocket.application.EventApplicationUnbondingBegin",
-    "pocket.application.EventApplicationUnbondingEnd",
-  ];
-
-  const getIdOfTransferEvents = (attributes: CosmosEvent['event']["attributes"]) => {
-    return attributes.find(({key}) => key === "source_address")?.value as string
-  }
-
-  const getIdOfBondingEvents = (attributes: CosmosEvent['event']["attributes"]) => {
-    for (const {key, value} of attributes) {
-      if (key !== "application") continue
-
-      return JSON.parse(value as string).address
-    }
-
-    return null
-  }
-
-  await indexStakeEntity([
-    ...msgTypes.map(type => msgByType[type]).flat(),
-    ...eventTypes.map(type => eventByType[type]).flat()
-  ],
-  {
-    "/pocket.application.MsgDelegateToGateway": "appAddress",
-    "/pocket.application.MsgUndelegateFromGateway": "appAddress",
-    "/pocket.application.MsgUnstakeApplication": "address",
-    "/pocket.application.MsgStakeApplication": "address",
-    "/pocket.migration.MsgClaimMorseApplication": "shannonDestAddress",
-    "/pocket.application.MsgTransferApplication": "sourceAddress",
-    "pocket.application.EventTransferBegin": getIdOfTransferEvents,
-    "pocket.application.EventTransferEnd": (attributes) => {
-      // here we need to return two ids (id of the source and id of the destination app)
-      // to group the data of those two apps
-      const ids: Array<string> = []
-
-      for (const {key, value} of attributes) {
-        if (key === 'source_address' || key === 'destination_address') {
-          // the source address is surrounded by quotes
-          ids.push((value as string).replaceAll("\"", ""))
-        }
-
-        if (ids.length === 2) break
-      }
-
-      return ids
-    },
-    "pocket.application.EventTransferError": getIdOfTransferEvents,
-    "pocket.application.EventApplicationUnbondingBegin": getIdOfBondingEvents,
-    "pocket.application.EventApplicationUnbondingEnd": getIdOfBondingEvents,
-  })
 }
 
 // any gateway msg or event
