@@ -488,11 +488,27 @@ function _handleSupplierStakeMsg(
   services: Array<SupplierServiceConfigProps>,
   servicesToRemove: Array<string>,
 } {
-  if (!msg.msg.decodedMsg.stake) {
+  // the MsgStakeSupplier can come without the stake field, so we need to get the previous stake
+  let stake = msg.msg.decodedMsg.stake;
+
+  if (!stake) {
+    const previousSupplier = record[msg.msg.decodedMsg.operatorAddress]?.supplier;
+
+    if (!previousSupplier) {
+      throw new Error(`[handleSupplierStakeMsg] previous supplier not found for operator address ${msg.msg.decodedMsg.operatorAddress}`);
+    }
+
+    stake = {
+      amount: previousSupplier.stakeAmount.toString(),
+      denom: previousSupplier.stakeDenom,
+    }
+  }
+
+  if (!stake) {
     throw new Error(`[handleSupplierStakeMsg] stake not provided in msg`);
   }
 
-  const {operatorAddress, ownerAddress, services: rawServices, signer, stake} = msg.msg.decodedMsg;
+  const {operatorAddress, ownerAddress, services: rawServices, signer} = msg.msg.decodedMsg;
 
   const msgId = messageId(msg);
 
