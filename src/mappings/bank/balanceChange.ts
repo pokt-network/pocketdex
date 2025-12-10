@@ -37,7 +37,7 @@ export async function enforceAccountsExists(accounts: Array<EnforceAccountExiste
   const moduleAccountRecords = accounts.filter(r => !!r.module);
 
   await Promise.all([
-    optimizedBulkCreate("Account", accounts, r => {
+    optimizedBulkCreate("Account", accounts, "omit" ,r => {
       return {
         id: r.account.id,
         chainId: r.account.chainId,
@@ -45,7 +45,7 @@ export async function enforceAccountsExists(accounts: Array<EnforceAccountExiste
         __block_range: [store.context.getHistoricalUnit(), null],
       };
     }),
-    optimizedBulkCreate("ModuleAccount", moduleAccountRecords, r => ({
+    optimizedBulkCreate("ModuleAccount", moduleAccountRecords, 'omit', r => ({
       ...r.module as ModuleAccountProps,
       __id: generateDeterministicUUID(r.account.id),
       __block_range: [store.context.getHistoricalUnit(), null],
@@ -196,7 +196,12 @@ export async function updateBalances(
   }
 
   if (balancesToSaveWithOptimize.length > 0) {
-    await optimizedBulkCreate("Balance", balancesToSaveWithOptimize, (doc) => ({
+    await optimizedBulkCreate(
+      "Balance",
+      balancesToSaveWithOptimize,
+      // we are omitting this here because we are deleting the old records before
+      'omit',
+      (doc) => ({
         ...doc,
         __block_range: [blockHeight, null],
       })

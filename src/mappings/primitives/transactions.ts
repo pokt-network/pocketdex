@@ -133,5 +133,5 @@ function _handleTransaction(tx: CosmosTransaction): TransactionProps {
 // handleTransactions, referenced in project.ts, handles transactions and store as is in case we need to use them on a migration
 export async function handleTransactions(txs: CosmosTransaction[]): Promise<void> {
   // Process Transactions using the _handleTransaction function
-  await optimizedBulkCreate("Transaction", txs, _handleTransaction);
+  await optimizedBulkCreate("Transaction", txs, 'block_id', _handleTransaction);
 }

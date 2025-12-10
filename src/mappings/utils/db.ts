@@ -186,6 +186,7 @@ export async function fetchPaginatedRecords<T>({
 export async function optimizedBulkCreate<T>(
   modelName: string,
   docs: T[],
+  removeBy: 'block_id' | 'block_range' | 'omit',
   transformer?: Transformer<T>,
   bulkCreateOpts?: BulkCreateOptions<BaseEntity>,
 ): Promise<void> {
@@ -211,6 +212,24 @@ export async function optimizedBulkCreate<T>(
       batches.push(currentBatch);
       currentBatch = [];
     }
+  }
+
+  if (removeBy === 'block_id') {
+    await getStoreModel(modelName).model.destroy({
+      where: {
+        // @ts-ignore
+        block_id: BigInt(store.context.getHistoricalUnit())
+      }
+    });
+  } else if (removeBy === 'block_range') {
+    const sequelize = getSequelize(modelName);
+
+    await getStoreModel(modelName).model.destroy({
+      where: sequelize.where(
+        sequelize.fn("lower", sequelize.col("_block_range")),
+        store.context.getHistoricalUnit()
+      ),
+    });
   }
 
   const tasks = batches.map((batch, index) =>
