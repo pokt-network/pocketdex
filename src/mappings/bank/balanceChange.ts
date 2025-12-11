@@ -121,6 +121,42 @@ export async function updateBalances(
 ): Promise<void> {
   const ids = addressDenomEntries.map(([id]) => id)
 
+  if (ids.length === 0) return;
+
+  const BalanceModel = getStoreModel('Balance')
+  const sequelize = getSequelize("Balance")
+
+  // Clean up any records from a previous failed attempt at this block
+  // 1. Delete records that were created for this block
+  await BalanceModel.model.destroy({
+    where: {
+      // @ts-ignore
+      last_updated_block_id: blockId,
+    },
+    transaction: store.context.transaction,
+  })
+
+  // 2. Reopen records that were closed for this block (restore them to active state)
+  // to just fetch then using `fetchPaginatedRecords` subql utility
+  await BalanceModel.model.update(
+    {
+      __block_range: sequelize.fn(
+        "int8range",
+        sequelize.fn("lower", sequelize.col("_block_range")),
+        null,
+        '[)'
+      ),
+    },
+    {
+      hooks: false,
+      where: sequelize.where(
+        sequelize.fn("upper", sequelize.col("_block_range")),
+        blockId
+      ),
+      transaction: store.context.transaction,
+    }
+  )
+
   const batches = chunkArray(ids, 1000);
 
   const balances = [];
@@ -159,23 +195,11 @@ export async function updateBalances(
     balancesToSaveWithOptimize.push(props)
   }
 
-  const BalanceModel = getStoreModel('Balance')
-  const sequelize = getSequelize("Balance")
-
   const blockHeight = store.context.getHistoricalUnit()
 
   if (Object.keys(currentBalancesMap).length > 0) {
-    // remove existing records of changes for this block
-    // if they exist before saving records
-    await BalanceModel.model.destroy({
-      where: {
-        // @ts-ignore
-        last_updated_block_id: blockId,
-      },
-      transaction: store.context.transaction,
-    })
-
-    await BalanceModel.model.update(
+    // Close the existing records by setting their upper bound to the current block
+    const [result] = await BalanceModel.model.update(
       {
         __block_range: sequelize.fn(
           "int8range",
