@@ -165,19 +165,57 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   logger.info(`[handleGenesis] (block.header.height): indexing genesis block ${block.block.header.height}`);
 
   // save records
-  await Promise.all([
+  const [
+    servicesResult,
+    suppliersResult,
+    applicationsResult,
+    gatewaysResult,
+    genTxsResult,
+    moduleAccountGenesisBalances,
+    genesisBalances,
+  ] = await Promise.all([
+    _handleGenesisServices(genesis, block),
+    _handleGenesisSuppliers(genesis, block),
+    _handleGenesisApplications(genesis, block),
+    _handleGenesisGateways(genesis, block),
+    _handleGenesisGenTxs(genesis, block),
     _handleModuleAccounts(block),
+    _handleGenesisBalances(genesis, block),
     _handleAuthz(genesis, block),
     _handleGenesisSupplyDenom(genesis),
     _handleGenesisSupply(genesis, block),
     _handleGenesisEvent(block),
-    _handleGenesisServices(genesis, block),
-    _handleGenesisBalances(genesis, block),
-    _handleGenesisGateways(genesis, block),
-    _handleGenesisSuppliers(genesis, block),
-    _handleGenesisApplications(genesis, block),
     _handleGenesisParams(genesis, block),
-    _handleGenesisGenTxs(genesis, block),
+  ]);
+
+  // Collect all transactions and messages from the different handlers
+  const allTransactions: Array<TransactionProps> = [
+    ...servicesResult.transactions,
+    ...suppliersResult.transactions,
+    ...applicationsResult.transactions,
+    ...gatewaysResult.transactions,
+    ...genTxsResult.transactions,
+  ];
+
+  const allMessages: Array<MessageProps> = [
+    ...servicesResult.messages,
+    ...suppliersResult.messages,
+    ...applicationsResult.messages,
+    ...gatewaysResult.messages,
+    ...genTxsResult.messages,
+  ];
+
+  // Collect all genesis balances from the different handlers
+  const allGenesisBalances: Array<GenesisBalanceProps> = [
+    ...moduleAccountGenesisBalances,
+    ...genesisBalances,
+  ];
+
+  // Save all transactions, messages, and genesis balances in single calls
+  await Promise.all([
+    optimizedBulkCreate("Transaction", allTransactions, 'block_id'),
+    optimizedBulkCreate("Message", allMessages, 'block_id'),
+    optimizedBulkCreate("GenesisBalance", allGenesisBalances, 'block_range'),
   ]);
 
   await GenesisEntity.create({
@@ -186,7 +224,7 @@ export async function handleGenesis(block: CosmosBlock): Promise<void> {
   }).save();
 }
 
-async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
+async function _handleModuleAccounts(block: CosmosBlock): Promise<Array<GenesisBalanceProps>> {
   const moduleAccounts = await queryModuleAccounts(block);
 
   const accounts: Array<EnforceAccountExistenceParams> = [];
@@ -227,9 +265,10 @@ async function _handleModuleAccounts(block: CosmosBlock): Promise<void> {
 
   await Promise.all([
     enforceAccountsExists(accounts),
-    optimizedBulkCreate("GenesisBalance", genesisBalances),
     store.bulkCreate("Balance", balances),
   ]);
+
+  return genesisBalances;
 }
 
 async function _handleAuthz(genesis: Genesis, block: CosmosBlock): Promise<void> {
@@ -282,7 +321,7 @@ async function _handleGenesisEvent(block: CosmosBlock): Promise<void> {
   }).save();
 }
 
-async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Promise<void> {
+async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Promise<Array<GenesisBalanceProps>> {
   const accounts: Set<string> = new Set();
 
   for (const account of genesis.app_state.auth.accounts) {
@@ -322,12 +361,13 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
         },
       })),
     ),
-    optimizedBulkCreate("GenesisBalance", genesisBalances),
     store.bulkCreate("Balance", balances),
   ]);
+
+  return genesisBalances;
 }
 
-async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Promise<void> {
+async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Promise<{ transactions: Array<TransactionProps>, messages: Array<MessageProps> }> {
   const services: Array<ServiceProps> = [],
     addServiceMsgs: Array<MsgAddServiceProps> = [],
     msgs: Array<MessageProps> = [],
@@ -393,13 +433,13 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
 
   await Promise.all([
     store.bulkCreate("Service", services),
-    optimizedBulkCreate("MsgAddService", addServiceMsgs),
-    optimizedBulkCreate("Transaction", transactions),
-    optimizedBulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgAddService", addServiceMsgs, 'block_id'),
   ]);
+
+  return { transactions, messages: msgs };
 }
 
-async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Promise<void> {
+async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Promise<{ transactions: Array<TransactionProps>, messages: Array<MessageProps> }> {
   const suppliers: Array<SupplierProps> = [];
   const supplierMsgStakes: Array<MsgStakeSupplierProps> = [];
   const supplierServices: Array<SupplierServiceConfigProps> = [];
@@ -520,14 +560,14 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
   await Promise.all([
     store.bulkCreate("Supplier", suppliers),
     store.bulkCreate("SupplierServiceConfig", supplierServices),
-    optimizedBulkCreate("MsgStakeSupplier", supplierMsgStakes),
-    optimizedBulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes),
-    optimizedBulkCreate("Transaction", transactions),
-    optimizedBulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeSupplier", supplierMsgStakes, 'block_id'),
+    optimizedBulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes, 'block_id'),
   ]);
+
+  return { transactions, messages: msgs };
 }
 
-async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock): Promise<void> {
+async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock): Promise<{ transactions: Array<TransactionProps>, messages: Array<MessageProps> }> {
   const applications: Array<ApplicationProps> = [];
   const appMsgStakes: Array<MsgStakeApplicationProps> = [];
   const appServices: Array<ApplicationServiceProps> = [];
@@ -635,17 +675,17 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
     store.bulkCreate("Application", applications),
     store.bulkCreate("ApplicationService", appServices),
     store.bulkCreate("ApplicationGateway", appsDelegatedToGateways),
-    optimizedBulkCreate("MsgStakeApplication", appMsgStakes),
-    optimizedBulkCreate("Transaction", transactions),
-    optimizedBulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes),
-    optimizedBulkCreate("Message", msgs),
-    optimizedBulkCreate("MsgDelegateToGateway", msgDelegateToGateways),
+    optimizedBulkCreate("MsgStakeApplication", appMsgStakes, 'block_id'),
+    optimizedBulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes, 'block_id'),
+    optimizedBulkCreate("MsgDelegateToGateway", msgDelegateToGateways, 'block_id'),
   ];
 
   await Promise.all(promises);
+
+  return { transactions, messages: msgs };
 }
 
-async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Promise<void> {
+async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Promise<{ transactions: Array<TransactionProps>, messages: Array<MessageProps> }> {
   const gateways: Array<GatewayProps> = [];
   const gatewayMsgStakes: Array<MsgStakeGatewayProps> = [];
   const transactions: Array<TransactionProps> = [];
@@ -710,10 +750,10 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
 
   await Promise.all([
     store.bulkCreate("Gateway", gateways),
-    optimizedBulkCreate("MsgStakeGateway", gatewayMsgStakes),
-    optimizedBulkCreate("Transaction", transactions),
-    optimizedBulkCreate("Message", msgs),
+    optimizedBulkCreate("MsgStakeGateway", gatewayMsgStakes, 'block_id'),
   ]);
+
+  return { transactions, messages: msgs };
 }
 
 function saveParams(namespace: string, params: Record<string, unknown> | undefined, block: CosmosBlock): Array<ParamProps> {
@@ -771,7 +811,7 @@ async function _handleGenesisSupply(genesis: Genesis, block: CosmosBlock): Promi
 }
 
 // Handle genutil.gen_txs payloads
-async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promise<void> {
+async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promise<{ transactions: Array<TransactionProps>, messages: Array<MessageProps> }> {
   const promises: Array<Promise<void>> = [];
   const transactions: Array<TransactionProps> = [];
   const typedMessages: Map<string, Array<MsgCreateValidatorProps>> = new Map<string, Array<MsgCreateValidatorProps>>();
@@ -858,20 +898,18 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
 
   // upsert accounts
   promises.push(enforceAccountsExists(accounts.map(account => ({ account }))));
-  // create txs, validators & messages
+  // create validators
   promises.push(store.bulkCreate("Validator", validators));
-  promises.push(optimizedBulkCreate("Transaction", transactions));
-  promises.push(optimizedBulkCreate("Message", messages));
 
   let entity: string;
   for (const [key, value] of typedMessages) {
     entity = key.split(".")?.at(-1) as string;
-    promises.push(optimizedBulkCreate(entity, value));
+    promises.push(optimizedBulkCreate(entity, value, 'block_id'));
   }
 
   await Promise.all(promises);
 
-  return;
+  return { transactions, messages };
 }
 
 function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, block: CosmosBlock): MsgCreateValidatorProps {

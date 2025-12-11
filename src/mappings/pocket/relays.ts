@@ -993,15 +993,15 @@ function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidit
 }
 
 export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
-  await optimizedBulkCreate("MsgCreateClaim", messages.map(_handleMsgCreateClaim));
+  await optimizedBulkCreate("MsgCreateClaim", messages.map(_handleMsgCreateClaim), 'block_id');
 }
 
 export async function handleMsgSubmitProof(messages: Array<CosmosMessage<MsgSubmitProof>>): Promise<void> {
-  await optimizedBulkCreate("MsgSubmitProof", messages.map(_handleMsgSubmitProof));
+  await optimizedBulkCreate("MsgSubmitProof", messages.map(_handleMsgSubmitProof), 'block_id');
 }
 
 export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promise<void> {
-  await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired));
+  await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired), 'block_id');
 }
 
 export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promise<void> {
@@ -1018,31 +1018,31 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promi
   }
 
   await Promise.all([
-    optimizedBulkCreate("EventClaimSettled", eventsSettled),
-    optimizedBulkCreate("ModToAcctTransfer", modToAcctTransfersToSave),
+    optimizedBulkCreate("EventClaimSettled", eventsSettled, 'block_id'),
+    optimizedBulkCreate("ModToAcctTransfer", modToAcctTransfersToSave, 'block_id'),
   ]);
 }
 
 export async function handleEventClaimUpdated(events: Array<CosmosEvent>): Promise<void> {
-  await optimizedBulkCreate("EventClaimUpdated", events.map(_handleEventClaimUpdated));
+  await optimizedBulkCreate("EventClaimUpdated", events.map(_handleEventClaimUpdated), 'block_id');
 }
 
 export async function handleEventProofUpdated(events: Array<CosmosEvent>): Promise<void> {
-  await optimizedBulkCreate("EventProofUpdated", events.map(_handleEventProofUpdated));
+  await optimizedBulkCreate("EventProofUpdated", events.map(_handleEventProofUpdated), 'block_id');
 }
 
 export async function handleEventApplicationOverserviced(events: Array<CosmosEvent>): Promise<void> {
   const eventsUpdated = events.map(_handleEventApplicationOverserviced);
 
-  await optimizedBulkCreate("EventApplicationOverserviced", eventsUpdated);
+  await optimizedBulkCreate("EventApplicationOverserviced", eventsUpdated, 'block_id');
 }
 
 export async function handleEventApplicationReimbursementRequest(events: Array<CosmosEvent>): Promise<void> {
   const eventsUpdated = events.map(_handleEventApplicationReimbursementRequest);
 
-  await optimizedBulkCreate("EventApplicationReimbursementRequest", eventsUpdated);
+  await optimizedBulkCreate("EventApplicationReimbursementRequest", eventsUpdated, 'block_id');
 }
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {
-  await optimizedBulkCreate("EventProofValidityChecked", events.map(_handleEventProofValidityChecked));
+  await optimizedBulkCreate("EventProofValidityChecked", events.map(_handleEventProofValidityChecked), 'block_id');
 }
