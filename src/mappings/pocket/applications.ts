@@ -825,7 +825,7 @@ export async function handleAppMsgStake(
     store.bulkCreate("Application", applications),
     store.bulkCreate("ApplicationService", appService),
     optimizedBulkCreate("MsgStakeApplication", stakeMsgs, 'block_id'),
-    optimizedBulkCreate("MsgStakeApplicationService", stakeAppService, 'block_id'),
+    optimizedBulkCreate("MsgStakeApplicationService", stakeAppService, 'block_range'),
     ApplicationServiceModel.model.update(
       // mark as deleted (close the block range)
       {
