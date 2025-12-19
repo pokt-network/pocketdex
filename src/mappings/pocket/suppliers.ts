@@ -48,6 +48,7 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { updateMorseClaimableAccounts } from "./migration";
 import { parseAttribute } from "../utils/json";
 import {
   filterEventsByTxStatus,
@@ -1205,6 +1206,18 @@ async function performSupplierDatabaseOperations(data: {
   }
   if (data.slashingEvents.length > 0) {
     savePromises.push(optimizedBulkCreate("EventSupplierSlashed", data.slashingEvents, 'omit', assignBlockRange));
+  }
+
+  // Update MorseClaimableAccounts to mark them as claimed
+  if (data.claimMsgs.length > 0) {
+    savePromises.push(updateMorseClaimableAccounts(
+      data.claimMsgs.map((msg) => ({
+        morseAddress: msg.morseSrcAddress,
+        destinationAddress: msg.shannonOwnerAddress,
+        claimedMsgId: msg.messageId,
+        transactionHash: msg.transactionId,
+      }))
+    ));
   }
 
   if (savePromises.length > 0) {
