@@ -824,8 +824,8 @@ export async function handleAppMsgStake(
   await Promise.all([
     store.bulkCreate("Application", applications),
     store.bulkCreate("ApplicationService", appService),
-    optimizedBulkCreate("MsgStakeApplication", stakeMsgs),
-    optimizedBulkCreate("MsgStakeApplicationService", stakeAppService),
+    optimizedBulkCreate("MsgStakeApplication", stakeMsgs, 'block_id'),
+    optimizedBulkCreate("MsgStakeApplicationService", stakeAppService, 'block_range'),
     ApplicationServiceModel.model.update(
       // mark as deleted (close the block range)
       {
@@ -895,8 +895,8 @@ export async function handleMsgClaimMorseApplication(
   await Promise.all([
     store.bulkCreate("Application", applications),
     store.bulkCreate("ApplicationService", appService),
-    optimizedBulkCreate("MsgClaimMorseApplication", claimMsgs),
-    optimizedBulkCreate("MsgClaimMorseApplicationService", claimAppService),
+    optimizedBulkCreate("MsgClaimMorseApplication", claimMsgs, 'block_id'),
+    optimizedBulkCreate("MsgClaimMorseApplicationService", claimAppService, 'block_id'),
     ApplicationServiceModel.model.update(
       // mark as deleted (close the block range)
       {

@@ -128,7 +128,6 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
 async function indexValidators(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
     "/cosmos.staking.v1beta1.MsgCreateValidator",
-    "/pocket.proof.MsgSubmitProof",
   ];
   const eventTypes = [
     "rewards",

@@ -48,6 +48,7 @@ import {
   getStakeServiceId,
   messageId,
 } from "../utils/ids";
+import { updateMorseClaimableAccounts } from "./migration";
 import { parseAttribute } from "../utils/json";
 import {
   filterEventsByTxStatus,
@@ -1180,31 +1181,43 @@ async function performSupplierDatabaseOperations(data: {
   const savePromises: Array<Promise<unknown>> = [];
 
   if (data.suppliersToSave.length > 0) {
-    savePromises.push(optimizedBulkCreate("Supplier", data.suppliersToSave, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("Supplier", data.suppliersToSave, 'omit', assignBlockRange));
   }
   if (data.servicesToSave.length > 0) {
-    savePromises.push(optimizedBulkCreate("SupplierServiceConfig", data.servicesToSave, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("SupplierServiceConfig", data.servicesToSave, 'omit',assignBlockRange));
   }
   if (data.stakeMsgs.length > 0) {
-    savePromises.push(optimizedBulkCreate("MsgStakeSupplier", data.stakeMsgs, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("MsgStakeSupplier", data.stakeMsgs, 'omit', assignBlockRange));
   }
   if (data.claimMsgs.length > 0) {
-    savePromises.push(optimizedBulkCreate("MsgClaimMorseSupplier", data.claimMsgs, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("MsgClaimMorseSupplier", data.claimMsgs, 'omit', assignBlockRange));
   }
   if (data.unstakeMsgs.length > 0) {
-    savePromises.push(optimizedBulkCreate("MsgUnstakeSupplier", data.unstakeMsgs, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("MsgUnstakeSupplier", data.unstakeMsgs, 'omit', assignBlockRange));
   }
   if (data.serviceConfigActivatedEvents.length > 0) {
-    savePromises.push(optimizedBulkCreate("EventSupplierServiceConfigActivated", data.serviceConfigActivatedEvents, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("EventSupplierServiceConfigActivated", data.serviceConfigActivatedEvents, 'omit', assignBlockRange));
   }
   if (data.unbondingBeginEvents.length > 0) {
-    savePromises.push(optimizedBulkCreate("EventSupplierUnbondingBegin", data.unbondingBeginEvents, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("EventSupplierUnbondingBegin", data.unbondingBeginEvents, 'omit', assignBlockRange));
   }
   if (data.unbondingEndEvents.length > 0) {
-    savePromises.push(optimizedBulkCreate("EventSupplierUnbondingEnd", data.unbondingEndEvents, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("EventSupplierUnbondingEnd", data.unbondingEndEvents, 'omit', assignBlockRange));
   }
   if (data.slashingEvents.length > 0) {
-    savePromises.push(optimizedBulkCreate("EventSupplierSlashed", data.slashingEvents, assignBlockRange));
+    savePromises.push(optimizedBulkCreate("EventSupplierSlashed", data.slashingEvents, 'omit', assignBlockRange));
+  }
+
+  // Update MorseClaimableAccounts to mark them as claimed
+  if (data.claimMsgs.length > 0) {
+    savePromises.push(updateMorseClaimableAccounts(
+      data.claimMsgs.map((msg) => ({
+        morseAddress: msg.morseSrcAddress,
+        destinationAddress: msg.shannonOwnerAddress,
+        claimedMsgId: msg.messageId,
+        transactionHash: msg.transactionId,
+      }))
+    ));
   }
 
   if (savePromises.length > 0) {

@@ -22,5 +22,5 @@ function _handleMessage(msg: CosmosMessage): MessageProps {
 // handleMessages, referenced in project.ts, handles messages and store as is in case we need to use them on a migration
 export async function handleMessages(msgs: CosmosMessage[]): Promise<void> {
   // Process Messages using the _handleMessage function
-  await optimizedBulkCreate("Message", msgs, _handleMessage);
+  await optimizedBulkCreate("Message", msgs, 'block_id', _handleMessage);
 }
