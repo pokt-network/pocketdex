@@ -157,8 +157,11 @@ export async function loadGenesisFile(): Promise<Genesis> {
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   const genesis: Genesis = await loadGenesisFile();
 
+  // use 1 in case genesis initial height is 0
+  const initialHeight = genesis.initial_height === 0 ? 1 : genesis.initial_height;
+
   // IMPORTANT: Return early if this is not the genesis initial height as this is called for block indexed!
-  if (block.block.header.height !== genesis.initial_height) {
+  if (block.block.header.height !== initialHeight) {
     return;
   }
 
@@ -325,7 +328,17 @@ async function _handleGenesisBalances(genesis: Genesis, block: CosmosBlock): Pro
   const accounts: Set<string> = new Set();
 
   for (const account of genesis.app_state.auth.accounts) {
-    accounts.add(account.address);
+    let address = ''
+
+    if ('base_account' in account) {
+      address = account.base_account?.address || ''
+    } else if ('address' in account) {
+      address = account.address || ''
+    }
+
+    if (address) {
+      accounts.add(address);
+    }
   }
 
   const genesisBalances: Array<GenesisBalanceProps> = [];
@@ -373,7 +386,7 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
     msgs: Array<MessageProps> = [],
     transactions: Array<TransactionProps> = [];
 
-  for (const service of genesis.app_state.service.serviceList) {
+  for (const service of (genesis.app_state.service?.serviceList || [])) {
     services.push({
       id: service.id,
       name: service.name,
@@ -447,7 +460,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
   const transactions: Array<TransactionProps> = [];
   const msgs: Array<MessageProps> = [];
 
-  for (let i = 0; i < genesis.app_state.supplier.supplierList.length; i++) {
+  for (let i = 0; i < (genesis.app_state.supplier.supplierList?.length || 0); i++) {
     const supplier = genesis.app_state.supplier.supplierList[i];
     const msgId = `genesis-${supplier.operator_address}`;
     const transactionHash = getGenesisFakeTxHash("supplier", i);
@@ -577,7 +590,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
   const appsDelegatedToGateways: Array<ApplicationGatewayProps> = [];
   const msgs: Array<MessageProps> = [];
 
-  for (let i = 0; i < genesis.app_state.application.applicationList.length; i++) {
+  for (let i = 0; i < (genesis.app_state.application.applicationList?.length || 0); i++) {
     const app = genesis.app_state.application.applicationList[i];
     const msgId = `genesis-${app.address}`;
     const transactionHash = getGenesisFakeTxHash("app", i);
@@ -597,7 +610,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
       code: 0,
     });
 
-    if (app.delegatee_gateway_addresses.length > 0) {
+    if ((app.delegatee_gateway_addresses?.length || 0) > 0) {
       for (const gatewayAddress of app.delegatee_gateway_addresses) {
         const msgId = `genesis-${gatewayAddress}`;
         msgDelegateToGateways.push({
@@ -691,7 +704,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
   const transactions: Array<TransactionProps> = [];
   const msgs: Array<MessageProps> = [];
 
-  for (let i = 0; i < genesis.app_state.gateway.gatewayList.length; i++) {
+  for (let i = 0; i < (genesis.app_state.gateway.gatewayList?.length || 0); i++) {
     const gateway = genesis.app_state.gateway.gatewayList[i];
     const msgId = `genesis-${gateway.address}`;
     const transactionHash = getGenesisFakeTxHash("gateway", i);
@@ -759,7 +772,7 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
 function saveParams(namespace: string, params: Record<string, unknown> | undefined, block: CosmosBlock): Array<ParamProps> {
   const paramsEntries = Object.entries(params || {});
 
-  if (!paramsEntries.length) {
+  if (!paramsEntries?.length) {
     return [];
   }
 
@@ -820,7 +833,7 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   const accounts: Array<AccountProps> = [];
 
   // logger.debug(`[handleGenesisGenTxs] Looping over gen_txs Transactions: ${genesis.app_state.genutil.gen_txs.length}`);
-  for (let i = 0; i < genesis.app_state.genutil.gen_txs.length; i++) {
+  for (let i = 0; i < (genesis.app_state.genutil.gen_txs?.length || 0); i++) {
     const genTx = genesis.app_state.genutil.gen_txs[i];
     // assume that the first message type is the type of the transaction
     const type = get(genTx, "body.messages[0].@type");
