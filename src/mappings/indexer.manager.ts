@@ -637,12 +637,13 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   // await profilerWrap(handleEvents, "indexPrimitives", "handleEvents")(filteredEvents);
   // await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
   await profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions);
+  // Params needs to run before relays to have the param 'mint_ratio' updated
+  await profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType)
 
   await Promise.all([
     profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
-    profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType),
     profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
