@@ -41,5 +41,5 @@ function _handleEvent(event: CosmosEvent): EventProps {
 // handleEvents, referenced in project.ts, handles events and store as is in case we need to use them on a migration
 export async function handleEvents(events: CosmosEvent[]): Promise<void> {
   // Process Events using the _handleEvent function
-  await optimizedBulkCreate("Event", events, _handleEvent);
+  await optimizedBulkCreate("Event", events, 'block_id', _handleEvent);
 }

@@ -158,9 +158,9 @@ function _handleValidatorRewardOrCommission(event: CosmosEvent): ValidatorReward
 }
 
 export async function handleValidatorRewards(events: Array<CosmosEvent>): Promise<void> {
-  await optimizedBulkCreate("ValidatorReward", events, _handleValidatorRewardOrCommission);
+  await optimizedBulkCreate("ValidatorReward", events, 'block_id', _handleValidatorRewardOrCommission);
 }
 
 export async function handleValidatorCommission(events: Array<CosmosEvent>): Promise<void> {
-  await optimizedBulkCreate("ValidatorCommission", events, _handleValidatorRewardOrCommission);
+  await optimizedBulkCreate("ValidatorCommission", events, 'block_id', _handleValidatorRewardOrCommission);
 }
