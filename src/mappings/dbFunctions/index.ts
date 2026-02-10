@@ -1,4 +1,7 @@
 import { getDbSchema, getSequelize } from "../utils/db";
+import { getLatestBlocksByDayFn } from "./blocks";
+import { getClaimProofsDataByDelegatorsAndTimeFn, getClaimProofsDataByTimeFn } from "./claimProofs";
+import { getDaoBalanceAtHeightFn } from "./dao";
 import { getDataByDelegatorAddressesAndBlocksFn } from "./dataByDelegatorAddressesAndBlocks";
 import {
   getDataByDelegatorAddressesAndTimesFn,
@@ -30,8 +33,16 @@ import {
   getRewardsBySuppliersAndTimeGroupByDateAndAddress,
 } from "./rewardsByAddressesAndTime";
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByServicesAddressesAndTime";
+import { getAmountOfBlocksAndSuppliersByTimesFn, servicesPerformanceBetweenTimesFn } from "./servicePerformance";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
-import { getTotalSupplyByDay } from "./supply";
+import {
+  getBurnBreakdownBetweenDatesFn,
+  getMintBreakdownBetweenDatesFn,
+  getSupplyCompositionBetweenDatesFn,
+  getTotalSupplyBetweenDatesFn,
+  getTotalSupplyByDay,
+} from "./supply";
+import { getMissingValidatorBlocksFn, getProducedBlocksByValidatorFn } from "./validators";
 
 const functionsCreatedCacheKey = 'functionsCreated';
 
@@ -71,6 +82,19 @@ export async function createDbFunctions(): Promise<void> {
     getRewardsBySuppliersAndTime,
     getRewardsBySuppliersAndTimeGroupByDateAndAddress,
     getTotalSupplyByDay,
+    // New analytics functions
+    getAmountOfBlocksAndSuppliersByTimesFn,
+    getClaimProofsDataByDelegatorsAndTimeFn,
+    getClaimProofsDataByTimeFn,
+    getLatestBlocksByDayFn,
+    getMissingValidatorBlocksFn,
+    getProducedBlocksByValidatorFn,
+    servicesPerformanceBetweenTimesFn,
+    getBurnBreakdownBetweenDatesFn,
+    getDaoBalanceAtHeightFn,
+    getMintBreakdownBetweenDatesFn,
+    getSupplyCompositionBetweenDatesFn,
+    getTotalSupplyBetweenDatesFn,
   )
 
   // these are the function used to generate the aggregated data saved by block
