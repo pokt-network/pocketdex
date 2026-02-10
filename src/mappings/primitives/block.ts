@@ -62,7 +62,7 @@ export async function handleBlock(block: CosmosBlock): Promise<void> {
     stakedSuppliersTokens: BigInt(0),
     unstakingSuppliers: 0,
     unstakingSuppliersTokens: BigInt(0),
-    timeToBlock: 0,
+    timeToBlock: BigInt(0),
     unstakedSuppliers: 0,
     unstakedSuppliersTokens: BigInt(0),
     stakedApps: 0,
