@@ -1,4 +1,4 @@
-import type { BaseAccountSDKType } from "../../types/proto-interfaces/cosmos/auth/v1beta1/auth";
+import type { BaseAccountSDKType, ModuleAccountSDKType } from "../../types/proto-interfaces/cosmos/auth/v1beta1/auth";
 import { GrantAuthorization } from "../../types/proto-interfaces/cosmos/authz/v1beta1/authz";
 import type { Balance } from "../../types/proto-interfaces/cosmos/bank/v1beta1/genesis";
 import type {
@@ -135,7 +135,7 @@ export interface Genesis {
     }
     auth: {
       params: Params
-      accounts: Array<BaseAccountSDKType>
+      accounts: Array<BaseAccountSDKType | ModuleAccountSDKType>
     }
     authz: {
       authorization: Array<GrantAuthorization>

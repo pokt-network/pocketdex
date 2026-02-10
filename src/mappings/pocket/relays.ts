@@ -5,15 +5,13 @@ import {
 import isEmpty from "lodash/isEmpty";
 import { claimProofStatusFromJSON } from "../../client/pocket/proof/types";
 import { claimExpirationReasonFromJSON } from "../../client/pocket/tokenomics/event";
-import { parseCoins } from "../../cosmjs/utils";
 import {
   ClaimExpirationReason,
   ClaimProofStatus,
   Coin,
-  EventSupplierSlashed,
+  Param,
   ProofRequirementReason,
   SettlementOpReason,
-  Supplier,
 } from "../../types";
 import { EventApplicationOverservicedProps } from "../../types/models/EventApplicationOverserviced";
 import { EventApplicationReimbursementRequestProps } from "../../types/models/EventApplicationReimbursementRequest";
@@ -48,6 +46,7 @@ import { optimizedBulkCreate } from "../utils/db";
 import {
   getBlockId,
   getEventId,
+  getParamId,
   messageId,
 } from "../utils/ids";
 import {
@@ -106,7 +105,7 @@ function getSettlementOpReasonFromSDK(item: typeof SettlementOpReasonSDKType | n
       return SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION":
-    case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION:
+    case 6:
       return SettlementOpReason.TLM_GLOBAL_MINT_PROPOSER_REWARD_DISTRIBUTION;
 
     case "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION":
@@ -142,7 +141,7 @@ function getSettlementOpReasonFromSDK(item: typeof SettlementOpReasonSDKType | n
       return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER;
 
     default:
-      throw new Error(`Unknown SettlementOpReason=${item}`);
+      return SettlementOpReason.UNSPECIFIED;
   }
 }
 
@@ -462,7 +461,7 @@ function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): MsgSubmitPro
   };
 }
 
-function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
+function _handleEventClaimSettled(event: CosmosEvent, mintRatio: number): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
   const {
     claim,
     claimed,
@@ -551,30 +550,38 @@ function _handleEventClaimSettled(event: CosmosEvent): [EventClaimSettledProps, 
     ];
 
     // it seems that global mint is being minted twice, one due to inflation and the other due to application reimbursement
-    // see: https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L57
+    // see:
+    //      https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L57
+    //      https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L102-L112
     // so in order to get the inflation mint we need to divide the difference between the total of the reward_distribution
     // and the claimed upokt
-    const totalMint = totalFromRewardDistribution - BigInt(claimed.amount);
-    const globalMint = totalMint / BigInt(2);
+    const mintedAfterRatio = Math.floor(Number(claimed.amount) * mintRatio)
+    const inflationPlusReimbursementMint = totalFromRewardDistribution - BigInt(mintedAfterRatio);
+    const inflationAndReimbursementMint = inflationPlusReimbursementMint / BigInt(2);
+
+    if (inflationAndReimbursementMint < BigInt(0)) {
+      throw new Error(
+        `inflationAndReimbursementMint is negative, totalFromRewardDistribution: ${totalFromRewardDistribution}, claimed.amount: ${claimed.amount}, inflationAndReimbursementMint: ${inflationAndReimbursementMint}, mintRatio: ${mintRatio}`
+      )
+    }
 
     mints = [
       {
         opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_INFLATION),
         destinationModule: "",
-        amount: globalMint,
+        amount: inflationAndReimbursementMint,
         denom: claimed.denom,
       },
       {
         opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER),
         destinationModule: "",
-        amount: globalMint,
+        amount: inflationAndReimbursementMint,
         denom: claimed.denom,
       },
       {
         opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT),
         destinationModule: "",
-        // we are assuming here that mint = burn is always true, if this changes in the future, then we need to update this
-        amount: BigInt(claimed.amount),
+        amount: BigInt(mintedAfterRatio),
         denom: claimed.denom,
       },
     ];
@@ -1005,11 +1012,18 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
 }
 
 export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promise<void> {
+  // Load the min_ratio parameter from tokenomics module
+  // This parameter is updated via AuthzExecMsg (transactions) and EventClaimSettled events are block events
+  // Block events run after params are changed, so the param should already be updated in the database
+  const mintRatioParam = await Param.get(getParamId("tokenomics", "mint_ratio"));
+
+  const mintRatio = mintRatioParam ? parseFloat(mintRatioParam.value) : 1; // Default to 1 if not found, meaning it was before the PIP-41
+
   const eventsSettled = [];
   const modToAcctTransfersToSave = [];
 
   for (const event of events) {
-    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event);
+    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event, mintRatio);
     eventsSettled.push(eventSettled);
 
     if (modToAcctTransfers.length) {
