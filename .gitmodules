@@ -9,7 +9,7 @@
 [submodule "vendor/subql-cosmos"]
 	path = vendor/subql-cosmos
 	url = https://github.com/pokt-shannon/subql-cosmos.git
-	branch = pocketdex
+	branch = feat/http-client-logging
 [submodule "vendor/cosmjs"]
 	path = vendor/cosmjs
 	url = https://github.com/pokt-shannon/x-cosmjs.git

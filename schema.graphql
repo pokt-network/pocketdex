@@ -283,7 +283,7 @@ type Block @entity {
   unstakingSuppliersTokens: BigInt
   # How much time (in ms) the block took to be produced.
   # In fact this is the subtract of the timestamp of the current block against the previous one.
-  timeToBlock: Int
+  timeToBlock: BigInt
   unstakedSuppliers: Int
   unstakedSuppliersTokens: BigInt
   stakedApps: Int
