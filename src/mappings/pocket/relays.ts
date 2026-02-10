@@ -561,7 +561,7 @@ function _handleEventClaimSettled(event: CosmosEvent, mintRatio: number): [Event
 
     if (inflationAndReimbursementMint < BigInt(0)) {
       throw new Error(
-        `globalMint is negative, totalFromRewardDistribution: ${totalFromRewardDistribution}, claimed.amount: ${claimed.amount}, inflationAndReimbursementMint: ${inflationAndReimbursementMint}`
+        `inflationAndReimbursementMint is negative, totalFromRewardDistribution: ${totalFromRewardDistribution}, claimed.amount: ${claimed.amount}, inflationAndReimbursementMint: ${inflationAndReimbursementMint}, mintRatio: ${mintRatio}`
       )
     }
 
