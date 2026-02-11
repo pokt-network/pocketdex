@@ -63,40 +63,9 @@ export async function createDbFunctions(): Promise<void> {
 
   if (wereFunctionsCreated) return
 
-  logger.debug('[createDbFunctions] creating db functions: get_relays_by_service_per_point_json, get_suppliers_staked_and_blocks_by_point_json')
+  logger.debug('[createDbFunctions] creating db functions')
 
   const schema = getDbSchema()
-
-  // this will create db functions that are used in the graphql api
-  await createFunctions(
-    schema,
-    getRelaysByServicePerPointJsonFn,
-    getSuppliersStakedAndBlocksByPointJsonFn,
-    getDataByDelegatorAddressesAndTimesFn,
-    getDataByDelegatorAddressesAndBlocksFn,
-    getRewardsByAddressesAndTime,
-    getRewardsByAddressesAndTimeGroupByDate,
-    getRewardsByAddressesAndTimeGroupByDateAndAddress,
-    getRewardsByDelegatorAddressesAndTimesGroupByServiceFn,
-    getRewardsByDate,
-    getRewardsBySuppliersAndTime,
-    getRewardsBySuppliersAndTimeGroupByDateAndAddress,
-    getTotalSupplyByDay,
-    // New analytics functions
-    getAmountOfBlocksAndSuppliersByTimesFn,
-    getClaimProofsDataByDelegatorsAndTimeFn,
-    getClaimProofsDataByTimeFn,
-    getLatestBlocksByDayFn,
-    getMissingValidatorBlocksFn,
-    getProducedBlocksByValidatorFn,
-    servicesPerformanceBetweenTimesFn,
-    getBurnBreakdownBetweenDatesFn,
-    getDaoBalanceAtHeightFn,
-    getMintBreakdownBetweenDatesFn,
-    getSupplyCompositionBetweenDatesFn,
-    getTotalSupplyBetweenDatesFn,
-  )
-
   // these are the function used to generate the aggregated data saved by block
   await createFunctions(
     schema,
@@ -127,6 +96,35 @@ export async function createDbFunctions(): Promise<void> {
     updateBlockReportsFn,
     updateBlockReportsRangeFn,
     createNeededExtensions,
+  )
+  // this will create db functions that are used in the graphql api
+  await createFunctions(
+    schema,
+    getRelaysByServicePerPointJsonFn,
+    getSuppliersStakedAndBlocksByPointJsonFn,
+    getDataByDelegatorAddressesAndTimesFn,
+    getDataByDelegatorAddressesAndBlocksFn,
+    getRewardsByAddressesAndTime,
+    getRewardsByAddressesAndTimeGroupByDate,
+    getRewardsByAddressesAndTimeGroupByDateAndAddress,
+    getRewardsByDelegatorAddressesAndTimesGroupByServiceFn,
+    getRewardsByDate,
+    getRewardsBySuppliersAndTime,
+    getRewardsBySuppliersAndTimeGroupByDateAndAddress,
+    getTotalSupplyByDay,
+    // New analytics functions
+    getAmountOfBlocksAndSuppliersByTimesFn,
+    getClaimProofsDataByDelegatorsAndTimeFn,
+    getClaimProofsDataByTimeFn,
+    getLatestBlocksByDayFn,
+    getMissingValidatorBlocksFn,
+    getProducedBlocksByValidatorFn,
+    servicesPerformanceBetweenTimesFn,
+    getBurnBreakdownBetweenDatesFn,
+    getDaoBalanceAtHeightFn,
+    getMintBreakdownBetweenDatesFn,
+    getSupplyCompositionBetweenDatesFn,
+    getTotalSupplyBetweenDatesFn,
   )
 
   logger.info(`[createDbFunctions] db functions were saved successfully to schema=${schema}.`)

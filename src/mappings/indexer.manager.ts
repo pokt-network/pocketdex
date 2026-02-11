@@ -24,6 +24,7 @@ import {
   EventHandlers,
   MsgHandlers,
 } from "./handlers";
+import { handleEventClaimSettled } from "./pocket/relays";
 import { handleAddBlockReports } from "./pocket/reports";
 import { indexSupplier } from "./pocket/suppliers";
 import {
@@ -165,7 +166,7 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
   // "index":true
   // }
   const eventTypes = [
-    "pocket.tokenomics.EventClaimSettled",
+    // "pocket.tokenomics.EventClaimSettled",
     "pocket.tokenomics.EventClaimExpired",
     "pocket.proof.EventClaimUpdated",
     "pocket.proof.EventProofUpdated",
@@ -177,6 +178,10 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
   await Promise.all([
     ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
     ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
+    handleEventClaimSettled(
+      eventByType['pocket.tokenomics.EventClaimSettled'],
+      eventByType['pocket.tokenomics.EventApplicationOverserviced']
+    )
   ]);
 }
 

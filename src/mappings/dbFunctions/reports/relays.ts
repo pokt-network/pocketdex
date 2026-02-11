@@ -5,15 +5,21 @@ export function updateRelaysDataOnBlockFn(dbSchema: string): string {
 RETURNS void AS $$
 DECLARE
   v_total_relays bigint := 0;
+  v_total_estimated_relays bigint := 0;
   v_total_computed_units bigint := 0;
+  v_total_estimated_computed_units bigint := 0;
 BEGIN
   -- Aggregate values from event_claim_settleds
   SELECT
     COALESCE(SUM(num_relays), 0),
-    COALESCE(SUM(num_claimed_computed_units), 0)
+    COALESCE(SUM(num_estimated_relays), 0),
+    COALESCE(SUM(num_claimed_computed_units), 0),
+    COALESCE(SUM(num_estimated_computed_units), 0)
   INTO
     v_total_relays,
-    v_total_computed_units
+    v_total_estimated_relays,
+    v_total_computed_units,
+    v_total_estimated_computed_units
   FROM ${dbSchema}.event_claim_settleds
   WHERE block_id = p_block_id;
 
@@ -21,7 +27,9 @@ BEGIN
   UPDATE ${dbSchema}.blocks
   SET
     total_relays = v_total_relays,
-    total_computed_units = v_total_computed_units
+    total_estimated_relays = v_total_estimated_relays,
+    total_computed_units = v_total_computed_units,
+    total_estimated_computed_units = v_total_estimated_computed_units
   WHERE id = p_block_id;
 END;
 $$ LANGUAGE plpgsql;
@@ -36,7 +44,9 @@ export function upsertRelaysByBlockAndServiceFn(dbSchema: string): string {
 CREATE TABLE IF NOT EXISTS ${dbSchema}.relay_by_block_and_services
 (
     relays numeric NOT NULL,
+    estimated_relays numeric,
     computed_units numeric NOT NULL,
+    estimated_computed_units numeric,
     claimed_upokt numeric NOT NULL,
     amount integer NOT NULL,
     block_id numeric NOT NULL,
@@ -66,7 +76,9 @@ BEGIN
     block_id,
     amount,
     relays,
+    estimated_relays,
     computed_units,
+    estimated_computed_units,
     claimed_upokt,
 	  _id
   )
@@ -75,7 +87,9 @@ BEGIN
     p_block_id,
     COUNT(*) AS amount,
     SUM(c.num_relays) AS relays,
+    SUM(c.num_estimated_relays) AS estimated_relays,
     SUM(c.num_claimed_computed_units) AS computed_units,
+    SUM(c.num_estimated_computed_units) AS estimated_computed_units,
     SUM(c.claimed_amount) AS claimed_upokt,
 	  uuid_generate_v4() _id
   FROM ${dbSchema}.event_claim_settleds c

@@ -272,7 +272,9 @@ type Block @entity {
   params: [Param] @derivedFrom(field: "block")
   # REPORTS
   totalComputedUnits: BigInt
+  totalEstimatedComputedUnits: BigInt
   totalRelays: BigInt
+  totalEstimatedRelays: BigInt
   failedTxs: Int
   successfulTxs: Int
   totalTxs: Int
@@ -972,6 +974,7 @@ type EventClaimExpired @entity {
   expirationReason: ClaimExpirationReason
   proofValidationStatus: ClaimProofStatus
   numRelays: BigInt
+  numEstimatedRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
   claimedAmount: BigInt
@@ -992,6 +995,7 @@ type EventClaimSettled @entity {
   proofRequirement: ProofRequirementReason
   proofValidationStatus: ClaimProofStatus
   numRelays: BigInt
+  numEstimatedRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
   claimedAmount: BigInt
