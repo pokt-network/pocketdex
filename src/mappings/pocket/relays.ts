@@ -461,7 +461,11 @@ function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): MsgSubmitPro
   };
 }
 
-function _handleEventClaimSettled(event: CosmosEvent, mintRatio: number): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
+function _handleEventClaimSettled(
+  event: CosmosEvent,
+  mintRatio: number,
+  getEffectiveBurn: (application: string, supplier: string) => string | null
+): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
   const {
     claim,
     claimed,
@@ -539,31 +543,34 @@ function _handleEventClaimSettled(event: CosmosEvent, mintRatio: number): [Event
       };
     });
 
-    burns = [
-      {
-        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN),
-        destinationModule: "",
-        // we are assuming here that mint = burn is always true, if this changes in the future, then we need to update this
-        amount: BigInt(claimed.amount),
-        denom: claimed.denom,
-      },
-    ];
-
     // it seems that global mint is being minted twice, one due to inflation and the other due to application reimbursement
     // see:
     //      https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L57
     //      https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L102-L112
-    // so in order to get the inflation mint we need to divide the difference between the total of the reward_distribution
+    // so in order to get the inflation mint, we need to divide the difference between the total of the reward_distribution
     // and the claimed upokt
-    const mintedAfterRatio = Math.floor(Number(claimed.amount) * mintRatio)
+    // Also we need to see if there is an EventApplicationOverserviced event with effective_burn to use instead of claimed.amount
+    // because if this event exists for this session, it means less was paid
+    const effectiveBurn = getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount
+    const mintedAfterRatio = Math.floor(Number(effectiveBurn) * mintRatio);
     const inflationPlusReimbursementMint = totalFromRewardDistribution - BigInt(mintedAfterRatio);
-    const inflationAndReimbursementMint = inflationPlusReimbursementMint / BigInt(2);
 
-    if (inflationAndReimbursementMint < BigInt(0)) {
+    if (inflationPlusReimbursementMint < BigInt(0)) {
       throw new Error(
-        `inflationAndReimbursementMint is negative, totalFromRewardDistribution: ${totalFromRewardDistribution}, claimed.amount: ${claimed.amount}, inflationAndReimbursementMint: ${inflationAndReimbursementMint}, mintRatio: ${mintRatio}`
+        `inflationAndReimbursementMint is negative, totalFromRewardDistribution: ${totalFromRewardDistribution}, claimed.amount: ${effectiveBurn}, inflationAndReimbursementMint: ${inflationPlusReimbursementMint}, mintRatio: ${mintRatio}`
       )
     }
+
+    const inflationAndReimbursementMint = inflationPlusReimbursementMint / BigInt(2);
+
+    burns = [
+      {
+        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN),
+        destinationModule: "",
+        amount: BigInt(effectiveBurn),
+        denom: claimed.denom,
+      },
+    ];
 
     mints = [
       {
@@ -587,6 +594,9 @@ function _handleEventClaimSettled(event: CosmosEvent, mintRatio: number): [Event
     ];
   }
 
+  const CUPR = Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))
+  const numEstimatedRelays = BigInt(Math.round(Number(numEstimatedComputedUnits) / CUPR))
+
   return [
     {
       supplierId: supplier_operator_address,
@@ -596,6 +606,7 @@ function _handleEventClaimSettled(event: CosmosEvent, mintRatio: number): [Event
       sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
       sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
       numRelays,
+      numEstimatedRelays,
       numClaimedComputedUnits,
       numEstimatedComputedUnits,
       claimedDenom: claimed?.denom || "",
@@ -626,6 +637,9 @@ function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
 
   const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
+  const CUPR = Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))
+  const numEstimatedRelays = BigInt(Math.round(Number(numEstimatedComputedUnits) / CUPR))
+
   return {
     supplierId: supplier_operator_address,
     applicationId: session_header?.application_address || "",
@@ -634,6 +648,7 @@ function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
     sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
     sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
     numRelays,
+    numEstimatedRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     claimedDenom: claimed?.denom || "",
@@ -1011,19 +1026,47 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
   await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired), 'block_id');
 }
 
-export async function handleEventClaimSettled(events: Array<CosmosEvent>): Promise<void> {
+export async function handleEventClaimSettled(events: Array<CosmosEvent>, overservices: Array<CosmosEvent>): Promise<void> {
   // Load the min_ratio parameter from tokenomics module
   // This parameter is updated via AuthzExecMsg (transactions) and EventClaimSettled events are block events
   // Block events run after params are changed, so the param should already be updated in the database
   const mintRatioParam = await Param.get(getParamId("tokenomics", "mint_ratio"));
 
-  const mintRatio = mintRatioParam ? parseFloat(mintRatioParam.value) : 1; // Default to 1 if not found, meaning it was before the PIP-41
+  const mintRatio = mintRatioParam ? parseFloat(mintRatioParam.value) : 0.975; // Default to 1 if not found, meaning it was before the PIP-41
 
   const eventsSettled = [];
   const modToAcctTransfersToSave = [];
 
+  const effectiveBurnPerAppAndSupplier = overservices.reduce((acc, overservice) => {
+    let effectiveBurn: CoinSDKType | undefined, application = '', supplier = '';
+
+    for (const attribute of overservice.event.attributes) {
+      if (attribute.key === "application_addr") {
+        application = parseAttribute(attribute.value);
+      }
+
+      if (attribute.key === "supplier_operator_addr") {
+        supplier = parseAttribute(attribute.value);
+      }
+
+      if (attribute.key === "effective_burn") {
+        effectiveBurn = getDenomAndAmount(attribute.value as string);
+      }
+    }
+
+    if (effectiveBurn && application && supplier) {
+      acc[`${application}-${supplier}`] = effectiveBurn.amount;
+    }
+
+    return acc;
+  }, {} as Record<string, string>);
+
+  function getEffectiveBurn(application: string, supplier: string): string | null {
+    return effectiveBurnPerAppAndSupplier[`${application}-${supplier}`] || null;
+  }
+
   for (const event of events) {
-    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event, mintRatio);
+    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event, mintRatio, getEffectiveBurn);
     eventsSettled.push(eventSettled);
 
     if (modToAcctTransfers.length) {

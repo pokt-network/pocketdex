@@ -27,7 +27,6 @@ import {
   handleEventApplicationOverserviced,
   handleEventApplicationReimbursementRequest,
   handleEventClaimExpired,
-  handleEventClaimSettled,
   handleEventClaimUpdated,
   handleEventProofUpdated,
   handleEventProofValidityChecked,
@@ -119,7 +118,8 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "pocket.gateway.EventGatewayUnbondingBegin": handleEventGatewayUnbondingBegin,
   "pocket.gateway.EventGatewayUnbondingEnd": handleEventGatewayUnbondingEnd,
   // relay
-  "pocket.tokenomics.EventClaimSettled": handleEventClaimSettled,
+  // EventClaimSettled is being handled separately because it needs access to EventApplicationOverserviced events
+  "pocket.tokenomics.EventClaimSettled": noOp,
   "pocket.tokenomics.EventClaimExpired": handleEventClaimExpired,
   "pocket.tokenomics.EventSupplierSlashed": noOp, // - now handled in indexSupplier
   "pocket.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
