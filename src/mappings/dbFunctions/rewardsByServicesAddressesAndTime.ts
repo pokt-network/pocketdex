@@ -34,7 +34,9 @@ WITH matched_suppliers AS (
 		SUM(m.amount) net_rewards,
 		SUM(e.claimed_amount) gross_rewards,
 		SUM(e.num_relays) relays,
-		SUM(e.num_claimed_computed_units) computed_units
+		SUM(e.num_estimated_relays) estimated_relays,
+		SUM(e.num_claimed_computed_units) computed_units,
+		SUM(e.num_estimated_computed_units) estimated_computed_units
 	FROM ${dbSchema}.mod_to_acct_transfers m
 	INNER JOIN ${dbSchema}.blocks b ON b.id = m.block_id
 	INNER JOIN ${dbSchema}.event_claim_settleds e ON e.id = m.event_claim_settled_id
