@@ -12,7 +12,9 @@ BEGIN
                 'date_truncated', date_truncated,
                 'service_id', service_id,
                 'relays', relays,
+                'estimated_relays', estimated_relays,
                 'computed_units', computed_units,
+                'estimated_computed_units', estimated_computed_units,
                 'claimed_upokt', claimed_upokt
             )
             ORDER BY date_truncated
@@ -22,7 +24,9 @@ BEGIN
                 date_trunc(trunc_interval, b.timestamp) AS date_truncated, 
                 r.service_id, 
                 SUM(r.relays)::NUMERIC AS relays, 
+                SUM(r.estimated_relays)::NUMERIC AS estimated_relays, 
                 SUM(r.computed_units)::NUMERIC AS computed_units, 
+                SUM(r.estimated_computed_units)::NUMERIC AS estimated_computed_units, 
                 SUM(r.claimed_upokt)::NUMERIC AS claimed_upokt
             FROM ${dbSchema}.relay_by_block_and_services r
             INNER JOIN ${dbSchema}.blocks b ON b.id = r.block_id

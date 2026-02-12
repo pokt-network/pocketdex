@@ -11,8 +11,10 @@ BEGIN
             json_build_object(
                 'date_truncated', date_truncated,
                 'relays', relays,
-				'computed_units', computed_units,
-				'claimed_amount', claimed_amount
+                'estimated_relays', estimated_relays,
+				        'computed_units', computed_units,
+				        'estimated_computed_units', estimated_computed_units,
+				        'claimed_amount', claimed_amount
             )
             ORDER BY date_truncated
         )
@@ -20,7 +22,9 @@ BEGIN
 			SELECT
 				date_trunc(trunc_interval, b.timestamp) date_truncated,
 				SUM(r.relays) relays,
+				SUM(r.estimated_relays) estimated_relays,
 				SUM(r.computed_units) computed_units,
+				SUM(r.estimated_computed_units) estimated_computed_units,
 				SUM(r.claimed_upokt) claimed_amount
 			FROM ${dbSchema}.relay_by_block_and_services r
 			INNER JOIN ${dbSchema}.blocks b on b.id = r.block_id

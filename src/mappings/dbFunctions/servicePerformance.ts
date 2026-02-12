@@ -41,7 +41,9 @@ AS $$
         SELECT
             r.service_id,
             SUM(r.relays) relays,
+            SUM(r.estimated_relays) estimated_relays,
             SUM(r.computed_units) computed_units,
+            SUM(r.estimated_computed_units) estimated_computed_units,
             SUM(r.claimed_upokt) claimed_upokt
         FROM ${dbSchema}.relay_by_block_and_services r
         INNER JOIN ${dbSchema}.blocks b ON b.id = r.block_id
@@ -51,7 +53,7 @@ AS $$
     p as (
         SELECT
             r.service_id,
-            SUM(r.computed_units) computed_units
+            SUM(r.estimated_computed_units) estimated_computed_units
         FROM ${dbSchema}.relay_by_block_and_services r
         INNER JOIN ${dbSchema}.blocks b ON b.id = r.block_id
         WHERE b.timestamp BETWEEN start_previous AND start_current_and_end_previous
@@ -82,11 +84,13 @@ AS $$
       c.service_id,
       s.name AS service_name,
       c.relays,
+      c.estimated_relays,
       c.computed_units,
+      c.estimated_computed_units,
       c.claimed_upokt,
       CASE
-        WHEN p.computed_units IS NOT NULL AND p.computed_units <> 0 THEN
-          (c.computed_units - p.computed_units)::NUMERIC / p.computed_units
+        WHEN p.estimated_computed_units IS NOT NULL AND p.estimated_computed_units <> 0 THEN
+          (c.estimated_computed_units - p.estimated_computed_units)::NUMERIC / p.estimated_computed_units
         ELSE 1
       END AS change,
       COALESCE(apps.amount, 0) AS apps_staked,
