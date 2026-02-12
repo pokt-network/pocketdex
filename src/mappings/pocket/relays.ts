@@ -482,6 +482,10 @@ function _handleEventClaimSettled(
   const eventId = getEventId(event);
   const blockId = getBlockId(event.block);
 
+  // We need to see if there is an EventApplicationOverserviced event with effective_burn to use instead of claimed.amount
+  // because if this event exists for this session, it means less was paid
+  const effectiveBurn = getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount
+
   let
     modToAcctTransfers: Array<ModToAcctTransferProps> = [],
     mints: EventClaimSettledProps["mints"] = [],
@@ -549,9 +553,6 @@ function _handleEventClaimSettled(
     //      https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L102-L112
     // so in order to get the inflation mint, we need to divide the difference between the total of the reward_distribution
     // and the claimed upokt
-    // Also we need to see if there is an EventApplicationOverserviced event with effective_burn to use instead of claimed.amount
-    // because if this event exists for this session, it means less was paid
-    const effectiveBurn = getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount
     const mintedAfterRatio = Math.floor(Number(effectiveBurn) * mintRatio);
     const inflationPlusReimbursementMint = totalFromRewardDistribution - BigInt(mintedAfterRatio);
 
@@ -610,7 +611,7 @@ function _handleEventClaimSettled(
       numClaimedComputedUnits,
       numEstimatedComputedUnits,
       claimedDenom: claimed?.denom || "",
-      claimedAmount: BigInt(claimed?.amount || "0"),
+      claimedAmount: BigInt(effectiveBurn || "0"),
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
       transactionId: event.tx?.hash,
       blockId: blockId,
