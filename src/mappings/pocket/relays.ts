@@ -1032,7 +1032,7 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>, overse
   // Block events run after params are changed, so the param should already be updated in the database
   const mintRatioParam = await Param.get(getParamId("tokenomics", "mint_ratio"));
 
-  const mintRatio = mintRatioParam ? parseFloat(mintRatioParam.value) : 0.975; // Default to 1 if not found, meaning it was before the PIP-41
+  const mintRatio = mintRatioParam ? parseFloat(mintRatioParam.value) : 1; // Default to 1 if not found, meaning it was before the PIP-41
 
   const eventsSettled = [];
   const modToAcctTransfersToSave = [];
