@@ -420,6 +420,9 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateCla
     numRelays,
   } = getAttributes(eventClaimCreated.attributes);
 
+  const CUPR = Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))
+  const numEstimatedRelays = BigInt(Math.round(Number(numEstimatedComputedUnits) / CUPR))
+
   return {
     id: messageId(msg),
     transactionId: msg.tx.hash,
@@ -429,6 +432,7 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateCla
     serviceId,
     sessionId,
     numRelays,
+    numEstimatedRelays,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     claimedDenom: claimed?.denom || "",

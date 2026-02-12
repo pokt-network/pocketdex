@@ -923,6 +923,7 @@ type MsgCreateClaim @entity {
   rootHash: String
   transaction: Transaction!
   numRelays: BigInt
+  numEstimatedRelays: BigInt
   numClaimedComputedUnits: BigInt
   numEstimatedComputedUnits: BigInt
   claimedAmount: BigInt
