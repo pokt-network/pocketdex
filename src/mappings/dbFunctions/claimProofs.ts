@@ -30,7 +30,7 @@ AS $$
       SUM(mcc.num_relays) AS claim_relays,
       SUM(mcc.num_estimated_relays) AS claim_estimated_relays,
       SUM(mcc.num_claimed_computed_units) AS claim_computed_units,
-      SUM(mcc.num_estimated_computed_units) AS claim_estimated_units,
+      SUM(mcc.num_estimated_computed_units) AS claim_estimated_computed_units,
       SUM(mcc.claimed_amount) AS claim_upokt
     FROM ${dbSchema}.msg_create_claims mcc
     INNER JOIN ${dbSchema}.blocks b ON b.id = mcc.block_id
