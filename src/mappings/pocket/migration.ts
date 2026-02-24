@@ -1,7 +1,11 @@
 import { toHex } from "@cosmjs/encoding";
 import type { CosmosMessage, CosmosTransaction } from "@subql/types-cosmos";
 import type { Coin } from "../../client/cosmos/base/v1beta1/coin";
-import { MsgImportMorseClaimableAccounts, MsgRecoverMorseAccount } from "../../client/pocket/migration/tx";
+import {
+  MsgAdminRecoverMorseAccount,
+  MsgImportMorseClaimableAccounts,
+  MsgRecoverMorseAccount,
+} from "../../client/pocket/migration/tx";
 import type { MorseClaimableAccountProps } from "../../types/models/MorseClaimableAccount";
 import {
   MsgClaimMorseAccount as MsgClaimMorseAccountEntity,
@@ -70,25 +74,30 @@ interface HandleMsgRecoverMorseAccount {
   tx: CosmosTransaction
   blockId: bigint
   messageId: string
+  isAdmin: boolean
 }
 
 export function handleMsgRecoverMorseAccount({
   blockId,
   encodedMsg,
+  isAdmin,
   messageId,
   tx,
 }: HandleMsgRecoverMorseAccount): {
   decodedMsg: object
   msgRecoverMorseAccount: MsgRecoverMorseAccountProps
 } {
-  const decodedMsg = MsgRecoverMorseAccount.decode(
+  const Proto = isAdmin ? MsgAdminRecoverMorseAccount : MsgRecoverMorseAccount;
+  const decodedMsg = Proto.decode(
     new Uint8Array(Object.values(encodedMsg.value))
   )
+
+  const eventTypeTarget = isAdmin ? 'pocket.migration.EventMorseAccountRecoveredAdmin' : 'pocket.migration.EventMorseAccountRecovered';
 
   let recoveredBalance: Coin | null = null;
 
   for (const event of tx.tx.events) {
-    if (event.type === 'pocket.migration.EventMorseAccountRecovered') {
+    if (event.type === eventTypeTarget) {
       let coin: CoinSDKType | null = null, morseAddress: string | null = null, shannonAddress: string | null = null;
 
       for (const attribute of event.attributes) {
@@ -135,6 +144,7 @@ export function handleMsgRecoverMorseAccount({
       blockId: blockId,
       transactionId: tx.hash,
       messageId: messageId,
+      isAdmin,
     }
   }
 }
