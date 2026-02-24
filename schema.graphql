@@ -1219,6 +1219,7 @@ type MsgRecoverMorseAccount @entity {
   morseSrcAddress: String!
   recoveredBalanceAmount: BigInt!
   recoveredBalanceDenom: String!
+  isAdmin: Boolean
 
   block: Block!
   transaction: Transaction!
