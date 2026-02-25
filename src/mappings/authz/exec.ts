@@ -86,12 +86,16 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
       decodedMsg = response.decodedMsg;
       result.morseClaimableAccount.push(...response.morseClaimableAccounts);
       result.msgImportMorseClaimableAccounts.push(response.msgImportMorseClaimableAccounts);
-    } else if (encodedMsg.typeUrl === "/pocket.migration.MsgRecoverMorseAccount") {
+    } else if (
+      encodedMsg.typeUrl === "/pocket.migration.MsgRecoverMorseAccount" ||
+      encodedMsg.typeUrl === "/pocket.migration.MsgAdminRecoverMorseAccount"
+    ) {
       const response = handleMsgRecoverMorseAccount({
         encodedMsg,
         blockId,
         tx: msg.tx,
         messageId: authzExecId,
+        isAdmin: encodedMsg.typeUrl === "/pocket.migration.MsgAdminRecoverMorseAccount"
       })
 
       decodedMsg = response.decodedMsg;
