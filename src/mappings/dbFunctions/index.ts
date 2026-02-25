@@ -6,6 +6,7 @@ import { getDataByDelegatorAddressesAndBlocksFn } from "./dataByDelegatorAddress
 import {
   getDataByDelegatorAddressesAndTimesFn,
 } from "./dataByDelegatorAddressesAndTimes";
+import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
 import { getRelaysByServicePerPointJsonFn } from "./relaysByServicePerPoint";
 import { createNeededExtensions, updateBlockReportsFn, updateBlockReportsRangeFn } from "./reports";
 import {
@@ -125,6 +126,7 @@ export async function createDbFunctions(): Promise<void> {
     getMintBreakdownBetweenDatesFn,
     getSupplyCompositionBetweenDatesFn,
     getTotalSupplyBetweenDatesFn,
+    getOverservicedsByDelegatorAddressesAndTimesFn,
   )
 
   logger.info(`[createDbFunctions] db functions were saved successfully to schema=${schema}.`)
