@@ -369,6 +369,8 @@ const project: CosmosProject = {
             "EventSupplierSlashed",
             "EventApplicationOverserviced",
             "EventApplicationReimbursementRequest",
+            "EventSettlementBatch",
+            "RewardDistributionDetail",
           ],
         },
       ],

@@ -15,6 +15,7 @@ import {
 } from "../../types";
 import { EventApplicationOverservicedProps } from "../../types/models/EventApplicationOverserviced";
 import { EventApplicationReimbursementRequestProps } from "../../types/models/EventApplicationReimbursementRequest";
+import { EventSettlementBatchProps } from "../../types/models/EventSettlementBatch";
 import { EventClaimExpiredProps } from "../../types/models/EventClaimExpired";
 import { EventClaimSettledProps } from "../../types/models/EventClaimSettled";
 import { EventClaimUpdatedProps } from "../../types/models/EventClaimUpdated";
@@ -160,6 +161,38 @@ function getSettlementOpReasonFromSDK(item: typeof SettlementOpReasonSDKType | n
     case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER:
       return SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER;
 
+    case "TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION":
+    case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION:
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION;
+
+    case "TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION":
+    case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION:
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_RD;
+
+    case "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION":
+    case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION:
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_RD;
+
+    case "TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT":
+    case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT:
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_MINT;
+
+    case "TLM_RELAY_BURN_EQUALS_MINT_VALIDATOR_REWARD_DISTRIBUTION":
+    case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_VALIDATOR_REWARD_DISTRIBUTION:
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_VALIDATOR_RD;
+
+    case "TLM_RELAY_BURN_EQUALS_MINT_DELEGATOR_REWARD_DISTRIBUTION":
+    case SettlementOpReasonSDKType.TLM_RELAY_BURN_EQUALS_MINT_DELEGATOR_REWARD_DISTRIBUTION:
+      return SettlementOpReason.TLM_RELAY_BURN_EQUALS_MINT_DELEGATOR_RD;
+
+    case "TLM_GLOBAL_MINT_VALIDATOR_REWARD_DISTRIBUTION":
+    case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_VALIDATOR_REWARD_DISTRIBUTION:
+      return SettlementOpReason.TLM_GLOBAL_MINT_VALIDATOR_REWARD_DISTRIBUTION;
+
+    case "TLM_GLOBAL_MINT_DELEGATOR_REWARD_DISTRIBUTION":
+    case SettlementOpReasonSDKType.TLM_GLOBAL_MINT_DELEGATOR_REWARD_DISTRIBUTION:
+      return SettlementOpReason.TLM_GLOBAL_MINT_DELEGATOR_REWARD_DISTRIBUTION;
+
     default:
       return SettlementOpReason.UNSPECIFIED;
   }
@@ -192,7 +225,15 @@ export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     proofMissingPenalty: CoinSDKType = {},
-    rewardDistribution: Record<string, string> | undefined;
+    rewardDistribution: Record<string, string> | undefined,
+    rewardDistributionDetailed: Array<{ recipient_address: string; op_reason: number; amount: string }> | undefined,
+    settledUpokt: CoinSDKType | undefined,
+    mintRatioStr: string | undefined,
+    supplierOwnerAddress: string | undefined,
+    chainNumEstimatedRelays: bigint | undefined,
+    mintedUpokt: CoinSDKType | undefined,
+    overservicingLossUpokt: CoinSDKType | undefined,
+    deflationLossUpokt: CoinSDKType | undefined;
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
@@ -222,7 +263,13 @@ export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     if (attribute.key === "session_end_block_height") {
       newClaim.session_header!.session_end_block_height = BigInt(parseAttribute(attribute.value));
       newClaim.session_header!.session_start_block_height = BigInt(0);
-      newClaim.session_header!.session_id = "";
+      if (!newClaim.session_header!.session_id) {
+        newClaim.session_header!.session_id = "";
+      }
+    }
+
+    if (attribute.key === "session_id") {
+      newClaim.session_header!.session_id = parseAttribute(attribute.value);
     }
 
     if (attribute.key === "claim_proof_status_int") {
@@ -257,6 +304,38 @@ export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
 
     if (attribute.key === "reward_distribution") {
       rewardDistribution = JSON.parse(attribute.value as string);
+    }
+
+    if (attribute.key === "reward_distribution_detailed") {
+      rewardDistributionDetailed = JSON.parse(attribute.value as string);
+    }
+
+    if (attribute.key === "settled_upokt") {
+      settledUpokt = getDenomAndAmount(attribute.value as string);
+    }
+
+    if (attribute.key === "mint_ratio") {
+      mintRatioStr = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "supplier_owner_address") {
+      supplierOwnerAddress = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "num_estimated_relays") {
+      chainNumEstimatedRelays = BigInt(parseAttribute(attribute.value));
+    }
+
+    if (attribute.key === "minted_upokt") {
+      mintedUpokt = getDenomAndAmount(attribute.value as string);
+    }
+
+    if (attribute.key === "overservicing_loss_upokt") {
+      overservicingLossUpokt = getDenomAndAmount(attribute.value as string);
+    }
+
+    if (attribute.key === "deflation_loss_upokt") {
+      deflationLossUpokt = getDenomAndAmount(attribute.value as string);
     }
 
     if (attribute.key === "proof_missing_penalty") {
@@ -328,6 +407,14 @@ export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     proofValidationStatus,
     settlementResult,
     rewardDistribution,
+    rewardDistributionDetailed,
+    settledUpokt,
+    mintRatioStr,
+    supplierOwnerAddress,
+    chainNumEstimatedRelays,
+    mintedUpokt,
+    overservicingLossUpokt,
+    deflationLossUpokt,
   };
 }
 
@@ -498,7 +585,15 @@ function _handleEventClaimSettled(
     numRelays,
     proofRequirement,
     rewardDistribution,
+    rewardDistributionDetailed,
     settlementResult,
+    settledUpokt,
+    mintRatioStr,
+    supplierOwnerAddress,
+    chainNumEstimatedRelays,
+    mintedUpokt,
+    overservicingLossUpokt,
+    deflationLossUpokt,
   } = getAttributes(event.event.attributes);
 
   const { proof_validation_status, session_header, supplier_operator_address } = claim;
@@ -506,9 +601,11 @@ function _handleEventClaimSettled(
   const eventId = getEventId(event);
   const blockId = getBlockId(event.block);
 
-  // We need to see if there is an EventApplicationOverserviced event with effective_burn to use instead of claimed.amount
-  // because if this event exists for this session, it means less was paid
-  const effectiveBurn = getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount
+  // Use chain-provided settled_upokt if available (post-aggregation upgrade),
+  // otherwise fall back to overserviced effective_burn, then claimed amount
+  const effectiveBurn = settledUpokt
+    ? settledUpokt.amount
+    : (getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount)
 
   let
     modToAcctTransfers: Array<ModToAcctTransferRecord> = [],
@@ -617,8 +714,17 @@ function _handleEventClaimSettled(
     ];
   }
 
-  const CUPR = Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))
-  const numEstimatedRelays = BigInt(Math.round(Number(numEstimatedComputedUnits) / CUPR))
+  // Use chain-provided num_estimated_relays if available, otherwise compute from CU ratio
+  const numEstimatedRelays = chainNumEstimatedRelays !== undefined
+    ? chainNumEstimatedRelays
+    : BigInt(Math.round(Number(numEstimatedComputedUnits) / Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))));
+
+  // Map reward_distribution_detailed to the schema's RewardDistributionDetail JSON type
+  const mappedRewardDistributionDetailed = rewardDistributionDetailed?.map(detail => ({
+    recipientAddress: detail.recipient_address,
+    opReason: detail.op_reason,
+    amount: detail.amount,
+  }));
 
   return [
     {
@@ -643,6 +749,18 @@ function _handleEventClaimSettled(
       burns,
       modToModTransfers,
       rootHash: undefined,
+      // New fields from settlement aggregation (undefined for pre-upgrade blocks)
+      settledAmount: settledUpokt ? BigInt(settledUpokt.amount) : undefined,
+      settledDenom: settledUpokt?.denom,
+      mintRatio: mintRatioStr,
+      supplierOwnerId: supplierOwnerAddress,
+      mintedAmount: mintedUpokt ? BigInt(mintedUpokt.amount) : undefined,
+      mintedDenom: mintedUpokt?.denom,
+      overservicingLossAmount: overservicingLossUpokt ? BigInt(overservicingLossUpokt.amount) : undefined,
+      overservicingLossDenom: overservicingLossUpokt?.denom,
+      deflationLossAmount: deflationLossUpokt ? BigInt(deflationLossUpokt.amount) : undefined,
+      deflationLossDenom: deflationLossUpokt?.denom,
+      rewardDistributionDetailed: mappedRewardDistributionDetailed,
     },
     modToAcctTransfers,
   ];
@@ -823,6 +941,9 @@ function _handleEventProofUpdated(event: CosmosEvent): EventProofUpdatedProps {
 function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicationOverservicedProps {
   let expectedBurn: Coin | null = null, effectiveBurn: Coin | null = null, applicationAddress = "",
     supplierAddress = "";
+  let serviceId: string | undefined;
+  let sessionEndBlockHeight: bigint | undefined;
+  let spendLimitExceeded: boolean | undefined;
 
   for (const attribute of event.event.attributes) {
     if (attribute.key === "application_addr") {
@@ -839,6 +960,18 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
 
     if (attribute.key === "effective_burn") {
       effectiveBurn = getDenomAndAmount(attribute.value as string);
+    }
+
+    if (attribute.key === "service_id") {
+      serviceId = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "session_end_block_height") {
+      sessionEndBlockHeight = BigInt(parseAttribute(attribute.value));
+    }
+
+    if (attribute.key === "spend_limit_exceeded") {
+      spendLimitExceeded = parseAttribute(attribute.value) === "true";
     }
   }
 
@@ -868,6 +1001,10 @@ function _handleEventApplicationOverserviced(event: CosmosEvent): EventApplicati
     effectiveBurnDenom: effectiveBurn.denom,
     blockId: getBlockId(event.block),
     eventId: getEventId(event),
+    // New fields (undefined for pre-upgrade blocks)
+    serviceId,
+    sessionEndBlockHeight,
+    spendLimitExceeded,
   };
 }
 
@@ -1196,4 +1333,61 @@ export async function handleEventApplicationReimbursementRequest(events: Array<C
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {
   await optimizedBulkCreate("EventProofValidityChecked", events.map(_handleEventProofValidityChecked), 'block_id');
+}
+
+function _handleEventSettlementBatch(event: CosmosEvent): EventSettlementBatchProps {
+  let sessionEndBlockHeight = BigInt(0),
+    senderModule = "",
+    recipient = "",
+    opReasonValue: string | number = 0,
+    totalAmountCoin: CoinSDKType | undefined,
+    numClaims = 0,
+    opType = "";
+
+  for (const attribute of event.event.attributes) {
+    if (attribute.key === "session_end_block_height") {
+      sessionEndBlockHeight = BigInt(parseAttribute(attribute.value));
+    }
+
+    if (attribute.key === "sender_module") {
+      senderModule = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "recipient") {
+      recipient = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "op_reason") {
+      opReasonValue = parseAttribute(attribute.value);
+    }
+
+    if (attribute.key === "total_amount") {
+      totalAmountCoin = getDenomAndAmount(attribute.value as string);
+    }
+
+    if (attribute.key === "num_claims") {
+      numClaims = Number(parseAttribute(attribute.value));
+    }
+
+    if (attribute.key === "op_type") {
+      opType = parseAttribute(attribute.value);
+    }
+  }
+
+  return {
+    id: getEventId(event),
+    sessionEndBlockHeight,
+    senderModule,
+    recipient,
+    opReason: getSettlementOpReasonFromSDK(opReasonValue),
+    totalAmount: totalAmountCoin ? BigInt(totalAmountCoin.amount) : BigInt(0),
+    totalAmountDenom: totalAmountCoin?.denom || "",
+    numClaims,
+    opType,
+    blockId: getBlockId(event.block),
+  };
+}
+
+export async function handleEventSettlementBatch(events: Array<CosmosEvent>): Promise<void> {
+  await optimizedBulkCreate("EventSettlementBatch", events.map(_handleEventSettlementBatch), 'block_id');
 }

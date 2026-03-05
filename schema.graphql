@@ -122,6 +122,22 @@ enum SettlementOpReason {
   # Module accounting
   TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER
   TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER
+
+  # Relay Burn Equals Mint TLM reward distributions (post-aggregation)
+  TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION
+  # This label was truncated because it is too large to be handled by subql/postgres
+  TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_RD # = TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION
+  # This label was truncated because it is too large to be handled by subql/postgres
+  TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_RD # = TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION
+  TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_MINT
+  # This label was truncated because it is too large to be handled by subql/postgres
+  TLM_RELAY_BURN_EQUALS_MINT_VALIDATOR_RD # = TLM_RELAY_BURN_EQUALS_MINT_VALIDATOR_REWARD_DISTRIBUTION
+  # This label was truncated because it is too large to be handled by subql/postgres
+  TLM_RELAY_BURN_EQUALS_MINT_DELEGATOR_RD # = TLM_RELAY_BURN_EQUALS_MINT_DELEGATOR_REWARD_DISTRIBUTION
+
+  # Global Mint TLM validator/delegator distributions (post-aggregation)
+  TLM_GLOBAL_MINT_VALIDATOR_REWARD_DISTRIBUTION
+  TLM_GLOBAL_MINT_DELEGATOR_REWARD_DISTRIBUTION
 }
 
 enum MorseSupplierClaimSignerType {
@@ -1007,6 +1023,18 @@ type EventClaimSettled @entity {
   burns: [MintBurnOp]!
   modToModTransfers: [ModToModTransfer]!
   block: Block!
+  # New fields from settlement aggregation (nullable for backward compat with pre-upgrade blocks)
+  settledAmount: BigInt
+  settledDenom: String
+  mintRatio: String
+  supplierOwner: Account
+  mintedAmount: BigInt
+  mintedDenom: String
+  overservicingLossAmount: BigInt
+  overservicingLossDenom: String
+  deflationLossAmount: BigInt
+  deflationLossDenom: String
+  rewardDistributionDetailed: [RewardDistributionDetail]
 }
 
 type MintBurnOp @jsonField(indexed: false) {
@@ -1024,6 +1052,25 @@ type ModToModTransfer @jsonField(indexed: false) {
   recipientModule: String!
   amount: BigInt!
   denom: String!
+}
+
+type RewardDistributionDetail @jsonField(indexed: false) {
+  recipientAddress: String!
+  opReason: Int!
+  amount: String!
+}
+
+type EventSettlementBatch @entity {
+  id: ID!
+  sessionEndBlockHeight: BigInt!
+  senderModule: String!
+  recipient: String!
+  opReason: SettlementOpReason!
+  totalAmount: BigInt!
+  totalAmountDenom: String!
+  numClaims: Int!
+  opType: String!
+  block: Block!
 }
 
 type EventProofUpdated @entity {
@@ -1067,6 +1114,10 @@ type EventApplicationOverserviced @entity {
   effectiveBurnDenom: String!
   block: Block!
   event: Event!
+  # New fields (nullable for backward compat with pre-upgrade blocks)
+  service: Service
+  sessionEndBlockHeight: BigInt
+  spendLimitExceeded: Boolean
 }
 
 type EventSupplierSlashed @entity {
