@@ -1034,7 +1034,6 @@ type EventClaimSettled @entity {
   overservicingLossDenom: String
   deflationLossAmount: BigInt
   deflationLossDenom: String
-  rewardDistributionDetailed: [RewardDistributionDetail]
 }
 
 type MintBurnOp @jsonField(indexed: false) {
@@ -1070,19 +1069,6 @@ type ModToAcctTransfer @entity {
   recipient: Account!
   amount: BigInt!
   denom: String!
-}
-
-type EventSettlementBatch @entity {
-  id: ID!
-  sessionEndBlockHeight: BigInt!
-  senderModule: String!
-  recipient: String!
-  opReason: SettlementOpReason!
-  totalAmount: BigInt!
-  totalAmountDenom: String!
-  numClaims: Int!
-  opType: String!
-  block: Block!
 }
 
 type Relay @entity {

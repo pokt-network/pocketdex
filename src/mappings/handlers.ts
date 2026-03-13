@@ -30,7 +30,6 @@ import {
   handleEventClaimUpdated,
   handleEventProofUpdated,
   handleEventProofValidityChecked,
-  handleEventSettlementBatch,
   handleMsgCreateClaim,
   handleMsgSubmitProof,
 } from "./pocket/relays";
@@ -125,7 +124,7 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "pocket.tokenomics.EventSupplierSlashed": noOp, // - now handled in indexSupplier
   "pocket.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
   "pocket.tokenomics.EventApplicationReimbursementRequest": handleEventApplicationReimbursementRequest,
-  "pocket.tokenomics.EventSettlementBatch": handleEventSettlementBatch,
+  "pocket.tokenomics.EventSettlementBatch": noOp, // we are not interested in this event
   "pocket.proof.EventClaimUpdated": handleEventClaimUpdated,
   "pocket.proof.EventProofUpdated": handleEventProofUpdated,
   "pocket.proof.EventProofValidityChecked": handleEventProofValidityChecked,

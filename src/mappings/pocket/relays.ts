@@ -552,31 +552,334 @@ function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): MsgSubmitPro
   };
 }
 
-function _handleEventClaimSettled(
-  event: CosmosEvent,
+interface SettlementParts {
+  modToAcctTransfers: Array<ModToAcctTransferProps>;
+  mints: EventClaimSettledProps["mints"];
+  burns: EventClaimSettledProps["burns"];
+  modToModTransfers: EventClaimSettledProps["modToModTransfers"];
+  mintedUpokt: CoinSDKType | undefined;
+}
+
+// Builds burns and mints arrays from reward distribution totals.
+// Global mint is minted twice: once for inflation, once for application reimbursement.
+// See:
+//   https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L57
+//   https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L102-L112
+function _buildBurnsAndMintsFromRewardTotal(
+  totalFromRewardDistribution: bigint,
+  effectiveBurn: string,
   mintRatio: number,
-  getEffectiveBurn: (application: string, supplier: string) => string | null
-): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
+  claimed: CoinSDKType,
+  mintedUpokt: CoinSDKType | undefined,
+): { burns: EventClaimSettledProps["burns"]; mints: EventClaimSettledProps["mints"]; mintedUpokt: CoinSDKType | undefined } {
+  const mintedAfterRatio = mintedUpokt ? Number(mintedUpokt.amount) : Math.floor(Number(effectiveBurn) * mintRatio);
+  const inflationPlusReimbursementMint = totalFromRewardDistribution - BigInt(mintedAfterRatio);
+
+  if (inflationPlusReimbursementMint < BigInt(0)) {
+    throw new Error(
+      `inflationAndReimbursementMint is negative, totalFromRewardDistribution: ${totalFromRewardDistribution}, claimed.amount: ${effectiveBurn}, inflationAndReimbursementMint: ${inflationPlusReimbursementMint}, mintRatio: ${mintRatio}`
+    )
+  }
+
+  const inflationAndReimbursementMint = inflationPlusReimbursementMint / BigInt(2);
+
+  const burns: EventClaimSettledProps["burns"] = [
+    {
+      opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN),
+      destinationModule: "",
+      amount: BigInt(effectiveBurn),
+      denom: claimed.denom,
+    },
+  ];
+
+  const mints: EventClaimSettledProps["mints"] = [
+    {
+      opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_INFLATION),
+      destinationModule: "",
+      amount: inflationAndReimbursementMint,
+      denom: claimed.denom,
+    },
+    {
+      opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER),
+      destinationModule: "",
+      amount: inflationAndReimbursementMint,
+      denom: claimed.denom,
+    },
+    {
+      opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT),
+      destinationModule: "",
+      amount: BigInt(mintedAfterRatio),
+      denom: claimed.denom,
+    },
+  ];
+
+  if (!mintedUpokt) {
+    mintedUpokt = {
+      amount: mintedAfterRatio.toString(),
+      denom: claimed.denom,
+    }
+  }
+
+  return { burns, mints, mintedUpokt };
+}
+
+function _buildSettlementFromResult(
+  settlementResult: ClaimSettlementResultSDKType,
+  eventId: string,
+  blockId: bigint,
+  effectiveBurn: string,
+  claimed: CoinSDKType,
+  mintedUpokt: CoinSDKType | undefined,
+): SettlementParts {
+  const modToAcctTransfers = settlementResult.mod_to_acct_transfers?.map((item, index) => ({
+    id: `${eventId}-${index}`,
+    blockId,
+    eventClaimSettledId: eventId,
+    senderModule: item.SenderModule,
+    recipientId: item.RecipientAddress,
+    amount: BigInt(item.coin.amount),
+    denom: item.coin.denom,
+    opReason: getSettlementOpReasonFromSDK(item.op_reason),
+    relayId: "",
+  })) || [];
+
+  if (!mintedUpokt) {
+    // if we get settlementResult that means mintRatio is equal to 1, so the amount minted will be equal to the settled amount, to the effective burn too due to burn being equal to mint
+    mintedUpokt = {
+      amount: effectiveBurn,
+      denom: claimed.denom,
+    }
+  }
+
+  const mints = settlementResult.mints?.map(mint => ({
+    opReason: settlementOpReasonFromJSON(mint.op_reason),
+    destinationModule: mint.DestinationModule,
+    amount: BigInt(mint.coin.amount),
+    denom: mint.coin.denom,
+  })) || [];
+
+  const burns = settlementResult.burns?.map(burn => ({
+    opReason: settlementOpReasonFromJSON(burn.op_reason),
+    destinationModule: burn.DestinationModule,
+    amount: BigInt(burn.coin.amount),
+    denom: burn.coin.denom,
+  })) || [];
+
+  const modToModTransfers = settlementResult.mod_to_mod_transfers?.map((item) => ({
+    opReason: settlementOpReasonFromJSON(item.op_reason),
+    senderModule: item.SenderModule,
+    recipientModule: item.RecipientModule,
+    amount: BigInt(item.coin.amount),
+    denom: item.coin.denom,
+  })) || [];
+
+  return { modToAcctTransfers, mints, burns, modToModTransfers, mintedUpokt };
+}
+
+function _buildSettlementFromDetailedDistribution(
+  rewardDistributionDetailed: Array<{ amount: string; op_reason: typeof SettlementOpReasonSDKType | number | string; recipient_address: string }>,
+  eventId: string,
+  blockId: bigint,
+  effectiveBurn: string,
+  mintRatio: number,
+  claimed: CoinSDKType,
+  mintedUpokt: CoinSDKType | undefined,
+): SettlementParts {
+  let totalFromRewardDistribution = BigInt(0);
+
+  const modToAcctTransfers = rewardDistributionDetailed.map((item, index) => {
+    const coin = getDenomAndAmount(item.amount)
+    const coinAmount = BigInt(coin.amount);
+    totalFromRewardDistribution = totalFromRewardDistribution + coinAmount;
+
+    return {
+      opReason: getSettlementOpReasonFromSDK(item.op_reason),
+      amount: coinAmount,
+      id: `${eventId}-${index}`,
+      blockId,
+      eventClaimSettledId: eventId,
+      senderModule: "",
+      recipientId: item.recipient_address,
+      relayId: "",
+      denom: coin.denom,
+    };
+  });
+
+  const { burns, mintedUpokt: resolvedMintedUpokt, mints } =
+    _buildBurnsAndMintsFromRewardTotal(totalFromRewardDistribution, effectiveBurn, mintRatio, claimed, mintedUpokt);
+
+  return { modToAcctTransfers, mints, burns, modToModTransfers: [], mintedUpokt: resolvedMintedUpokt };
+}
+
+function _buildSettlementFromDistribution(
+  rewardDistribution: Record<string, string>,
+  eventId: string,
+  blockId: bigint,
+  effectiveBurn: string,
+  mintRatio: number,
+  claimed: CoinSDKType,
+): SettlementParts {
+  let totalFromRewardDistribution = BigInt(0);
+
+  const modToAcctTransfers = Object.entries(rewardDistribution).map(([address, coinString], index) => {
+    const coin = getDenomAndAmount(coinString);
+    const coinAmount = BigInt(coin.amount);
+    totalFromRewardDistribution = totalFromRewardDistribution + coinAmount;
+
+    return {
+      id: `${eventId}-${index}`,
+      blockId,
+      eventClaimSettledId: eventId,
+      senderModule: "",
+      recipientId: address,
+      opReason: SettlementOpReason.UNSPECIFIED,
+      relayId: "",
+      denom: coin.denom,
+      amount: coinAmount,
+    };
+  });
+
+  const { burns, mintedUpokt, mints } =
+    _buildBurnsAndMintsFromRewardTotal(totalFromRewardDistribution, effectiveBurn, mintRatio, claimed, undefined);
+
+  return { modToAcctTransfers, mints, burns, modToModTransfers: [], mintedUpokt };
+}
+
+function _resolveSettlementParts(
+  attributes: ReturnType<typeof getAttributes>,
+  eventId: string,
+  blockId: bigint,
+  effectiveBurn: string,
+  mintRatio: number,
+): SettlementParts {
+  const { claimed, mintedUpokt, rewardDistribution, rewardDistributionDetailed, settlementResult } = attributes;
+
+  if (settlementResult) {
+    return _buildSettlementFromResult(settlementResult, eventId, blockId, effectiveBurn, claimed, mintedUpokt);
+  }
+
+  if (rewardDistributionDetailed) {
+    return _buildSettlementFromDetailedDistribution(
+      rewardDistributionDetailed, eventId, blockId, effectiveBurn, mintRatio, claimed, mintedUpokt,
+    );
+  }
+
+  if (rewardDistribution) {
+    return _buildSettlementFromDistribution(rewardDistribution, eventId, blockId, effectiveBurn, mintRatio, claimed);
+  }
+
+  return { modToAcctTransfers: [], mints: [], burns: [], modToModTransfers: [], mintedUpokt };
+}
+
+function _computeNumEstimatedRelays(
+  chainNumEstimatedRelays: bigint | undefined,
+  numEstimatedComputedUnits: bigint,
+  numClaimedComputedUnits: bigint,
+  numRelays: bigint,
+): bigint {
+  if (chainNumEstimatedRelays !== undefined) {
+    return chainNumEstimatedRelays;
+  }
+  return BigInt(Math.round(Number(numEstimatedComputedUnits) / Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))));
+}
+
+function _computeDeflationLoss(
+  deflationLossUpokt: CoinSDKType | undefined,
+  effectiveBurn: string,
+  mintedUpokt: CoinSDKType | undefined,
+): bigint {
+  return deflationLossUpokt
+    ? BigInt(deflationLossUpokt.amount)
+    : BigInt(effectiveBurn) - BigInt(mintedUpokt?.amount || 0);
+}
+
+function _computeOverservicingLoss(
+  overservicingLossUpokt: CoinSDKType | undefined,
+  claimedAmount: string,
+  effectiveBurn: string,
+): bigint {
+  if (overservicingLossUpokt) {
+    return BigInt(overservicingLossUpokt.amount);
+  }
+  return claimedAmount !== effectiveBurn
+    ? BigInt(claimedAmount) - BigInt(effectiveBurn)
+    : BigInt(0);
+}
+
+function _buildClaimSettledProps(
+  event: CosmosEvent,
+  attributes: ReturnType<typeof getAttributes>,
+  settlement: SettlementParts,
+  effectiveBurn: string,
+  mintRatio: number,
+): EventClaimSettledProps {
   const {
+    chainNumEstimatedRelays,
     claim,
     claimed,
+    deflationLossUpokt,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
-    proofRequirement,
-    rewardDistribution,
-    rewardDistributionDetailed,
-    settlementResult,
-    settledUpokt,
-    mintRatioStr,
-    supplierOwnerAddress,
-    chainNumEstimatedRelays,
-    mintedUpokt,
     overservicingLossUpokt,
-    deflationLossUpokt,
-  } = getAttributes(event.event.attributes);
-
+    proofRequirement,
+    settledUpokt,
+    supplierOwnerAddress,
+  } = attributes;
   const { proof_validation_status, session_header, supplier_operator_address } = claim;
+  const { burns, mintedUpokt, mints, modToModTransfers } = settlement;
+
+  const numEstimatedRelays = _computeNumEstimatedRelays(
+    chainNumEstimatedRelays, numEstimatedComputedUnits, numClaimedComputedUnits, numRelays,
+  );
+  const overservicingLossAmount = _computeOverservicingLoss(overservicingLossUpokt, claimed.amount, effectiveBurn);
+  const deflationLossAmount = _computeDeflationLoss(deflationLossUpokt, effectiveBurn, mintedUpokt);
+
+  return {
+    supplierId: supplier_operator_address,
+    applicationId: session_header?.application_address || "",
+    serviceId: session_header?.service_id || "",
+    sessionId: session_header?.session_id || "",
+    sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
+    sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
+    numRelays,
+    numEstimatedRelays,
+    numClaimedComputedUnits,
+    numEstimatedComputedUnits,
+    claimedDenom: claimed?.denom || "",
+    claimedAmount: BigInt(effectiveBurn || "0"),
+    proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
+    transactionId: event.tx?.hash,
+    blockId: getBlockId(event.block),
+    id: getEventId(event),
+    proofRequirement,
+    mints,
+    burns,
+    modToModTransfers,
+    rootHash: undefined,
+    settledAmount: BigInt(effectiveBurn),
+    settledDenom: settledUpokt?.denom || claimed.denom,
+    mintRatio: mintRatio.toString(),
+    supplierOwnerId: supplierOwnerAddress,
+    mintedAmount: mintedUpokt ? BigInt(mintedUpokt.amount) : undefined,
+    mintedDenom: mintedUpokt?.denom || claimed.denom,
+    overservicingLossAmount: overservicingLossAmount,
+    overservicingLossDenom: overservicingLossUpokt?.denom || claimed.denom,
+    deflationLossAmount: deflationLossAmount,
+    deflationLossDenom: deflationLossUpokt?.denom || claimed.denom,
+  };
+}
+
+function _handleEventClaimSettled(
+  event: CosmosEvent,
+  mintRatioFromParams: number,
+  getEffectiveBurn: (application: string, supplier: string) => string | null
+): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
+  const attributes = getAttributes(event.event.attributes);
+  const { claim, claimed, mintRatioStr, settledUpokt } = attributes;
+
+  const mintRatio = mintRatioStr ? parseFloat(mintRatioStr) : mintRatioFromParams;
+  const { session_header, supplier_operator_address } = claim;
 
   const eventId = getEventId(event);
   const blockId = getBlockId(event.block);
@@ -585,167 +888,12 @@ function _handleEventClaimSettled(
   // otherwise fall back to overserviced effective_burn, then claimed amount
   const effectiveBurn = settledUpokt
     ? settledUpokt.amount
-    : (getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount)
+    : (getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount);
 
-  let
-    modToAcctTransfers: Array<ModToAcctTransferProps> = [],
-    mints: EventClaimSettledProps["mints"] = [],
-    burns: EventClaimSettledProps["burns"] = [],
-    modToModTransfers: EventClaimSettledProps["modToModTransfers"] = [];
+  const settlement = _resolveSettlementParts(attributes, eventId, blockId, effectiveBurn, mintRatio);
+  const props = _buildClaimSettledProps(event, attributes, settlement, effectiveBurn, mintRatio);
 
-  if (settlementResult) {
-    modToAcctTransfers = settlementResult.mod_to_acct_transfers?.map((item, index) => ({
-      id: `${eventId}-${index}`,
-      blockId,
-      eventClaimSettledId: eventId,
-      senderModule: item.SenderModule,
-      recipientId: item.RecipientAddress,
-      amount: BigInt(item.coin.amount),
-      denom: item.coin.denom,
-      opReason: getSettlementOpReasonFromSDK(item.op_reason),
-      relayId: "",
-    })) || [];
-
-    mints = settlementResult.mints?.map(mint => ({
-      opReason: settlementOpReasonFromJSON(mint.op_reason),
-      destinationModule: mint.DestinationModule,
-      amount: BigInt(mint.coin.amount),
-      denom: mint.coin.denom,
-    })) || [];
-
-    burns = settlementResult.burns?.map(burn => ({
-      opReason: settlementOpReasonFromJSON(burn.op_reason),
-      destinationModule: burn.DestinationModule,
-      amount: BigInt(burn.coin.amount),
-      denom: burn.coin.denom,
-    })) || [];
-
-    modToModTransfers = settlementResult.mod_to_mod_transfers?.map((item) => ({
-      opReason: settlementOpReasonFromJSON(item.op_reason),
-      senderModule: item.SenderModule,
-      recipientModule: item.RecipientModule,
-      amount: BigInt(item.coin.amount),
-      denom: item.coin.denom,
-    })) || [];
-  } else if (rewardDistribution) {
-    let totalFromRewardDistribution = BigInt(0);
-
-    modToAcctTransfers = Object.entries(rewardDistribution).map(([address, coinString], index) => {
-      const coin = getDenomAndAmount(coinString);
-      const coinAmount = BigInt(coin.amount);
-      totalFromRewardDistribution = totalFromRewardDistribution + coinAmount;
-
-      return {
-        id: `${eventId}-${index}`,
-        blockId,
-        eventClaimSettledId: eventId,
-        senderModule: "",
-        recipientId: address,
-        opReason: SettlementOpReason.UNSPECIFIED,
-        relayId: "",
-        denom: coin.denom,
-        amount: coinAmount,
-      };
-    });
-
-    // it seems that global mint is being minted twice, one due to inflation and the other due to application reimbursement
-    // see:
-    //      https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L57
-    //      https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L102-L112
-    // so in order to get the inflation mint, we need to divide the difference between the total of the reward_distribution
-    // and the claimed upokt
-    const mintedAfterRatio = Math.floor(Number(effectiveBurn) * mintRatio);
-    const inflationPlusReimbursementMint = totalFromRewardDistribution - BigInt(mintedAfterRatio);
-
-    if (inflationPlusReimbursementMint < BigInt(0)) {
-      throw new Error(
-        `inflationAndReimbursementMint is negative, totalFromRewardDistribution: ${totalFromRewardDistribution}, claimed.amount: ${effectiveBurn}, inflationAndReimbursementMint: ${inflationPlusReimbursementMint}, mintRatio: ${mintRatio}`
-      )
-    }
-
-    const inflationAndReimbursementMint = inflationPlusReimbursementMint / BigInt(2);
-
-    burns = [
-      {
-        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN),
-        destinationModule: "",
-        amount: BigInt(effectiveBurn),
-        denom: claimed.denom,
-      },
-    ];
-
-    mints = [
-      {
-        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_INFLATION),
-        destinationModule: "",
-        amount: inflationAndReimbursementMint,
-        denom: claimed.denom,
-      },
-      {
-        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER),
-        destinationModule: "",
-        amount: inflationAndReimbursementMint,
-        denom: claimed.denom,
-      },
-      {
-        opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_STAKE_MINT),
-        destinationModule: "",
-        amount: BigInt(mintedAfterRatio),
-        denom: claimed.denom,
-      },
-    ];
-  }
-
-  // Use chain-provided num_estimated_relays if available, otherwise compute from CU ratio
-  const numEstimatedRelays = chainNumEstimatedRelays !== undefined
-    ? chainNumEstimatedRelays
-    : BigInt(Math.round(Number(numEstimatedComputedUnits) / Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))));
-
-  // Map reward_distribution_detailed to the schema's RewardDistributionDetail JSON type
-  const mappedRewardDistributionDetailed = rewardDistributionDetailed?.map(detail => ({
-    recipientAddress: detail.recipient_address,
-    opReason: detail.op_reason,
-    amount: detail.amount,
-  }));
-
-  return [
-    {
-      supplierId: supplier_operator_address,
-      applicationId: session_header?.application_address || "",
-      serviceId: session_header?.service_id || "",
-      sessionId: session_header?.session_id || "",
-      sessionStartHeight: BigInt(session_header?.session_start_block_height?.toString() || 0),
-      sessionEndHeight: BigInt(session_header?.session_end_block_height?.toString() || 0),
-      numRelays,
-      numEstimatedRelays,
-      numClaimedComputedUnits,
-      numEstimatedComputedUnits,
-      claimedDenom: claimed?.denom || "",
-      claimedAmount: BigInt(effectiveBurn || "0"),
-      proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
-      transactionId: event.tx?.hash,
-      blockId: blockId,
-      id: eventId,
-      proofRequirement,
-      mints,
-      burns,
-      modToModTransfers,
-      rootHash: undefined,
-      // New fields from settlement aggregation (undefined for pre-upgrade blocks)
-      settledAmount: settledUpokt ? BigInt(settledUpokt.amount) : undefined,
-      settledDenom: settledUpokt?.denom,
-      mintRatio: mintRatioStr,
-      supplierOwnerId: supplierOwnerAddress,
-      mintedAmount: mintedUpokt ? BigInt(mintedUpokt.amount) : undefined,
-      mintedDenom: mintedUpokt?.denom,
-      overservicingLossAmount: overservicingLossUpokt ? BigInt(overservicingLossUpokt.amount) : undefined,
-      overservicingLossDenom: overservicingLossUpokt?.denom,
-      deflationLossAmount: deflationLossUpokt ? BigInt(deflationLossUpokt.amount) : undefined,
-      deflationLossDenom: deflationLossUpokt?.denom,
-      rewardDistributionDetailed: mappedRewardDistributionDetailed,
-    },
-    modToAcctTransfers,
-  ];
+  return [props, settlement.modToAcctTransfers];
 }
 
 function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
@@ -1244,61 +1392,4 @@ export async function handleEventApplicationReimbursementRequest(events: Array<C
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {
   await optimizedBulkCreate("EventProofValidityChecked", events.map(_handleEventProofValidityChecked), 'block_id');
-}
-
-function _handleEventSettlementBatch(event: CosmosEvent): EventSettlementBatchProps {
-  let sessionEndBlockHeight = BigInt(0),
-    senderModule = "",
-    recipient = "",
-    opReasonValue: string | number = 0,
-    totalAmountCoin: CoinSDKType | undefined,
-    numClaims = 0,
-    opType = "";
-
-  for (const attribute of event.event.attributes) {
-    if (attribute.key === "session_end_block_height") {
-      sessionEndBlockHeight = BigInt(parseAttribute(attribute.value));
-    }
-
-    if (attribute.key === "sender_module") {
-      senderModule = parseAttribute(attribute.value);
-    }
-
-    if (attribute.key === "recipient") {
-      recipient = parseAttribute(attribute.value);
-    }
-
-    if (attribute.key === "op_reason") {
-      opReasonValue = parseAttribute(attribute.value);
-    }
-
-    if (attribute.key === "total_amount") {
-      totalAmountCoin = getDenomAndAmount(attribute.value as string);
-    }
-
-    if (attribute.key === "num_claims") {
-      numClaims = Number(parseAttribute(attribute.value));
-    }
-
-    if (attribute.key === "op_type") {
-      opType = parseAttribute(attribute.value);
-    }
-  }
-
-  return {
-    id: getEventId(event),
-    sessionEndBlockHeight,
-    senderModule,
-    recipient,
-    opReason: getSettlementOpReasonFromSDK(opReasonValue),
-    totalAmount: totalAmountCoin ? BigInt(totalAmountCoin.amount) : BigInt(0),
-    totalAmountDenom: totalAmountCoin?.denom || "",
-    numClaims,
-    opType,
-    blockId: getBlockId(event.block),
-  };
-}
-
-export async function handleEventSettlementBatch(events: Array<CosmosEvent>): Promise<void> {
-  await optimizedBulkCreate("EventSettlementBatch", events.map(_handleEventSettlementBatch), 'block_id');
 }
