@@ -449,6 +449,23 @@ function getServices(
       configs: endpoint.configs,
     }));
 
+    // Extract unique root domains (last two hostname segments) from endpoint URLs.
+    const domains: string[] = [...new Set(
+      endpoints
+        .map((ep) => {
+          try {
+            const parts = new URL(ep.url).hostname.split('.');
+            return parts.length >= 2 ? parts.slice(-2).join('.') : parts[0];
+          } catch {
+            const match = ep.url.match(/https?:\/\/([^/:]+)/);
+            if (!match) return null;
+            const parts = match[1].split('.');
+            return parts.length >= 2 ? parts.slice(-2).join('.') : match[1];
+          }
+        })
+        .filter((d): d is string => d !== null)
+    )];
+
     const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,
       revSharePercentage: revShare.revSharePercentage.toString(),
@@ -460,6 +477,7 @@ function getServices(
       supplierId: operatorAddress,
       endpoints: endpointsArr,
       revShare: revShareArr,
+      domains,
     });
   }
 

@@ -594,7 +594,6 @@ type Application @entity {
   # Account because the destination application is created on transfer end
   transferringTo: Account
   transferEndHeight: BigInt
-  relays: [Relay] @derivedFrom(field: "application")
 }
 
 type ApplicationGateway @entity {
@@ -731,7 +730,6 @@ type Supplier @entity {
   # This is received with the EventSupplierUnbondingEnd event.
   unstakingEndBlock: Block
   serviceConfigs: [SupplierServiceConfig] @derivedFrom(field: "supplier")
-  relays: [Relay] @derivedFrom(field: "supplier")
 }
 
 type ConfigOption @jsonField {
@@ -758,6 +756,9 @@ type SupplierServiceConfig @entity {
   service: Service!
   revShare: [SupplierRevShare]!
   endpoints: [SupplierEndpoint]!
+  # Root domains extracted from endpoint URLs at stake time (e.g. "nodefleet.net").
+  # Nullable: populated for new stakes; existing rows backfilled separately.
+  domains: [String]
   # activation block per EventSupplierServiceConfigActivated event
   activatedAt: Block
   activatedEvent: EventSupplierServiceConfigActivated
@@ -960,7 +961,6 @@ type EventClaimUpdated @entity {
   claimedDenom: String
   transaction: Transaction
   block: Block!
-  relay: Relay
 }
 
 type EventClaimExpired @entity {
@@ -1029,43 +1029,11 @@ type ModToModTransfer @jsonField(indexed: false) {
 type ModToAcctTransfer @entity {
   id: ID!
   eventClaimSettled: EventClaimSettled!
-  relay: Relay!
   block: Block!
   opReason: SettlementOpReason!
-  senderModule: String!
   recipient: Account!
   amount: BigInt!
   denom: String!
-}
-
-type Relay @entity {
-  id: ID!
-  supplier: Supplier!
-  application: Application!
-  service: Service!
-  sessionId: String!
-  sessionStartHeight: BigInt!
-  sessionEndHeight: BigInt!
-  status: RelayStatus!
-  rootHash: String
-  closestMerkleProof: String
-  numRelays: BigInt
-  numClaimedComputedUnits: BigInt
-  numEstimatedComputedUnits: BigInt
-  claimedAmount: BigInt
-  claimedDenom: String
-  msgCreateClaim: MsgCreateClaim
-  msgSubmitProof: MsgSubmitProof
-  eventsClaimUpdated: [EventClaimUpdated] @derivedFrom(field: "relay")
-  eventClaimExpired: EventClaimExpired
-  eventClaimSettled: EventClaimSettled
-  eventsProofUpdated: [EventProofUpdated] @derivedFrom(field: "relay")
-  modToAcctTransfers: [ModToAcctTransfer]! @derivedFrom(field: "relay")
-  failedCodeSpace: String
-  requiredProof: Boolean
-  # this must be a value of the enums ClaimErrors or ProofErrors. We are using Int because we can't define enums with numbers.
-  failedCode: Int
-  proofValidationStatus: ClaimProofStatus
 }
 
 type EventProofUpdated @entity {
@@ -1085,7 +1053,6 @@ type EventProofUpdated @entity {
   claimedDenom: String
   transaction: Transaction
   block: Block!
-  relay: Relay
 }
 
 type EventApplicationReimbursementRequest @entity {

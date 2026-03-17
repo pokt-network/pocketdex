@@ -764,7 +764,6 @@ function _handleEventClaimUpdated(event: CosmosEvent): EventClaimUpdatedProps {
     numEstimatedComputedUnits,
     claimedDenom: claimed?.denom || "",
     claimedAmount: BigInt(claimed?.amount || "0"),
-    relayId: undefined,
     rootHash: undefined,
   };
 }
@@ -799,7 +798,6 @@ function _handleEventProofUpdated(event: CosmosEvent): EventProofUpdatedProps {
       proofValidationStatus: getClaimProofStatusFromSDK(proof_validation_status),
     }),
     closestMerkleProof: undefined,
-    relayId: undefined,
     rootHash: undefined,
   };
 }

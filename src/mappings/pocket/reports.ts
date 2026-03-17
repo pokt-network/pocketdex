@@ -1,4 +1,5 @@
 import { CosmosBlock } from "@subql/types-cosmos";
+import { refreshDomainServiceDailyRewardsFnName } from "../dbFunctions/domainRewards";
 import { updateBlockReportsFnName } from "../dbFunctions/reports";
 import { upsertAppsByBlockAndServicesFnName } from "../dbFunctions/reports/apps";
 import { upsertRelaysByBlockAndServicesFnName } from "../dbFunctions/reports/relays";
@@ -41,6 +42,11 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       // insert new records of relays by services and block
       sequelize.query(
         `SELECT ${dbSchema}.${upsertRelaysByBlockAndServicesFnName}(${block.header.height}::bigint);`,
+        defaultOptions
+      ),
+      // refresh domain+service daily rewards summary (no-op for blocks without relays)
+      sequelize.query(
+        `SELECT ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}(${block.header.height}::bigint);`,
         defaultOptions
       ),
     ])
