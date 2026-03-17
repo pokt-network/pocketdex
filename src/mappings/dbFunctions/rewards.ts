@@ -40,33 +40,27 @@ $$ LANGUAGE plpgsql STABLE;`
 // Used to get supplier count and total staked tokens for a list of domains
 export function getSupplierStatsByDomainsFn (dbSchema: string): string {
   return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_supplier_stats_by_domains(
-  domains TEXT[]
+  p_domains TEXT[]
 )
 RETURNS jsonb
 LANGUAGE sql
 STABLE
+SET jit = off
 AS $$
 WITH matched_suppliers AS (
-    SELECT DISTINCT ssc.supplier_id
-    FROM ${dbSchema}.supplier_service_configs ssc
-    CROSS JOIN jsonb_array_elements(ssc.endpoints) AS endpoint
-    WHERE EXISTS (
-      SELECT 1
-      FROM unnest(domains) AS domain
-      WHERE
-        substring(endpoint->>'url' FROM 'https?://([^/:]+)') = domain
-        OR substring(endpoint->>'url' FROM 'https?://([^/:]+)') LIKE '%.' || domain
-    )
+  SELECT DISTINCT ssc.supplier_id
+  FROM ${dbSchema}.supplier_service_configs ssc
+  WHERE ssc.domains ?| p_domains
     AND upper_inf(ssc._block_range)
-  )
-
-  SELECT jsonb_build_object(
-    'suppliers_count', COALESCE(COUNT(*), 0),
-    'total_staked_tokens', COALESCE(SUM(s.stake_amount), 0)
-  )
-  FROM ${dbSchema}.suppliers s
-  INNER JOIN matched_suppliers ms ON s.id = ms.supplier_id
-  WHERE upper_inf(s._block_range);
+)
+SELECT jsonb_build_object(
+  'suppliers_count', COALESCE(COUNT(*), 0),
+  'total_staked_tokens', COALESCE(SUM(s.stake_amount), 0)
+)
+FROM ${dbSchema}.suppliers s
+INNER JOIN matched_suppliers ms ON s.id = ms.supplier_id
+WHERE upper_inf(s._block_range)
+  AND s.stake_status = 'Staked';
 $$;
 `
 }

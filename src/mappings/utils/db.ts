@@ -253,6 +253,71 @@ export async function optimizedBulkCreate<T>(
   await Promise.all(tasks);
 }
 
+/**
+ * Batched raw SQL bulk insert with the same batching and concurrency as optimizedBulkCreate.
+ * Used for tables not managed by SubQuery (no _block_range, no SubQL model registry).
+ *
+ * @param table       Fully-qualified table name (e.g. `${schema}.mod_to_acct_transfers`)
+ * @param columns     Ordered column names for the INSERT
+ * @param rows        Array of pre-escaped SQL value tuples, e.g. `"('a', 'b', 1)"`
+ * @param conflictCol Column to use in ON CONFLICT DO NOTHING (defaults to first column)
+ * @param blockId     Block id used for DELETE-before-insert idempotency
+ * @param blockIdCol  Column name for the block id delete (default `block_id`)
+ */
+export async function rawBulkInsert({
+  blockId,
+  blockIdCol = 'block_id',
+  columns,
+  conflictCol,
+  rows,
+  table,
+}: {
+  table: string;
+  columns: string[];
+  rows: string[];
+  conflictCol: string;
+  blockId: bigint | number;
+  blockIdCol?: string;
+}): Promise<void> {
+  if (rows.length === 0) return;
+
+  const sequelize = getSequelize('Block');
+  const limit = pLimit(CONCURRENCY);
+
+  logger.info(
+    `[rawBulkInsert] ${table}: ${rows.length} records, batch=${BATCH_SIZE}, concurrency=${CONCURRENCY}`,
+  );
+
+  await sequelize.query(
+    `DELETE FROM ${table} WHERE ${blockIdCol} = ${blockId}`,
+    { useMaster: true },
+  );
+
+  const batches: string[][] = [];
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    batches.push(rows.slice(i, i + BATCH_SIZE));
+  }
+
+  const columnList = columns.join(', ');
+
+  await Promise.all(
+    batches.map((batch, index) =>
+      limit(async () => {
+        try {
+          await sequelize.query(
+            `INSERT INTO ${table} (${columnList}) VALUES ${batch.join(', ')} ON CONFLICT (${conflictCol}) DO NOTHING`,
+            { useMaster: true },
+          );
+          logger.info(`[rawBulkInsert] ${table} batch ${index + 1}/${batches.length} inserted`);
+        } catch (err) {
+          logger.error(`[rawBulkInsert] ${table} batch ${index + 1}/${batches.length} failed`);
+          throw err;
+        }
+      }),
+    ),
+  );
+}
+
 export function getDbSchema(): string {
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore

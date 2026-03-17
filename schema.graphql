@@ -123,6 +123,7 @@ enum SettlementOpReason {
   TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER
   TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_MODULE_TRANSFER
 }
+
 enum MorseSupplierClaimSignerType {
   # Unspecified signer type
   MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_UNSPECIFIED
@@ -1005,7 +1006,6 @@ type EventClaimSettled @entity {
   mints: [MintBurnOp]!
   burns: [MintBurnOp]!
   modToModTransfers: [ModToModTransfer]!
-  modToAcctTransfers: [ModToAcctTransfer]! @derivedFrom(field: "eventClaimSettled")
   block: Block!
 }
 
@@ -1022,16 +1022,6 @@ type ModToModTransfer @jsonField(indexed: false) {
   opReason: Int!
   senderModule: String!
   recipientModule: String!
-  amount: BigInt!
-  denom: String!
-}
-
-type ModToAcctTransfer @entity {
-  id: ID!
-  eventClaimSettled: EventClaimSettled!
-  block: Block!
-  opReason: SettlementOpReason!
-  recipient: Account!
   amount: BigInt!
   denom: String!
 }

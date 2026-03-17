@@ -20,7 +20,6 @@ import { EventClaimSettledProps } from "../../types/models/EventClaimSettled";
 import { EventClaimUpdatedProps } from "../../types/models/EventClaimUpdated";
 import { EventProofUpdatedProps } from "../../types/models/EventProofUpdated";
 import { EventProofValidityCheckedProps } from "../../types/models/EventProofValidityChecked";
-import { ModToAcctTransferProps } from "../../types/models/ModToAcctTransfer";
 import { MsgCreateClaimProps } from "../../types/models/MsgCreateClaim";
 import { MsgSubmitProofProps } from "../../types/models/MsgSubmitProof";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
@@ -42,7 +41,7 @@ import {
   settlementOpReasonFromJSON,
   SettlementOpReasonSDKType,
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
-import { optimizedBulkCreate } from "../utils/db";
+import { getDbSchema, optimizedBulkCreate, rawBulkInsert } from "../utils/db";
 import {
   getBlockId,
   getEventId,
@@ -54,6 +53,16 @@ import {
   stringify,
 } from "../utils/json";
 import { getDenomAndAmount } from "../utils/primitives";
+
+type ModToAcctTransferRecord = {
+  id: string;
+  eventClaimSettledId: string;
+  blockId: bigint;
+  opReason: string;
+  recipientId: string;
+  amount: bigint;
+  denom: string;
+};
 
 // this can return undefined because older events do not have this attribute
 export function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
@@ -469,7 +478,7 @@ function _handleEventClaimSettled(
   event: CosmosEvent,
   mintRatio: number,
   getEffectiveBurn: (application: string, supplier: string) => string | null
-): [EventClaimSettledProps, Array<ModToAcctTransferProps>] {
+): [EventClaimSettledProps, Array<ModToAcctTransferRecord>] {
   const {
     claim,
     claimed,
@@ -491,7 +500,7 @@ function _handleEventClaimSettled(
   const effectiveBurn = getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount
 
   let
-    modToAcctTransfers: Array<ModToAcctTransferProps> = [],
+    modToAcctTransfers: Array<ModToAcctTransferRecord> = [],
     mints: EventClaimSettledProps["mints"] = [],
     burns: EventClaimSettledProps["burns"] = [],
     modToModTransfers: EventClaimSettledProps["modToModTransfers"] = [];
@@ -501,12 +510,10 @@ function _handleEventClaimSettled(
       id: `${eventId}-${index}`,
       blockId,
       eventClaimSettledId: eventId,
-      senderModule: item.SenderModule,
       recipientId: item.RecipientAddress,
       amount: BigInt(item.coin.amount),
       denom: item.coin.denom,
       opReason: getSettlementOpReasonFromSDK(item.op_reason),
-      relayId: "",
     })) || [];
 
     mints = settlementResult.mints?.map(mint => ({
@@ -1017,6 +1024,23 @@ function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidit
   };
 }
 
+async function bulkInsertModToAcctTransfers(records: ModToAcctTransferRecord[]): Promise<void> {
+  if (records.length === 0) return;
+
+  const schema = getDbSchema();
+  const blockId = records[0].blockId;
+
+  await rawBulkInsert({
+    table: `${schema}.mod_to_acct_transfers`,
+    columns: ['id', 'event_claim_settled_id', 'block_id', 'op_reason', 'recipient_id', 'amount', 'denom', '_block_range'],
+    rows: records.map(r =>
+      `('${r.id}', '${r.eventClaimSettledId}', ${r.blockId}, '${r.opReason}', '${r.recipientId}', ${r.amount}, '${r.denom}', int8range(${r.blockId}, null))`
+    ),
+    conflictCol: 'id',
+    blockId,
+  });
+}
+
 export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
   await optimizedBulkCreate("MsgCreateClaim", messages.map(_handleMsgCreateClaim), 'block_id');
 }
@@ -1079,7 +1103,7 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>, overse
 
   await Promise.all([
     optimizedBulkCreate("EventClaimSettled", eventsSettled, 'block_id'),
-    optimizedBulkCreate("ModToAcctTransfer", modToAcctTransfersToSave, 'block_id'),
+    bulkInsertModToAcctTransfers(modToAcctTransfersToSave),
   ]);
 }
 

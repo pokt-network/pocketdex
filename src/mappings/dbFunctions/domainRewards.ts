@@ -26,32 +26,31 @@ SET jit = off
 AS $$
 DECLARE
   v_day DATE;
-  v_total_relays bigint;
   v_block_range int8range;
 BEGIN
-  SELECT b."timestamp"::date, b.total_relays
-  INTO v_day, v_total_relays
+  SELECT b.timestamp::date
+  INTO v_day
   FROM ${dbSchema}.blocks b
   WHERE b.id = p_block_id;
 
-  IF v_day IS NULL OR v_total_relays IS NULL OR v_total_relays = 0 THEN
+  IF v_day IS NULL THEN
     RETURN;
   END IF;
 
   SELECT int8range(MIN(id)::bigint, MAX(id)::bigint, '[]')
   INTO v_block_range
   FROM ${dbSchema}.blocks
-  WHERE "timestamp"::date = v_day;
+  WHERE timestamp::date = v_day;
 
   DELETE FROM ${dbSchema}.domain_service_daily_rewards
   WHERE day = v_day;
 
   -- Recompute and insert the full day's data.
   -- claims: relay/reward aggregates from event_claim_settleds.
-  --   Fix 1: joins ssc on both supplier_id AND service_id to avoid cross-service domain attribution.
-  --   Fix 2: uses _block_range && v_block_range so the ssc state at claim time is used.
-  -- staked: distinct suppliers staked during this day per (domain, service_id),
-  --   computed independently of who had claims (same _block_range overlap logic).
+  --   joins ssc on supplier_id, service_id, and _block_range @> e.block_id to match exactly
+  --   the one ssc record active at claim time — avoids overcounting from historical restakes.
+  -- staked: distinct suppliers staked at any point during the day per (domain, service_id),
+  --   uses _block_range && v_block_range; COUNT(DISTINCT) deduplicates across restakes.
   WITH claims AS (
     SELECT
       domain,
@@ -66,9 +65,9 @@ BEGIN
     INNER JOIN ${dbSchema}.supplier_service_configs ssc
       ON ssc.supplier_id = e.supplier_id
       AND ssc.service_id = e.service_id
-      AND ssc._block_range && v_block_range
+      AND ssc._block_range @> e.block_id::bigint
     CROSS JOIN jsonb_array_elements_text(ssc.domains) AS domain
-    WHERE b."timestamp"::date = v_day
+    WHERE b.timestamp::date = v_day
       AND ssc.domains IS NOT NULL
     GROUP BY domain, e.service_id
   ),
@@ -111,7 +110,7 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
       ON ${dbSchema}.event_claim_settleds (supplier_id, block_id, service_id)`,
     // Covering index for blocks timestamp→id lookups (enables index-only scans).
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_blocks_timestamp_id
-      ON ${dbSchema}.blocks ("timestamp", id)`,
+      ON ${dbSchema}.blocks (timestamp, id)`,
     // GIN index for array overlap queries on the domains column.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_domains
       ON ${dbSchema}.supplier_service_configs USING GIN (domains)`,

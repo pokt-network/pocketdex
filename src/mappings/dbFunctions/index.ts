@@ -1,16 +1,17 @@
 import { getDbSchema, getSequelize } from "../utils/db";
 import { getLatestBlocksByDayFn } from "./blocks";
-import {
-  createDomainServiceDailyRewardsTableFn,
-  getPerformanceIndexSqls,
-  refreshDomainServiceDailyRewardsFn,
-} from "./domainRewards";
 import { getClaimProofsDataByDelegatorsAndTimeFn, getClaimProofsDataByTimeFn } from "./claimProofs";
 import { getDaoBalanceAtHeightFn } from "./dao";
 import { getDataByDelegatorAddressesAndBlocksFn } from "./dataByDelegatorAddressesAndBlocks";
 import {
   getDataByDelegatorAddressesAndTimesFn,
 } from "./dataByDelegatorAddressesAndTimes";
+import {
+  createDomainServiceDailyRewardsTableFn,
+  getPerformanceIndexSqls,
+  refreshDomainServiceDailyRewardsFn,
+} from "./domainRewards";
+import { createModToAcctTransfersTableFn } from "./modToAcctTransfers";
 import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
 import { getComputeUnitsToTokensMultiplierEvolutionFn } from "./params";
 import { getRelaysByServicePerPointJsonFn } from "./relaysByServicePerPoint";
@@ -122,6 +123,7 @@ export async function createDbFunctions(): Promise<void> {
   // create the domain_service_daily_rewards summary table and its refresh function
   await createFunctions(
     schema,
+    createModToAcctTransfersTableFn,
     createDomainServiceDailyRewardsTableFn,
     refreshDomainServiceDailyRewardsFn,
   )
