@@ -27,6 +27,13 @@ vendors:
     dependencies:
       - "@cosmjs"
 
+  - name: "simdjson"
+    path: "vendor/simdjson"
+    workspace: false
+    install:
+      required: true
+      script: "npm install"
+
   - name: "@subql-cosmos"
     path: "vendor/subql-cosmos"
     workspace: true
@@ -43,3 +50,4 @@ vendors:
     dependencies:
       - "@cosmjs"
       - "@subql"
+      - "simdjson"

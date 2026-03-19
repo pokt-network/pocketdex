@@ -64,6 +64,7 @@
     "json-bigint": "1.0.0",
     "lodash": "4.17.21",
     "node-fetch": "^3.3.2",
+    "simdjson": "^0.9.2",
     "starknet": "6.11.0",
     "stream-json": "^1.9.1",
     "ts-proto": "^1.112.1",

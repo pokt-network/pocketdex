@@ -14,3 +14,7 @@
 	path = vendor/cosmjs
 	url = https://github.com/pokt-shannon/x-cosmjs.git
 	branch = main
+[submodule "vendor/simdjson"]
+	path = vendor/simdjson
+	url = https://github.com/jorgecuesta/simdjson_nodejs.git
+	branch = buffer-support
