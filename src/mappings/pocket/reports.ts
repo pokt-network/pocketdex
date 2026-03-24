@@ -1,4 +1,5 @@
 import { CosmosBlock } from "@subql/types-cosmos";
+import { refreshDomainServiceDailyRewardsFnName } from "../dbFunctions/domainRewards";
 import { updateBlockReportsFnName } from "../dbFunctions/reports";
 import { upsertAppsByBlockAndServicesFnName } from "../dbFunctions/reports/apps";
 import { upsertRelaysByBlockAndServicesFnName } from "../dbFunctions/reports/relays";
@@ -21,29 +22,22 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       useMaster: true,
     }
 
+    const hasClaimSettled = block.events.some(e => e.event.type === 'pocket.tokenomics.EventClaimSettled');
+    const height = block.header.height;
+
     // we can run those functions in parallel because they do not modify the same records
     await Promise.all([
       // mutate current block
-      sequelize.query(
-        `SELECT ${dbSchema}.${updateBlockReportsFnName}(${block.header.height}::bigint);`,
-        defaultOptions
-      ),
+      sequelize.query(`SELECT ${dbSchema}.${updateBlockReportsFnName}(${height}::bigint);`, defaultOptions),
       // insert new records of suppliers by services and block
-      sequelize.query(
-        `SELECT ${dbSchema}.${upsertSuppliersByBlockAndServicesFnName}(${block.header.height}::bigint);`,
-        defaultOptions
-      ),
+      sequelize.query(`SELECT ${dbSchema}.${upsertSuppliersByBlockAndServicesFnName}(${height}::bigint);`, defaultOptions),
       // insert new records of apps by services and block
-      sequelize.query(
-        `SELECT ${dbSchema}.${upsertAppsByBlockAndServicesFnName}(${block.header.height}::bigint);`,
-        defaultOptions
-      ),
+      sequelize.query(`SELECT ${dbSchema}.${upsertAppsByBlockAndServicesFnName}(${height}::bigint);`, defaultOptions),
       // insert new records of relays by services and block
-      sequelize.query(
-        `SELECT ${dbSchema}.${upsertRelaysByBlockAndServicesFnName}(${block.header.height}::bigint);`,
-        defaultOptions
-      ),
-    ])
+      sequelize.query(`SELECT ${dbSchema}.${upsertRelaysByBlockAndServicesFnName}(${height}::bigint);`, defaultOptions),
+      // refresh domain+service daily rewards summary — only on blocks with settlements
+      hasClaimSettled && sequelize.query(`SELECT ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}(${height}::bigint);`, defaultOptions),
+    ].filter(Boolean))
   } catch (e) {
     logger.error(`[handleAddBlockReports] Error generating block #${block.header.height} reports: ${e}`);
     throw e;

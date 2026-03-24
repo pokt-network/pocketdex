@@ -49,7 +49,9 @@ WITH matched_suppliers AS (
     jsonb_build_object(
       'service_id', service_id,
       'relays', COALESCE(relays, 0),
+      'estimated_relays', COALESCE(estimated_relays, 0),
       'computed_units', COALESCE(computed_units, 0),
+      'estimated_computed_units', COALESCE(estimated_computed_units, 0),
       'gross_rewards', COALESCE(gross_rewards, 0),
       'net_rewards', COALESCE(net_rewards, 0)
     )
@@ -57,7 +59,9 @@ WITH matched_suppliers AS (
 	SELECT 
 		COALESCE(s.service_id, r.service_id, '') as service_id,
 		r.relays as relays,
+		r.estimated_relays as estimated_relays,
 		r.computed_units as computed_units,
+		r.estimated_computed_units as estimated_computed_units,
 		r.gross_rewards as gross_rewards,
 		r.net_rewards net_rewards
 	FROM services s
