@@ -11,7 +11,7 @@ import {
   getPerformanceIndexSqls,
   refreshDomainServiceDailyRewardsFn,
 } from "./domainRewards";
-import { createModToAcctTransfersTableFn } from "./modToAcctTransfers";
+import { createModToAcctTransfersTableFn, createModToAcctTransfersSummarizedTableFn } from "./modToAcctTransfers";
 import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
 import { getComputeUnitsToTokensMultiplierEvolutionFn } from "./params";
 import { getRelaysByServicePerPointJsonFn } from "./relaysByServicePerPoint";
@@ -124,6 +124,7 @@ export async function createDbFunctions(): Promise<void> {
   await createFunctions(
     schema,
     createModToAcctTransfersTableFn,
+    createModToAcctTransfersSummarizedTableFn,
     createDomainServiceDailyRewardsTableFn,
     refreshDomainServiceDailyRewardsFn,
   )

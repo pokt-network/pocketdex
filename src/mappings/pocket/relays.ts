@@ -64,6 +64,17 @@ type ModToAcctTransferRecord = {
   denom: string;
 };
 
+type SummarizedTransferRecord = {
+  id: string;
+  blockId: bigint;
+  recipientId: string;
+  opReason: string;
+  denom: string;
+  serviceId: string;
+  amount: bigint;
+  transferCount: bigint;
+};
+
 // this can return undefined because older events do not have this attribute
 export function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
   if (!item) return undefined;
@@ -1041,6 +1052,57 @@ async function bulkInsertModToAcctTransfers(records: ModToAcctTransferRecord[]):
   });
 }
 
+function summarizeTransfers(
+  records: ModToAcctTransferRecord[],
+  serviceIdByEventSettledId: Map<string, string>,
+): SummarizedTransferRecord[] {
+  if (records.length === 0) return [];
+
+  const grouped = new Map<string, SummarizedTransferRecord>();
+  const blockId = records[0].blockId;
+
+  for (const r of records) {
+    const serviceId = serviceIdByEventSettledId.get(r.eventClaimSettledId) || '';
+    const key = `${r.recipientId}|${r.opReason}|${r.denom}|${serviceId}`;
+
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.amount += r.amount;
+      existing.transferCount += BigInt(1);
+    } else {
+      grouped.set(key, {
+        id: `${blockId}-${r.recipientId}-${r.opReason}-${r.denom}-${serviceId}`,
+        blockId,
+        recipientId: r.recipientId,
+        opReason: r.opReason,
+        denom: r.denom,
+        serviceId,
+        amount: r.amount,
+        transferCount: BigInt(1),
+      });
+    }
+  }
+
+  return Array.from(grouped.values());
+}
+
+async function bulkInsertSummarizedTransfers(records: SummarizedTransferRecord[]): Promise<void> {
+  if (records.length === 0) return;
+
+  const schema = getDbSchema();
+  const blockId = records[0].blockId;
+
+  await rawBulkInsert({
+    table: `${schema}.mod_to_acct_transfers_summarized`,
+    columns: ['id', 'block_id', 'recipient_id', 'op_reason', 'denom', 'service_id', 'amount', 'transfer_count', '_block_range'],
+    rows: records.map(r =>
+      `('${r.id}', ${r.blockId}, '${r.recipientId}', '${r.opReason}', '${r.denom}', '${r.serviceId}', ${r.amount}, ${r.transferCount}, int8range(${r.blockId}, null))`
+    ),
+    conflictCol: 'id',
+    blockId,
+  });
+}
+
 export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
   await optimizedBulkCreate("MsgCreateClaim", messages.map(_handleMsgCreateClaim), 'block_id');
 }
@@ -1063,6 +1125,7 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>, overse
 
   const eventsSettled = [];
   const modToAcctTransfersToSave = [];
+  const serviceIdByEventSettledId = new Map<string, string>();
 
   const effectiveBurnPerAppAndSupplier = overservices.reduce((acc, overservice) => {
     let effectiveBurn: CoinSDKType | undefined, application = '', supplier = '';
@@ -1095,15 +1158,19 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>, overse
   for (const event of events) {
     const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event, mintRatio, getEffectiveBurn);
     eventsSettled.push(eventSettled);
+    serviceIdByEventSettledId.set(eventSettled.id as string, eventSettled.serviceId as string);
 
     if (modToAcctTransfers.length) {
       modToAcctTransfersToSave.push(...modToAcctTransfers);
     }
   }
 
+  const summarized = summarizeTransfers(modToAcctTransfersToSave, serviceIdByEventSettledId);
+
   await Promise.all([
     optimizedBulkCreate("EventClaimSettled", eventsSettled, 'block_id'),
     bulkInsertModToAcctTransfers(modToAcctTransfersToSave),
+    bulkInsertSummarizedTransfers(summarized),
   ]);
 }
 
