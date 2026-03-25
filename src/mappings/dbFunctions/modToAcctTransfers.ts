@@ -21,3 +21,26 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.mod_to_acct_transfers (
 );
 `;
 }
+
+export function createModToAcctTransfersSummarizedTableFn(dbSchema: string): string {
+  return `
+CREATE TABLE IF NOT EXISTS ${dbSchema}.mod_to_acct_transfers_summarized (
+  id              TEXT      NOT NULL,
+  block_id        NUMERIC   NOT NULL,
+  recipient_id    TEXT      NOT NULL,
+  op_reason       ${dbSchema}.c8206fb405 NOT NULL,
+  denom           TEXT      NOT NULL,
+  service_id      TEXT      NOT NULL DEFAULT '',
+  amount          BIGINT    NOT NULL,
+  transfer_count  BIGINT    NOT NULL DEFAULT 1,
+  _block_range    INT8RANGE NOT NULL,
+  PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_mtat_summ_block_id
+  ON ${dbSchema}.mod_to_acct_transfers_summarized (block_id);
+CREATE INDEX IF NOT EXISTS idx_mtat_summ_recipient_block
+  ON ${dbSchema}.mod_to_acct_transfers_summarized (recipient_id, block_id);
+CREATE INDEX IF NOT EXISTS idx_mtat_summ_service_block
+  ON ${dbSchema}.mod_to_acct_transfers_summarized (service_id, block_id);
+`;
+}
