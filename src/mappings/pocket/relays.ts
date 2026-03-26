@@ -1569,6 +1569,10 @@ export async function handleEventSettlementBatch(events: Array<CosmosEvent>): Pr
   }
 
   if (modToAcctTransfers.length) {
-    await bulkInsertModToAcctTransfers(modToAcctTransfers);
+    const summarized = summarizeTransfers(modToAcctTransfers, new Map());
+    await Promise.all([
+      bulkInsertModToAcctTransfers(modToAcctTransfers),
+      bulkInsertSummarizedTransfers(summarized),
+    ]);
   }
 }
