@@ -132,10 +132,13 @@ BEGIN
     AND b.timestamp BETWEEN start_date AND end_date;
 
   -- Mint by op_reason
+  -- Old protocol: opReason 1=SUPPLIER_STAKE_MINT (mint_burn), 3=INFLATION (inflation)
+  -- New protocol: opReason 19=TOKENOMICS_CLAIM_DISTRIBUTION_MINT (mint_burn), 5=DAO_REWARD_DISTRIBUTION (inflation)
+  -- opReason 10=REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER is unchanged across both protocols
   SELECT
     SUM(CASE WHEN (elem->>'opReason')::int = 10 THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END),
-    SUM(CASE WHEN (elem->>'opReason')::int = 3 THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END),
-    SUM(CASE WHEN (elem->>'opReason')::int = 1 THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END)
+    SUM(CASE WHEN (elem->>'opReason')::int IN (3, 5) THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END),
+    SUM(CASE WHEN (elem->>'opReason')::int IN (1, 19) THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END)
   INTO
     reimbursement_v2_amount, inflation_amount, mint_burn_amount
   FROM ${dbSchema}.event_claim_settleds t
