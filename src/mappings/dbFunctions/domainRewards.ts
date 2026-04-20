@@ -77,6 +77,9 @@ BEGIN
       ssc.service_id,
       COUNT(DISTINCT ssc.supplier_id) AS suppliers_count
     FROM ${dbSchema}.supplier_service_configs ssc
+    INNER JOIN ${dbSchema}.suppliers s ON s.id = ssc.supplier_id
+      AND s._block_range && v_block_range
+      AND s.stake_status = 'Staked'
     CROSS JOIN jsonb_array_elements_text(ssc.domains) AS domain
     WHERE ssc._block_range && v_block_range
       AND ssc.domains IS NOT NULL

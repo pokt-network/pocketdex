@@ -172,7 +172,8 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
     "pocket.proof.EventProofUpdated",
     "pocket.proof.EventProofValidityChecked",
     "pocket.tokenomics.EventApplicationOverserviced",
-    "pocket.tokenomics.EventApplicationReimbursementRequest"
+    "pocket.tokenomics.EventApplicationReimbursementRequest",
+    "pocket.tokenomics.EventSettlementBatch",
   ];
 
   await Promise.all([
