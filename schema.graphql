@@ -1131,6 +1131,52 @@ type EventProofValidityChecked @entity {
   event: Event!
 }
 
+# EventValidatorRewardDistribution is emitted once per bonded validator per
+# settlement op_reason per settlement block (v0.1.34+). It summarizes how that
+# validator's slice of the proposer reward pool was split into commission and
+# (self / external) delegator rewards. It is bounded by the validator-set size,
+# so it does NOT scale with delegators or claims (preserves the #1758 event-count
+# reduction).
+#
+# ACCOUNTING NOTE: build "VALIDATOR vs DELEGATOR" reward totals from THIS event
+# (per-validator) rather than from EventSettlementBatch / ModToAcctTransfer. When
+# the same pokt address is both a validator account AND a delegator on another
+# validator, the bank-batch stream buckets both incomes under the validator-side
+# op_reason, over-counting VALIDATOR and under-counting DELEGATOR. The split here
+# is unambiguous: commissionAmount is validator income; self/external delegator
+# amounts are delegator-side.
+#
+# All *Amount fields are denominated in upokt (chain emits bare integer strings).
+type EventValidatorRewardDistribution @entity {
+  id: ID!
+  # session_end_block_height of the FIRST claim in the batch. On the common
+  # single-session path this differs from the settlement block height only by the
+  # claim/proof window offsets; for a canonical timestamp use block.
+  sessionEndBlockHeight: BigInt!
+  # Distinguishes the Mint=Burn pool from the Global Mint pool.
+  opReason: SettlementOpReason!
+  # valoper... operator address.
+  validatorOperatorAddress: String! @index
+  # pokt... account address; commission + self-delegation slice are paid here.
+  validatorAccountAddress: String! @index
+  # Commission rate as a decimal string, e.g. "0.100000000000000000".
+  commissionRate: String!
+  # This validator's slice of the total proposer reward pool (upokt).
+  poolShareAmount: BigInt!
+  # Commission carved out of poolShareAmount, paid to the validator account (upokt).
+  commissionAmount: BigInt!
+  # Validator self-delegation slice of the post-commission remainder (upokt).
+  selfDelegationRewardAmount: BigInt!
+  # Portion of the post-commission remainder paid to external delegators (upokt).
+  delegatorsRewardAmount: BigInt!
+  # Total delegated stake backing this validator incl. self-delegation (upokt);
+  # the denominator for per-delegator reward attribution.
+  totalDelegatedStakeAmount: BigInt!
+  # Number of external (non-self) delegators that received a reward.
+  numDelegators: Int!
+  block: Block!
+}
+
 type Supply @entity {
   id: ID!
   denom: String! @index

@@ -20,6 +20,7 @@ import { EventClaimSettledProps } from "../../types/models/EventClaimSettled";
 import { EventClaimUpdatedProps } from "../../types/models/EventClaimUpdated";
 import { EventProofUpdatedProps } from "../../types/models/EventProofUpdated";
 import { EventProofValidityCheckedProps } from "../../types/models/EventProofValidityChecked";
+import { EventValidatorRewardDistributionProps } from "../../types/models/EventValidatorRewardDistribution";
 import { MsgCreateClaimProps } from "../../types/models/MsgCreateClaim";
 import { MsgSubmitProofProps } from "../../types/models/MsgSubmitProof";
 import { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
@@ -232,7 +233,8 @@ export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     chainNumEstimatedRelays: bigint | undefined,
     mintedUpokt: CoinSDKType | undefined,
     overservicingLossUpokt: CoinSDKType | undefined,
-    deflationLossUpokt: CoinSDKType | undefined;
+    deflationLossUpokt: CoinSDKType | undefined,
+    supplierStakeAfterSlash: CoinSDKType | undefined;
 
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
@@ -341,6 +343,11 @@ export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
       proofMissingPenalty = getDenomAndAmount(attribute.value as string);
     }
 
+    // EventSupplierSlashed field 9 (v0.1.34+): post-slash stake as a coin string.
+    if (attribute.key === "supplier_stake_after_slash") {
+      supplierStakeAfterSlash = getDenomAndAmount(attribute.value as string);
+    }
+
     if (attribute.key === "failure_reason") {
       failureReason = parseAttribute(attribute.value as string);
     }
@@ -414,6 +421,7 @@ export function getAttributes(attributes: CosmosEvent["event"]["attributes"]) {
     mintedUpokt,
     overservicingLossUpokt,
     deflationLossUpokt,
+    supplierStakeAfterSlash,
   };
 }
 
@@ -520,14 +528,20 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateCla
    */
 
   const {
+    chainNumEstimatedRelays,
     claimed,
     numClaimedComputedUnits,
     numEstimatedComputedUnits,
     numRelays,
   } = getAttributes(eventClaimCreated.attributes);
 
-  const CUPR = Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))
-  const numEstimatedRelays = BigInt(Math.round(Number(numEstimatedComputedUnits) / CUPR))
+  // Prefer the chain-emitted num_estimated_relays (EventClaimCreated field 13,
+  // v0.1.34+); fall back to deriving it from compute units for pre-upgrade blocks.
+  // The helper also avoids the divide-by-zero that the raw CUPR math hits when
+  // numRelays == 0.
+  const numEstimatedRelays = _computeNumEstimatedRelays(
+    chainNumEstimatedRelays, numEstimatedComputedUnits, numClaimedComputedUnits, numRelays,
+  );
 
   return {
     id: messageId(msg),
@@ -963,6 +977,7 @@ function _handleEventClaimSettled(
 
 function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
   const {
+    chainNumEstimatedRelays,
     claim,
     claimed,
     expirationReason,
@@ -973,8 +988,12 @@ function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
 
   const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
-  const CUPR = Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))
-  const numEstimatedRelays = BigInt(Math.round(Number(numEstimatedComputedUnits) / CUPR))
+  // Prefer the chain-emitted num_estimated_relays (EventClaimExpired field 13,
+  // v0.1.34+); fall back to deriving it for pre-upgrade blocks (also avoids the
+  // divide-by-zero in the raw CUPR math when numRelays == 0).
+  const numEstimatedRelays = _computeNumEstimatedRelays(
+    chainNumEstimatedRelays, numEstimatedComputedUnits, numClaimedComputedUnits, numRelays,
+  );
 
   return {
     supplierId: supplier_operator_address,
@@ -1575,4 +1594,91 @@ export async function handleEventSettlementBatch(events: Array<CosmosEvent>): Pr
       bulkInsertSummarizedTransfers(summarized),
     ]);
   }
+}
+
+// EventValidatorRewardDistribution (v0.1.34+) is emitted once per bonded
+// validator per settlement op_reason per settlement block. It carries the
+// canonical per-validator commission/delegator split, which is the correct
+// source for "VALIDATOR vs DELEGATOR" reward totals — see the entity comment in
+// schema.graphql for the cross-delegation accounting caveat that makes summing
+// from EventSettlementBatch alone over-count the validator side.
+function _handleEventValidatorRewardDistribution(event: CosmosEvent): EventValidatorRewardDistributionProps {
+  let sessionEndBlockHeight = BigInt(0),
+    opReason = "",
+    validatorOperatorAddress = "",
+    validatorAccountAddress = "",
+    commissionRate = "",
+    poolShareAmount = BigInt(0),
+    commissionAmount = BigInt(0),
+    selfDelegationRewardAmount = BigInt(0),
+    delegatorsRewardAmount = BigInt(0),
+    totalDelegatedStakeAmount = BigInt(0),
+    numDelegators = 0;
+
+  for (const attribute of event.event.attributes) {
+    switch (attribute.key) {
+      case "session_end_block_height":
+        sessionEndBlockHeight = BigInt(parseAttribute(attribute.value));
+        break;
+      case "op_reason":
+        opReason = parseAttribute(attribute.value);
+        break;
+      case "validator_operator_address":
+        validatorOperatorAddress = parseAttribute(attribute.value);
+        break;
+      case "validator_account_address":
+        validatorAccountAddress = parseAttribute(attribute.value);
+        break;
+      case "commission_rate":
+        commissionRate = parseAttribute(attribute.value);
+        break;
+      // *_upokt fields are emitted as bare integer strings (no denom).
+      case "pool_share_upokt":
+        poolShareAmount = BigInt(parseAttribute(attribute.value));
+        break;
+      case "commission_upokt":
+        commissionAmount = BigInt(parseAttribute(attribute.value));
+        break;
+      case "self_delegation_reward_upokt":
+        selfDelegationRewardAmount = BigInt(parseAttribute(attribute.value));
+        break;
+      case "delegators_reward_upokt":
+        delegatorsRewardAmount = BigInt(parseAttribute(attribute.value));
+        break;
+      case "total_delegated_stake_upokt":
+        totalDelegatedStakeAmount = BigInt(parseAttribute(attribute.value));
+        break;
+      case "num_delegators":
+        numDelegators = Number(parseAttribute(attribute.value));
+        break;
+      default:
+        break;
+    }
+  }
+
+  return {
+    // getEventId includes the event index, so per-validator/op_reason emissions
+    // within the same settlement block get distinct ids.
+    id: getEventId(event),
+    blockId: getBlockId(event.block),
+    sessionEndBlockHeight,
+    opReason: getSettlementOpReasonFromSDK(opReason),
+    validatorOperatorAddress,
+    validatorAccountAddress,
+    commissionRate,
+    poolShareAmount,
+    commissionAmount,
+    selfDelegationRewardAmount,
+    delegatorsRewardAmount,
+    totalDelegatedStakeAmount,
+    numDelegators,
+  };
+}
+
+export async function handleEventValidatorRewardDistribution(events: Array<CosmosEvent>): Promise<void> {
+  await optimizedBulkCreate(
+    "EventValidatorRewardDistribution",
+    events.map(_handleEventValidatorRewardDistribution),
+    "block_id",
+  );
 }

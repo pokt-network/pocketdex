@@ -633,6 +633,8 @@ function _getValuesOldEventSupplierSlashed(event: CosmosEvent) {
     session: "",
     sessionStartHeight: BigInt(0),
     sessionEndHeight: BigInt(0),
+    // Not emitted before v0.1.34; afterStakeAmount is derived from stake - penalty.
+    supplierStakeAfterSlash: undefined as CoinSDKType | undefined,
   }
 }
 
@@ -640,6 +642,7 @@ function _getValuesEventSupplierSlashed(event: CosmosEvent) {
   const {
     claim,
     proofMissingPenalty,
+    supplierStakeAfterSlash,
   } = getAttributes(event.event.attributes);
 
   if (!claim || !claim.session_header || Object.keys(claim).length === 0) {
@@ -656,6 +659,7 @@ function _getValuesEventSupplierSlashed(event: CosmosEvent) {
     sessionStartHeight: BigInt(claim.session_header.session_start_block_height || "0"),
     proofMissingPenalty,
     proofValidationStatus: getClaimProofStatusFromSDK(claim.proof_validation_status),
+    supplierStakeAfterSlash,
   }
 }
 
@@ -678,6 +682,7 @@ export function _handleEventSupplierSlashed(
     session,
     sessionEndHeight,
     sessionStartHeight,
+    supplierStakeAfterSlash,
   } = _getValuesEventSupplierSlashed(event);
 
   if (!operatorAddress) {
@@ -695,7 +700,12 @@ export function _handleEventSupplierSlashed(
   }
 
   const previousStakeAmount = currentSupplier.stakeAmount.valueOf();
-  const afterStakeAmount = currentSupplier.stakeAmount - BigInt(proofMissingPenalty.amount);
+  // Prefer the chain-emitted post-slash stake (supplier_stake_after_slash, v0.1.34+);
+  // fall back to deriving it from the indexer-tracked stake minus the penalty for
+  // pre-upgrade events (also robust when tracked stake drifts on pruned nodes).
+  const afterStakeAmount = supplierStakeAfterSlash
+    ? BigInt(supplierStakeAfterSlash.amount)
+    : currentSupplier.stakeAmount - BigInt(proofMissingPenalty.amount);
 
   return {
     supplier: {
