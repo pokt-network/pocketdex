@@ -221,7 +221,7 @@ message EventApplicationOverserviced {
 // EventSupplierSlashed is emitted when a supplier is slashed.
 // This can happen for in cases such as missing or invalid proofs for submitted claims.
 message EventSupplierSlashed {
-    // Next index: 9
+    // Next index: 10
 
     // pocket.proof.Claim claim = 1;
     // cosmos.base.v1beta1.Coin proof_missing_penalty = 2;
@@ -253,6 +253,69 @@ message EventSupplierSlashed {
 
     // The operator address of the supplier that was slashed.
     string supplier_operator_address = 8 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+    // The supplier's remaining stake AFTER the slash was applied, in uPOKT
+    // (capped at 0 when the penalty exceeds the prior stake). Lets indexers read
+    // the post-slash stake directly instead of subtracting proof_missing_penalty
+    // from a cached prior stake, removing dependence on indexer cache accuracy.
+    string supplier_stake_after_slash = 9 [(gogoproto.jsontag) = "supplier_stake_after_slash"];
+}
+
+// EventValidatorRewardDistribution is emitted once per bonded validator per
+// settlement op_reason per settlement block (v0.1.34+). It summarizes how that
+// validator's slice of the proposer reward pool was split into commission and
+// (self / external) delegator rewards.
+message EventValidatorRewardDistribution {
+    // Next index: 12
+
+    // The session end block height for the batch of settlements.
+    //
+    // Caveat (cross-session batches): when settlement processes claims that
+    // belong to DIFFERENT session_end_block_heights in the same settlement
+    // block (the O2 cross-session candidate-scan path, exercised after a
+    // window-offset change), this field reports the session_end_block_height
+    // of the FIRST claim in the batched results — it does NOT identify every
+    // session contributing to the pool. Indexers wanting a canonical timestamp
+    // for the validator-reward summary should use the settlement block height
+    // from the SDK header (the height at which this event was emitted) rather
+    // than treating session_end_block_height as definitive. On the common
+    // path (single-session settlement, by far the typical case on mainnet),
+    // this field and the settlement block height differ by exactly the
+    // claim/proof-window offsets, and there is no ambiguity.
+    int64 session_end_block_height = 1;
+
+    // The settlement operation reason (distinguishes Mint=Burn from Global Mint pools).
+    SettlementOpReason op_reason = 2;
+
+    // The validator operator (valoper...) address.
+    string validator_operator_address = 3;
+
+    // The validator account (pokt...) address; commission and the self-delegation slice
+    // are paid here.
+    string validator_account_address = 4;
+
+    // The validator's commission rate as a decimal string (e.g. "0.100000000000000000").
+    string commission_rate = 5;
+
+    // The validator's slice of the total proposer reward pool, as upokt.
+    string pool_share_upokt = 6;
+
+    // The commission carved out of pool_share_upokt and paid to the validator account, as upokt.
+    string commission_upokt = 7;
+
+    // The validator's own self-delegation slice of the post-commission remainder, as upokt.
+    // For sole-stakeholder validators (no external delegations), the entire remainder is here.
+    string self_delegation_reward_upokt = 8;
+
+    // The portion of the post-commission remainder paid to external (non-self) delegators, as upokt.
+    string delegators_reward_upokt = 9;
+
+    // The total delegated stake backing this validator (includes the self-delegation), as upokt.
+    // This is the denominator for per-delegator reward attribution.
+    string total_delegated_stake_upokt = 10;
+
+    // The number of external (non-self) delegators that received a reward from this validator.
+    uint32 num_delegators = 11;
 }
 
 // EventClaimDiscarded is emitted when a claim is discarded due to unexpected situations.
