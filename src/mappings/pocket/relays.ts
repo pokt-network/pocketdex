@@ -50,6 +50,7 @@ import {
   messageId,
 } from "../utils/ids";
 import {
+  parseAttribute,
   parseJson,
   stringify,
 } from "../utils/json";
@@ -196,10 +197,6 @@ function getSettlementOpReasonFromSDK(item: typeof SettlementOpReasonSDKType | n
     default:
       return SettlementOpReason.UNSPECIFIED;
   }
-}
-
-function parseAttribute(attribute: unknown = ""): string {
-  return (attribute as string).replaceAll("\"", "");
 }
 
 // eslint-disable-next-line complexity
@@ -536,9 +533,7 @@ function _handleMsgCreateClaim(msg: CosmosMessage<MsgCreateClaim>): MsgCreateCla
   } = getAttributes(eventClaimCreated.attributes);
 
   // Prefer the chain-emitted num_estimated_relays (EventClaimCreated field 13,
-  // v0.1.34+); fall back to deriving it from compute units for pre-upgrade blocks.
-  // The helper also avoids the divide-by-zero that the raw CUPR math hits when
-  // numRelays == 0.
+  // v0.1.34+); the helper derives it from compute units for pre-upgrade blocks.
   const numEstimatedRelays = _computeNumEstimatedRelays(
     chainNumEstimatedRelays, numEstimatedComputedUnits, numClaimedComputedUnits, numRelays,
   );
@@ -859,7 +854,17 @@ function _computeNumEstimatedRelays(
   if (chainNumEstimatedRelays !== undefined) {
     return chainNumEstimatedRelays;
   }
-  return BigInt(Math.round(Number(numEstimatedComputedUnits) / Math.floor(Number(numClaimedComputedUnits) / Number(numRelays))));
+  // Pre-upgrade fallback: derive from compute units. Guard against numRelays == 0
+  // and a 0 compute-units-per-relay (CUPR) divisor, both of which would otherwise
+  // produce Infinity/NaN and make BigInt() throw.
+  if (numRelays === BigInt(0)) {
+    return BigInt(0);
+  }
+  const cupr = Math.floor(Number(numClaimedComputedUnits) / Number(numRelays));
+  if (cupr === 0) {
+    return BigInt(0);
+  }
+  return BigInt(Math.round(Number(numEstimatedComputedUnits) / cupr));
 }
 
 function _computeDeflationLoss(
@@ -989,8 +994,7 @@ function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
   const { proof_validation_status, session_header, supplier_operator_address } = claim;
 
   // Prefer the chain-emitted num_estimated_relays (EventClaimExpired field 13,
-  // v0.1.34+); fall back to deriving it for pre-upgrade blocks (also avoids the
-  // divide-by-zero in the raw CUPR math when numRelays == 0).
+  // v0.1.34+); the helper derives it from compute units for pre-upgrade blocks.
   const numEstimatedRelays = _computeNumEstimatedRelays(
     chainNumEstimatedRelays, numEstimatedComputedUnits, numClaimedComputedUnits, numRelays,
   );
@@ -1602,7 +1606,10 @@ export async function handleEventSettlementBatch(events: Array<CosmosEvent>): Pr
 // source for "VALIDATOR vs DELEGATOR" reward totals — see the entity comment in
 // schema.graphql for the cross-delegation accounting caveat that makes summing
 // from EventSettlementBatch alone over-count the validator side.
-function _handleEventValidatorRewardDistribution(event: CosmosEvent): EventValidatorRewardDistributionProps {
+function _handleEventValidatorRewardDistribution(
+  event: CosmosEvent,
+  blockId: bigint,
+): EventValidatorRewardDistributionProps {
   let sessionEndBlockHeight = BigInt(0),
     opReason = "",
     validatorOperatorAddress = "",
@@ -1656,13 +1663,32 @@ function _handleEventValidatorRewardDistribution(event: CosmosEvent): EventValid
     }
   }
 
+  // Fail fast on malformed events instead of silently persisting empty/zero rows
+  // (mirrors the guard clauses in the sibling event handlers).
+  if (!validatorOperatorAddress) {
+    throw new Error(`[handleEventValidatorRewardDistribution] validator_operator_address not found in event ${getEventId(event)}`);
+  }
+  if (!validatorAccountAddress) {
+    throw new Error(`[handleEventValidatorRewardDistribution] validator_account_address not found in event ${getEventId(event)}`);
+  }
+  if (Number.isNaN(numDelegators)) {
+    throw new Error(`[handleEventValidatorRewardDistribution] num_delegators is not a number in event ${getEventId(event)}`);
+  }
+
+  // op_reason should always resolve to a known reward-distribution reason; surface
+  // protocol drift (a new/renamed reason) rather than silently bucketing as UNSPECIFIED.
+  const opReasonEnum = getSettlementOpReasonFromSDK(opReason);
+  if (opReasonEnum === SettlementOpReason.UNSPECIFIED) {
+    logger.warn(`[handleEventValidatorRewardDistribution] unknown op_reason='${opReason}' resolved to UNSPECIFIED in event ${getEventId(event)}`);
+  }
+
   return {
     // getEventId includes the event index, so per-validator/op_reason emissions
     // within the same settlement block get distinct ids.
     id: getEventId(event),
-    blockId: getBlockId(event.block),
+    blockId,
     sessionEndBlockHeight,
-    opReason: getSettlementOpReasonFromSDK(opReason),
+    opReason: opReasonEnum,
     validatorOperatorAddress,
     validatorAccountAddress,
     commissionRate,
@@ -1676,9 +1702,13 @@ function _handleEventValidatorRewardDistribution(event: CosmosEvent): EventValid
 }
 
 export async function handleEventValidatorRewardDistribution(events: Array<CosmosEvent>): Promise<void> {
+  if (events.length === 0) return;
+
+  // All events in the batch belong to the same block; compute blockId once.
+  const blockId = getBlockId(events[0].block);
   await optimizedBulkCreate(
     "EventValidatorRewardDistribution",
-    events.map(_handleEventValidatorRewardDistribution),
+    events.map((event) => _handleEventValidatorRewardDistribution(event, blockId)),
     "block_id",
   );
 }

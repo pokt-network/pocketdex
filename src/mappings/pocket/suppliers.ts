@@ -699,13 +699,21 @@ export function _handleEventSupplierSlashed(
     throw new Error(`[handleEventSupplierSlashed] supplier not found for address: ${operatorAddress}`);
   }
 
-  const previousStakeAmount = currentSupplier.stakeAmount.valueOf();
   // Prefer the chain-emitted post-slash stake (supplier_stake_after_slash, v0.1.34+);
   // fall back to deriving it from the indexer-tracked stake minus the penalty for
   // pre-upgrade events (also robust when tracked stake drifts on pruned nodes).
   const afterStakeAmount = supplierStakeAfterSlash
     ? BigInt(supplierStakeAfterSlash.amount)
     : currentSupplier.stakeAmount - BigInt(proofMissingPenalty.amount);
+
+  // When the chain emits the post-slash stake, derive the pre-slash stake from it
+  // (after + penalty, both chain-sourced) so that
+  // previousStakeAmount - afterStakeAmount === proofMissingPenalty holds by
+  // construction and does not drift with the indexer-tracked stake. Pre-upgrade
+  // events fall back to the indexer-tracked stake.
+  const previousStakeAmount = supplierStakeAfterSlash
+    ? afterStakeAmount + BigInt(proofMissingPenalty.amount)
+    : currentSupplier.stakeAmount.valueOf();
 
   return {
     supplier: {
