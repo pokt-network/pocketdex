@@ -2,11 +2,8 @@ import { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 import { MsgGrant } from "cosmjs-types/cosmos/authz/v1beta1/tx";
 import { AuthzProps } from "../../types/models/Authz";
 import { getAuthzId, getBlockId, getEventId } from "../utils/ids";
+import { parseAttribute } from "../utils/json";
 import { isEventOfFinalizedBlockKind, isEventOfMessageKind } from "../utils/primitives";
-
-function parseAttribute(attribute: unknown): string {
-  return (attribute as string).replaceAll("\"", "");
-}
 
 function _handleEventGrant(event: CosmosEvent): AuthzProps {
   let granter: string | null = null;
