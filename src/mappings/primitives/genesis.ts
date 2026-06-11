@@ -863,7 +863,9 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
         }
 
         validators.push({
-          id: validatorMsg.signerId,
+          // canonical staking id; the cross-check in _handleMsgCreateValidator
+          // guarantees it equals the derived signerId
+          id: (genTx.body.messages[0] as { validator_address: string }).validator_address,
           ed25519_id: validatorMsg.address,
           signerId: validatorMsg.signerId,
           signerPoktPrefixId: validatorMsg.signerPoktPrefixId,
@@ -931,6 +933,13 @@ function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, blo
   const signer = genTx.auth_info.signer_infos[0];
   const signerAddress = pubKeyToAddress(Secp256k1, fromBase64(signer.public_key.key), VALIDATOR_PREFIX);
   const poktSignerAddress = pubKeyToAddress(Secp256k1, fromBase64(signer.public_key.key), PREFIX);
+
+  // Same invariant as _handleValidatorMsgCreate: the gentx signer must be the
+  // staking operator, so the derived valoper address has to match the
+  // validator_address carried by the message itself.
+  if (signerAddress !== msg.validator_address) {
+    throw new Error(`[handleGenesisGenTxs] gen_tx ${index}: derived signer address ${signerAddress} != msg validator_address ${msg.validator_address}`);
+  }
 
   return {
     id: `genesis-gen-txs-${index}-0`,

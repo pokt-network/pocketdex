@@ -83,6 +83,22 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
     throw new Error("Pubkey is nil");
   }
 
+  // The staking module keys validators by operatorAddress, which is the
+  // canonical id every other consumer (reconcile, rewards/commission FKs)
+  // already assumes. Take it straight from the message instead of trusting the
+  // signer-pubkey derivation, and cross-check both: a mismatch means the
+  // derivation assumptions broke, and failing here is loud — unlike a silent
+  // row the reconciler would close out as Unstaked forever.
+  const operatorAddress = createValMsg.validatorAddress;
+
+  if (!operatorAddress) {
+    throw new Error(`[handleValidatorMsgCreate] (block ${msg.block.block.header.height}): hash=${msg.tx.hash} missing validatorAddress in MsgCreateValidator`);
+  }
+
+  if ((isMulti(signerInfo) || signerType === Secp256k1) && signerAddress !== operatorAddress) {
+    throw new Error(`[handleValidatorMsgCreate] (block ${msg.block.block.header.height}): hash=${msg.tx.hash} derived signer address ${signerAddress} != msg validatorAddress ${operatorAddress}`);
+  }
+
   const msgCreateValidator = MsgCreateValidatorEntity.create({
     id: msgId,
     pubkey: {
@@ -103,7 +119,7 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   });
 
   const validator = Validator.create({
-    id: msgCreateValidator.signerId,
+    id: operatorAddress,
     ed25519_id: msgCreateValidator.address,
     signerId: msgCreateValidator.signerId,
     signerPoktPrefixId: poktSignerAddress,
@@ -229,6 +245,16 @@ export async function reconcileValidators(height: number): Promise<void> {
 
   for (const validator of tracked) {
     if (seen.has(validator.id)) {
+      continue;
+    }
+
+    // Same invariant as reconcileApplications: the staking module keeps a
+    // validator in its store (any bond status) until unbonding fully completes,
+    // and the unbonding trigger events already moved the row to Unstaking. A
+    // Staked row missing from the chain read is an impossible state — report it
+    // instead of wiping it.
+    if (validator.stakeStatus !== StakeStatus.Unstaking) {
+      logger.error(`[reconcileValidators] validator ${validator.id} is ${validator.stakeStatus} in store but missing from chain at height ${height} — refusing close-out, investigate`);
       continue;
     }
 
