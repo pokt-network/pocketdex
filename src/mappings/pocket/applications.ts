@@ -62,11 +62,14 @@ import {
   Ed25519,
   pubKeyToAddress,
 } from "../utils/pub_key";
+import { isNil } from "lodash";
 import { updateMorseClaimableAccounts } from "./migration";
 import {
+  fetchAllApplicationByStatus,
   fetchAllApplicationGatewayByApplicationId,
   fetchAllApplicationServiceByApplicationId,
 } from "./pagination";
+import getQueryClient from "../utils/query_client";
 
 function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
   switch (item) {
@@ -336,33 +339,32 @@ async function _handleUndelegateFromGatewayMsg(
 
 async function _handleUnstakeApplicationMsg(
   msg: CosmosMessage<MsgUnstakeApplication>,
-) {
+): Promise<Application> {
   const application = await Application.get(msg.msg.decodedMsg.address);
 
   if (!application) {
     throw new Error(`[handleUnstakeApplicationMsg] application not found for address ${msg.msg.decodedMsg.address}`);
   }
 
-  application.stakeStatus = StakeStatus.Unstaking;
+  // stakeStatus is owned by reconcile — it reads unstakeSessionEndHeight from chain
   application.unstakingBeginBlockId = getBlockId(msg.block);
 
   const msgId = messageId(msg);
 
-  await Promise.all([
-    application.save(),
-    MsgUnstakeApplicationEntity.create({
-      id: msgId,
-      applicationId: msg.msg.decodedMsg.address,
-      transactionId: msg.tx.hash,
-      blockId: getBlockId(msg.block),
-      messageId: msgId,
-    }).save(),
-  ]);
+  await MsgUnstakeApplicationEntity.create({
+    id: msgId,
+    applicationId: msg.msg.decodedMsg.address,
+    transactionId: msg.tx.hash,
+    blockId: getBlockId(msg.block),
+    messageId: msgId,
+  }).save();
+
+  return application;
 }
 
 async function _handleTransferApplicationMsg(
   msg: CosmosMessage<MsgTransferApplication>,
-) {
+): Promise<Application> {
   const application = await Application.get(msg.msg.decodedMsg.sourceAddress);
 
   if (!application) {
@@ -373,22 +375,21 @@ async function _handleTransferApplicationMsg(
 
   const msgId = messageId(msg);
 
-  await Promise.all([
-    application.save(),
-    MsgTransferApplicationEntity.create({
-      id: msgId,
-      sourceApplicationId: msg.msg.decodedMsg.sourceAddress,
-      destinationApplicationId: msg.msg.decodedMsg.destinationAddress,
-      transactionId: msg.tx.hash,
-      blockId: getBlockId(msg.block),
-      messageId: msgId,
-    }).save(),
-  ]);
+  await MsgTransferApplicationEntity.create({
+    id: msgId,
+    sourceApplicationId: msg.msg.decodedMsg.sourceAddress,
+    destinationApplicationId: msg.msg.decodedMsg.destinationAddress,
+    transactionId: msg.tx.hash,
+    blockId: getBlockId(msg.block),
+    messageId: msgId,
+  }).save();
+
+  return application;
 }
 
 async function _handleTransferApplicationBeginEvent(
   event: CosmosEvent,
-) {
+): Promise<Application> {
   const msg = event.msg as CosmosMessage<EventTransferBegin>;
   const tx = event.tx as CosmosTransaction;
 
@@ -408,22 +409,21 @@ async function _handleTransferApplicationBeginEvent(
 
   const eventId = getEventId(event);
 
-  await Promise.all([
-    application.save(),
-    EventTransferBeginEntity.create({
-      id: eventId,
-      sourceId: msg.msg.decodedMsg.sourceAddress,
-      destinationId: msg.msg.decodedMsg.destinationAddress,
-      transactionId: tx.hash,
-      blockId: getBlockId(event.block),
-      eventId,
-    }).save(),
-  ]);
+  await EventTransferBeginEntity.create({
+    id: eventId,
+    sourceId: msg.msg.decodedMsg.sourceAddress,
+    destinationId: msg.msg.decodedMsg.destinationAddress,
+    transactionId: tx.hash,
+    blockId: getBlockId(event.block),
+    eventId,
+  }).save();
+
+  return application;
 }
 
 async function _handleTransferApplicationEndEvent(
   event: CosmosEvent,
-) {
+): Promise<Application[]> {
   let sourceAddress: string | undefined, destinationAppAddress: string | undefined
 
   for (const attribute of event.event.attributes) {
@@ -478,14 +478,12 @@ async function _handleTransferApplicationEndEvent(
   sourceApplication.transferringToId = undefined;
   sourceApplication.transferEndHeight = undefined;
   sourceApplication.transferEndBlockId = getBlockId(event.block);
-  sourceApplication.stakeStatus = StakeStatus.Unstaked;
+  // stakeStatus for source is owned by reconcile — source will be absent from AllApplications after transfer, so reconcile marks it Unstaked via tracked loop
   sourceApplication.unstakingReason = ApplicationUnbondingReason.TRANSFER;
   sourceApplication.unstakingEndBlockId = getBlockId(event.block);
   sourceApplication.destinationApplicationId = destinationAppAddress;
 
-  if (destinationApplication && destinationApplication.stakeStatus === StakeStatus.Staked) {
-    destinationApplication.stakeAmount = sourceApplication.stakeAmount.valueOf() + destinationApplication.stakeAmount.valueOf();
-  } else {
+  if (!destinationApplication) {
     destinationApplication = Application.create({
       id: destinationAppAddress,
       accountId: destinationAppAddress,
@@ -522,8 +520,6 @@ async function _handleTransferApplicationEndEvent(
   const eventId = getEventId(event);
 
   await Promise.all([
-    sourceApplication.save(),
-    destinationApplication.save(),
     EventTransferEndEntity.create({
       id: eventId,
       sourceId: sourceAddress,
@@ -536,11 +532,13 @@ async function _handleTransferApplicationEndEvent(
     store.bulkRemove("ApplicationService", sourceApplicationServices.map(service => service.id)),
     store.bulkRemove("ApplicationGateway", sourceApplicationGateways.map(item => item.id)),
   ]);
+
+  return [sourceApplication, destinationApplication];
 }
 
 async function _handleTransferApplicationErrorEvent(
   event: CosmosEvent,
-) {
+): Promise<Application> {
   let sourceAddress = "", destinationAddress = "", error = "";
 
   for (const attribute of event.event.attributes) {
@@ -585,22 +583,21 @@ async function _handleTransferApplicationErrorEvent(
 
   const eventId = getEventId(event);
 
-  await Promise.all([
-    application.save(),
-    EventTransferErrorEntity.create({
-      id: eventId,
-      sourceId: sourceAddress,
-      destinationId: destinationAddress,
-      error: error,
-      blockId: getBlockId(event.block),
-      eventId,
-    }).save(),
-  ]);
+  await EventTransferErrorEntity.create({
+    id: eventId,
+    sourceId: sourceAddress,
+    destinationId: destinationAddress,
+    error: error,
+    blockId: getBlockId(event.block),
+    eventId,
+  }).save();
+
+  return application;
 }
 
 async function _handleApplicationUnbondingBeginEvent(
   event: CosmosEvent,
-) {
+): Promise<Application> {
   /**
    * {
    * "type":"pocket.application.EventApplicationUnbondingBegin",
@@ -691,23 +688,22 @@ async function _handleApplicationUnbondingBeginEvent(
 
   const eventId = getEventId(event);
 
-  await Promise.all([
-    application.save(),
-    EventApplicationUnbondingBeginEntity.create({
-      id: eventId,
-      applicationId: address,
-      blockId: getBlockId(event.block),
-      unstakingEndHeight,
-      sessionEndHeight,
-      reason,
-      eventId,
-    }).save(),
-  ]);
+  await EventApplicationUnbondingBeginEntity.create({
+    id: eventId,
+    applicationId: address,
+    blockId: getBlockId(event.block),
+    unstakingEndHeight,
+    sessionEndHeight,
+    reason,
+    eventId,
+  }).save();
+
+  return application;
 }
 
 async function _handleApplicationUnbondingEndEvent(
   event: CosmosEvent,
-) {
+): Promise<Application> {
   let unstakingEndHeight = BigInt(0), sessionEndHeight = BigInt(0), reason: number | null = null,
     applicationAddress: string | undefined;
 
@@ -757,8 +753,7 @@ async function _handleApplicationUnbondingEndEvent(
   }
 
   application.unstakingEndBlockId = getBlockId(event.block);
-  application.stakeStatus = StakeStatus.Unstaked;
-  application.unstakingReason = getAppUnbondingReasonFromSDK(reason);
+  // stakeStatus is owned by reconcile — app will be absent from AllApplications at this height, so reconcile marks it Unstaked via the tracked loop. unstakingReason was already set by handleApplicationUnbondingBeginEvent; don't overwrite it here.
 
   const applicationServices = (await fetchAllApplicationServiceByApplicationId(applicationAddress)).map(item => item.id);
 
@@ -774,9 +769,10 @@ async function _handleApplicationUnbondingEndEvent(
       applicationId: applicationAddress,
       eventId,
     }).save(),
-    application.save(),
     store.bulkRemove("ApplicationService", applicationServices),
   ]);
+
+  return application;
 }
 
 export async function handleAppMsgStake(
@@ -942,41 +938,102 @@ export async function handleUndelegateFromGatewayMsg(
 export async function handleUnstakeApplicationMsg(
   messages: Array<CosmosMessage<MsgUnstakeApplication>>,
 ): Promise<void> {
-  await Promise.all(messages.map(_handleUnstakeApplicationMsg));
+  const apps = await Promise.all(messages.map(_handleUnstakeApplicationMsg));
+  if (apps.length > 0) await store.bulkCreate("Application", apps);
 }
 
 export async function handleTransferApplicationMsg(
   messages: Array<CosmosMessage<MsgTransferApplication>>,
 ): Promise<void> {
-  await Promise.all(messages.map(_handleTransferApplicationMsg));
+  const apps = await Promise.all(messages.map(_handleTransferApplicationMsg));
+  if (apps.length > 0) await store.bulkCreate("Application", apps);
 }
 
 export async function handleTransferApplicationBeginEvent(
   events: Array<CosmosEvent>,
 ): Promise<void> {
-  await Promise.all(events.map(_handleTransferApplicationBeginEvent));
+  const apps = await Promise.all(events.map(_handleTransferApplicationBeginEvent));
+  if (apps.length > 0) await store.bulkCreate("Application", apps);
 }
 
 export async function handleTransferApplicationEndEvent(
   events: Array<CosmosEvent>,
 ): Promise<void> {
-  await Promise.all(events.map(_handleTransferApplicationEndEvent));
+  const appArrays = await Promise.all(events.map(_handleTransferApplicationEndEvent));
+  const apps = appArrays.flat();
+  if (apps.length > 0) await store.bulkCreate("Application", apps);
 }
 
 export async function handleTransferApplicationErrorEvent(
   events: Array<CosmosEvent>,
 ): Promise<void> {
-  await Promise.all(events.map(_handleTransferApplicationErrorEvent));
+  const apps = await Promise.all(events.map(_handleTransferApplicationErrorEvent));
+  if (apps.length > 0) await store.bulkCreate("Application", apps);
 }
 
 export async function handleApplicationUnbondingEndEvent(
   events: Array<CosmosEvent>,
 ): Promise<void> {
-  await Promise.all(events.map(_handleApplicationUnbondingEndEvent));
+  const apps = await Promise.all(events.map(_handleApplicationUnbondingEndEvent));
+  if (apps.length > 0) await store.bulkCreate("Application", apps);
 }
 
 export async function handleApplicationUnbondingBeginEvent(
   events: Array<CosmosEvent>,
 ): Promise<void> {
-  await Promise.all(events.map(_handleApplicationUnbondingBeginEvent));
+  const apps = await Promise.all(events.map(_handleApplicationUnbondingBeginEvent));
+  if (apps.length > 0) await store.bulkCreate("Application", apps);
+}
+
+// reconcileApplications re-syncs every application entity against the chain's
+// authoritative state at the given height via a single paginated query.
+// Same pattern as reconcileValidators — reading final state is exact and avoids
+// drift from accumulating stake burns, transfers, or missed events.
+// Apps absent from the chain response (fully unbonded => removed from store)
+// are marked Unstaked with zero stake so they never stay stuck in Unstaking.
+export async function reconcileApplications(height: number): Promise<void> {
+  const queryClient = getQueryClient(height);
+  const chainApps = await queryClient.application.allApplications();
+
+  const seen = new Set<string>();
+  const toUpsert: Array<Application> = [];
+
+  for (const ca of chainApps) {
+    const id = ca.address;
+    seen.add(id);
+
+    const app = await Application.get(id);
+    if (isNil(app)) {
+      continue;
+    }
+
+    app.stakeAmount = BigInt(ca.stake?.amount ?? "0");
+    app.stakeDenom = ca.stake?.denom ?? app.stakeDenom;
+    // AllApplications returns apps in any bonding state (Staked or Unstaking).
+    // unstakeSessionEndHeight > 0 means the app initiated unstaking but hasn't
+    // completed it yet — it still lives in the store but must not be marked Staked.
+    app.stakeStatus = ca.unstakeSessionEndHeight > 0 ? StakeStatus.Unstaking : StakeStatus.Staked;
+
+    toUpsert.push(app);
+  }
+
+  // Apps still tracked as Staked/Unstaking but absent from chain => fully unbonded.
+  const tracked = [
+    ...await fetchAllApplicationByStatus(StakeStatus.Staked),
+    ...await fetchAllApplicationByStatus(StakeStatus.Unstaking),
+  ];
+
+  for (const app of tracked) {
+    if (seen.has(app.id)) {
+      continue;
+    }
+
+    app.stakeStatus = StakeStatus.Unstaked;
+    app.stakeAmount = BigInt(0);
+    toUpsert.push(app);
+  }
+
+  if (toUpsert.length > 0) {
+    await store.bulkCreate("Application", toUpsert);
+  }
 }

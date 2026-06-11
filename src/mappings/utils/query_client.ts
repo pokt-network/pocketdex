@@ -7,6 +7,22 @@ import {
 } from "cosmjs-types/cosmos/bank/v1beta1/query";
 import { Coin } from "cosmjs-types/cosmos/base/v1beta1/coin";
 import { Any } from "cosmjs-types/google/protobuf/any";
+import { PageRequest } from "../../client/cosmos/base/query/v1beta1/pagination";
+import {
+  QueryAllApplicationsRequest,
+  QueryClientImpl as ApplicationQueryClientImpl,
+} from "../../client/pocket/application/query";
+import { Application as ChainApplication } from "../../client/pocket/application/types";
+import {
+  QueryClientImpl as StakingQueryClientImpl,
+  QueryValidatorsRequest,
+} from "../../client/cosmos/staking/v1beta1/query";
+import { Validator as ChainValidator } from "../../client/cosmos/staking/v1beta1/staking";
+
+// High default page size: with the current validator/app counts a single page is
+// enough, but the loop below keeps requesting pages while a next_key is returned
+// so we stay covered if the set ever grows past one page.
+const DEFAULT_PAGE_LIMIT = 1000;
 
 interface PocketdexExtension {
   readonly bank: {
@@ -15,6 +31,16 @@ interface PocketdexExtension {
   }
   readonly auth: {
     readonly moduleAccounts: () => Promise<Any[]>;
+  }
+  readonly staking: {
+    // Returns every validator known to the chain (any bond status) at the
+    // configured height, following pagination across as many pages as needed.
+    readonly allValidators: () => Promise<ChainValidator[]>;
+  }
+  readonly application: {
+    // Returns every application known to the chain at the configured height,
+    // following pagination across as many pages as needed.
+    readonly allApplications: () => Promise<ChainApplication[]>;
   }
 }
 
@@ -35,6 +61,8 @@ const setupPocketdexExtension = (height?: number) => (base: QueryClient): Pocket
   // This cannot be used for proof verification
   const bankQueryService = new BankQueryClientImpl(rpc);
   const authQueryService = new AuthQueryClientImpl(rpc);
+  const stakingQueryService = new StakingQueryClientImpl(rpc);
+  const applicationQueryService = new ApplicationQueryClientImpl(rpc);
 
   return {
     bank: {
@@ -55,6 +83,52 @@ const setupPocketdexExtension = (height?: number) => (base: QueryClient): Pocket
         const { accounts } = await authQueryService.ModuleAccounts();
         return accounts ?? [];
       }
+    },
+    staking: {
+      allValidators: async () => {
+        const validators: ChainValidator[] = [];
+        let nextKey: Uint8Array | undefined;
+
+        do {
+          const response = await stakingQueryService.Validators(
+            QueryValidatorsRequest.fromPartial({
+              // empty status => all bond statuses (bonded, unbonding, unbonded)
+              status: "",
+              pagination: PageRequest.fromPartial({
+                key: nextKey ?? new Uint8Array(),
+                limit: DEFAULT_PAGE_LIMIT,
+              }),
+            }),
+          );
+
+          validators.push(...response.validators);
+          nextKey = response.pagination?.nextKey;
+        } while (nextKey && nextKey.length > 0);
+
+        return validators;
+      },
+    },
+    application: {
+      allApplications: async () => {
+        const applications: ChainApplication[] = [];
+        let nextKey: Uint8Array | undefined;
+
+        do {
+          const response = await applicationQueryService.AllApplications(
+            QueryAllApplicationsRequest.fromPartial({
+              pagination: PageRequest.fromPartial({
+                key: nextKey ?? new Uint8Array(),
+                limit: DEFAULT_PAGE_LIMIT,
+              }),
+            }),
+          );
+
+          applications.push(...response.applications);
+          nextKey = response.pagination?.nextKey;
+        } while (nextKey && nextKey.length > 0);
+
+        return applications;
+      },
     }
   };
 }

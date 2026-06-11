@@ -27,6 +27,8 @@ import {
 import { handleEventClaimSettled } from "./pocket/relays";
 import { handleAddBlockReports } from "./pocket/reports";
 import { indexSupplier } from "./pocket/suppliers";
+import { reconcileApplications } from "./pocket/applications";
+import { reconcileValidators } from "./pocket/validator";
 import {
   handleBlock,
   handleGenesis,
@@ -125,8 +127,36 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
   ]);
 }
 
+// Messages/events whose presence in a block means a validator's on-chain state
+// (description, commission, tokens or bond status) may have changed. When any of
+// these is seen we re-sync the affected validators against the chain instead of
+// trying to derive the new state from the message payloads.
+const VALIDATOR_RECONCILE_MSG_TYPES = [
+  "/cosmos.staking.v1beta1.MsgCreateValidator",
+  "/cosmos.staking.v1beta1.MsgEditValidator",
+  "/cosmos.staking.v1beta1.MsgDelegate",
+  "/cosmos.staking.v1beta1.MsgUndelegate",
+  "/cosmos.staking.v1beta1.MsgBeginRedelegate",
+  "/cosmos.slashing.v1beta1.MsgUnjail",
+];
+const VALIDATOR_RECONCILE_EVENT_TYPES = [
+  "slash",
+  // emitted by cosmos staking end-blocker when a validator completes unbonding
+  // (no explicit MsgUndelegate in that block — without this trigger the DB row
+  // would stay Unstaking forever since the chain drops it from the store)
+  "complete_unbonding",
+  "unbonding_validator",
+];
+
+// Force a validator reconcile on EVERY block. Intended for local testing to
+// verify the chain re-sync works end-to-end; in production reconcile should only
+// run when a validator-related msg/event is seen (see hasStakeChange below).
+// Toggle via env (no code change needed); defaults to off.
+// process.env works inside the sandbox thanks to the fork that runs it with `context: host`.
+const RECONCILE_VALIDATORS_EVERY_BLOCK = process.env.POCKETDEX_RECONCILE_VALIDATORS_EVERY_BLOCK === "true";
+
 // any validator messages or events
-async function indexValidators(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+async function indexValidators(block: CosmosBlock, msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
     "/cosmos.staking.v1beta1.MsgCreateValidator",
   ];
@@ -135,10 +165,20 @@ async function indexValidators(msgByType: MessageByType, eventByType: EventByTyp
     "commission",
   ];
 
+  // Create handlers must persist before reconcile so newly created validators
+  // are found by Validator.get during the chain re-sync.
   await Promise.all([
     ...handleByType(msgTypes, msgByType, MsgHandlers, ByTxStatus.Success),
     ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.All),
   ]);
+
+  const hasStakeChange =
+    VALIDATOR_RECONCILE_MSG_TYPES.some(type => (msgByType[type]?.length ?? 0) > 0) ||
+    VALIDATOR_RECONCILE_EVENT_TYPES.some(type => (eventByType[type]?.length ?? 0) > 0);
+
+  if (hasStakeChange || RECONCILE_VALIDATORS_EVERY_BLOCK) {
+    await reconcileValidators(block.header.height);
+  }
 }
 
 // any message or event related to relays
@@ -217,8 +257,33 @@ async function indexService(msgByType: MessageByType, eventByType: EventByType):
   ])
 }
 
+const APPLICATION_RECONCILE_MSG_TYPES = [
+  "/pocket.application.MsgStakeApplication",
+  "/pocket.application.MsgUnstakeApplication",
+  "/pocket.application.MsgTransferApplication",
+  "/pocket.application.MsgDelegateToGateway",
+  "/pocket.application.MsgUndelegateFromGateway",
+  "/pocket.migration.MsgClaimMorseApplication",
+];
+const APPLICATION_RECONCILE_EVENT_TYPES = [
+  // stake changes driven by relay settlement
+  "pocket.tokenomics.EventClaimSettled",
+  "pocket.tokenomics.EventApplicationOverserviced",
+  "pocket.tokenomics.EventApplicationReimbursementRequest",
+  // unbonding lifecycle — without these, apps that complete unbonding in a block
+  // with no explicit msg trigger would stay Unstaking forever in the DB since
+  // the chain drops them from the store once fully unbonded
+  "pocket.application.EventApplicationUnbondingBegin",
+  "pocket.application.EventApplicationUnbondingEnd",
+  "pocket.application.EventTransferBegin",
+  "pocket.application.EventTransferEnd",
+  "pocket.application.EventTransferError",
+];
+
+const RECONCILE_APPLICATIONS_EVERY_BLOCK = process.env.POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK === "true";
+
 // any application msg or event
-async function indexApplications(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+async function indexApplications(block: CosmosBlock, msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
     "/pocket.application.MsgDelegateToGateway",
     "/pocket.application.MsgUndelegateFromGateway",
@@ -281,6 +346,14 @@ async function indexApplications(msgByType: MessageByType, eventByType: EventByT
     "pocket.application.EventApplicationUnbondingBegin": getIdOfBondingEvents,
     "pocket.application.EventApplicationUnbondingEnd": getIdOfBondingEvents,
   })
+
+  const hasAppChange =
+    APPLICATION_RECONCILE_MSG_TYPES.some(type => (msgByType[type]?.length ?? 0) > 0) ||
+    APPLICATION_RECONCILE_EVENT_TYPES.some(type => (eventByType[type]?.length ?? 0) > 0);
+
+  if (hasAppChange || RECONCILE_APPLICATIONS_EVERY_BLOCK) {
+    await reconcileApplications(block.header.height);
+  }
 }
 
 // any gateway msg or event
@@ -509,9 +582,9 @@ async function indexStakeEntity(allData: Array<CosmosEvent | CosmosMessage>, get
 }
 
 // any message or event related to stake (supplier, gateway, application, service)
-async function indexStake(msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+async function indexStake(block: CosmosBlock, msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   await Promise.all([
-    indexApplications(msgByType, eventByType),
+    indexApplications(block, msgByType, eventByType),
     indexGateway(msgByType, eventByType),
     indexSupplier(msgByType, eventByType),
   ])
@@ -648,12 +721,12 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   await profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType)
 
   await Promise.all([
-    profilerWrap(indexStake, "indexingHandler", "indexStake")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexStake, "indexingHandler", "indexStake")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexGrants, "indexingHandler", "indexGrants")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexService, "indexingHandler", "indexService")(msgsByType as MessageByType, eventsByType),
-    profilerWrap(indexValidators, "indexingHandler", "indexValidators")(msgsByType as MessageByType, eventsByType),
+    profilerWrap(indexValidators, "indexingHandler", "indexValidators")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
   ]);
 

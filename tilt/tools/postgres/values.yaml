@@ -2,6 +2,17 @@ global:
   postgresql:
     auth:
       postgresPassword: "postgres"
+  # Chart blocks non-standard images (NOTES.txt verification). Required because we
+  # repoint to bitnamilegacy below. See bitnami/charts#30850.
+  security:
+    allowInsecureImages: true
+# Bitnami removed versioned tags from docker.io/bitnami on 2025-09-29; the chart's
+# default image no longer resolves. Point at the legacy repo to unblock local dev.
+# NOTE: bitnamilegacy receives no updates — temporary until we move off the Bitnami chart.
+image:
+  registry: docker.io
+  repository: bitnamilegacy/postgresql
+  tag: 17.5.0-debian-12-r16
 primary:
   initdb:
     scripts:

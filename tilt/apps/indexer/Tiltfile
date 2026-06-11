@@ -88,6 +88,7 @@ def deploy_indexer(
     ignore = [
       os.path.join(context_path, '*.md'),
       os.path.join(context_path, 'docs'),
+      os.path.join(context_path, '.claude'),
       os.path.join(context_path, 'node_modules'), # root
       os.path.join(context_path, 'vendor/**/node_modules'), # vendor root
       os.path.join(context_path,'vendor/**/packages/**/node_modules') # vendor packages root
