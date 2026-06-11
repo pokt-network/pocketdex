@@ -211,8 +211,8 @@ export async function reconcileValidators(height: number): Promise<void> {
       continue;
     }
 
-    validator.description = cv.description;
-    validator.commission = cv.commission?.commissionRates;
+    validator.description = cv.description ?? validator.description;
+    validator.commission = cv.commission?.commissionRates ?? validator.commission;
     validator.minSelfDelegation = parseInt(cv.minSelfDelegation || "0", 10);
     validator.stakeAmount = BigInt(cv.tokens || "0");
     validator.stakeStatus = mapBondStatus(cv.status);

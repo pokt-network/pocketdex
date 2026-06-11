@@ -123,7 +123,7 @@ const setupPocketdexExtension = (height?: number) => (base: QueryClient): Pocket
             }),
           );
 
-          applications.push(...response.application);
+          applications.push(...response.applications);
           nextKey = response.pagination?.nextKey;
         } while (nextKey && nextKey.length > 0);
 

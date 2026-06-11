@@ -574,7 +574,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
     store.bulkCreate("Supplier", suppliers),
     store.bulkCreate("SupplierServiceConfig", supplierServices),
     optimizedBulkCreate("MsgStakeSupplier", supplierMsgStakes, 'block_id'),
-    optimizedBulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes, 'block_id'),
+    optimizedBulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes, 'omit'),
   ]);
 
   return { transactions, messages: msgs };
@@ -689,7 +689,7 @@ async function _handleGenesisApplications(genesis: Genesis, block: CosmosBlock):
     store.bulkCreate("ApplicationService", appServices),
     store.bulkCreate("ApplicationGateway", appsDelegatedToGateways),
     optimizedBulkCreate("MsgStakeApplication", appMsgStakes, 'block_id'),
-    optimizedBulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes, 'block_id'),
+    optimizedBulkCreate("MsgStakeApplicationService", servicesAndAppMsgStakes, 'omit'),
     optimizedBulkCreate("MsgDelegateToGateway", msgDelegateToGateways, 'block_id'),
   ];
 
