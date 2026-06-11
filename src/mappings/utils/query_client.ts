@@ -87,7 +87,7 @@ const setupPocketdexExtension = (height?: number) => (base: QueryClient): Pocket
     staking: {
       allValidators: async () => {
         const validators: ChainValidator[] = [];
-        let nextKey: Uint8Array | undefined = undefined;
+        let nextKey: Uint8Array | undefined;
 
         do {
           const response = await stakingQueryService.Validators(
@@ -111,7 +111,7 @@ const setupPocketdexExtension = (height?: number) => (base: QueryClient): Pocket
     application: {
       allApplications: async () => {
         const applications: ChainApplication[] = [];
-        let nextKey: Uint8Array | undefined = undefined;
+        let nextKey: Uint8Array | undefined;
 
         do {
           const response = await applicationQueryService.AllApplications(
