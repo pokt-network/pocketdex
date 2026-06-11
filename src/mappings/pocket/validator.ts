@@ -44,7 +44,7 @@ import {
 } from "../utils/pub_key";
 
 
-async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>): Promise<void> {
+async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>): Promise<Validator> {
   const msgId = messageId(msg);
   const blockId = getBlockId(msg.block);
   const createValMsg = msg.msg.decodedMsg;
@@ -118,22 +118,19 @@ async function _handleValidatorMsgCreate(msg: CosmosMessage<MsgCreateValidator>)
   });
 
   await Promise.all([
-    validator.save(),
     msgCreateValidator.save(),
-    // in bulk
     enforceAccountsExists([
       { account: { id: signerAddress, chainId: msg.block.header.chainId } },
       { account: { id: poktSignerAddress, chainId: msg.block.header.chainId } },
     ]),
   ]);
+
+  return validator;
 }
 
 export async function handleValidatorMsgCreate(messages: Array<CosmosMessage<MsgCreateValidator>>): Promise<void> {
-  await Promise.all(
-    messages.map(
-      (msg) => _handleValidatorMsgCreate(msg),
-    ),
-  );
+  const validators = await Promise.all(messages.map(_handleValidatorMsgCreate));
+  if (validators.length > 0) await store.bulkCreate("Validator", validators);
 }
 
 function _handleValidatorRewardOrCommission(event: CosmosEvent): ValidatorRewardProps | ValidatorCommissionProps {
