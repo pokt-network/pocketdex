@@ -62,11 +62,14 @@ import {
   Ed25519,
   pubKeyToAddress,
 } from "../utils/pub_key";
+import { isNil } from "lodash";
 import { updateMorseClaimableAccounts } from "./migration";
 import {
+  fetchAllApplicationByStatus,
   fetchAllApplicationGatewayByApplicationId,
   fetchAllApplicationServiceByApplicationId,
 } from "./pagination";
+import getQueryClient from "../utils/query_client";
 
 function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
   switch (item) {
@@ -979,4 +982,54 @@ export async function handleApplicationUnbondingBeginEvent(
   events: Array<CosmosEvent>,
 ): Promise<void> {
   await Promise.all(events.map(_handleApplicationUnbondingBeginEvent));
+}
+
+// reconcileApplications re-syncs every application entity against the chain's
+// authoritative state at the given height via a single paginated query.
+// Same pattern as reconcileValidators — reading final state is exact and avoids
+// drift from accumulating stake burns, transfers, or missed events.
+// Apps absent from the chain response (fully unbonded => removed from store)
+// are marked Unstaked with zero stake so they never stay stuck in Unstaking.
+export async function reconcileApplications(height: number): Promise<void> {
+  const queryClient = getQueryClient(height);
+  const chainApps = await queryClient.application.allApplications();
+
+  const seen = new Set<string>();
+  const toUpsert: Array<Application> = [];
+
+  for (const ca of chainApps) {
+    const id = ca.address;
+    seen.add(id);
+
+    const app = await Application.get(id);
+    if (isNil(app)) {
+      continue;
+    }
+
+    app.stakeAmount = BigInt(ca.stake?.amount ?? "0");
+    app.stakeDenom = ca.stake?.denom ?? app.stakeDenom;
+    app.stakeStatus = StakeStatus.Staked;
+
+    toUpsert.push(app);
+  }
+
+  // Apps still tracked as Staked/Unstaking but absent from chain => fully unbonded.
+  const tracked = [
+    ...await fetchAllApplicationByStatus(StakeStatus.Staked),
+    ...await fetchAllApplicationByStatus(StakeStatus.Unstaking),
+  ];
+
+  for (const app of tracked) {
+    if (seen.has(app.id)) {
+      continue;
+    }
+
+    app.stakeStatus = StakeStatus.Unstaked;
+    app.stakeAmount = BigInt(0);
+    toUpsert.push(app);
+  }
+
+  if (toUpsert.length > 0) {
+    await store.bulkCreate("Application", toUpsert);
+  }
 }

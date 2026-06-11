@@ -8,11 +8,14 @@ import {
   isEmpty,
   isNil,
 } from "lodash";
+import { BondStatus } from "../../client/cosmos/staking/v1beta1/staking";
 import { parseCoins } from "../../cosmjs/utils";
 import {
   StakeStatus,
   Validator,
 } from "../../types";
+import getQueryClient from "../utils/query_client";
+import { fetchAllValidatorByStatus } from "./pagination";
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
 import { ValidatorCommissionProps } from "../../types/models/ValidatorCommission";
 import { ValidatorRewardProps } from "../../types/models/ValidatorReward";
@@ -163,4 +166,81 @@ export async function handleValidatorRewards(events: Array<CosmosEvent>): Promis
 
 export async function handleValidatorCommission(events: Array<CosmosEvent>): Promise<void> {
   await optimizedBulkCreate("ValidatorCommission", events, 'block_id', _handleValidatorRewardOrCommission);
+}
+
+function mapBondStatus(status: BondStatus): StakeStatus {
+  switch (status) {
+    case BondStatus.BOND_STATUS_BONDED:
+      return StakeStatus.Staked;
+    case BondStatus.BOND_STATUS_UNBONDING:
+      return StakeStatus.Unstaking;
+    // BOND_STATUS_UNBONDED / UNSPECIFIED => not actively staked
+    default:
+      return StakeStatus.Unstaked;
+  }
+}
+
+// reconcileValidators re-syncs every validator entity against the chain's
+// authoritative state at the given height. We read the full validator set in a
+// single (paginated) query instead of deriving mutations from individual
+// messages/events: cosmos changes a validator's tokens through delegate,
+// undelegate, redelegate, slashing and reward auto-compounding, and several of
+// those can happen in the same block - accumulating them by hand drifts. Reading
+// the resulting state is exact and 1:1 by construction.
+//
+// Only the mutable fields are overwritten; identity columns (ed25519_id,
+// signerId, createMsgId, transactionId, ...) are preserved. Validators that the
+// chain no longer returns (fully unbonded => removed from the staking store) are
+// marked Unstaked with zero stake.
+export async function reconcileValidators(height: number): Promise<void> {
+  const queryClient = getQueryClient(height);
+  const chainValidators = await queryClient.staking.allValidators();
+
+  const seen = new Set<string>();
+  // Collect every mutated entity and persist them in a single batched upsert
+  // (store.bulkCreate => one statement) instead of issuing an individual
+  // save()/UPDATE per validator.
+  const toUpsert: Array<Validator> = [];
+
+  for (const cv of chainValidators) {
+    const id = cv.operatorAddress;
+    seen.add(id);
+
+    const validator = await Validator.get(id);
+    if (isNil(validator)) {
+      // Created earlier in this same block by handleValidatorMsgCreate (which
+      // runs before reconcile); if it is not persisted yet there is nothing to
+      // refresh and the next trigger will pick it up.
+      continue;
+    }
+
+    validator.description = cv.description;
+    validator.commission = cv.commission?.commissionRates;
+    validator.minSelfDelegation = parseInt(cv.minSelfDelegation || "0", 10);
+    validator.stakeAmount = BigInt(cv.tokens || "0");
+    validator.stakeStatus = mapBondStatus(cv.status);
+
+    toUpsert.push(validator);
+  }
+
+  // Detect validators we still track as active but that the chain dropped from
+  // the staking store, and close them out.
+  const tracked = [
+    ...await fetchAllValidatorByStatus(StakeStatus.Staked),
+    ...await fetchAllValidatorByStatus(StakeStatus.Unstaking),
+  ];
+
+  for (const validator of tracked) {
+    if (seen.has(validator.id)) {
+      continue;
+    }
+
+    validator.stakeStatus = StakeStatus.Unstaked;
+    validator.stakeAmount = BigInt(0);
+    toUpsert.push(validator);
+  }
+
+  if (toUpsert.length > 0) {
+    await store.bulkCreate("Validator", toUpsert);
+  }
 }

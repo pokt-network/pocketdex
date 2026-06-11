@@ -94,6 +94,10 @@ spec:
               value: "10000"
             - name: POCKETDEX_DB_BULK_WRITE_CONCURRENCY
               value: "10"
+            - name: POCKETDEX_RECONCILE_VALIDATORS_EVERY_BLOCK
+              value: "false"
+            - name: POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK
+              value: "false"
             - name: POCKETDEX_GENESIS
               valueFrom:
                 configMapKeyRef:
