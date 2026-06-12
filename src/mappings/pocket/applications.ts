@@ -1028,6 +1028,16 @@ export async function reconcileApplications(height: number): Promise<void> {
       continue;
     }
 
+    // An app cannot leave the chain store without unbonding first, and the
+    // unbonding-begin event already moved it to Unstaking when that block was
+    // processed. A Staked row missing from the chain is therefore an impossible
+    // state — a corrupt/partial chain read or an indexer bug — so close-out is
+    // restricted to Unstaking rows; anything else is reported, never wiped.
+    if (app.stakeStatus !== StakeStatus.Unstaking) {
+      logger.error(`[reconcileApplications] app ${app.id} is ${app.stakeStatus} in store but missing from chain at height ${height} — refusing close-out, investigate`);
+      continue;
+    }
+
     app.stakeStatus = StakeStatus.Unstaked;
     app.stakeAmount = BigInt(0);
     toUpsert.push(app);
