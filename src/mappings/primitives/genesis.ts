@@ -1,6 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
-import { fromBase64 } from "@cosmjs/encoding";
+import {
+  fromBase64,
+  fromBech32,
+  toBech32,
+} from "@cosmjs/encoding";
 import { CosmosBlock } from "@subql/types-cosmos";
 import {
   get,
@@ -58,6 +62,7 @@ import {
 } from "../constants";
 import {
   Genesis,
+  GenesisStakingValidator,
   GenesisTransaction,
 } from "../types/genesis";
 import { optimizedBulkCreate } from "../utils/db";
@@ -823,7 +828,17 @@ async function _handleGenesisSupply(genesis: Genesis, block: CosmosBlock): Promi
   return store.bulkCreate("Supply", genesis.app_state.bank.supply.map(supply => getSupplyRecord(supply, block)));
 }
 
-// Handle genutil.gen_txs payloads
+// Handle the genesis validator set.
+//
+// Validators reach genesis through one of two mutually exclusive sources:
+//   - genutil.gen_txs: the create-validator txs of a freshly launched network.
+//   - app_state.staking.validators: the live validator set carried by a
+//     migration/restart (state-export) genesis, with gen_txs empty.
+// Both are handled here so they share a single Validator/MsgCreateValidator
+// persistence pass — splitting them into parallel handlers would race on
+// optimizedBulkCreate's destroy-by-block_id of the shared MsgCreateValidator
+// model. If a genesis ever carries both, staking.validators entries whose
+// operator was already created from a gen_tx are skipped to avoid a duplicate.
 async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promise<{ transactions: Array<TransactionProps>, messages: Array<MessageProps> }> {
   const promises: Array<Promise<void>> = [];
   const transactions: Array<TransactionProps> = [];
@@ -831,6 +846,9 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
   const validators: Array<ValidatorProps> = [];
   const messages: Array<MessageProps> = [];
   const accounts: Array<AccountProps> = [];
+  // Operators already created from gen_txs, so the staking.validators pass can
+  // skip them when (rarely) both sources are present in the same genesis.
+  const genTxValidatorOperators = new Set<string>();
 
   // logger.debug(`[handleGenesisGenTxs] Looping over gen_txs Transactions: ${genesis.app_state.genutil.gen_txs.length}`);
   for (let i = 0; i < (genesis.app_state.genutil.gen_txs?.length || 0); i++) {
@@ -862,10 +880,14 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
           typedMessages.set(type, [validatorMsg]);
         }
 
+        // canonical staking id; the cross-check in _handleMsgCreateValidator
+        // guarantees it equals the derived signerId
+        // eslint-disable-next-line no-case-declarations
+        const genTxOperator = (genTx.body.messages[0] as { validator_address: string }).validator_address;
+        genTxValidatorOperators.add(genTxOperator);
+
         validators.push({
-          // canonical staking id; the cross-check in _handleMsgCreateValidator
-          // guarantees it equals the derived signerId
-          id: (genTx.body.messages[0] as { validator_address: string }).validator_address,
+          id: genTxOperator,
           ed25519_id: validatorMsg.address,
           signerId: validatorMsg.signerId,
           signerPoktPrefixId: validatorMsg.signerPoktPrefixId,
@@ -899,6 +921,83 @@ async function _handleGenesisGenTxs(genesis: Genesis, block: CosmosBlock): Promi
       idx: 0,
       blockId: getBlockId(block),
       signerAddress,
+      gasUsed: BigInt(0),
+      gasWanted: BigInt(0),
+      fees: [{ denom: "upokt", amount: "0" }],
+      codespace: "",
+      memo: "",
+      log: "",
+      status: TxStatus.Success,
+      isMultisig: false,
+      code: 0,
+    });
+  }
+
+  // app_state.staking.validators: validators carried as exported state by a
+  // migration/restart genesis. Continue the fake-tx-hash index space past the
+  // gen_tx validators so the synthetic hashes never collide.
+  const stakingValidators = genesis.app_state.staking.validators ?? [];
+  const stakingValidatorMsgType = "/cosmos.staking.v1beta1.MsgCreateValidator";
+  for (let j = 0; j < stakingValidators.length; j++) {
+    const validator = stakingValidators[j];
+    const operatorAddress = validator.operator_address;
+
+    if (genTxValidatorOperators.has(operatorAddress)) {
+      // already created from a gen_tx above; do not duplicate
+      continue;
+    }
+
+    const fakeTxIndex = (genesis.app_state.genutil.gen_txs?.length ?? 0) + j;
+    const validatorMsg = _handleGenesisStakingValidator(validator, fakeTxIndex, block);
+
+    accounts.push({ id: validatorMsg.signerId, chainId: block.header.chainId });
+    accounts.push({ id: validatorMsg.signerPoktPrefixId, chainId: block.header.chainId });
+
+    if (typedMessages.has(stakingValidatorMsgType)) {
+      typedMessages.get(stakingValidatorMsgType)?.push(validatorMsg);
+    } else {
+      typedMessages.set(stakingValidatorMsgType, [validatorMsg]);
+    }
+
+    validators.push({
+      id: operatorAddress,
+      ed25519_id: validatorMsg.address,
+      signerId: validatorMsg.signerId,
+      signerPoktPrefixId: validatorMsg.signerPoktPrefixId,
+      description: validatorMsg.description,
+      commission: validatorMsg.commission,
+      minSelfDelegation: validatorMsg.minSelfDelegation,
+      stakeDenom: validatorMsg.stakeDenom,
+      stakeAmount: validatorMsg.stakeAmount,
+      stakeStatus: mapGenesisBondStatus(validator.status),
+      transactionId: validatorMsg.transactionId,
+      createMsgId: validatorMsg.id,
+    });
+
+    messages.push({
+      id: validatorMsg.id,
+      idx: 0,
+      typeUrl: stakingValidatorMsgType,
+      // store a MsgCreateValidator-shaped payload (matching the declared typeUrl
+      // and the gen_tx path's raw message) rather than the staking.Validator shape
+      json: stringify({
+        "@type": stakingValidatorMsgType,
+        description: validator.description,
+        commission: validator.commission.commission_rates,
+        min_self_delegation: validator.min_self_delegation,
+        validator_address: operatorAddress,
+        pubkey: validator.consensus_pubkey,
+        value: { denom: STAKING_BOND_DENOM, amount: validator.tokens },
+      }),
+      blockId: getBlockId(block),
+      transactionId: validatorMsg.transactionId,
+    });
+
+    transactions.push({
+      id: validatorMsg.transactionId,
+      idx: 0,
+      blockId: getBlockId(block),
+      signerAddress: validatorMsg.signerId,
       gasUsed: BigInt(0),
       gasWanted: BigInt(0),
       fees: [{ denom: "upokt", amount: "0" }],
@@ -962,5 +1061,91 @@ function _handleMsgCreateValidator(genTx: GenesisTransaction, index: number, blo
     blockId: getBlockId(block),
     transactionId: txHash,
     messageId: `genesis-gen-txs-${index}-0`,
+  };
+}
+
+// Bond denom is implicit in the staking module (validators carry tokens, not a
+// Coin), so genesis staking.validators entries have no denom field.
+const STAKING_BOND_DENOM = "upokt";
+
+// Maps the string BondStatus from a genesis staking.validators entry to the
+// StakeStatus enum. Mirrors mapBondStatus in pocket/validator.ts, which works
+// off the protobuf enum; here the genesis JSON carries the string form.
+function mapGenesisBondStatus(status: string): StakeStatus {
+  switch (status) {
+    case "BOND_STATUS_BONDED":
+      return StakeStatus.Staked;
+    case "BOND_STATUS_UNBONDING":
+      return StakeStatus.Unstaking;
+    // BOND_STATUS_UNBONDED / UNSPECIFIED => not actively staked
+    default:
+      return StakeStatus.Unstaked;
+  }
+}
+
+// cosmos sdk.Dec is JSON-encoded as a decimal string ("0.100000000000000000")
+// but protobuf-encoded as an integer scaled by 10^18. The live MsgCreateValidator
+// handler and reconcileValidators both persist the protobuf (integer) form — and
+// that is what existing rows store — so convert the genesis decimal to match.
+// (The older gen_tx genesis path stores the raw decimal instead; that pre-existing
+// inconsistency is out of scope here.)
+function decToScaledInt(dec: string): string {
+  const [int, frac = ""] = dec.split(".");
+  const scaled = (int + frac.padEnd(18, "0").slice(0, 18)).replace(/^0+/, "");
+  return scaled === "" ? "0" : scaled;
+}
+
+// Re-encodes a valoper bech32 address to the account (pokt) prefix, preserving
+// the underlying address bytes. Used as signer_pokt_prefix_id for genesis
+// staking validators, which carry no signer pubkey to derive from.
+function valoperToPoktPrefix(operatorAddress: string): string {
+  return toBech32(PREFIX, fromBech32(operatorAddress).data);
+}
+
+// Builds the synthesized MsgCreateValidator for an app_state.staking.validators
+// entry, mirroring _handleMsgCreateValidator (the gen_tx path). A state-exported
+// validator has no real create message, so — like genesis apps synthesizing a
+// MsgStakeApplication — we synthesize one so the entity's relations resolve. The
+// signer derivation the gen_tx path runs is unavailable (the export carries no
+// signer pubkey), so the operator address is used directly as the signer id and
+// re-encoded to the pokt prefix for signerPoktPrefixId.
+function _handleGenesisStakingValidator(validator: GenesisStakingValidator, index: number, block: CosmosBlock): MsgCreateValidatorProps {
+  const operatorAddress = validator.operator_address;
+  const rates = validator.commission.commission_rates;
+  // Built as a const so it lands in the description jsonb with the camelCase
+  // securityContact key the live MsgCreateValidator path produces (the schema's
+  // ValidatorDescription declares the misspelled securityContract, never
+  // populated; a const assignment skips the excess-property check while keeping
+  // the runtime key consistent with existing rows).
+  const description = {
+    moniker: validator.description.moniker,
+    identity: validator.description.identity,
+    website: validator.description.website,
+    securityContact: validator.description.security_contact,
+    details: validator.description.details,
+  };
+
+  return {
+    id: `genesis-staking-validator-${operatorAddress}`,
+    pubkey: {
+      type: validator.consensus_pubkey["@type"],
+      key: validator.consensus_pubkey.key,
+    },
+    // ed25519 consensus address (no bech32 prefix, hex), same as the gen_tx path
+    address: pubKeyToAddress(Ed25519, fromBase64(validator.consensus_pubkey.key)),
+    signerId: operatorAddress,
+    signerPoktPrefixId: valoperToPoktPrefix(operatorAddress),
+    description,
+    commission: {
+      rate: decToScaledInt(rates.rate),
+      maxRate: decToScaledInt(rates.max_rate),
+      maxChangeRate: decToScaledInt(rates.max_change_rate),
+    },
+    minSelfDelegation: parseInt(validator.min_self_delegation || "0", 10),
+    stakeDenom: STAKING_BOND_DENOM,
+    stakeAmount: BigInt(validator.tokens),
+    blockId: getBlockId(block),
+    transactionId: getGenesisFakeTxHash("validator", index),
+    messageId: `genesis-staking-validator-${operatorAddress}`,
   };
 }

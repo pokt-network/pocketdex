@@ -12,6 +12,36 @@ type Supplier = Omit<SupplierSDKType, "stake"> & { stake: Required<CoinSDKType> 
 type Params = Record<string, unknown>
 type ObjectWithParams = { params: Params }
 
+// A validator entry as it appears in app_state.staking.validators. Present in
+// migration/restart genesis files (the validator set is exported as state)
+// instead of genutil.gen_txs. Mirrors the cosmos staking Validator JSON shape.
+export interface GenesisStakingValidator {
+  operator_address: string;
+  consensus_pubkey: {
+    "@type": string;
+    key: string;
+  };
+  jailed: boolean;
+  // BOND_STATUS_BONDED | BOND_STATUS_UNBONDING | BOND_STATUS_UNBONDED
+  status: string;
+  tokens: string;
+  description: {
+    moniker: string;
+    identity?: string;
+    website?: string;
+    security_contact?: string;
+    details?: string;
+  };
+  commission: {
+    commission_rates: {
+      rate: string;
+      max_rate: string;
+      max_change_rate: string;
+    };
+  };
+  min_self_delegation: string;
+}
+
 export type FakeTxType = "app" | "supplier" | "gateway" | "service" | "validator"
 
 // Base interface representing a transaction message
@@ -149,7 +179,7 @@ export interface Genesis {
     gov: ObjectWithParams
     mint: ObjectWithParams
     slashing: ObjectWithParams
-    staking: ObjectWithParams
+    staking: ObjectWithParams & { validators?: Array<GenesisStakingValidator> }
     proof: ObjectWithParams
     shared: ObjectWithParams
     tokenomics: ObjectWithParams
