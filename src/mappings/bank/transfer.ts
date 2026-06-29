@@ -27,8 +27,10 @@ function _handleNativeTransfer(msg: CosmosMessage<NativeTransferMsg>): NativeTra
   const denom = amounts[0].denom;
   return {
     id,
-    senderId: toAddress,
-    recipientId: fromAddress,
+    // fixes pocketdex#84: senderId/recipientId were swapped vs on-chain MsgSend.
+    // sender == MsgSend.fromAddress, recipient == MsgSend.toAddress.
+    senderId: fromAddress,
+    recipientId: toAddress,
     amounts,
     denom,
     status: getTxStatus(tx),
