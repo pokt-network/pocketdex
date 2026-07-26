@@ -753,14 +753,6 @@ function _buildSettlementFromDetailedDistribution(
     },
   ];
 
-  if (inflationAmount === BigInt(0)) {
-    throw new Error(`Missing TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION in reward_distribution_detailed for event ${eventId}`);
-  }
-
-  if (reimbursementAmount === BigInt(0)) {
-    throw new Error(`Missing TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER in reward_distribution_detailed for event ${eventId}`);
-  }
-
   const mints: EventClaimSettledProps["mints"] = [
     {
       opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_RELAY_BURN_EQUALS_MINT_TOKENOMICS_CLAIM_DISTRIBUTION_MINT),
@@ -768,19 +760,32 @@ function _buildSettlementFromDetailedDistribution(
       amount: BigInt(resolvedMintedUpokt.amount),
       denom: claimed.denom,
     },
-    {
+  ];
+
+  // Global mint entries are not guaranteed to be present. A fully overserviced claim
+  // settles to zero (settled_upokt == 0) and the chain emits reward_distribution_detailed
+  // as an empty array — 43 of the 3033 claims settled in block 852613 look like this.
+  // Independently, both global mint TLMs early-return when global_inflation_per_claim is
+  // zero, and the DAO append is skipped when its share truncates to zero.
+  // All of these are valid chain states, so record each mint only when its amount is
+  // non-zero rather than failing the block.
+  if (inflationAmount > BigInt(0)) {
+    mints.push({
       opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION),
       destinationModule: "",
       amount: inflationAmount,
       denom: claimed.denom,
-    },
-    {
+    });
+  }
+
+  if (reimbursementAmount > BigInt(0)) {
+    mints.push({
       opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER),
       destinationModule: "",
       amount: reimbursementAmount,
       denom: claimed.denom,
-    },
-  ];
+    });
+  }
 
   return { modToAcctTransfers, mints, burns, modToModTransfers: [], mintedUpokt: resolvedMintedUpokt };
 }
