@@ -46,17 +46,19 @@ jobs:
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
-      # Tags: `sha-<short>` so a deploy can pin to an exact commit, plus `latest`,
-      # which metadata-action only emits on the default branch.
+      # Tag only `sha-<short>`, matching the convention already in pnf/pocketdex.
+      # No moving `latest` tag: every artifact in that repository is explicitly
+      # pinned, and release tags like 0.1.34-rc2 are published by hand.
       - name: Docker metadata
         if: ${{ inputs.push }}
         id: meta
         uses: docker/metadata-action@v5.7.0
         with:
           images: ${{ vars.HARBOR_REGISTRY }}/${{ vars.HARBOR_PROJECT }}/pocketdex
+          flavor: |
+            latest=false
           tags: |
             type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
 
       # production mode
       - name: Build Production
