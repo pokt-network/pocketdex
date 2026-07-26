@@ -43,4 +43,7 @@ jobs:
     with:
       env: ${{ matrix.environment }}
       platform: ${{ matrix.platform }}
+      # Publish only the production image, and only for commits landing on main.
+      # Pull requests build without ever touching the registry credentials.
+      push: ${{ matrix.environment == 'production' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
