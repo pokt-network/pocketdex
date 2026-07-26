@@ -7,6 +7,14 @@ on:
       platform:
         type: string
         required: true
+      push:
+        description: >-
+          Publish the built image to Harbor. The caller only enables this for pushes
+          landing on main, so pull request runs -- including runs from forks, which
+          GitHub never grants secrets to -- stay build-only.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -27,7 +35,28 @@ jobs:
       - name: Docker Setup Buildx
         uses: docker/setup-buildx-action@v3.9.0
 
-      # TODO: add later in another PR the registry login and docker metadata base on commit sha
+      # This repository is public, which makes its Actions logs public too. The registry
+      # host and project are kept in secrets rather than vars so they are masked in the
+      # log output -- the tradeoff is that image tags render as *** while debugging.
+      - name: Login to Harbor
+        if: ${{ inputs.push }}
+        uses: docker/login-action@v3.4.0
+        with:
+          registry: ${{ secrets.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      # Tags: `sha-<short>` so a deploy can pin to an exact commit, plus `latest`,
+      # which metadata-action only emits on the default branch.
+      - name: Docker metadata
+        if: ${{ inputs.push }}
+        id: meta
+        uses: docker/metadata-action@v5.7.0
+        with:
+          images: ${{ secrets.HARBOR_REGISTRY }}/${{ secrets.HARBOR_PROJECT }}/pocketdex-indexer
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
 
       # production mode
       - name: Build Production
@@ -40,3 +69,10 @@ jobs:
           build-args: |
             BUILD_MODE=production
           platforms: ${{ inputs.platform }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Harbor lists buildkit attestation manifests as a separate untagged
+          # "unknown/unknown" artifact next to the image, so emit a plain manifest.
+          provenance: false
+          sbom: false
