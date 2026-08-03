@@ -128,6 +128,10 @@ async function _handleGatewayUnstakeEvent(
 
   gateway.unstakingEndBlockId = getBlockId(event.block);
   gateway.stakeStatus = StakeStatus.Unstaked;
+  // Stake returned to the owner and the gateway dropped from the chain's store;
+  // see the same zeroing in handleEventGatewayUnbondingEnd and in the reconcile
+  // close-outs. A non-zero amount on an Unstaked row reads as live stake.
+  gateway.stakeAmount = BigInt(0);
 
   const eventId = getEventId(event);
 
@@ -248,6 +252,8 @@ async function _handleEventGatewayUnbondingEnd(event: CosmosEvent) {
 
   gateway.unstakingEndBlockId = unstakingEndHeight;
   gateway.stakeStatus = StakeStatus.Unstaked;
+  // Same as handleGatewayMsgUnstake: unbonding is done, the stake is gone.
+  gateway.stakeAmount = BigInt(0);
 
   const eventId = getEventId(event);
 
