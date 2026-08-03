@@ -193,6 +193,34 @@ function mapBondStatus(status: BondStatus): StakeStatus {
   }
 }
 
+// Compares two @jsonField values (description, commission) ignoring key order
+// and empty/absent fields: the stored side comes back from jsonb, which does not
+// preserve insertion order, while the incoming side is a decoded proto message
+// where an unset string is "" rather than missing.
+//
+// Invariant this relies on: both @jsonField types it is called with
+// (ValidatorDescription, ValidatorCommissionParams in schema.graphql) are FLAT
+// objects of scalars. Only the top level is canonicalised, so a nested object
+// added later would still be compared by its serialised form with whatever key
+// order each side happens to have — reporting "changed" every block and writing
+// a historical row per validator per block. Keep them flat, or extend this.
+function jsonFieldEquals(a: unknown, b: unknown): boolean {
+  const canonical = (value: unknown): string => {
+    if (isNil(value)) return "null";
+    return stringify(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => !isNil(v) && v !== "")
+        .sort(([keyA], [keyB]) => keyA.localeCompare(keyB)),
+    );
+  };
+
+  return canonical(a) === canonical(b);
+}
+
+// Validator ids already reported as "Staked in store but missing from chain".
+// Process-scoped, so a restart re-reports whatever is still broken.
+const reportedMissingFromChain = new Set<string>();
+
 // reconcileValidators re-syncs every validator entity against the chain's
 // authoritative state at the given height. We read the full validator set in a
 // single (paginated) query instead of deriving mutations from individual
@@ -207,7 +235,29 @@ function mapBondStatus(status: BondStatus): StakeStatus {
 // marked Unstaked with zero stake.
 export async function reconcileValidators(height: number): Promise<void> {
   const queryClient = getQueryClient(height);
-  const chainValidators = await queryClient.staking.allValidators();
+
+  // The read is pinned to the block height, so it depends on the node still
+  // serving state at that height: a pruned height during a from-genesis
+  // reindex, or a transient RPC failure, would otherwise throw out of the block
+  // handler and stall indexing entirely. (Other height-pinned reads share that
+  // exposure and are still unguarded — queryTotalSupply in bank/supply.ts,
+  // handleModuleAccounts in bank/moduleAccounts.ts, reconcileApplications — so
+  // this hardens the validator path, not the indexer as a whole.)
+  // Running every block is what makes giving up on this block safe — the next
+  // one reads the same set again — but it must be loud, or "the reconcile is
+  // broken" and "nothing changed" become the same silence.
+  //
+  // Only the read is tolerated. Everything below it writes through the block's
+  // Postgres transaction, shared with every other handler, so a failure there
+  // must fail the block instead of leaving the rest of it running on an aborted
+  // transaction.
+  let chainValidators: Awaited<ReturnType<typeof queryClient.staking.allValidators>>;
+  try {
+    chainValidators = await queryClient.staking.allValidators();
+  } catch (error) {
+    logger.error(`[reconcileValidators] chain read failed at height ${height}, retrying next block: ${error}`);
+    return;
+  }
 
   const seen = new Set<string>();
   // Collect every mutated entity and persist them in a single batched upsert
@@ -218,20 +268,42 @@ export async function reconcileValidators(height: number): Promise<void> {
   for (const cv of chainValidators) {
     const id = cv.operatorAddress;
     seen.add(id);
+    // Back on chain: forget it was reported, so a second, unrelated incident on
+    // the same validator is not silenced by the dedupe below.
+    reportedMissingFromChain.delete(id);
 
     const validator = await Validator.get(id);
     if (isNil(validator)) {
       // Created earlier in this same block by handleValidatorMsgCreate (which
       // runs before reconcile); if it is not persisted yet there is nothing to
-      // refresh and the next trigger will pick it up.
+      // refresh and the next block will pick it up.
       continue;
     }
 
-    validator.description = cv.description ?? validator.description;
-    validator.commission = cv.commission?.commissionRates ?? validator.commission;
-    validator.minSelfDelegation = parseInt(cv.minSelfDelegation || "0", 10);
-    validator.stakeAmount = BigInt(cv.tokens || "0");
-    validator.stakeStatus = mapBondStatus(cv.status);
+    const description = cv.description ?? validator.description;
+    const commission = cv.commission?.commissionRates ?? validator.commission;
+    const minSelfDelegation = parseInt(cv.minSelfDelegation || "0", 10);
+    const stakeAmount = BigInt(cv.tokens || "0");
+    const stakeStatus = mapBondStatus(cv.status);
+
+    // Reconcile runs on every block, so most blocks find every validator already
+    // in sync. Writing them anyway would open a new historical row per validator
+    // per block; skip the ones that did not move.
+    if (
+      validator.stakeStatus === stakeStatus &&
+      validator.stakeAmount === stakeAmount &&
+      validator.minSelfDelegation === minSelfDelegation &&
+      jsonFieldEquals(validator.description, description) &&
+      jsonFieldEquals(validator.commission, commission)
+    ) {
+      continue;
+    }
+
+    validator.description = description;
+    validator.commission = commission;
+    validator.minSelfDelegation = minSelfDelegation;
+    validator.stakeAmount = stakeAmount;
+    validator.stakeStatus = stakeStatus;
 
     toUpsert.push(validator);
   }
@@ -250,11 +322,19 @@ export async function reconcileValidators(height: number): Promise<void> {
 
     // Same invariant as reconcileApplications: the staking module keeps a
     // validator in its store (any bond status) until unbonding fully completes,
-    // and the unbonding trigger events already moved the row to Unstaking. A
-    // Staked row missing from the chain read is an impossible state — report it
-    // instead of wiping it.
+    // and running every block means the reconcile itself has already moved the
+    // row to Unstaking well before the chain drops it. A Staked row missing from
+    // the chain read is an impossible state — report it instead of wiping it.
+    //
+    // Reported once per unresolved streak: the row is deliberately never
+    // repaired, so re-logging it on every block would bury the signal it exists
+    // to raise. The id is forgotten as soon as the chain returns it again, so a
+    // later incident still reports.
     if (validator.stakeStatus !== StakeStatus.Unstaking) {
-      logger.error(`[reconcileValidators] validator ${validator.id} is ${validator.stakeStatus} in store but missing from chain at height ${height} — refusing close-out, investigate`);
+      if (!reportedMissingFromChain.has(validator.id)) {
+        reportedMissingFromChain.add(validator.id);
+        logger.error(`[reconcileValidators] validator ${validator.id} is ${validator.stakeStatus} in store but missing from chain at height ${height} — refusing close-out, investigate`);
+      }
       continue;
     }
 
