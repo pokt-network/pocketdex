@@ -69,16 +69,43 @@ DECLARE
   v_unstaked_suppliers bigint := 0;
   v_unstaked_tokens numeric := 0;
 BEGIN
-  -- Aggregate unstaked supplier stats for the block
+  -- Aggregate unstaked supplier stats for the block.
+  --
+  -- The amount is read from the row version immediately BEFORE the entity turned
+  -- Unstaked, not from the Unstaked row itself: finishing unbonding zeroes
+  -- stake_amount (the chain returned the stake and dropped the supplier from its
+  -- store), and this report answers "how many tokens were returned in this
+  -- block" — reading the zeroed row would answer 0 for every block. Requires
+  -- historical indexing, which is how this project runs; without it there is no
+  -- previous version and the report degrades to 0 rather than reporting a wrong
+  -- number.
+  --
+  -- Grouping by id first keeps one row per supplier even if several versions
+  -- carry the same unstaking_end_block_id, and taking MIN(lower(_block_range))
+  -- anchors on the first Unstaked version so a supplier that staked and unstaked
+  -- more than once picks up the amount of the cycle that ended here.
+  WITH unstaked_here AS (
+    SELECT s.id, MIN(lower(s._block_range)) AS unstaked_from
+    FROM ${dbSchema}.suppliers s
+    WHERE s.stake_status = 'Unstaked'
+      AND s.unstaking_end_block_id = p_block_id
+    GROUP BY s.id
+  )
   SELECT
     COUNT(*),
-    COALESCE(SUM(stake_amount), 0)
+    COALESCE(SUM(COALESCE(prev.stake_amount, 0)), 0)
   INTO
     v_unstaked_suppliers,
     v_unstaked_tokens
-  FROM ${dbSchema}.suppliers s
-  WHERE s.stake_status = 'Unstaked'
-    AND s.unstaking_end_block_id = p_block_id;
+  FROM unstaked_here u
+  LEFT JOIN LATERAL (
+    SELECT p.stake_amount
+    FROM ${dbSchema}.suppliers p
+    WHERE p.id = u.id
+      AND lower(p._block_range) < u.unstaked_from
+    ORDER BY lower(p._block_range) DESC
+    LIMIT 1
+  ) prev ON TRUE;
 
   -- Update the blocks table
   UPDATE ${dbSchema}.blocks
