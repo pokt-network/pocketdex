@@ -236,10 +236,13 @@ const reportedMissingFromChain = new Set<string>();
 export async function reconcileValidators(height: number): Promise<void> {
   const queryClient = getQueryClient(height);
 
-  // The read is pinned to the block height, which makes it the one part of block
-  // indexing that depends on the node still serving state at that height: a
-  // pruned height during a from-genesis reindex, or a transient RPC failure,
-  // would otherwise throw out of the block handler and stall indexing entirely.
+  // The read is pinned to the block height, so it depends on the node still
+  // serving state at that height: a pruned height during a from-genesis
+  // reindex, or a transient RPC failure, would otherwise throw out of the block
+  // handler and stall indexing entirely. (Other height-pinned reads share that
+  // exposure and are still unguarded — queryTotalSupply in bank/supply.ts,
+  // handleModuleAccounts in bank/moduleAccounts.ts, reconcileApplications — so
+  // this hardens the validator path, not the indexer as a whole.)
   // Running every block is what makes giving up on this block safe — the next
   // one reads the same set again — but it must be loud, or "the reconcile is
   // broken" and "nothing changed" become the same silence.
