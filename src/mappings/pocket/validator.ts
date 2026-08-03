@@ -197,6 +197,13 @@ function mapBondStatus(status: BondStatus): StakeStatus {
 // and empty/absent fields: the stored side comes back from jsonb, which does not
 // preserve insertion order, while the incoming side is a decoded proto message
 // where an unset string is "" rather than missing.
+//
+// Invariant this relies on: both @jsonField types it is called with
+// (ValidatorDescription, ValidatorCommissionParams in schema.graphql) are FLAT
+// objects of scalars. Only the top level is canonicalised, so a nested object
+// added later would still be compared by its serialised form with whatever key
+// order each side happens to have — reporting "changed" every block and writing
+// a historical row per validator per block. Keep them flat, or extend this.
 function jsonFieldEquals(a: unknown, b: unknown): boolean {
   const canonical = (value: unknown): string => {
     if (isNil(value)) return "null";
@@ -209,6 +216,10 @@ function jsonFieldEquals(a: unknown, b: unknown): boolean {
 
   return canonical(a) === canonical(b);
 }
+
+// Validator ids already reported as "Staked in store but missing from chain".
+// Process-scoped, so a restart re-reports whatever is still broken.
+const reportedMissingFromChain = new Set<string>();
 
 // reconcileValidators re-syncs every validator entity against the chain's
 // authoritative state at the given height. We read the full validator set in a
@@ -240,7 +251,7 @@ export async function reconcileValidators(height: number): Promise<void> {
     if (isNil(validator)) {
       // Created earlier in this same block by handleValidatorMsgCreate (which
       // runs before reconcile); if it is not persisted yet there is nothing to
-      // refresh and the next trigger will pick it up.
+      // refresh and the next block will pick it up.
       continue;
     }
 
@@ -286,11 +297,18 @@ export async function reconcileValidators(height: number): Promise<void> {
 
     // Same invariant as reconcileApplications: the staking module keeps a
     // validator in its store (any bond status) until unbonding fully completes,
-    // and the unbonding trigger events already moved the row to Unstaking. A
-    // Staked row missing from the chain read is an impossible state — report it
-    // instead of wiping it.
+    // and running every block means the reconcile itself has already moved the
+    // row to Unstaking well before the chain drops it. A Staked row missing from
+    // the chain read is an impossible state — report it instead of wiping it.
+    //
+    // Reported once per validator per process: the row is deliberately never
+    // repaired, so re-logging it on every block would bury the signal it exists
+    // to raise.
     if (validator.stakeStatus !== StakeStatus.Unstaking) {
-      logger.error(`[reconcileValidators] validator ${validator.id} is ${validator.stakeStatus} in store but missing from chain at height ${height} — refusing close-out, investigate`);
+      if (!reportedMissingFromChain.has(validator.id)) {
+        reportedMissingFromChain.add(validator.id);
+        logger.error(`[reconcileValidators] validator ${validator.id} is ${validator.stakeStatus} in store but missing from chain at height ${height} — refusing close-out, investigate`);
+      }
       continue;
     }
 
