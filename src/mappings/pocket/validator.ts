@@ -235,7 +235,26 @@ const reportedMissingFromChain = new Set<string>();
 // marked Unstaked with zero stake.
 export async function reconcileValidators(height: number): Promise<void> {
   const queryClient = getQueryClient(height);
-  const chainValidators = await queryClient.staking.allValidators();
+
+  // The read is pinned to the block height, which makes it the one part of block
+  // indexing that depends on the node still serving state at that height: a
+  // pruned height during a from-genesis reindex, or a transient RPC failure,
+  // would otherwise throw out of the block handler and stall indexing entirely.
+  // Running every block is what makes giving up on this block safe — the next
+  // one reads the same set again — but it must be loud, or "the reconcile is
+  // broken" and "nothing changed" become the same silence.
+  //
+  // Only the read is tolerated. Everything below it writes through the block's
+  // Postgres transaction, shared with every other handler, so a failure there
+  // must fail the block instead of leaving the rest of it running on an aborted
+  // transaction.
+  let chainValidators: Awaited<ReturnType<typeof queryClient.staking.allValidators>>;
+  try {
+    chainValidators = await queryClient.staking.allValidators();
+  } catch (error) {
+    logger.error(`[reconcileValidators] chain read failed at height ${height}, retrying next block: ${error}`);
+    return;
+  }
 
   const seen = new Set<string>();
   // Collect every mutated entity and persist them in a single batched upsert
@@ -246,6 +265,9 @@ export async function reconcileValidators(height: number): Promise<void> {
   for (const cv of chainValidators) {
     const id = cv.operatorAddress;
     seen.add(id);
+    // Back on chain: forget it was reported, so a second, unrelated incident on
+    // the same validator is not silenced by the dedupe below.
+    reportedMissingFromChain.delete(id);
 
     const validator = await Validator.get(id);
     if (isNil(validator)) {
@@ -301,9 +323,10 @@ export async function reconcileValidators(height: number): Promise<void> {
     // row to Unstaking well before the chain drops it. A Staked row missing from
     // the chain read is an impossible state — report it instead of wiping it.
     //
-    // Reported once per validator per process: the row is deliberately never
+    // Reported once per unresolved streak: the row is deliberately never
     // repaired, so re-logging it on every block would bury the signal it exists
-    // to raise.
+    // to raise. The id is forgotten as soon as the chain returns it again, so a
+    // later incident still reports.
     if (validator.stakeStatus !== StakeStatus.Unstaking) {
       if (!reportedMissingFromChain.has(validator.id)) {
         reportedMissingFromChain.add(validator.id);

@@ -163,18 +163,9 @@ async function indexValidators(block: CosmosBlock, msgByType: MessageByType, eve
   // validators), and reconcileValidators only writes the rows whose values
   // actually changed, so the steady state is one read and zero writes.
   //
-  // That query is pinned to the block height, so it is the one part of block
-  // indexing that depends on the node still serving state at that height: a
-  // pruned height during a from-genesis reindex, or a transient RPC failure,
-  // would otherwise throw out of the block handler and stall indexing entirely.
-  // Running every block is what makes swallowing it safe — the next block
-  // reconciles the same set — but it must be loud, or "the reconcile is broken"
-  // and "nothing changed" become the same silence.
-  try {
-    await reconcileValidators(block.header.height);
-  } catch (error) {
-    logger.error(`[indexValidators] validator reconcile failed at height ${block.header.height}, retrying next block: ${error}`);
-  }
+  // A failed chain read is tolerated inside reconcileValidators (the next block
+  // reads the same set again); a failed write is not, and still fails the block.
+  await reconcileValidators(block.header.height);
 }
 
 // any message or event related to relays
