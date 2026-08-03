@@ -69,16 +69,17 @@ DECLARE
   v_unstaked_apps bigint := 0;
   v_unstaked_apps_tokens numeric := 0;
 BEGIN
-  -- Aggregate unstaked applications at a specific block. The amount comes from
-  -- the row version immediately BEFORE the app turned Unstaked, because the
-  -- reconcile close-out zeroes stake_amount on the same write that marks it
-  -- Unstaked; see update_block_unstaked_suppliers for the full rationale.
+  -- Aggregate unstaked applications at a specific block. Anchored on
+  -- lower(_block_range) and reading the amount from the version before the
+  -- transition; see update_block_unstaked_suppliers for the full rationale.
+  -- Anchoring on the write block also picks up apps closed out by
+  -- reconcileApplications, which marks them Unstaked without ever setting
+  -- unstaking_end_block_id — those were invisible to this report before.
   WITH unstaked_here AS (
-    SELECT s.id, MIN(lower(s._block_range)) AS unstaked_from
+    SELECT s.id
     FROM ${dbSchema}.applications s
     WHERE s.stake_status = 'Unstaked'
-      AND s.unstaking_end_block_id = p_block_id
-    GROUP BY s.id
+      AND lower(s._block_range) = p_block_id
   )
   SELECT
     COUNT(*),
@@ -91,7 +92,7 @@ BEGIN
     SELECT p.stake_amount
     FROM ${dbSchema}.applications p
     WHERE p.id = u.id
-      AND lower(p._block_range) < u.unstaked_from
+      AND lower(p._block_range) < p_block_id
     ORDER BY lower(p._block_range) DESC
     LIMIT 1
   ) prev ON TRUE;
