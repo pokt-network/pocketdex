@@ -127,34 +127,6 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
   ]);
 }
 
-// Messages/events whose presence in a block means a validator's on-chain state
-// (description, commission, tokens or bond status) may have changed. When any of
-// these is seen we re-sync the affected validators against the chain instead of
-// trying to derive the new state from the message payloads.
-const VALIDATOR_RECONCILE_MSG_TYPES = [
-  "/cosmos.staking.v1beta1.MsgCreateValidator",
-  "/cosmos.staking.v1beta1.MsgEditValidator",
-  "/cosmos.staking.v1beta1.MsgDelegate",
-  "/cosmos.staking.v1beta1.MsgUndelegate",
-  "/cosmos.staking.v1beta1.MsgBeginRedelegate",
-  "/cosmos.slashing.v1beta1.MsgUnjail",
-];
-const VALIDATOR_RECONCILE_EVENT_TYPES = [
-  "slash",
-  // emitted by cosmos staking end-blocker when a validator completes unbonding
-  // (no explicit MsgUndelegate in that block — without this trigger the DB row
-  // would stay Unstaking forever since the chain drops it from the store)
-  "complete_unbonding",
-  "unbonding_validator",
-];
-
-// Force a validator reconcile on EVERY block. Intended for local testing to
-// verify the chain re-sync works end-to-end; in production reconcile should only
-// run when a validator-related msg/event is seen (see hasStakeChange below).
-// Toggle via env (no code change needed); defaults to off.
-// process.env works inside the sandbox thanks to the fork that runs it with `context: host`.
-const RECONCILE_VALIDATORS_EVERY_BLOCK = process.env.POCKETDEX_RECONCILE_VALIDATORS_EVERY_BLOCK === "true";
-
 // any validator messages or events
 async function indexValidators(block: CosmosBlock, msgByType: MessageByType, eventByType: EventByType): Promise<void> {
   const msgTypes = [
@@ -172,13 +144,25 @@ async function indexValidators(block: CosmosBlock, msgByType: MessageByType, eve
     ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.All),
   ]);
 
-  const hasStakeChange =
-    VALIDATOR_RECONCILE_MSG_TYPES.some(type => (msgByType[type]?.length ?? 0) > 0) ||
-    VALIDATOR_RECONCILE_EVENT_TYPES.some(type => (eventByType[type]?.length ?? 0) > 0);
-
-  if (hasStakeChange || RECONCILE_VALIDATORS_EVERY_BLOCK) {
-    await reconcileValidators(block.header.height);
-  }
+  // Reconcile on EVERY block, with no trigger list.
+  //
+  // A trigger list cannot work here for two independent reasons:
+  //
+  // 1. msgByType/eventByType only carry types that have an entry in
+  //    MsgHandlers/EventHandlers (see the maps built in indexingHandler);
+  //    anything else is dropped into unhandledMsgTypes. Of the staking messages
+  //    that mutate a validator only MsgCreateValidator has a handler, so a
+  //    trigger keyed on those maps fires exactly once per validator creation.
+  // 2. Even reading the raw block would not be enough: the staking end-blocker
+  //    moves validators in and out of the active set (UNBONDED -> BONDED when a
+  //    slot frees up, and back) without any message, and validator tokens grow
+  //    through reward auto-compounding with no message either. Those are
+  //    precisely the transitions that left rows frozen as Unstaked/Unstaking.
+  //
+  // The cost is one paginated ABCI query per block over a small set (~30
+  // validators), and reconcileValidators only writes the rows whose values
+  // actually changed, so the steady state is one read and zero writes.
+  await reconcileValidators(block.header.height);
 }
 
 // any message or event related to relays

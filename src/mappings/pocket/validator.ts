@@ -193,6 +193,23 @@ function mapBondStatus(status: BondStatus): StakeStatus {
   }
 }
 
+// Compares two @jsonField values (description, commission) ignoring key order
+// and empty/absent fields: the stored side comes back from jsonb, which does not
+// preserve insertion order, while the incoming side is a decoded proto message
+// where an unset string is "" rather than missing.
+function jsonFieldEquals(a: unknown, b: unknown): boolean {
+  const canonical = (value: unknown): string => {
+    if (isNil(value)) return "null";
+    return stringify(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => !isNil(v) && v !== "")
+        .sort(([keyA], [keyB]) => keyA.localeCompare(keyB)),
+    );
+  };
+
+  return canonical(a) === canonical(b);
+}
+
 // reconcileValidators re-syncs every validator entity against the chain's
 // authoritative state at the given height. We read the full validator set in a
 // single (paginated) query instead of deriving mutations from individual
@@ -227,11 +244,30 @@ export async function reconcileValidators(height: number): Promise<void> {
       continue;
     }
 
-    validator.description = cv.description ?? validator.description;
-    validator.commission = cv.commission?.commissionRates ?? validator.commission;
-    validator.minSelfDelegation = parseInt(cv.minSelfDelegation || "0", 10);
-    validator.stakeAmount = BigInt(cv.tokens || "0");
-    validator.stakeStatus = mapBondStatus(cv.status);
+    const description = cv.description ?? validator.description;
+    const commission = cv.commission?.commissionRates ?? validator.commission;
+    const minSelfDelegation = parseInt(cv.minSelfDelegation || "0", 10);
+    const stakeAmount = BigInt(cv.tokens || "0");
+    const stakeStatus = mapBondStatus(cv.status);
+
+    // Reconcile runs on every block, so most blocks find every validator already
+    // in sync. Writing them anyway would open a new historical row per validator
+    // per block; skip the ones that did not move.
+    if (
+      validator.stakeStatus === stakeStatus &&
+      validator.stakeAmount === stakeAmount &&
+      validator.minSelfDelegation === minSelfDelegation &&
+      jsonFieldEquals(validator.description, description) &&
+      jsonFieldEquals(validator.commission, commission)
+    ) {
+      continue;
+    }
+
+    validator.description = description;
+    validator.commission = commission;
+    validator.minSelfDelegation = minSelfDelegation;
+    validator.stakeAmount = stakeAmount;
+    validator.stakeStatus = stakeStatus;
 
     toUpsert.push(validator);
   }
