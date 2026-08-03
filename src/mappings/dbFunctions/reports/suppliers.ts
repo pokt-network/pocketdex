@@ -69,16 +69,45 @@ DECLARE
   v_unstaked_suppliers bigint := 0;
   v_unstaked_tokens numeric := 0;
 BEGIN
-  -- Aggregate unstaked supplier stats for the block
+  -- Aggregate unstaked supplier stats for the block: which suppliers turned
+  -- Unstaked here, and how much stake the chain returned doing so.
+  --
+  -- Anchored on lower(_block_range), i.e. the block the row was actually written
+  -- in, NOT on unstaking_end_block_id. That column carries the chain-announced
+  -- unbonding_end_height from the event attribute, which can name an earlier
+  -- height than the block the event was indexed in — on pnf mainnet they differ
+  -- for thousands of rows. Keying on it meant the report looked for a row that
+  -- did not exist yet at the announced height and no longer matched at the write
+  -- block, so those suppliers were counted in no block at all; it also
+  -- double-counted a supplier when several row versions shared the value.
+  --
+  -- The amount is read from the row version immediately BEFORE the transition,
+  -- because finishing unbonding zeroes stake_amount (the chain returned the
+  -- stake and dropped the supplier from its store) and reading the zeroed row
+  -- would answer 0 for every block. This needs historical indexing, which is how
+  -- this project runs; a supplier whose first ever row version is already
+  -- Unstaked has nothing earlier to read and contributes 0.
+  WITH unstaked_here AS (
+    SELECT s.id
+    FROM ${dbSchema}.suppliers s
+    WHERE s.stake_status = 'Unstaked'
+      AND lower(s._block_range) = p_block_id
+  )
   SELECT
     COUNT(*),
-    COALESCE(SUM(stake_amount), 0)
+    COALESCE(SUM(COALESCE(prev.stake_amount, 0)), 0)
   INTO
     v_unstaked_suppliers,
     v_unstaked_tokens
-  FROM ${dbSchema}.suppliers s
-  WHERE s.stake_status = 'Unstaked'
-    AND s.unstaking_end_block_id = p_block_id;
+  FROM unstaked_here u
+  LEFT JOIN LATERAL (
+    SELECT p.stake_amount
+    FROM ${dbSchema}.suppliers p
+    WHERE p.id = u.id
+      AND lower(p._block_range) < p_block_id
+    ORDER BY lower(p._block_range) DESC
+    LIMIT 1
+  ) prev ON TRUE;
 
   -- Update the blocks table
   UPDATE ${dbSchema}.blocks

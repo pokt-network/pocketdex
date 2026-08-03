@@ -404,6 +404,12 @@ function _handleSupplierUnbondingEndEvent(
   }
 
   supplier.stakeStatus = StakeStatus.Unstaked;
+  // Unbonding completed: the chain returned the stake to the owner and dropped
+  // the supplier from its store. Keeping the last known amount here leaves the
+  // row claiming to be unstaked and holding stake at the same time, which any
+  // consumer summing stakeAmount without filtering on stakeStatus reads as live
+  // stake.
+  supplier.stakeAmount = BigInt(0);
 
   const eventId = getEventId(event);
 

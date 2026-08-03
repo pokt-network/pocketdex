@@ -37,16 +37,33 @@ DECLARE
   v_unstaked_gateways bigint := 0;
   v_unstaked_gateways_tokens numeric := 0;
 BEGIN
-  -- Aggregate unstaked gateways at a specific block
+  -- Aggregate unstaked gateways at a specific block. Anchored on
+  -- lower(_block_range) and reading the amount from the version before the
+  -- transition; see update_block_unstaked_suppliers for the full rationale.
+  -- Gateways take the announced unbonding_end_height into unstaking_end_block_id
+  -- exactly like suppliers do, so they had the same exposure. Anchoring on the
+  -- write block also keeps each stake/unstake cycle of the same gateway separate.
+  WITH unstaked_here AS (
+    SELECT s.id
+    FROM ${dbSchema}.gateways s
+    WHERE s.stake_status = 'Unstaked'
+      AND lower(s._block_range) = p_block_id
+  )
   SELECT
     COUNT(*),
-    COALESCE(SUM(stake_amount), 0)
+    COALESCE(SUM(COALESCE(prev.stake_amount, 0)), 0)
   INTO
     v_unstaked_gateways,
     v_unstaked_gateways_tokens
-  FROM ${dbSchema}.gateways s
-  WHERE s.stake_status = 'Unstaked'
-    AND s.unstaking_end_block_id = p_block_id;
+  FROM unstaked_here u
+  LEFT JOIN LATERAL (
+    SELECT p.stake_amount
+    FROM ${dbSchema}.gateways p
+    WHERE p.id = u.id
+      AND lower(p._block_range) < p_block_id
+    ORDER BY lower(p._block_range) DESC
+    LIMIT 1
+  ) prev ON TRUE;
 
   -- Update the corresponding row in the blocks table
   UPDATE ${dbSchema}.blocks
