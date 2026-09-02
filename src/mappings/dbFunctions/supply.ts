@@ -120,36 +120,37 @@ STABLE
 AS $$
 DECLARE
   reimbursement_amount NUMERIC := 0;
-  reimbursement_v2_amount NUMERIC := 0;
   inflation_amount NUMERIC := 0;
   mint_burn_amount NUMERIC := 0;
 BEGIN
-  -- Reimbursement amount
-  SELECT COALESCE(SUM(t.amount), 0) INTO reimbursement_amount
-  FROM ${dbSchema}.mod_to_acct_transfers t
-  INNER JOIN ${dbSchema}.blocks b ON t.block_id = b.id
-  WHERE t.op_reason = 'TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER'
-    AND b.timestamp BETWEEN start_date AND end_date;
-
-  -- Mint by op_reason
+  -- Mint by op_reason, read from event_claim_settleds.mints only.
   -- Old protocol: opReason 1=SUPPLIER_STAKE_MINT (mint_burn), 3=INFLATION (inflation)
   -- New protocol: opReason 19=TOKENOMICS_CLAIM_DISTRIBUTION_MINT (mint_burn), 5=DAO_REWARD_DISTRIBUTION (inflation)
-  -- opReason 10=REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER is unchanged across both protocols
+  -- opReason 10=REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER is unchanged across both protocols.
+  --
+  -- Reimbursement used to also be summed from mod_to_acct_transfers (op_reason
+  -- TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER). That table is ~2.9 B rows on
+  -- mainnet and the only index on op_reason is single-column, so the planner heap-fetched
+  -- every reimbursement row (~21 GB of reads per call regardless of the date window). The
+  -- mapping already records the same escrow amount as a synthetic opReason 10 mint on the
+  -- event_claim_settleds row (see _buildSettlementFromDetailedDistribution in relays.ts),
+  -- so the raw-table branch was both redundant and double counting in the
+  -- reward_distribution_detailed era.
   SELECT
     SUM(CASE WHEN (elem->>'opReason')::int = 10 THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END),
     SUM(CASE WHEN (elem->>'opReason')::int IN (3, 5) THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END),
     SUM(CASE WHEN (elem->>'opReason')::int IN (1, 19) THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END)
   INTO
-    reimbursement_v2_amount, inflation_amount, mint_burn_amount
+    reimbursement_amount, inflation_amount, mint_burn_amount
   FROM ${dbSchema}.event_claim_settleds t
   INNER JOIN ${dbSchema}.blocks b ON t.block_id = b.id
   JOIN LATERAL jsonb_array_elements(t.mints) AS elem ON TRUE
   WHERE b.timestamp BETWEEN start_date AND end_date;
 
   RETURN json_build_object(
-    'reimbursement', reimbursement_amount + reimbursement_v2_amount,
-    'inflation', inflation_amount,
-    'mint_burn', mint_burn_amount
+    'reimbursement', COALESCE(reimbursement_amount, 0),
+    'inflation', COALESCE(inflation_amount, 0),
+    'mint_burn', COALESCE(mint_burn_amount, 0)
   );
 END;
 $$;

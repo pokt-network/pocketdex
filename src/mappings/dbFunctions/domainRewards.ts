@@ -122,5 +122,14 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
       ON ${dbSchema}.domain_service_daily_rewards (domain, day)`,
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dsdr_day
       ON ${dbSchema}.domain_service_daily_rewards (day)`,
+    // Covering partial index for the PostGraphile `transactions` connection
+    // (`ORDER BY block_id DESC LIMIT n` + `count(*)`). SubQuery only creates GIST
+    // (col, _block_range) indexes, which cannot serve ordering, so both halves of
+    // that query were parallel seq scans of the whole heap. PostGraphile adds
+    // `id IS NOT NULL` to the WHERE clause, so the index is partial on that
+    // predicate to allow an index-only scan for the count.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS transactions_block_id_desc_live_idx
+      ON ${dbSchema}.transactions (block_id DESC, _id) INCLUDE (_block_range)
+      WHERE id IS NOT NULL`,
   ];
 }
