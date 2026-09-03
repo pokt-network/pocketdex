@@ -131,5 +131,14 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS transactions_block_id_desc_live_idx
       ON ${dbSchema}.transactions (block_id DESC, _id) INCLUDE (_block_range)
       WHERE id IS NOT NULL`,
+    // Functional btree for the balances "reopen rows closed at this height" UPDATE
+    // in updateBalances (src/mappings/bank/balanceChange.ts):
+    //   UPDATE balances SET _block_range = int8range(lower(_block_range), NULL, '[)')
+    //   WHERE upper(_block_range) = <blockId>
+    // SubQuery only creates GIST (col, _block_range) indexes plus btrees on
+    // id/_id/last_updated_block_id; none can serve `upper(_block_range) = $1`,
+    // so every call was an index-only scan of the whole 2.7 GB GIST index.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS balances_block_range_upper_idx
+      ON ${dbSchema}.balances (upper(_block_range))`,
   ];
 }
