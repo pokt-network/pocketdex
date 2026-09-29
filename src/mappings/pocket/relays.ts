@@ -589,7 +589,9 @@ interface SettlementParts {
 }
 
 // Builds burns and mints arrays from reward distribution totals.
-// Global mint is minted twice: once for inflation, once for application reimbursement.
+// The distribution total holds the global mint twice: once as the inflation the chain mints,
+// once as the application reimbursement, which is not a mint but a transfer of the same amount
+// from the application's stake to the DAO. Hence the /2 below.
 // See:
 //   https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L57
 //   https://github.com/pokt-network/poktroll/blob/main/x/tokenomics/token_logic_module/tlm_reimbursement_requests.go#L102-L112
@@ -712,7 +714,6 @@ function _buildSettlementFromDetailedDistribution(
   claimed: CoinSDKType,
   mintedUpokt: CoinSDKType | undefined,
 ): SettlementParts {
-  let inflationAmount = BigInt(0);
   let reimbursementAmount = BigInt(0);
 
   const modToAcctTransfers = rewardDistributionDetailed.map((item, index) => {
@@ -720,9 +721,7 @@ function _buildSettlementFromDetailedDistribution(
     const coinAmount = BigInt(coin.amount);
     const reason = getSettlementOpReasonFromSDK(item.op_reason);
 
-    if (reason === SettlementOpReason.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION) {
-      inflationAmount += coinAmount;
-    } else if (reason === SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER) {
+    if (reason === SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER) {
       reimbursementAmount += coinAmount;
     }
 
@@ -769,11 +768,20 @@ function _buildSettlementFromDetailedDistribution(
   // zero, and the DAO append is skipped when its share truncates to zero.
   // All of these are valid chain states, so record each mint only when its amount is
   // non-zero rather than failing the block.
-  if (inflationAmount > BigInt(0)) {
+  //
+  // The inflation mint is the claim's whole global mint, which the chain emits as
+  // TLM_GLOBAL_MINT_INFLATION in EventSettlementBatch, not per claim. It is NOT the
+  // TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION entry: the DAO only receives the remainder
+  // after the supplier shareholder, source owner, application and proposer slices.
+  // The reimbursement escrow transfers exactly the claim's global mint from the
+  // application's stake to the DAO, so its amount is the inflation mint.
+  // Rows indexed before this change carry opReason 5 (DAO only) here instead;
+  // get_mint_breakdown_between_dates compensates for them.
+  if (reimbursementAmount > BigInt(0)) {
     mints.push({
-      opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION),
+      opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_INFLATION),
       destinationModule: "",
-      amount: inflationAmount,
+      amount: reimbursementAmount,
       denom: claimed.denom,
     });
   }

@@ -125,8 +125,15 @@ DECLARE
 BEGIN
   -- Mint by op_reason, read from event_claim_settleds.mints only.
   -- Old protocol: opReason 1=SUPPLIER_STAKE_MINT (mint_burn), 3=INFLATION (inflation)
-  -- New protocol: opReason 19=TOKENOMICS_CLAIM_DISTRIBUTION_MINT (mint_burn), 5=DAO_REWARD_DISTRIBUTION (inflation)
+  -- New protocol: opReason 19=TOKENOMICS_CLAIM_DISTRIBUTION_MINT (mint_burn)
   -- opReason 10=REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER is unchanged across both protocols.
+  --
+  -- Inflation is the claim's whole global mint (TLM_GLOBAL_MINT_INFLATION). Old-protocol rows
+  -- carry it as opReason 3. New-protocol rows indexed before the fix in
+  -- _buildSettlementFromDetailedDistribution (relays.ts) carry only the DAO's remainder as
+  -- opReason 5, which undercounts it; their opReason 10 escrow equals exactly the claim's global
+  -- mint, so it is used instead. Rows indexed after that fix carry opReason 3 = the escrow amount.
+  -- Per row: r3 when present, else r10 on new-protocol rows (r19 > 0). Never r3 + r10.
   --
   -- Reimbursement used to also be summed from mod_to_acct_transfers (op_reason
   -- TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER). That table is ~2.9 B rows on
@@ -137,14 +144,21 @@ BEGIN
   -- so the raw-table branch was both redundant and double counting in the
   -- reward_distribution_detailed era.
   SELECT
-    SUM(CASE WHEN (elem->>'opReason')::int = 10 THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END),
-    SUM(CASE WHEN (elem->>'opReason')::int IN (3, 5) THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END),
-    SUM(CASE WHEN (elem->>'opReason')::int IN (1, 19) THEN REPLACE(elem->>'amount', 'n', '')::numeric ELSE 0 END)
+    SUM(m.r10),
+    SUM(CASE WHEN m.r3 > 0 THEN m.r3 WHEN m.r19 > 0 THEN m.r10 ELSE 0 END),
+    SUM(m.r1 + m.r19)
   INTO
     reimbursement_amount, inflation_amount, mint_burn_amount
   FROM ${dbSchema}.event_claim_settleds t
   INNER JOIN ${dbSchema}.blocks b ON t.block_id = b.id
-  JOIN LATERAL jsonb_array_elements(t.mints) AS elem ON TRUE
+  CROSS JOIN LATERAL (
+    SELECT
+      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 10 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r10,
+      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 3 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r3,
+      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 1 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r1,
+      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 19 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r19
+    FROM jsonb_array_elements(t.mints) AS elem
+  ) m
   WHERE b.timestamp BETWEEN start_date AND end_date;
 
   RETURN json_build_object(
