@@ -1475,7 +1475,17 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
   await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired), 'block_id');
 }
 
-export async function handleEventClaimSettled(events: Array<CosmosEvent>, overservices: Array<CosmosEvent>): Promise<void> {
+// handleEventClaimSettled is the ONLY writer of mod_to_acct_transfers and
+// mod_to_acct_transfers_summarized. rawBulkInsert deletes every row of the block
+// before inserting, so with a second writer (EventSettlementBatch used to have
+// its own handler) whichever finished last wiped the other's rows for that
+// height. The staker rows are therefore merged here and each table is written
+// once per block.
+export async function handleEventClaimSettled(
+  events: Array<CosmosEvent>,
+  overservices: Array<CosmosEvent>,
+  settlementBatches: Array<CosmosEvent>,
+): Promise<void> {
   // Load the min_ratio parameter from tokenomics module
   // This parameter is updated via AuthzExecMsg (transactions) and EventClaimSettled events are block events
   // Block events run after params are changed, so the param should already be updated in the database
@@ -1525,6 +1535,9 @@ export async function handleEventClaimSettled(events: Array<CosmosEvent>, overse
     }
   }
 
+  // Staker rows have no eventClaimSettledId, so they summarize with serviceId ''.
+  modToAcctTransfersToSave.push(...buildSettlementBatchTransfers(settlementBatches));
+
   const summarized = summarizeTransfers(modToAcctTransfersToSave, serviceIdByEventSettledId);
 
   await Promise.all([
@@ -1565,7 +1578,9 @@ const VALIDATOR_REWARD_OP_REASONS = new Set([
   "TLM_GLOBAL_MINT_DELEGATOR_REWARD_DISTRIBUTION",
 ]);
 
-export async function handleEventSettlementBatch(events: Array<CosmosEvent>): Promise<void> {
+// Pure builder for the validator/delegator reward rows of EventSettlementBatch.
+// Written only by handleEventClaimSettled, never on their own (see there).
+export function buildSettlementBatchTransfers(events: Array<CosmosEvent>): ModToAcctTransferRecord[] {
   const modToAcctTransfers: ModToAcctTransferRecord[] = [];
 
   for (const event of events) {
@@ -1596,13 +1611,7 @@ export async function handleEventSettlementBatch(events: Array<CosmosEvent>): Pr
     });
   }
 
-  if (modToAcctTransfers.length) {
-    const summarized = summarizeTransfers(modToAcctTransfers, new Map());
-    await Promise.all([
-      bulkInsertModToAcctTransfers(modToAcctTransfers),
-      bulkInsertSummarizedTransfers(summarized),
-    ]);
-  }
+  return modToAcctTransfers;
 }
 
 // EventValidatorRewardDistribution (v0.1.34+) is emitted once per bonded
