@@ -1412,7 +1412,7 @@ async function bulkInsertModToAcctTransfers(records: ModToAcctTransferRecord[]):
   });
 }
 
-export function summarizeTransfers(
+function summarizeTransfers(
   records: ModToAcctTransferRecord[],
   serviceIdByEventSettledId: Map<string, string>,
 ): SummarizedTransferRecord[] {
