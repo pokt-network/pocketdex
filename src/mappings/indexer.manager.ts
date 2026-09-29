@@ -200,7 +200,6 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
     "pocket.proof.EventProofValidityChecked",
     "pocket.tokenomics.EventApplicationOverserviced",
     "pocket.tokenomics.EventApplicationReimbursementRequest",
-    "pocket.tokenomics.EventSettlementBatch",
     "pocket.tokenomics.EventValidatorRewardDistribution",
   ];
 
@@ -209,7 +208,8 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
     ...handleByType(eventTypes, eventByType, EventHandlers, ByTxStatus.Success),
     handleEventClaimSettled(
       eventByType['pocket.tokenomics.EventClaimSettled'],
-      eventByType['pocket.tokenomics.EventApplicationOverserviced']
+      eventByType['pocket.tokenomics.EventApplicationOverserviced'],
+      eventByType['pocket.tokenomics.EventSettlementBatch'],
     )
   ]);
 }

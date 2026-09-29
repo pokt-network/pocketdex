@@ -30,7 +30,6 @@ import {
   handleEventClaimUpdated,
   handleEventProofUpdated,
   handleEventProofValidityChecked,
-  handleEventSettlementBatch,
   handleEventValidatorRewardDistribution,
   handleMsgCreateClaim,
   handleMsgSubmitProof,
@@ -126,7 +125,8 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "pocket.tokenomics.EventSupplierSlashed": noOp, // - now handled in indexSupplier
   "pocket.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
   "pocket.tokenomics.EventApplicationReimbursementRequest": handleEventApplicationReimbursementRequest,
-  "pocket.tokenomics.EventSettlementBatch": handleEventSettlementBatch,
+  // EventSettlementBatch is handled inside handleEventClaimSettled: both write mod_to_acct_transfers
+  "pocket.tokenomics.EventSettlementBatch": noOp,
   "pocket.tokenomics.EventValidatorRewardDistribution": handleEventValidatorRewardDistribution,
   "pocket.proof.EventClaimUpdated": handleEventClaimUpdated,
   "pocket.proof.EventProofUpdated": handleEventProofUpdated,
