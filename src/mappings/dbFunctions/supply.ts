@@ -131,9 +131,10 @@ BEGIN
   -- Inflation is the claim's whole global mint (TLM_GLOBAL_MINT_INFLATION). Old-protocol rows
   -- carry it as opReason 3. New-protocol rows indexed before the fix in
   -- _buildSettlementFromDetailedDistribution (relays.ts) carry only the DAO's remainder as
-  -- opReason 5, which undercounts it; their opReason 10 escrow equals exactly the claim's global
-  -- mint, so it is used instead. Rows indexed after that fix carry opReason 3 = the escrow amount.
-  -- Per row: r3 when present, else r10 on new-protocol rows (r19 > 0). Never r3 + r10.
+  -- opReason 5, which undercounts it; their opReason 10 escrow equals the claim's global mint
+  -- (measured on all mainnet claims settled 2026-08-29..2026-09-27), so it is used instead.
+  -- Rows indexed after that fix carry opReason 3 = the escrow amount.
+  -- Per row: r3 when present, else r10, else r5 (no escrow recorded). Never r3 + r10.
   --
   -- Reimbursement used to also be summed from mod_to_acct_transfers (op_reason
   -- TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER). That table is ~2.9 B rows on
@@ -145,7 +146,7 @@ BEGIN
   -- reward_distribution_detailed era.
   SELECT
     SUM(m.r10),
-    SUM(CASE WHEN m.r3 > 0 THEN m.r3 WHEN m.r19 > 0 THEN m.r10 ELSE 0 END),
+    SUM(CASE WHEN m.r3 > 0 THEN m.r3 WHEN m.r10 > 0 THEN m.r10 ELSE m.r5 END),
     SUM(m.r1 + m.r19)
   INTO
     reimbursement_amount, inflation_amount, mint_burn_amount
@@ -153,11 +154,15 @@ BEGIN
   INNER JOIN ${dbSchema}.blocks b ON t.block_id = b.id
   CROSS JOIN LATERAL (
     SELECT
-      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 10 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r10,
-      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 3 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r3,
-      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 1 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r1,
-      COALESCE(SUM(CASE WHEN (elem->>'opReason')::int = 19 THEN REPLACE(elem->>'amount', 'n', '')::numeric END), 0) AS r19
-    FROM jsonb_array_elements(t.mints) AS elem
+      COALESCE(SUM(e.amount) FILTER (WHERE e.op = 10), 0) AS r10,
+      COALESCE(SUM(e.amount) FILTER (WHERE e.op = 3), 0) AS r3,
+      COALESCE(SUM(e.amount) FILTER (WHERE e.op = 5), 0) AS r5,
+      COALESCE(SUM(e.amount) FILTER (WHERE e.op = 1), 0) AS r1,
+      COALESCE(SUM(e.amount) FILTER (WHERE e.op = 19), 0) AS r19
+    FROM (
+      SELECT (elem->>'opReason')::int AS op, REPLACE(elem->>'amount', 'n', '')::numeric AS amount
+      FROM jsonb_array_elements(t.mints) AS elem
+    ) e
   ) m
   WHERE b.timestamp BETWEEN start_date AND end_date;
 

@@ -773,9 +773,11 @@ function _buildSettlementFromDetailedDistribution(
   // TLM_GLOBAL_MINT_INFLATION in EventSettlementBatch, not per claim. It is NOT the
   // TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION entry: the DAO only receives the remainder
   // after the supplier shareholder, source owner, application and proposer slices.
-  // The reimbursement escrow transfers exactly the claim's global mint from the
-  // application's stake to the DAO, so its amount is the inflation mint.
-  // Rows indexed before this change carry opReason 5 (DAO only) here instead;
+  // The reimbursement escrow transfers the claim's global mint from the application's
+  // stake to the DAO, so its amount is used as the inflation mint. Measured, not derived
+  // from the chain code: escrow == global mint on all 6,474,358 claims settled on mainnet
+  // 2026-08-29..2026-09-27, and Σ escrow == the batch TLM_GLOBAL_MINT_INFLATION in block
+  // 940033. Rows indexed before this change carry opReason 5 (DAO only) here instead;
   // get_mint_breakdown_between_dates compensates for them.
   if (reimbursementAmount > BigInt(0)) {
     mints.push({
@@ -784,9 +786,6 @@ function _buildSettlementFromDetailedDistribution(
       amount: reimbursementAmount,
       denom: claimed.denom,
     });
-  }
-
-  if (reimbursementAmount > BigInt(0)) {
     mints.push({
       opReason: settlementOpReasonFromJSON(SettlementOpReasonSdk.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER),
       destinationModule: "",
