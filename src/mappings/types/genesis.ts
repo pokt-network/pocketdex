@@ -134,6 +134,12 @@ interface GenUtil<T extends AllMessages = AllMessages> {
 
 export interface Genesis {
   initial_height: number,
+  // CometBFT consensus params. app_state.consensus is not where they live (on
+  // mainnet it holds an unrelated fragment), so the consensus Param rows come from
+  // here: consensus_params in a CometBFT GenesisDoc, consensus.params in a
+  // cosmos-sdk AppGenesis.
+  consensus_params?: Params,
+  consensus?: { params?: Params },
   app_state: {
     service: {
       params: Params
@@ -185,6 +191,7 @@ export interface Genesis {
     tokenomics: ObjectWithParams
     consensus: ObjectWithParams
     session: ObjectWithParams
+    migration?: ObjectWithParams
     genutil: GenUtil
   }
 }

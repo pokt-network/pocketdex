@@ -1,0 +1,1598 @@
+{
+ "172519": {
+  "application": {
+   "abci": {
+    "value": "ChcIBxITCgV1cG9rdBIKMTAwMDAwMDAwMA==",
+    "height": 172519
+   },
+   "rest": {
+    "max_delegated_gateways": "7",
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"1000000000\"}"
+   },
+   "json": {
+    "max_delegated_gateways": "7",
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "1000000000"
+    }
+   }
+  },
+  "gateway": {
+   "abci": {
+    "value": "ChUKEwoFdXBva3QSCjUwMDAwMDAwMDA=",
+    "height": 172519
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"5000000000\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "5000000000"
+    }
+   }
+  },
+  "proof": {
+   "abci": {
+    "value": "Ci8RexSuR+F6hD8aDAoFdXBva3QSAzEwMCIKCgV1cG9rdBIBMSoKCgV1cG9rdBIBMQ==",
+    "height": 172519
+   },
+   "rest": {
+    "proof_request_probability": "0.01",
+    "proof_requirement_threshold": "{\"denom\":\"upokt\",\"amount\":\"100\"}",
+    "proof_missing_penalty": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "proof_submission_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "proof_request_probability": 0.01,
+    "proof_requirement_threshold": {
+     "denom": "upokt",
+     "amount": "100"
+    },
+    "proof_missing_penalty": {
+     "denom": "upokt",
+     "amount": "1"
+    },
+    "proof_submission_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "service": {
+   "abci": {
+    "value": "ChkKEwoFdXBva3QSCjEwMDAwMDAwMDAQoI0G",
+    "height": 172519
+   },
+   "rest": {
+    "add_service_fee": "{\"denom\":\"upokt\",\"amount\":\"1000000000\"}",
+    "target_num_relays": "100000"
+   },
+   "json": {
+    "add_service_fee": {
+     "denom": "upokt",
+     "amount": "1000000000"
+    },
+    "target_num_relays": "100000"
+   }
+  },
+  "session": {
+   "abci": {
+    "value": "CgIYMg==",
+    "height": 172519
+   },
+   "rest": {
+    "num_suppliers_per_session": "50"
+   },
+   "json": {
+    "num_suppliers_per_session": "50"
+   }
+  },
+  "shared": {
+   "abci": {
+    "value": "ChgIMhABGAEgBDAEODlAAUjKhQJQAVjAhD0=",
+    "height": 172519
+   },
+   "rest": {
+    "num_blocks_per_session": "50",
+    "grace_period_end_offset_blocks": "1",
+    "claim_window_open_offset_blocks": "1",
+    "claim_window_close_offset_blocks": "4",
+    "proof_window_open_offset_blocks": "0",
+    "proof_window_close_offset_blocks": "4",
+    "supplier_unbonding_period_sessions": "57",
+    "application_unbonding_period_sessions": "1",
+    "compute_units_to_tokens_multiplier": "33482",
+    "gateway_unbonding_period_sessions": "1",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "0",
+    "session_number_at_anchor": "0"
+   },
+   "json": {
+    "num_blocks_per_session": "50",
+    "grace_period_end_offset_blocks": "1",
+    "claim_window_open_offset_blocks": "1",
+    "claim_window_close_offset_blocks": "4",
+    "proof_window_open_offset_blocks": "0",
+    "proof_window_close_offset_blocks": "4",
+    "supplier_unbonding_period_sessions": "57",
+    "application_unbonding_period_sessions": "1",
+    "compute_units_to_tokens_multiplier": "33482",
+    "gateway_unbonding_period_sessions": "1",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "0",
+    "session_number_at_anchor": "0"
+   }
+  },
+  "supplier": {
+   "abci": {
+    "value": "CiIKFAoFdXBva3QSCzU5NTAwMDAwMDAwEgoKBXVwb2t0EgEx",
+    "height": 172519
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "59500000000"
+    },
+    "staking_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "tokenomics": {
+   "abci": {
+    "value": "Cl4KJAmamZmZmZm5PxGamZmZmZnJPxkzMzMzMzPjPyGamZmZmZm5PzIrcG9rdDFkZDVya2FmOG05dG00NjZtcjJyeXRwaHY0NmpxeDYzOGE1bTVlcjmN7bWg98awPkIA",
+    "height": 172519
+   },
+   "rest": {
+    "dao_reward_address": "pokt1dd5rkaf8m9tm466mr2rytphv46jqx638a5m5er",
+    "mint_allocation_percentages": "{\"dao\":0.1,\"proposer\":0.2,\"supplier\":0.6,\"source_owner\":0.1,\"application\":0}",
+    "global_inflation_per_claim": "0.000001",
+    "mint_equals_burn_claim_distribution": "{\"dao\":0,\"proposer\":0,\"supplier\":0,\"source_owner\":0,\"application\":0}",
+    "mint_ratio": "0",
+    "overservicing_bonus_multiplier": "0"
+   },
+   "json": {
+    "dao_reward_address": "pokt1dd5rkaf8m9tm466mr2rytphv46jqx638a5m5er",
+    "mint_allocation_percentages": {
+     "dao": 0.1,
+     "proposer": 0.2,
+     "supplier": 0.6,
+     "source_owner": 0.1,
+     "application": 0
+    },
+    "global_inflation_per_claim": 0.000001,
+    "mint_equals_burn_claim_distribution": {
+     "dao": 0,
+     "proposer": 0,
+     "supplier": 0,
+     "source_owner": 0,
+     "application": 0
+    },
+    "mint_ratio": 0,
+    "overservicing_bonus_multiplier": "0"
+   }
+  },
+  "auth": {
+   "abci": {
+    "value": "CgwIgAIQBxgBIM4EKAE=",
+    "height": 172519
+   },
+   "rest": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   },
+   "json": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   }
+  },
+  "migration": {
+   "abci": {
+    "value": "CgQIARgB",
+    "height": 172519
+   },
+   "rest": {
+    "waive_morse_claim_gas_fees": "true",
+    "allow_morse_account_import_overwrite": "false",
+    "morse_account_claiming_enabled": "true"
+   },
+   "json": {
+    "waive_morse_claim_gas_fees": true,
+    "allow_morse_account_import_overwrite": false,
+    "morse_account_claiming_enabled": true
+   }
+  },
+  "distribution": {
+   "abci": {
+    "value": "ChsKETIwMDAwMDAwMDAwMDAwMDAwEgEwGgEwIAE=",
+    "height": 172519
+   },
+   "rest": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": "true"
+   },
+   "json": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": true
+   }
+  },
+  "bank": {
+   "abci": {
+    "value": "CgIQAQ==",
+    "height": 172519
+   },
+   "rest": {
+    "send_enabled": "[]",
+    "default_send_enabled": "true"
+   },
+   "json": {
+    "send_enabled": [],
+    "default_send_enabled": true
+   }
+  },
+  "mint": {
+   "abci": {
+    "value": "CikKBXVwb2t0EgEwGgEwIgEwKhI2NzAwMDAwMDAwMDAwMDAwMDAw4JyBAw==",
+    "height": 172519
+   },
+   "rest": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   },
+   "json": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   }
+  },
+  "slashing": {
+   "abci": {
+    "value": "CiIIyAESEjEwMDAwMDAwMDAwMDAwMDAwMBoDCNgEIgEwKgEw",
+    "height": 172519
+   },
+   "rest": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   },
+   "json": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   }
+  },
+  "staking": {
+   "abci": {
+    "value": "ChcKBAiA324QBhgIIJBOKgV1cG9rdDIBMA==",
+    "height": 172519
+   },
+   "rest": {
+    "unbonding_time": "1814400s",
+    "max_validators": "6",
+    "max_entries": "8",
+    "historical_entries": "10000",
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   },
+   "json": {
+    "unbonding_time": "1814400s",
+    "max_validators": 6,
+    "max_entries": 8,
+    "historical_entries": 10000,
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   }
+  },
+  "gov": {
+   "abci": {
+    "value": "Iv8BCjsKBXVwb2t0EjI0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2ORIECIDGChoECIDGCiIUMC4zMzQwMDAwMDAwMDAwMDAwMDAqFDAuNTAwMDAwMDAwMDAwMDAwMDAwMhQwLjMzNDAwMDAwMDAwMDAwMDAwMDoUMC4wMDAwMDAwMDAwMDAwMDAwMDBCFDAuNTAwMDAwMDAwMDAwMDAwMDAwUgQIgKMFWhQwLjY2NzAwMDAwMDAwMDAwMDAwMGIRCgVzdGFrZRIINTAwMDAwMDB4AYIBFDAuMDEwMDAwMDAwMDAwMDAwMDAw",
+    "height": 172519
+   },
+   "rest": {
+    "min_deposit": "[{\"denom\":\"upokt\",\"amount\":\"42069420694206942069420694206942069420694206942069\"}]",
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": "[{\"denom\":\"stake\",\"amount\":\"50000000\"}]",
+    "burn_vote_quorum": "false",
+    "burn_proposal_deposit_prevote": "false",
+    "burn_vote_veto": "true",
+    "min_deposit_ratio": "0.010000000000000000"
+   },
+   "json": {
+    "min_deposit": [
+     {
+      "denom": "upokt",
+      "amount": "42069420694206942069420694206942069420694206942069"
+     }
+    ],
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": [
+     {
+      "denom": "stake",
+      "amount": "50000000"
+     }
+    ],
+    "burn_vote_quorum": false,
+    "burn_proposal_deposit_prevote": false,
+    "burn_vote_veto": true,
+    "min_deposit_ratio": "0.010000000000000000"
+   }
+  },
+  "consensus": {
+   "abci": {
+    "value": "CjEKEAiAgMAKEP///////////wESDgigjQYSBAiAxgoYgIBAGgkKB2VkMjU1MTkiACoA",
+    "height": 172519
+   },
+   "rest": {
+    "block": "{\"max_bytes\":\"22020096\",\"max_gas\":\"-1\"}",
+    "evidence": "{\"max_age_num_blocks\":\"100000\",\"max_age_duration\":\"172800s\",\"max_bytes\":\"1048576\"}",
+    "validator": "{\"pub_key_types\":[\"ed25519\"]}",
+    "version": "{\"app\":\"0\"}",
+    "abci": "{\"vote_extensions_enable_height\":\"0\"}"
+   },
+   "json": {
+    "block": {
+     "max_bytes": "22020096",
+     "max_gas": "-1"
+    },
+    "evidence": {
+     "max_age_num_blocks": "100000",
+     "max_age_duration": "172800s",
+     "max_bytes": "1048576"
+    },
+    "validator": {
+     "pub_key_types": [
+      "ed25519"
+     ]
+    },
+    "version": {
+     "app": "0"
+    },
+    "abci": {
+     "vote_extensions_enable_height": "0"
+    }
+   }
+  }
+ },
+ "635505": {
+  "supplier": {
+   "abci": {
+    "value": "CiIKFAoFdXBva3QSCzU5NTAwMDAwMDAwEgoKBXVwb2t0EgEx",
+    "height": 635505
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "59500000000"
+    },
+    "staking_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "staking": {
+   "abci": {
+    "value": "ChcKBAiA324QDhgIIJBOKgV1cG9rdDIBMA==",
+    "height": 635505
+   },
+   "rest": {
+    "unbonding_time": "1814400s",
+    "max_validators": "14",
+    "max_entries": "8",
+    "historical_entries": "10000",
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   },
+   "json": {
+    "unbonding_time": "1814400s",
+    "max_validators": 14,
+    "max_entries": 8,
+    "historical_entries": 10000,
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   }
+  },
+  "application": {
+   "abci": {
+    "value": "ChcIBxITCgV1cG9rdBIKMTAwMDAwMDAwMA==",
+    "height": 635505
+   },
+   "rest": {
+    "max_delegated_gateways": "7",
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"1000000000\"}"
+   },
+   "json": {
+    "max_delegated_gateways": "7",
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "1000000000"
+    }
+   }
+  },
+  "migration": {
+   "abci": {
+    "value": "CgQIARgB",
+    "height": 635505
+   },
+   "rest": {
+    "waive_morse_claim_gas_fees": "true",
+    "allow_morse_account_import_overwrite": "false",
+    "morse_account_claiming_enabled": "true"
+   },
+   "json": {
+    "waive_morse_claim_gas_fees": true,
+    "allow_morse_account_import_overwrite": false,
+    "morse_account_claiming_enabled": true
+   }
+  },
+  "session": {
+   "abci": {
+    "value": "CgIYMg==",
+    "height": 635505
+   },
+   "rest": {
+    "num_suppliers_per_session": "50"
+   },
+   "json": {
+    "num_suppliers_per_session": "50"
+   }
+  },
+  "tokenomics": {
+   "abci": {
+    "value": "CnkKGwmamZmZmZm5PxmamZmZmZnpPyGamZmZmZm5PzIrcG9rdDFkcjVqdHFhYXo0d2s4d2V2bDMzZTd2a3hzamxwaGxqbmpoeXEybDmN7bWg98awPkIkCZqZmZmZmak/EexRuB6F68E/GfYoXI/C9eg/IbgehetRuJ4/",
+    "height": 635505
+   },
+   "rest": {
+    "dao_reward_address": "pokt1dr5jtqaaz4wk8wevl33e7vkxsjlphljnjhyq2l",
+    "mint_allocation_percentages": "{\"dao\":0.1,\"proposer\":0,\"supplier\":0.8,\"source_owner\":0.1,\"application\":0}",
+    "global_inflation_per_claim": "0.000001",
+    "mint_equals_burn_claim_distribution": "{\"dao\":0.05,\"proposer\":0.14,\"supplier\":0.78,\"source_owner\":0.03,\"application\":0}",
+    "mint_ratio": "0",
+    "overservicing_bonus_multiplier": "0"
+   },
+   "json": {
+    "dao_reward_address": "pokt1dr5jtqaaz4wk8wevl33e7vkxsjlphljnjhyq2l",
+    "mint_allocation_percentages": {
+     "dao": 0.1,
+     "proposer": 0,
+     "supplier": 0.8,
+     "source_owner": 0.1,
+     "application": 0
+    },
+    "global_inflation_per_claim": 0.000001,
+    "mint_equals_burn_claim_distribution": {
+     "dao": 0.05,
+     "proposer": 0.14,
+     "supplier": 0.78,
+     "source_owner": 0.03,
+     "application": 0
+    },
+    "mint_ratio": 0,
+    "overservicing_bonus_multiplier": "0"
+   }
+  },
+  "auth": {
+   "abci": {
+    "value": "CgwIgAIQBxgBIM4EKAE=",
+    "height": 635505
+   },
+   "rest": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   },
+   "json": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   }
+  },
+  "shared": {
+   "abci": {
+    "value": "ChsIPBAKGAsgCigBMAo4+ANAAUj7xwNQAVjAhD0=",
+    "height": 635505
+   },
+   "rest": {
+    "num_blocks_per_session": "60",
+    "grace_period_end_offset_blocks": "10",
+    "claim_window_open_offset_blocks": "11",
+    "claim_window_close_offset_blocks": "10",
+    "proof_window_open_offset_blocks": "1",
+    "proof_window_close_offset_blocks": "10",
+    "supplier_unbonding_period_sessions": "504",
+    "application_unbonding_period_sessions": "1",
+    "compute_units_to_tokens_multiplier": "58363",
+    "gateway_unbonding_period_sessions": "1",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "0",
+    "session_number_at_anchor": "0"
+   },
+   "json": {
+    "num_blocks_per_session": "60",
+    "grace_period_end_offset_blocks": "10",
+    "claim_window_open_offset_blocks": "11",
+    "claim_window_close_offset_blocks": "10",
+    "proof_window_open_offset_blocks": "1",
+    "proof_window_close_offset_blocks": "10",
+    "supplier_unbonding_period_sessions": "504",
+    "application_unbonding_period_sessions": "1",
+    "compute_units_to_tokens_multiplier": "58363",
+    "gateway_unbonding_period_sessions": "1",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "0",
+    "session_number_at_anchor": "0"
+   }
+  },
+  "distribution": {
+   "abci": {
+    "value": "ChsKETIwMDAwMDAwMDAwMDAwMDAwEgEwGgEwIAE=",
+    "height": 635505
+   },
+   "rest": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": "true"
+   },
+   "json": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": true
+   }
+  },
+  "service": {
+   "abci": {
+    "value": "ChsKFQoFdXBva3QSDDEwMDAwMDAwMDAwMBCgjQY=",
+    "height": 635505
+   },
+   "rest": {
+    "add_service_fee": "{\"denom\":\"upokt\",\"amount\":\"100000000000\"}",
+    "target_num_relays": "100000"
+   },
+   "json": {
+    "add_service_fee": {
+     "denom": "upokt",
+     "amount": "100000000000"
+    },
+    "target_num_relays": "100000"
+   }
+  },
+  "proof": {
+   "abci": {
+    "value": "CjQR/Knx0k1iUD8aEQoFdXBva3QSCDEwMDAwMDAwIgoKBXVwb2t0EgExKgoKBXVwb2t0EgEx",
+    "height": 635505
+   },
+   "rest": {
+    "proof_request_probability": "0.001",
+    "proof_requirement_threshold": "{\"denom\":\"upokt\",\"amount\":\"10000000\"}",
+    "proof_missing_penalty": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "proof_submission_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "proof_request_probability": 0.001,
+    "proof_requirement_threshold": {
+     "denom": "upokt",
+     "amount": "10000000"
+    },
+    "proof_missing_penalty": {
+     "denom": "upokt",
+     "amount": "1"
+    },
+    "proof_submission_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "gateway": {
+   "abci": {
+    "value": "ChUKEwoFdXBva3QSCjUwMDAwMDAwMDA=",
+    "height": 635505
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"5000000000\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "5000000000"
+    }
+   }
+  },
+  "consensus": {
+   "abci": {
+    "value": "CjEKEAiAgMAKEP///////////wESDgigjQYSBAiAxgoYgIBAGgkKB2VkMjU1MTkiACoA",
+    "height": 635505
+   },
+   "rest": {
+    "block": "{\"max_bytes\":\"22020096\",\"max_gas\":\"-1\"}",
+    "evidence": "{\"max_age_num_blocks\":\"100000\",\"max_age_duration\":\"172800s\",\"max_bytes\":\"1048576\"}",
+    "validator": "{\"pub_key_types\":[\"ed25519\"]}",
+    "version": "{\"app\":\"0\"}",
+    "abci": "{\"vote_extensions_enable_height\":\"0\"}"
+   },
+   "json": {
+    "block": {
+     "max_bytes": "22020096",
+     "max_gas": "-1"
+    },
+    "evidence": {
+     "max_age_num_blocks": "100000",
+     "max_age_duration": "172800s",
+     "max_bytes": "1048576"
+    },
+    "validator": {
+     "pub_key_types": [
+      "ed25519"
+     ]
+    },
+    "version": {
+     "app": "0"
+    },
+    "abci": {
+     "vote_extensions_enable_height": "0"
+    }
+   }
+  },
+  "slashing": {
+   "abci": {
+    "value": "CiIIyAESEjEwMDAwMDAwMDAwMDAwMDAwMBoDCNgEIgEwKgEw",
+    "height": 635505
+   },
+   "rest": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   },
+   "json": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   }
+  },
+  "gov": {
+   "abci": {
+    "value": "Iv8BCjsKBXVwb2t0EjI0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2ORIECIDGChoECIDGCiIUMC4zMzQwMDAwMDAwMDAwMDAwMDAqFDAuNTAwMDAwMDAwMDAwMDAwMDAwMhQwLjMzNDAwMDAwMDAwMDAwMDAwMDoUMC4wMDAwMDAwMDAwMDAwMDAwMDBCFDAuNTAwMDAwMDAwMDAwMDAwMDAwUgQIgKMFWhQwLjY2NzAwMDAwMDAwMDAwMDAwMGIRCgVzdGFrZRIINTAwMDAwMDB4AYIBFDAuMDEwMDAwMDAwMDAwMDAwMDAw",
+    "height": 635505
+   },
+   "rest": {
+    "min_deposit": "[{\"denom\":\"upokt\",\"amount\":\"42069420694206942069420694206942069420694206942069\"}]",
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": "[{\"denom\":\"stake\",\"amount\":\"50000000\"}]",
+    "burn_vote_quorum": "false",
+    "burn_proposal_deposit_prevote": "false",
+    "burn_vote_veto": "true",
+    "min_deposit_ratio": "0.010000000000000000"
+   },
+   "json": {
+    "min_deposit": [
+     {
+      "denom": "upokt",
+      "amount": "42069420694206942069420694206942069420694206942069"
+     }
+    ],
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": [
+     {
+      "denom": "stake",
+      "amount": "50000000"
+     }
+    ],
+    "burn_vote_quorum": false,
+    "burn_proposal_deposit_prevote": false,
+    "burn_vote_veto": true,
+    "min_deposit_ratio": "0.010000000000000000"
+   }
+  },
+  "mint": {
+   "abci": {
+    "value": "CikKBXVwb2t0EgEwGgEwIgEwKhI2NzAwMDAwMDAwMDAwMDAwMDAw4JyBAw==",
+    "height": 635505
+   },
+   "rest": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   },
+   "json": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   }
+  },
+  "bank": {
+   "abci": {
+    "value": "CgIQAQ==",
+    "height": 635505
+   },
+   "rest": {
+    "send_enabled": "[]",
+    "default_send_enabled": "true"
+   },
+   "json": {
+    "send_enabled": [],
+    "default_send_enabled": true
+   }
+  }
+ },
+ "831001": {
+  "distribution": {
+   "abci": {
+    "value": "ChsKETIwMDAwMDAwMDAwMDAwMDAwEgEwGgEwIAE=",
+    "height": 831001
+   },
+   "rest": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": "true"
+   },
+   "json": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": true
+   }
+  },
+  "supplier": {
+   "abci": {
+    "value": "CiIKFAoFdXBva3QSCzU5NTAwMDAwMDAwEgoKBXVwb2t0EgEx",
+    "height": 831001
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "59500000000"
+    },
+    "staking_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "consensus": {
+   "abci": {
+    "value": "CjEKEAiAgMAKEP///////////wESDgigjQYSBAiAxgoYgIBAGgkKB2VkMjU1MTkiACoA",
+    "height": 831001
+   },
+   "rest": {
+    "block": "{\"max_bytes\":\"22020096\",\"max_gas\":\"-1\"}",
+    "evidence": "{\"max_age_num_blocks\":\"100000\",\"max_age_duration\":\"172800s\",\"max_bytes\":\"1048576\"}",
+    "validator": "{\"pub_key_types\":[\"ed25519\"]}",
+    "version": "{\"app\":\"0\"}",
+    "abci": "{\"vote_extensions_enable_height\":\"0\"}"
+   },
+   "json": {
+    "block": {
+     "max_bytes": "22020096",
+     "max_gas": "-1"
+    },
+    "evidence": {
+     "max_age_num_blocks": "100000",
+     "max_age_duration": "172800s",
+     "max_bytes": "1048576"
+    },
+    "validator": {
+     "pub_key_types": [
+      "ed25519"
+     ]
+    },
+    "version": {
+     "app": "0"
+    },
+    "abci": {
+     "vote_extensions_enable_height": "0"
+    }
+   }
+  },
+  "migration": {
+   "abci": {
+    "value": "CgQIARgB",
+    "height": 831001
+   },
+   "rest": {
+    "waive_morse_claim_gas_fees": "true",
+    "allow_morse_account_import_overwrite": "false",
+    "morse_account_claiming_enabled": "true"
+   },
+   "json": {
+    "waive_morse_claim_gas_fees": true,
+    "allow_morse_account_import_overwrite": false,
+    "morse_account_claiming_enabled": true
+   }
+  },
+  "proof": {
+   "abci": {
+    "value": "CjQR/Knx0k1iUD8aEQoFdXBva3QSCDEwMDAwMDAwIgoKBXVwb2t0EgExKgoKBXVwb2t0EgEx",
+    "height": 831001
+   },
+   "rest": {
+    "proof_request_probability": "0.001",
+    "proof_requirement_threshold": "{\"denom\":\"upokt\",\"amount\":\"10000000\"}",
+    "proof_missing_penalty": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "proof_submission_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "proof_request_probability": 0.001,
+    "proof_requirement_threshold": {
+     "denom": "upokt",
+     "amount": "10000000"
+    },
+    "proof_missing_penalty": {
+     "denom": "upokt",
+     "amount": "1"
+    },
+    "proof_submission_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "service": {
+   "abci": {
+    "value": "ChkKEwoFdXBva3QSCjM1MDAwMDAwMDAQoI0G",
+    "height": 831001
+   },
+   "rest": {
+    "add_service_fee": "{\"denom\":\"upokt\",\"amount\":\"3500000000\"}",
+    "target_num_relays": "100000"
+   },
+   "json": {
+    "add_service_fee": {
+     "denom": "upokt",
+     "amount": "3500000000"
+    },
+    "target_num_relays": "100000"
+   }
+  },
+  "application": {
+   "abci": {
+    "value": "ChcIBxITCgV1cG9rdBIKMTAwMDAwMDAwMA==",
+    "height": 831001
+   },
+   "rest": {
+    "max_delegated_gateways": "7",
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"1000000000\"}"
+   },
+   "json": {
+    "max_delegated_gateways": "7",
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "1000000000"
+    }
+   }
+  },
+  "auth": {
+   "abci": {
+    "value": "CgwIgAIQBxgBIM4EKAE=",
+    "height": 831001
+   },
+   "rest": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   },
+   "json": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   }
+  },
+  "staking": {
+   "abci": {
+    "value": "ChcKBAiA324QFRgIIJBOKgV1cG9rdDIBMA==",
+    "height": 831001
+   },
+   "rest": {
+    "unbonding_time": "1814400s",
+    "max_validators": "21",
+    "max_entries": "8",
+    "historical_entries": "10000",
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   },
+   "json": {
+    "unbonding_time": "1814400s",
+    "max_validators": 21,
+    "max_entries": 8,
+    "historical_entries": 10000,
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   }
+  },
+  "tokenomics": {
+   "abci": {
+    "value": "CoIBChsJmpmZmZmZuT8ZmpmZmZmZ6T8hmpmZmZmZuT8yK3Bva3QxZHI1anRxYWF6NHdrOHdldmwzM2U3dmt4c2pscGhsam5qaHlxMmw5je21oPfGsD5CJAkK16NwPQqnPxHsUbgehevBPxlI4XoUrkfpPyGamZmZmZmZP0kzMzMzMzPvPw==",
+    "height": 831001
+   },
+   "rest": {
+    "dao_reward_address": "pokt1dr5jtqaaz4wk8wevl33e7vkxsjlphljnjhyq2l",
+    "mint_allocation_percentages": "{\"dao\":0.1,\"proposer\":0,\"supplier\":0.8,\"source_owner\":0.1,\"application\":0}",
+    "global_inflation_per_claim": "0.000001",
+    "mint_equals_burn_claim_distribution": "{\"dao\":0.045,\"proposer\":0.14,\"supplier\":0.79,\"source_owner\":0.025,\"application\":0}",
+    "mint_ratio": "0.975",
+    "overservicing_bonus_multiplier": "0"
+   },
+   "json": {
+    "dao_reward_address": "pokt1dr5jtqaaz4wk8wevl33e7vkxsjlphljnjhyq2l",
+    "mint_allocation_percentages": {
+     "dao": 0.1,
+     "proposer": 0,
+     "supplier": 0.8,
+     "source_owner": 0.1,
+     "application": 0
+    },
+    "global_inflation_per_claim": 0.000001,
+    "mint_equals_burn_claim_distribution": {
+     "dao": 0.045,
+     "proposer": 0.14,
+     "supplier": 0.79,
+     "source_owner": 0.025,
+     "application": 0
+    },
+    "mint_ratio": 0.975,
+    "overservicing_bonus_multiplier": "0"
+   }
+  },
+  "session": {
+   "abci": {
+    "value": "CgIYMg==",
+    "height": 831001
+   },
+   "rest": {
+    "num_suppliers_per_session": "50"
+   },
+   "json": {
+    "num_suppliers_per_session": "50"
+   }
+  },
+  "shared": {
+   "abci": {
+    "value": "CiIIFBAKGAsgCigBMAo4lQtAA0jZ6wdQA1jAhD1gmdwyaJts",
+    "height": 831001
+   },
+   "rest": {
+    "num_blocks_per_session": "20",
+    "grace_period_end_offset_blocks": "10",
+    "claim_window_open_offset_blocks": "11",
+    "claim_window_close_offset_blocks": "10",
+    "proof_window_open_offset_blocks": "1",
+    "proof_window_close_offset_blocks": "10",
+    "supplier_unbonding_period_sessions": "1429",
+    "application_unbonding_period_sessions": "3",
+    "compute_units_to_tokens_multiplier": "128473",
+    "gateway_unbonding_period_sessions": "3",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "831001",
+    "session_number_at_anchor": "13851"
+   },
+   "json": {
+    "num_blocks_per_session": "20",
+    "grace_period_end_offset_blocks": "10",
+    "claim_window_open_offset_blocks": "11",
+    "claim_window_close_offset_blocks": "10",
+    "proof_window_open_offset_blocks": "1",
+    "proof_window_close_offset_blocks": "10",
+    "supplier_unbonding_period_sessions": "1429",
+    "application_unbonding_period_sessions": "3",
+    "compute_units_to_tokens_multiplier": "128473",
+    "gateway_unbonding_period_sessions": "3",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "831001",
+    "session_number_at_anchor": "13851"
+   }
+  },
+  "mint": {
+   "abci": {
+    "value": "CikKBXVwb2t0EgEwGgEwIgEwKhI2NzAwMDAwMDAwMDAwMDAwMDAw4JyBAw==",
+    "height": 831001
+   },
+   "rest": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   },
+   "json": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   }
+  },
+  "bank": {
+   "abci": {
+    "value": "CgIQAQ==",
+    "height": 831001
+   },
+   "rest": {
+    "send_enabled": "[]",
+    "default_send_enabled": "true"
+   },
+   "json": {
+    "send_enabled": [],
+    "default_send_enabled": true
+   }
+  },
+  "gateway": {
+   "abci": {
+    "value": "ChUKEwoFdXBva3QSCjUwMDAwMDAwMDA=",
+    "height": 831001
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"5000000000\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "5000000000"
+    }
+   }
+  },
+  "gov": {
+   "abci": {
+    "value": "Iv8BCjsKBXVwb2t0EjI0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2ORIECIDGChoECIDGCiIUMC4zMzQwMDAwMDAwMDAwMDAwMDAqFDAuNTAwMDAwMDAwMDAwMDAwMDAwMhQwLjMzNDAwMDAwMDAwMDAwMDAwMDoUMC4wMDAwMDAwMDAwMDAwMDAwMDBCFDAuNTAwMDAwMDAwMDAwMDAwMDAwUgQIgKMFWhQwLjY2NzAwMDAwMDAwMDAwMDAwMGIRCgVzdGFrZRIINTAwMDAwMDB4AYIBFDAuMDEwMDAwMDAwMDAwMDAwMDAw",
+    "height": 831001
+   },
+   "rest": {
+    "min_deposit": "[{\"denom\":\"upokt\",\"amount\":\"42069420694206942069420694206942069420694206942069\"}]",
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": "[{\"denom\":\"stake\",\"amount\":\"50000000\"}]",
+    "burn_vote_quorum": "false",
+    "burn_proposal_deposit_prevote": "false",
+    "burn_vote_veto": "true",
+    "min_deposit_ratio": "0.010000000000000000"
+   },
+   "json": {
+    "min_deposit": [
+     {
+      "denom": "upokt",
+      "amount": "42069420694206942069420694206942069420694206942069"
+     }
+    ],
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": [
+     {
+      "denom": "stake",
+      "amount": "50000000"
+     }
+    ],
+    "burn_vote_quorum": false,
+    "burn_proposal_deposit_prevote": false,
+    "burn_vote_veto": true,
+    "min_deposit_ratio": "0.010000000000000000"
+   }
+  },
+  "slashing": {
+   "abci": {
+    "value": "CiIIyAESEjEwMDAwMDAwMDAwMDAwMDAwMBoDCNgEIgEwKgEw",
+    "height": 831001
+   },
+   "rest": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   },
+   "json": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   }
+  }
+ },
+ "944877": {
+  "slashing": {
+   "abci": {
+    "value": "CiIIyAESEjEwMDAwMDAwMDAwMDAwMDAwMBoDCNgEIgEwKgEw",
+    "height": 944877
+   },
+   "rest": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   },
+   "json": {
+    "signed_blocks_window": "200",
+    "min_signed_per_window": "0.100000000000000000",
+    "downtime_jail_duration": "600s",
+    "slash_fraction_double_sign": "0.000000000000000000",
+    "slash_fraction_downtime": "0.000000000000000000"
+   }
+  },
+  "staking": {
+   "abci": {
+    "value": "ChcKBAiA324QFhgIIJBOKgV1cG9rdDIBMA==",
+    "height": 944877
+   },
+   "rest": {
+    "unbonding_time": "1814400s",
+    "max_validators": "22",
+    "max_entries": "8",
+    "historical_entries": "10000",
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   },
+   "json": {
+    "unbonding_time": "1814400s",
+    "max_validators": 22,
+    "max_entries": 8,
+    "historical_entries": 10000,
+    "bond_denom": "upokt",
+    "min_commission_rate": "0.000000000000000000"
+   }
+  },
+  "supplier": {
+   "abci": {
+    "value": "CiIKFAoFdXBva3QSCzU5NTAwMDAwMDAwEgoKBXVwb2t0EgEx",
+    "height": 944877
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "59500000000"
+    },
+    "staking_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "gov": {
+   "abci": {
+    "value": "Iv8BCjsKBXVwb2t0EjI0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2OTQyMDY5NDIwNjk0MjA2ORIECIDGChoECIDGCiIUMC4zMzQwMDAwMDAwMDAwMDAwMDAqFDAuNTAwMDAwMDAwMDAwMDAwMDAwMhQwLjMzNDAwMDAwMDAwMDAwMDAwMDoUMC4wMDAwMDAwMDAwMDAwMDAwMDBCFDAuNTAwMDAwMDAwMDAwMDAwMDAwUgQIgKMFWhQwLjY2NzAwMDAwMDAwMDAwMDAwMGIRCgVzdGFrZRIINTAwMDAwMDB4AYIBFDAuMDEwMDAwMDAwMDAwMDAwMDAw",
+    "height": 944877
+   },
+   "rest": {
+    "min_deposit": "[{\"denom\":\"upokt\",\"amount\":\"42069420694206942069420694206942069420694206942069\"}]",
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": "[{\"denom\":\"stake\",\"amount\":\"50000000\"}]",
+    "burn_vote_quorum": "false",
+    "burn_proposal_deposit_prevote": "false",
+    "burn_vote_veto": "true",
+    "min_deposit_ratio": "0.010000000000000000"
+   },
+   "json": {
+    "min_deposit": [
+     {
+      "denom": "upokt",
+      "amount": "42069420694206942069420694206942069420694206942069"
+     }
+    ],
+    "max_deposit_period": "172800s",
+    "voting_period": "172800s",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "proposal_cancel_dest": "",
+    "expedited_voting_period": "86400s",
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_min_deposit": [
+     {
+      "denom": "stake",
+      "amount": "50000000"
+     }
+    ],
+    "burn_vote_quorum": false,
+    "burn_proposal_deposit_prevote": false,
+    "burn_vote_veto": true,
+    "min_deposit_ratio": "0.010000000000000000"
+   }
+  },
+  "shared": {
+   "abci": {
+    "value": "CiIIFBAKGAsgCigBMAo4lQtAA0jY0QZQA1jAhD1gmdwyaJts",
+    "height": 944877
+   },
+   "rest": {
+    "num_blocks_per_session": "20",
+    "grace_period_end_offset_blocks": "10",
+    "claim_window_open_offset_blocks": "11",
+    "claim_window_close_offset_blocks": "10",
+    "proof_window_open_offset_blocks": "1",
+    "proof_window_close_offset_blocks": "10",
+    "supplier_unbonding_period_sessions": "1429",
+    "application_unbonding_period_sessions": "3",
+    "compute_units_to_tokens_multiplier": "108760",
+    "gateway_unbonding_period_sessions": "3",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "831001",
+    "session_number_at_anchor": "13851"
+   },
+   "json": {
+    "num_blocks_per_session": "20",
+    "grace_period_end_offset_blocks": "10",
+    "claim_window_open_offset_blocks": "11",
+    "claim_window_close_offset_blocks": "10",
+    "proof_window_open_offset_blocks": "1",
+    "proof_window_close_offset_blocks": "10",
+    "supplier_unbonding_period_sessions": "1429",
+    "application_unbonding_period_sessions": "3",
+    "compute_units_to_tokens_multiplier": "108760",
+    "gateway_unbonding_period_sessions": "3",
+    "compute_unit_cost_granularity": "1000000",
+    "session_grid_anchor_height": "831001",
+    "session_number_at_anchor": "13851"
+   }
+  },
+  "consensus": {
+   "abci": {
+    "value": "CjEKEAiAgMAKEP///////////wESDgigjQYSBAiAxgoYgIBAGgkKB2VkMjU1MTkiACoA",
+    "height": 944877
+   },
+   "rest": {
+    "block": "{\"max_bytes\":\"22020096\",\"max_gas\":\"-1\"}",
+    "evidence": "{\"max_age_num_blocks\":\"100000\",\"max_age_duration\":\"172800s\",\"max_bytes\":\"1048576\"}",
+    "validator": "{\"pub_key_types\":[\"ed25519\"]}",
+    "version": "{\"app\":\"0\"}",
+    "abci": "{\"vote_extensions_enable_height\":\"0\"}"
+   },
+   "json": {
+    "block": {
+     "max_bytes": "22020096",
+     "max_gas": "-1"
+    },
+    "evidence": {
+     "max_age_num_blocks": "100000",
+     "max_age_duration": "172800s",
+     "max_bytes": "1048576"
+    },
+    "validator": {
+     "pub_key_types": [
+      "ed25519"
+     ]
+    },
+    "version": {
+     "app": "0"
+    },
+    "abci": {
+     "vote_extensions_enable_height": "0"
+    }
+   }
+  },
+  "application": {
+   "abci": {
+    "value": "ChcIBxITCgV1cG9rdBIKMTAwMDAwMDAwMA==",
+    "height": 944877
+   },
+   "rest": {
+    "max_delegated_gateways": "7",
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"1000000000\"}"
+   },
+   "json": {
+    "max_delegated_gateways": "7",
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "1000000000"
+    }
+   }
+  },
+  "proof": {
+   "abci": {
+    "value": "CjQR/Knx0k1iUD8aEQoFdXBva3QSCDEwMDAwMDAwIgoKBXVwb2t0EgExKgoKBXVwb2t0EgEx",
+    "height": 944877
+   },
+   "rest": {
+    "proof_request_probability": "0.001",
+    "proof_requirement_threshold": "{\"denom\":\"upokt\",\"amount\":\"10000000\"}",
+    "proof_missing_penalty": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "proof_submission_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+   },
+   "json": {
+    "proof_request_probability": 0.001,
+    "proof_requirement_threshold": {
+     "denom": "upokt",
+     "amount": "10000000"
+    },
+    "proof_missing_penalty": {
+     "denom": "upokt",
+     "amount": "1"
+    },
+    "proof_submission_fee": {
+     "denom": "upokt",
+     "amount": "1"
+    }
+   }
+  },
+  "mint": {
+   "abci": {
+    "value": "CikKBXVwb2t0EgEwGgEwIgEwKhI2NzAwMDAwMDAwMDAwMDAwMDAw4JyBAw==",
+    "height": 944877
+   },
+   "rest": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   },
+   "json": {
+    "mint_denom": "upokt",
+    "inflation_rate_change": "0.000000000000000000",
+    "inflation_max": "0.000000000000000000",
+    "inflation_min": "0.000000000000000000",
+    "goal_bonded": "0.670000000000000000",
+    "blocks_per_year": "6311520"
+   }
+  },
+  "session": {
+   "abci": {
+    "value": "CgIYMg==",
+    "height": 944877
+   },
+   "rest": {
+    "num_suppliers_per_session": "50"
+   },
+   "json": {
+    "num_suppliers_per_session": "50"
+   }
+  },
+  "distribution": {
+   "abci": {
+    "value": "ChsKETIwMDAwMDAwMDAwMDAwMDAwEgEwGgEwIAE=",
+    "height": 944877
+   },
+   "rest": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": "true"
+   },
+   "json": {
+    "community_tax": "0.020000000000000000",
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "withdraw_addr_enabled": true
+   }
+  },
+  "bank": {
+   "abci": {
+    "value": "CgIQAQ==",
+    "height": 944877
+   },
+   "rest": {
+    "send_enabled": "[]",
+    "default_send_enabled": "true"
+   },
+   "json": {
+    "send_enabled": [],
+    "default_send_enabled": true
+   }
+  },
+  "auth": {
+   "abci": {
+    "value": "CgwIgAIQBxgBIM4EKAE=",
+    "height": 944877
+   },
+   "rest": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   },
+   "json": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "1",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1"
+   }
+  },
+  "migration": {
+   "abci": {
+    "value": "CgQIARgB",
+    "height": 944877
+   },
+   "rest": {
+    "waive_morse_claim_gas_fees": "true",
+    "allow_morse_account_import_overwrite": "false",
+    "morse_account_claiming_enabled": "true"
+   },
+   "json": {
+    "waive_morse_claim_gas_fees": true,
+    "allow_morse_account_import_overwrite": false,
+    "morse_account_claiming_enabled": true
+   }
+  },
+  "tokenomics": {
+   "abci": {
+    "value": "CoQBChsJmpmZmZmZuT8ZmpmZmZmZ6T8hmpmZmZmZuT8yK3Bva3QxZHI1anRxYWF6NHdrOHdldmwzM2U3dmt4c2pscGhsam5qaHlxMmw5je21oPfGsD5CJAkK16NwPQqnPxHsUbgehevBPxlI4XoUrkfpPyGamZmZmZmZP0kzMzMzMzPvP1AC",
+    "height": 944877
+   },
+   "rest": {
+    "dao_reward_address": "pokt1dr5jtqaaz4wk8wevl33e7vkxsjlphljnjhyq2l",
+    "mint_allocation_percentages": "{\"dao\":0.1,\"proposer\":0,\"supplier\":0.8,\"source_owner\":0.1,\"application\":0}",
+    "global_inflation_per_claim": "0.000001",
+    "mint_equals_burn_claim_distribution": "{\"dao\":0.045,\"proposer\":0.14,\"supplier\":0.79,\"source_owner\":0.025,\"application\":0}",
+    "mint_ratio": "0.975",
+    "overservicing_bonus_multiplier": "2"
+   },
+   "json": {
+    "dao_reward_address": "pokt1dr5jtqaaz4wk8wevl33e7vkxsjlphljnjhyq2l",
+    "mint_allocation_percentages": {
+     "dao": 0.1,
+     "proposer": 0,
+     "supplier": 0.8,
+     "source_owner": 0.1,
+     "application": 0
+    },
+    "global_inflation_per_claim": 0.000001,
+    "mint_equals_burn_claim_distribution": {
+     "dao": 0.045,
+     "proposer": 0.14,
+     "supplier": 0.79,
+     "source_owner": 0.025,
+     "application": 0
+    },
+    "mint_ratio": 0.975,
+    "overservicing_bonus_multiplier": "2"
+   }
+  },
+  "service": {
+   "abci": {
+    "value": "ChkKEwoFdXBva3QSCjEwMDAwMDAwMDAQoI0G",
+    "height": 944877
+   },
+   "rest": {
+    "add_service_fee": "{\"denom\":\"upokt\",\"amount\":\"1000000000\"}",
+    "target_num_relays": "100000"
+   },
+   "json": {
+    "add_service_fee": {
+     "denom": "upokt",
+     "amount": "1000000000"
+    },
+    "target_num_relays": "100000"
+   }
+  },
+  "gateway": {
+   "abci": {
+    "value": "ChUKEwoFdXBva3QSCjUwMDAwMDAwMDA=",
+    "height": 944877
+   },
+   "rest": {
+    "min_stake": "{\"denom\":\"upokt\",\"amount\":\"5000000000\"}"
+   },
+   "json": {
+    "min_stake": {
+     "denom": "upokt",
+     "amount": "5000000000"
+    }
+   }
+  }
+ }
+}

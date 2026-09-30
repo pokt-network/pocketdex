@@ -1,0 +1,208 @@
+{
+ "chain_id": "pocket",
+ "initial_height": "1",
+ "consensus_params": {
+  "block": {
+   "max_bytes": "22020096",
+   "max_gas": "-1"
+  },
+  "evidence": {
+   "max_age_num_blocks": "100000",
+   "max_age_duration": "172800000000000",
+   "max_bytes": "1048576"
+  },
+  "validator": {
+   "pub_key_types": [
+    "ed25519"
+   ]
+  },
+  "version": {
+   "app": "0"
+  },
+  "abci": {
+   "vote_extensions_enable_height": "0"
+  }
+ },
+ "app_state": {
+  "application": {
+   "params": {
+    "max_delegated_gateways": "6",
+    "min_stake": {
+     "amount": "100000000",
+     "denom": "upokt"
+    }
+   }
+  },
+  "auth": {
+   "params": {
+    "max_memo_characters": "256",
+    "tx_sig_limit": "7",
+    "tx_size_cost_per_byte": "10",
+    "sig_verify_cost_ed25519": "590",
+    "sig_verify_cost_secp256k1": "1000"
+   }
+  },
+  "bank": {
+   "params": {
+    "send_enabled": [],
+    "default_send_enabled": true
+   }
+  },
+  "consensus": {
+   "params": {
+    "block": {
+     "max_bytes": "22020096",
+     "unbonding_time": "362880s"
+    }
+   }
+  },
+  "distribution": {
+   "params": {
+    "base_proposer_reward": "0.000000000000000000",
+    "bonus_proposer_reward": "0.000000000000000000",
+    "community_tax": "0.020000000000000000",
+    "withdraw_addr_enabled": true
+   }
+  },
+  "gateway": {
+   "params": {
+    "min_stake": {
+     "amount": "100000000",
+     "denom": "upokt"
+    }
+   }
+  },
+  "gov": {
+   "params": {
+    "burn_proposal_deposit_prevote": false,
+    "burn_vote_quorum": false,
+    "burn_vote_veto": true,
+    "expedited_min_deposit": [
+     {
+      "amount": "50000000",
+      "denom": "stake"
+     }
+    ],
+    "expedited_threshold": "0.667000000000000000",
+    "expedited_voting_period": "86400s",
+    "max_deposit_period": "172800s",
+    "min_deposit": [
+     {
+      "amount": "42069420694206942069420694206942069420694206942069",
+      "denom": "upokt"
+     }
+    ],
+    "min_deposit_ratio": "0.010000000000000000",
+    "min_initial_deposit_ratio": "0.000000000000000000",
+    "proposal_cancel_dest": "",
+    "proposal_cancel_ratio": "0.500000000000000000",
+    "quorum": "0.334000000000000000",
+    "threshold": "0.500000000000000000",
+    "veto_threshold": "0.334000000000000000",
+    "voting_period": "172800s"
+   }
+  },
+  "migration": {
+   "params": {}
+  },
+  "mint": {
+   "params": {
+    "blocks_per_year": "6311520",
+    "goal_bonded": "0.670000000000000000",
+    "inflation_max": "0.0",
+    "inflation_min": "0.0",
+    "inflation_rate_change": "0.0",
+    "mint_denom": "upokt"
+   }
+  },
+  "proof": {
+   "params": {
+    "proof_missing_penalty": {
+     "amount": "0",
+     "denom": "upokt"
+    },
+    "proof_request_probability": "0.25",
+    "proof_requirement_threshold": {
+     "amount": "100000000",
+     "denom": "upokt"
+    },
+    "proof_submission_fee": {
+     "amount": "0",
+     "denom": "upokt"
+    }
+   }
+  },
+  "service": {
+   "params": {
+    "add_service_fee": {
+     "amount": "0",
+     "denom": "upokt"
+    },
+    "target_num_relays": 100000
+   }
+  },
+  "session": {
+   "params": {
+    "num_suppliers_per_session": 24
+   }
+  },
+  "shared": {
+   "params": {
+    "application_unbonding_period_sessions": 1,
+    "claim_window_close_offset_blocks": 4,
+    "claim_window_open_offset_blocks": 1,
+    "compute_units_to_tokens_multiplier": 42,
+    "gateway_unbonding_period_sessions": 1,
+    "grace_period_end_offset_blocks": 1,
+    "num_blocks_per_session": 10,
+    "proof_window_close_offset_blocks": 4,
+    "proof_window_open_offset_blocks": 0,
+    "supplier_unbonding_period_sessions": 1
+   }
+  },
+  "slashing": {
+   "params": {
+    "downtime_jail_duration": "600s",
+    "min_signed_per_window": "0.500000000000000000",
+    "signed_blocks_window": "100",
+    "slash_fraction_double_sign": "0.050000000000000000",
+    "slash_fraction_downtime": "0.010000000000000000"
+   }
+  },
+  "staking": {
+   "params": {
+    "bond_denom": "upokt",
+    "historical_entries": 10000,
+    "max_entries": 7,
+    "max_validators": 10,
+    "min_commission_rate": "0.000000000000000000",
+    "unbonding_time": "1814400s"
+   }
+  },
+  "supplier": {
+   "params": {
+    "min_stake": {
+     "amount": "15000000000",
+     "denom": "upokt"
+    },
+    "staking_fee": {
+     "amount": "0",
+     "denom": "upokt"
+    }
+   }
+  },
+  "tokenomics": {
+   "params": {
+    "dao_reward_address": "pokt1hv3xrylxvwd7hfv03j50ql0ttp3s5hqqelegmv",
+    "global_inflation_per_claim": 0,
+    "mint_allocation_percentages": {
+     "application": 0,
+     "dao": 0.1,
+     "proposer": 0.1,
+     "source_owner": 0.1,
+     "supplier": 0.7
+    }
+   }
+  }
+ }
+}

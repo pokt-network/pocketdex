@@ -76,10 +76,11 @@ import {
   getParamId,
   getStakeServiceId,
 } from "../utils/ids";
+import { stringify } from "../utils/json";
 import {
-  sanitize,
-  stringify,
-} from "../utils/json";
+  GenesisParamsSource,
+  normalizeGenesisParams,
+} from "../utils/params_normalize";
 import {
   Ed25519,
   pubKeyToAddress,
@@ -774,46 +775,32 @@ async function _handleGenesisGateways(genesis: Genesis, block: CosmosBlock): Pro
   return { transactions, messages: msgs };
 }
 
-function saveParams(namespace: string, params: Record<string, unknown> | undefined, block: CosmosBlock): Array<ParamProps> {
-  const paramsEntries = Object.entries(params || {});
-
-  if (!paramsEntries?.length) {
-    return [];
-  }
-
-  return paramsEntries.map(([key, value]) => ({
-    id: getParamId(namespace, key),
-    // we handle the key as is, which is snake case, so on the AuthzExec handler they will transform to snake too.
-    key,
-    namespace,
-    // just using stringify for objects because if a string is passed in, it will put it in quotes
-    value: sanitize(value),
-    blockId: getBlockId(block),
-  }));
-}
-
+// Genesis params go through the same normalization as reconcileParams, so the
+// genesis rows and the ones reconcile writes later are comparable key by key
+// (same snake_case key, same canonical value) and a genesis value only gets a
+// new version when the chain actually changed it. Decoding is strict: a value
+// that is not what the chain writes fails the genesis block.
 async function _handleGenesisParams(
   genesis: Genesis,
   block: CosmosBlock,
 ): Promise<void> {
-  await store.bulkCreate("Param", [
-    ...saveParams("application", genesis.app_state.application?.params, block),
-    ...saveParams("auth", genesis.app_state.auth?.params, block),
-    ...saveParams("bank", genesis.app_state.bank?.params, block),
-    ...saveParams("distribution", genesis.app_state.distribution?.params, block),
-    ...saveParams("gateway", genesis.app_state.gateway?.params, block),
-    ...saveParams("gov", genesis.app_state.gov?.params, block),
-    ...saveParams("mint", genesis.app_state.mint?.params, block),
-    ...saveParams("proof", genesis.app_state.proof?.params, block),
-    ...saveParams("service", genesis.app_state.service?.params, block),
-    ...saveParams("session", genesis.app_state.session?.params, block),
-    ...saveParams("shared", genesis.app_state.shared?.params, block),
-    ...saveParams("slashing", genesis.app_state.slashing?.params, block),
-    ...saveParams("staking", genesis.app_state.staking?.params, block),
-    ...saveParams("supplier", genesis.app_state.supplier?.params, block),
-    ...saveParams("tokenomics", genesis.app_state.tokenomics?.params, block),
-    ...saveParams("consensus", genesis.app_state.consensus?.params, block),
-  ]);
+  const { missing, modules } = normalizeGenesisParams(genesis as unknown as GenesisParamsSource);
+  if (missing.length > 0) {
+    // Not fatal: some genesis files legitimately omit a module (consensus_params
+    // above all). The first reconcile writes those params at its own height.
+    logger.error(`[genesis] no params in the genesis for: ${missing.join(", ")}; the first reconcile writes them at its height, not at genesis`);
+  }
+
+  // A genesis value is used from the genesis block on.
+  const blockId = getBlockId(block);
+  await store.bulkCreate("Param", modules.flatMap(({ namespace, params }) => params.map(({ key, value }): ParamProps => ({
+    id: getParamId(namespace, key),
+    key,
+    namespace,
+    value,
+    activeAt: blockId,
+    blockId,
+  }))));
 }
 
 async function _handleGenesisSupplyDenom(genesis: Genesis): Promise<void> {

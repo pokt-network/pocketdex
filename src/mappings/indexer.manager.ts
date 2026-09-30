@@ -28,6 +28,7 @@ import { handleEventClaimSettled } from "./pocket/relays";
 import { handleAddBlockReports } from "./pocket/reports";
 import { indexSupplier } from "./pocket/suppliers";
 import { reconcileApplications } from "./pocket/applications";
+import { reconcileParams } from "./pocket/params";
 import { reconcileValidators } from "./pocket/validator";
 import {
   handleBlock,
@@ -215,10 +216,19 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
 }
 
 // any message or event related to Params
-async function indexParams(msgByType: MessageByType): Promise<void> {
+async function indexParams(block: CosmosBlock, msgByType: MessageByType): Promise<void> {
+  // MsgExec is still handled here for the Message/AuthzExec rows of the
+  // sub-messages; it no longer writes params.
   await Promise.all(
     handleByType("/cosmos.authz.v1beta1.MsgExec", msgByType, MsgHandlers, ByTxStatus.Success),
   );
+
+  // Params are read from chain state on EVERY block, with no trigger list: chain
+  // upgrades change params without any message, deferred updates apply at a
+  // later height than their message, and gov proposals carry no MsgExec. Only
+  // keys whose value changed are written, so the steady state is one read per
+  // module and zero writes. A read that cannot be verified fails the block.
+  await reconcileParams(block.header.height, block.header.chainId);
 }
 
 // any message or event related to Grants
@@ -705,7 +715,7 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   // await profilerWrap(handleMessages, "indexPrimitives", "handleMessages")(block.messages);
   await profilerWrap(handleTransactions, "indexPrimitives", "handleTransactions")(block.transactions);
   // Params needs to run before relays to have the param 'mint_ratio' updated
-  await profilerWrap(indexParams, "indexingHandler", "indexParams")(msgsByType as MessageByType)
+  await profilerWrap(indexParams, "indexingHandler", "indexParams")(block, msgsByType as MessageByType)
 
   await Promise.all([
     profilerWrap(indexStake, "indexingHandler", "indexStake")(block, msgsByType as MessageByType, eventsByType),

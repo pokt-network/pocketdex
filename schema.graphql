@@ -910,7 +910,13 @@ type Param @entity {
   id: ID!
   namespace: String! @index
   key: String! @index
+  # Raw chain value, as the chain REST returns it.
   value: String!
+  # First height the chain uses the value. The version's _block_range starts
+  # where the chain state changed; for shared and session changes since v0.1.35
+  # the chain only uses the new value from the next session start.
+  # Null on rows written before this field existed.
+  activeAt: BigInt
   block: Block!
 }
 

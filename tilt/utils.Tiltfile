@@ -66,6 +66,7 @@ def build_indexer_params_overwrite():
         'POCKETDEX_DB_PAGE_LIMIT': 'page_limit',
         'POCKETDEX_DB_BULK_WRITE_CONCURRENCY': 'db_bulk_concurrency',
         'POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK': 'reconcile_applications_every_block',
+        'POCKETDEX_ABCI_TIMEOUT_MS': 'abci_timeout_ms',
     }
 
     for env_key, dict_key in flat_keys.items():
@@ -107,6 +108,7 @@ def extract_env_and_args(params_overwrite):
         'db_batch_size': 'POCKETDEX_DB_BATCH_SIZE',
         'db_bulk_concurrency': 'POCKETDEX_DB_BULK_WRITE_CONCURRENCY',
         'reconcile_applications_every_block': 'POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK',
+        'abci_timeout_ms': 'POCKETDEX_ABCI_TIMEOUT_MS',
     }
 
     for key, env_var in flat_env_map.items():

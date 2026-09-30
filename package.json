@@ -20,7 +20,8 @@
     "format": "yarn exec prettier --loglevel error --write 'src/*.{js,ts,jsx,tsx}'",
     "format:ci": "yarn exec pretty-quick --verbose --check --pattern 'src/*.{js,ts,jsx,tsx}' --branch origin/main",
     "test": "yarn run build && subql-node-cosmos test",
-    "test:ci": "env node vendor/subql-cosmos/packages/node/bin/run test"
+    "test:ci": "env node vendor/subql-cosmos/packages/node/bin/run test",
+    "test:unit": "TS_NODE_FILES=true node -r ts-node/register --test src/mappings/utils/params_normalize.spec.ts src/mappings/utils/params_history.spec.ts src/mappings/pocket/params.spec.ts"
   },
   "homepage": "https://github.com/pokt-network/pocketdex",
   "repository": "github:pokt-network/pocketdex",
@@ -51,6 +52,7 @@
     "js-yaml": "4.1.0",
     "nodemon": "3.1.4",
     "prettier": "2.5.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.2.2"
   },
   "dependencies": {
@@ -64,6 +66,7 @@
     "json-bigint": "1.0.0",
     "lodash": "4.17.21",
     "node-fetch": "^3.3.2",
+    "p-limit": "^2.3.0",
     "simdjson": "^0.9.2",
     "starknet": "6.11.0",
     "stream-json": "^1.9.1",

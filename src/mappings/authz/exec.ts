@@ -7,13 +7,12 @@ import { MessageProps } from "../../types/models/Message";
 import { MorseClaimableAccountProps } from "../../types/models/MorseClaimableAccount";
 import { MsgImportMorseClaimableAccountsProps } from "../../types/models/MsgImportMorseClaimableAccounts";
 import { MsgRecoverMorseAccountProps } from "../../types/models/MsgRecoverMorseAccount";
-import { ParamProps } from "../../types/models/Param";
 import {
   handleMsgImportMorseClaimableAccounts,
   handleMsgRecoverMorseAccount,
   updateMorseClaimableAccounts,
 } from "../pocket/migration";
-import { _handleUpdateParam } from "../pocket/params";
+import { decodeUpdateParamMsg } from "../pocket/params";
 import { AuthzExecMsg } from "../types";
 import {
   getBlockId,
@@ -29,7 +28,6 @@ type HandleAuthzExecResult = {
   messages: Array<MessageProps>;
   authzExec: Array<AuthzExecProps>;
   authzExecMsgs: Array<AuthzMsgExecProps>;
-  params: Array<ParamProps>;
   msgImportMorseClaimableAccounts: Array<MsgImportMorseClaimableAccountsProps>;
   morseClaimableAccount: Array<MorseClaimableAccountProps>;
   msgRecoverMorseAccount: Array<MsgRecoverMorseAccountProps>;
@@ -42,7 +40,6 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
     messages: [],
     authzExec: [],
     authzExecMsgs: [],
-    params: [],
     msgImportMorseClaimableAccounts: [],
     morseClaimableAccount: [],
     msgRecoverMorseAccount: [],
@@ -101,12 +98,11 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
       decodedMsg = response.decodedMsg;
       result.msgRecoverMorseAccount.push(response.msgRecoverMorseAccount);
     } else {
-      // _handleUpdateParam will return the decoded message if it is a param update,
-      // otherwise it will return undefined.
-      // _handleUpdateParam will decode and save the message using its specific entity
-      const paramResult = _handleUpdateParam(encodedMsg, blockId);
+      // A param update is only decoded here to store the sub-message; the params
+      // table itself is written from chain state by reconcileParams.
+      const paramMsg = decodeUpdateParamMsg(encodedMsg);
 
-      if (!paramResult) {
+      if (!paramMsg) {
         for (const [typeUrl, msgType] of allModuleTypes) {
 
           if (typeUrl === encodedMsg.typeUrl) {
@@ -117,8 +113,7 @@ function _handleAuthzExec(msg: CosmosMessage<AuthzExecMsg>): HandleAuthzExecResu
           }
         }
       } else {
-        decodedMsg = paramResult.decodedMsg;
-        result.params.push(...paramResult.params);
+        decodedMsg = paramMsg;
       }
     }
 
@@ -153,7 +148,6 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     messages: [],
     authzExec: [],
     authzExecMsgs: [],
-    params: [],
     msgImportMorseClaimableAccounts: [],
     morseClaimableAccount: [],
     msgRecoverMorseAccount: [],
@@ -171,9 +165,6 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     if (r.authzExecMsgs.length > 0) {
       allResults.authzExecMsgs.push(...r.authzExecMsgs);
     }
-    if (r.params.length > 0) {
-      allResults.params.push(...r.params);
-    }
     if (r.msgImportMorseClaimableAccounts.length > 0) {
       allResults.msgImportMorseClaimableAccounts.push(...r.msgImportMorseClaimableAccounts);
     }
@@ -189,7 +180,6 @@ export async function handleAuthzExec(messages: CosmosMessage<AuthzExecMsg>[]): 
     store.bulkCreate("Message", allResults.messages),
     store.bulkCreate("AuthzExec", allResults.authzExec),
     store.bulkCreate("AuthzMsgExec", allResults.authzExecMsgs),
-    store.bulkCreate("Param", allResults.params),
     store.bulkCreate("MsgImportMorseClaimableAccounts", allResults.msgImportMorseClaimableAccounts),
     store.bulkCreate("MorseClaimableAccount", allResults.morseClaimableAccount),
     store.bulkCreate("MsgRecoverMorseAccount", allResults.msgRecoverMorseAccount),
