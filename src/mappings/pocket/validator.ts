@@ -236,28 +236,13 @@ const reportedMissingFromChain = new Set<string>();
 export async function reconcileValidators(height: number): Promise<void> {
   const queryClient = getQueryClient(height);
 
-  // The read is pinned to the block height, so it depends on the node still
-  // serving state at that height: a pruned height during a from-genesis
-  // reindex, or a transient RPC failure, would otherwise throw out of the block
-  // handler and stall indexing entirely. (Other height-pinned reads share that
-  // exposure and are still unguarded — queryTotalSupply in bank/supply.ts,
-  // handleModuleAccounts in bank/moduleAccounts.ts, reconcileApplications — so
-  // this hardens the validator path, not the indexer as a whole.)
-  // Running every block is what makes giving up on this block safe — the next
-  // one reads the same set again — but it must be loud, or "the reconcile is
-  // broken" and "nothing changed" become the same silence.
-  //
-  // Only the read is tolerated. Everything below it writes through the block's
-  // Postgres transaction, shared with every other handler, so a failure there
-  // must fail the block instead of leaving the rest of it running on an aborted
-  // transaction.
-  let chainValidators: Awaited<ReturnType<typeof queryClient.staking.allValidators>>;
-  try {
-    chainValidators = await queryClient.staking.allValidators();
-  } catch (error) {
-    logger.error(`[reconcileValidators] chain read failed at height ${height}, retrying next block: ${error}`);
-    return;
-  }
+  // The read is pinned to the block height. A read that still fails after the
+  // transport's retries (utils/query_client.ts queryAbci: a pruned height, a
+  // node that keeps failing) throws and fails the block, which SubQuery
+  // retries: the same rule as params, supply, module accounts and applications.
+  // Skipping the block instead would leave its validator state unwritten, with
+  // nothing but a log line to tell it apart from "nothing changed".
+  const chainValidators = await queryClient.staking.allValidators();
 
   const seen = new Set<string>();
   // Collect every mutated entity and persist them in a single batched upsert

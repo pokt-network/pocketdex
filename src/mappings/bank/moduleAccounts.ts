@@ -9,7 +9,6 @@ import {
   getBlockId,
 } from "../utils/ids";
 import getQueryClient from "../utils/query_client";
-import { retryOnFail } from "../utils/retry";
 import { enforceAccountsExists } from "./balanceChange";
 
 export type ExtendedAccount = ModuleAccount & {
@@ -62,14 +61,9 @@ export async function handleModuleAccounts(block: CosmosBlock): Promise<Set<stri
   const blockId = getBlockId(block);
   const moduleAccountsSet: Set<string> = new Set();
 
-  // retry for 15 seconds with a delay of 100 milliseconds every time it fails
-  const moduleAccounts = await retryOnFail(
-    async () => {
-      return queryModuleAccounts(block);
-    },
-    150,
-    100,
-  )
+  // No retry here: every ABCI query below already retries transport failures
+  // (utils/query_client.ts queryAbci), and one that still fails fails the block.
+  const moduleAccounts = await queryModuleAccounts(block);
 
   const accounts = [];
 
