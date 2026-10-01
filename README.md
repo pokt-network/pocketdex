@@ -187,4 +187,5 @@ For this last one you can do this in two ways:
 1. Run this from `poktroll` repository using `make localnet_up` and modify `indexer.enabled=true` at
    `localnet_config.yaml` on that repository.
 2. Copy a localnet genesis file here and uncomment `ENDPOINT` which you should point to a `localnet` fullnode RPC
-   endpoint.
+   endpoint. Point `GENESIS_PATH` at the genesis file with a path relative to the repo root; an absolute path does not
+   work.

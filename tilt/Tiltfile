@@ -67,6 +67,11 @@ def pocketdex(
   # Validate network value
   validate_network(network)
 
+  # genesis_file_path (GENESIS_PATH) must be relative to base_path: joining an
+  # absolute path onto it yields <base_path>/<absolute path>, which does not exist.
+  if genesis_file_path.startswith('/'):
+    fail('GENESIS_PATH must be a path relative to the repo root, got the absolute path: {}'.format(genesis_file_path))
+
   # set all the paths using base_path, which be default will be root
   genesis_file_path = os.path.abspath(os.path.join(base_path, genesis_file_path))
   postgres_values_path = os.path.abspath(os.path.join(base_path, postgres_values_path))
