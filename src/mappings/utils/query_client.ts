@@ -79,9 +79,17 @@ const abciLimit = pLimit(ABCI_MAX_IN_FLIGHT);
 type AbciTransport = Pick<QueryClient, "queryAbci">;
 
 // cosmjs QueryClient.queryAbci throws this for a response with a non-zero code
-// (height not available, unknown path, bad request): the node answered, and it
-// will answer the same again, so it is not retried.
+// (unknown path, bad request): the node answered, and it will answer the same
+// again, so it is not retried.
 const ABCI_ERROR_CODE = /^Query failed with \(\d+\)/;
+// Except a height the node has not committed yet: behind a load balancer the
+// block can come from one backend and the query land on another a block or two
+// behind. That clears in seconds, so it is retried on a fixed delay for up to
+// ABCI_HEIGHT_LAG_ATTEMPTS * ABCI_HEIGHT_LAG_DELAY_MS (15 s, the old
+// retryOnFail budget) before the block fails.
+const ABCI_HEIGHT_LAG = /invalid height|height in the future|version does not exist/i;
+export const ABCI_HEIGHT_LAG_ATTEMPTS = 30;
+export const ABCI_HEIGHT_LAG_DELAY_MS = 500;
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -98,8 +106,9 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Pr
 // queryAbci runs one ABCI query under the shared concurrency limit, each attempt
 // bounded by a timeout so a node that never answers cannot hold a slot. A
 // transport failure is retried up to ABCI_ATTEMPTS times in all, with jittered
-// exponential backoff slept outside the limit; an error code from the node is
-// not. Then it throws: the caller's block fails and SubQuery retries it.
+// exponential backoff slept outside the limit; a height the node has not reached
+// yet is retried on a fixed delay; any other error code from the node is not.
+// Then it throws: the caller's block fails and SubQuery retries it.
 export async function queryAbci(
   base: AbciTransport,
   path: string,
@@ -108,13 +117,21 @@ export async function queryAbci(
   timeoutMs = ABCI_TIMEOUT_MS,
 ): Promise<{ value: Uint8Array; height: number }> {
   const what = `abci query ${path} at height ${height}`;
+  let lagAttempt = 0;
   for (let attempt = 1; ; attempt++) {
     try {
       return await abciLimit(() => withTimeout(base.queryAbci(path, data, height), timeoutMs, what));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const final = ABCI_ERROR_CODE.test(message) || attempt >= ABCI_ATTEMPTS;
-      if (final) {
+      if (ABCI_ERROR_CODE.test(message)) {
+        if (!ABCI_HEIGHT_LAG.test(message) || ++lagAttempt >= ABCI_HEIGHT_LAG_ATTEMPTS) {
+          throw Object.assign(new Error(`${what} failed (node error): ${message}`), { cause: error });
+        }
+        attempt--; // a lagging node is not a transport failure
+        await new Promise((resolve) => setTimeout(resolve, ABCI_HEIGHT_LAG_DELAY_MS));
+        continue;
+      }
+      if (attempt >= ABCI_ATTEMPTS) {
         throw Object.assign(new Error(`${what} failed (attempt ${attempt} of ${ABCI_ATTEMPTS}): ${message}`), { cause: error });
       }
       const backoff = ABCI_RETRY_BASE_MS * 2 ** (attempt - 1);

@@ -457,11 +457,25 @@ describe("queryAbci transport", () => {
     const base = {
       queryAbci: (): Promise<{ value: Uint8Array; height: number }> => {
         calls++;
-        return Promise.reject(new Error("Query failed with (26): height 5 is not available"));
+        return Promise.reject(new Error("Query failed with (6): unknown query path"));
       },
     };
-    await assert.rejects(queryAbci(base, "/p", new Uint8Array(), 5), /attempt 1 of 3\): Query failed with \(26\)/);
+    await assert.rejects(queryAbci(base, "/p", new Uint8Array(), 5), /failed \(node error\): Query failed with \(6\)/);
     assert.equal(calls, 1);
+  });
+
+  it("retries a node that has not reached the height yet (load-balanced RPC lag)", async () => {
+    let calls = 0;
+    const base = {
+      queryAbci: () => {
+        if (++calls < 2) {
+          return Promise.reject(new Error("Query failed with (18): cannot query with height in the future; please provide a valid height: invalid request"));
+        }
+        return Promise.resolve({ value: new Uint8Array([1]), height: 5 });
+      },
+    };
+    assert.deepEqual(await queryAbci(base, "/p", new Uint8Array(), 5), { value: new Uint8Array([1]), height: 5 });
+    assert.equal(calls, 2);
   });
 
   it("defaults the timeout to 120 s, overridable, and refuses a bad value", () => {
