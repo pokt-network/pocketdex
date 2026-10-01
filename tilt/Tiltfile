@@ -4,6 +4,7 @@ load('./apps/indexer/Tiltfile', 'deploy_indexer')
 load('./apps/query/Tiltfile', 'deploy_query')
 load('./tools/pgadmin/Tiltfile', 'deploy_pgadmin')
 load('./tools/postgres/Tiltfile', 'deploy_postgres')
+load('./localnet/Tiltfile', 'deploy_localnet_validator')
 load(
   './cons.Tiltfile',
   'mainnet',
@@ -36,7 +37,7 @@ def pocketdex(
   # Static and Genesis path is only needed on localnet
   static_kustomize_path='./tilt/apps/static',
   static_kustomize_flags=[],
-  genesis_file_path='./tilt/genesis.json',
+  genesis_file_path='./tilt/localnet/validator/genesis.json',
   # Indexer params
   indexer_kustomize_path='./tilt/apps/indexer',
   indexer_kustomize_flags=[],
@@ -81,7 +82,7 @@ def pocketdex(
   indexer_docker_context = os.path.abspath(os.path.join(base_path, indexer_docker_context))
   query_kustomize_path = os.path.abspath(os.path.join(base_path, query_kustomize_path))
 
-  # default should be $ROOT/tilt/genesis.json since it is listed at .gitignore
+  # default is the localnet validator's genesis, tilt/localnet/validator/genesis.json
   if not os.path.exists(genesis_file_path) and network == 'localnet':
     fail('genesis_file: {} does not exists and the network=localnet'.format(genesis_file_path))
 
@@ -107,6 +108,14 @@ def pocketdex(
     return
 
   if network == 'localnet':
+    # Our own single-validator chain, started from the same genesis the static
+    # server hands the indexer.
+    deploy_localnet_validator(
+      validator_dir=os.path.abspath(os.path.join(base_path, './tilt/localnet/validator')),
+      genesis_file_path=genesis_file_path,
+      labels=tools_labels
+    )
+
     # Deploy static server to service the genesis file for the indexer
     # NOTE: indexer allow load genesis file from remote source which is used for:
     # mainnet and beta from Pocket Network GitHub.

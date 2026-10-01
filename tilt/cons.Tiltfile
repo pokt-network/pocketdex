@@ -6,7 +6,8 @@ localnet = 'localnet'
 testnet_beta = 'beta'
 mainnet = 'mainnet'
 
-genesisPath = './tilt/genesis.json'
+# the localnet validator's genesis (tilt/localnet/validator); relative to the repo root
+genesisPath = './tilt/localnet/validator/genesis.json'
 
 # on-host development only
 onlyDb = 'no'

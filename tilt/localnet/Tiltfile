@@ -1,0 +1,157 @@
+# Localnet Pocket Shannon validator for NETWORK=localnet: a single validator on
+# the local kind cluster, so the indexer indexes a chain it fully controls.
+# Adapted from pocket-relay-miner tilt/k8s/validator.Tiltfile (validator only:
+# no account-init, relayer, miner or observability). See validator/README.md.
+load('ext://configmap', 'configmap_create')
+load('ext://secret', 'secret_create_generic')
+
+def deploy_localnet_validator(
+  validator_dir,
+  genesis_file_path,
+  image='ghcr.io/pokt-network/pocketd',
+  tag='0.1.35',
+  chain_id='pocket',
+  labels=[]
+):
+  # The same genesis the indexer loads through the static server.
+  configmap_create('validator-genesis', from_file=['genesis.json={}'.format(genesis_file_path)])
+  configmap_create('validator-config', from_file=['config.toml={}'.format(os.path.join(validator_dir, 'config.toml'))])
+  secret_create_generic('validator-keys', from_file=[
+    '{}={}'.format(f, os.path.join(validator_dir, f))
+    for f in ['priv_validator_key.json', 'node_key.json', 'app.toml', 'client.toml']
+  ])
+
+  k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: validator
+  labels:
+    app: validator
+spec:
+  ports:
+  - port: 26657
+    targetPort: 26657
+    name: rpc
+  - port: 9090
+    targetPort: 9090
+    name: grpc
+  - port: 1317
+    targetPort: 1317
+    name: rest
+  selector:
+    app: validator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: validator
+  labels:
+    app: validator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: validator
+  template:
+    metadata:
+      labels:
+        app: validator
+    spec:
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      initContainers:
+      # The home is an emptyDir: every pod start is a new chain from genesis.
+      - name: init-validator
+        image: {image}:{tag}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          pocketd init validator --home=/home/pocket/.pocket --chain-id={chain_id} > /dev/null 2>&1
+          cp /genesis/genesis.json /home/pocket/.pocket/config/genesis.json
+        volumeMounts:
+        - name: validator-data
+          mountPath: /home/pocket/.pocket
+        - name: validator-genesis
+          mountPath: /genesis
+      containers:
+      - name: validator
+        image: {image}:{tag}
+        command:
+        - pocketd
+        - start
+        - --home=/home/pocket/.pocket
+        - --log_level=info
+        ports:
+        - containerPort: 26657
+          name: rpc
+        - containerPort: 9090
+          name: grpc
+        - containerPort: 1317
+          name: rest
+        volumeMounts:
+        - name: validator-data
+          mountPath: /home/pocket/.pocket
+        - name: validator-keys
+          mountPath: /home/pocket/.pocket/config/priv_validator_key.json
+          subPath: priv_validator_key.json
+          readOnly: true
+        - name: validator-keys
+          mountPath: /home/pocket/.pocket/config/node_key.json
+          subPath: node_key.json
+          readOnly: true
+        - name: validator-keys
+          mountPath: /home/pocket/.pocket/config/app.toml
+          subPath: app.toml
+          readOnly: true
+        - name: validator-keys
+          mountPath: /home/pocket/.pocket/config/client.toml
+          subPath: client.toml
+          readOnly: true
+        - name: validator-config
+          mountPath: /home/pocket/.pocket/config/config.toml
+          subPath: config.toml
+          readOnly: true
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 26657
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: validator-data
+        emptyDir: {{}}
+      - name: validator-genesis
+        configMap:
+          name: validator-genesis
+      - name: validator-keys
+        secret:
+          secretName: validator-keys
+          defaultMode: 0644
+      - name: validator-config
+        configMap:
+          name: validator-config
+          defaultMode: 0644
+""".format(image=image, tag=tag, chain_id=chain_id)))
+
+  k8s_resource(
+    'validator',
+    labels=labels,
+    objects=[
+      'validator-genesis:configmap',
+      'validator-config:configmap',
+      'validator-keys:secret',
+    ],
+  )

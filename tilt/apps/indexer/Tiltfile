@@ -100,6 +100,7 @@ def deploy_indexer(
 
   if network == localnet:
     rs_deps.append('static-server')
+    rs_deps.append('validator')
 
   if len(resource_deps) > 0:
     for resource in resource_deps:
