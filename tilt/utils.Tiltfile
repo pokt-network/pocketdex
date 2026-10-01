@@ -10,6 +10,9 @@ def inject_env_vars(resources, target_kind, target_name, container_name, env_var
                         found = False
                         for env in existing_env:
                             if env['name'] == key:
+                                # the base entry may come from a configmap/secret (valueFrom);
+                                # Kubernetes rejects an entry with both, so the override replaces it.
+                                env.pop('valueFrom', None)
                                 env['value'] = value
                                 found = True
                                 break
