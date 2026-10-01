@@ -5,7 +5,6 @@ load(
   './tilt/cons.Tiltfile',
   'mainnet',
   'testnet_beta',
-  'testnet_alpha',
   'localnet',
   'genesisPath',
   'defaultEmail',
@@ -19,8 +18,7 @@ dotenv(fn=".env", verbose=True, showValues=False)
 watch_file('.env')
 secret_settings(disable_scrub = True)
 
-# Default to mainnet since it is running longer than maybe alpha
-# and requires less setup than localnet.
+# Default to mainnet since it requires less setup than localnet.
 network = os.getenv('NETWORK', mainnet)
 # Default to genesis.json at tilt folder. GENESIS_PATH must be RELATIVE to the
 # repo root: tilt/Tiltfile joins it with base_path, so an absolute path breaks.

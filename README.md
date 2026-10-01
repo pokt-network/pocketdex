@@ -180,7 +180,7 @@ yarn run codegen
 
 ### 3. Switch between networks:
 
-Modify .env `NETWORK` value between: `mainnet`, `beta`, `alpha` or `localnet`
+Modify .env `NETWORK` value between: `mainnet`, `beta` or `localnet`
 
 For this last one you can do this in two ways:
 
