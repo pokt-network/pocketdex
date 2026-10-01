@@ -19,6 +19,7 @@ import {
   QueryValidatorsRequest,
 } from "../../client/cosmos/staking/v1beta1/query";
 import { Validator as ChainValidator } from "../../client/cosmos/staking/v1beta1/staking";
+import { positiveIntFromEnv } from "./env";
 
 // High default page size: with the current validator/app counts a single page is
 // enough, but the loop below keeps requesting pages while a next_key is returned
@@ -71,12 +72,7 @@ const ABCI_RETRY_BASE_MS = 250;
 export const ABCI_TIMEOUT_MS = abciTimeoutFromEnv(process.env.POCKETDEX_ABCI_TIMEOUT_MS);
 
 export function abciTimeoutFromEnv(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") return 120_000;
-  const ms = Number(value);
-  if (!Number.isSafeInteger(ms) || ms <= 0) {
-    throw new Error(`POCKETDEX_ABCI_TIMEOUT_MS must be a positive integer of milliseconds, got "${value}"`);
-  }
-  return ms;
+  return positiveIntFromEnv("POCKETDEX_ABCI_TIMEOUT_MS", value, 120_000);
 }
 const abciLimit = pLimit(ABCI_MAX_IN_FLIGHT);
 

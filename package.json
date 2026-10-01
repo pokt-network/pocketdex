@@ -21,7 +21,7 @@
     "format:ci": "yarn exec pretty-quick --verbose --check --pattern 'src/*.{js,ts,jsx,tsx}' --branch origin/main",
     "test": "yarn run build && subql-node-cosmos test",
     "test:ci": "env node vendor/subql-cosmos/packages/node/bin/run test",
-    "test:unit": "TS_NODE_FILES=true node -r ts-node/register --test src/mappings/utils/params_normalize.spec.ts src/mappings/utils/params_history.spec.ts src/mappings/pocket/params.spec.ts src/mappings/pocket/validator.spec.ts"
+    "test:unit": "TS_NODE_FILES=true node -r ts-node/register --test src/mappings/utils/params_normalize.spec.ts src/mappings/utils/params_history.spec.ts src/mappings/pocket/params.spec.ts src/mappings/pocket/validator.spec.ts src/mappings/utils/env.spec.ts"
   },
   "homepage": "https://github.com/pokt-network/pocketdex",
   "repository": "github:pokt-network/pocketdex",

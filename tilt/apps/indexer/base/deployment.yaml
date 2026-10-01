@@ -89,11 +89,11 @@ spec:
             - name: START_BLOCK
               value: "1"
             - name: POCKETDEX_DB_BATCH_SIZE
-              value: "10000"
+              value: "5000"
             - name: POCKETDEX_DB_PAGE_LIMIT
-              value: "10000"
+              value: "1000"
             - name: POCKETDEX_DB_BULK_WRITE_CONCURRENCY
-              value: "10"
+              value: "5"
             - name: POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK
               value: "false"
             - name: POCKETDEX_GENESIS

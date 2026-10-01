@@ -10,9 +10,9 @@ import type {
   BulkCreateOptions,
   Sequelize,
 } from "@subql/x-sequelize";
-import { isNumber } from "lodash";
 import pLimit from "p-limit";
 import type { SupplyDenom } from "../../types";
+import { positiveIntFromEnv } from "./env";
 
 type EntityProps<T> = Omit<SupplyDenom, NonNullable<FunctionPropertyNames<T>> | "_name">
 
@@ -26,9 +26,9 @@ type PaginatedFetchOptions<T> = {
 type Transformer<T> = (doc: T) => any;
 
 // PAGE_LIMIT should be less or equal to --query-limit=<value> otherwise Subql will throw an error.
-const PAGE_LIMIT = isNumber(process.env.POCKETDEX_DB_PAGE_LIMIT) ? Number(process.env.POCKETDEX_DB_PAGE_LIMIT) : 1000;
-const BATCH_SIZE = isNumber(process.env.POCKETDEX_DB_BATCH_SIZE) ? Number(process.env.POCKETDEX_DB_BATCH_SIZE) : 5000;
-const CONCURRENCY = isNumber(process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY) ? Number(process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY) : 5;
+const PAGE_LIMIT = positiveIntFromEnv("POCKETDEX_DB_PAGE_LIMIT", process.env.POCKETDEX_DB_PAGE_LIMIT, 1000);
+const BATCH_SIZE = positiveIntFromEnv("POCKETDEX_DB_BATCH_SIZE", process.env.POCKETDEX_DB_BATCH_SIZE, 5000);
+const CONCURRENCY = positiveIntFromEnv("POCKETDEX_DB_BULK_WRITE_CONCURRENCY", process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY, 5);
 
 logger.info(`[Global] PAGE_LIMIT=${PAGE_LIMIT} BATCH_SIZE=${BATCH_SIZE} CONCURRENCY=${CONCURRENCY}`);
 
