@@ -7,8 +7,8 @@ echo "Entrypoint Args: $@"
 
 # prepare the env variables needed for subql node in a previous step to then based on WATCH env
 # attach the rest of the command
-# NOTE: this is needed because we exec the command with su - app which start a new session where the available
-# env from root will not been available.
+# NOTE: `env VAR=...` adds to the inherited environment (the image runs as USER app; there is no `su -`), so these only
+# set defaults: a variable listed here and unset reaches node as an empty string.
 # all this is to been able to join WATCH and Normal execution in a single dockerfile
 cmd="env NODE_OPTIONS=$NODE_OPTIONS \
 NODE_ENV=$NODE_ENV \
@@ -46,7 +46,8 @@ EOF
     POCKETDEX_DB_PAGE_LIMIT=$POCKETDEX_DB_PAGE_LIMIT \
     POCKETDEX_DB_BATCH_SIZE=$POCKETDEX_DB_BATCH_SIZE \
     POCKETDEX_DB_BULK_WRITE_CONCURRENCY=$POCKETDEX_DB_BULK_WRITE_CONCURRENCY \
-    POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK=$POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK"
+    POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK=$POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK \
+    POCKETDEX_ABCI_TIMEOUT_MS=$POCKETDEX_ABCI_TIMEOUT_MS"
 
   if [ "$NODE_ENV" = "development" ]
   then

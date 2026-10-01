@@ -54,6 +54,7 @@ import {
   parseJson,
   stringify,
 } from "../utils/json";
+import { effectiveMintRatio } from "../utils/params_history";
 import { getDenomAndAmount } from "../utils/primitives";
 
 type ModToAcctTransferRecord = {
@@ -968,13 +969,13 @@ function _buildClaimSettledProps(
 
 function _handleEventClaimSettled(
   event: CosmosEvent,
-  mintRatioFromParams: number,
+  getMintRatioFromParams: () => number,
   getEffectiveBurn: (application: string, supplier: string) => string | null
 ): [EventClaimSettledProps, Array<ModToAcctTransferRecord>] {
   const attributes = getAttributes(event.event.attributes);
   const { claim, claimed, mintRatioStr, settledUpokt } = attributes;
 
-  const mintRatio = mintRatioStr ? parseFloat(mintRatioStr) : mintRatioFromParams;
+  const mintRatio = mintRatioStr ? parseFloat(mintRatioStr) : getMintRatioFromParams();
   const { session_header, supplier_operator_address } = claim;
 
   const eventId = getEventId(event);
@@ -1493,12 +1494,24 @@ export async function handleEventClaimSettled(
   overservices: Array<CosmosEvent>,
   settlementBatches: Array<CosmosEvent>,
 ): Promise<void> {
-  // Load the min_ratio parameter from tokenomics module
-  // This parameter is updated via AuthzExecMsg (transactions) and EventClaimSettled events are block events
-  // Block events run after params are changed, so the param should already be updated in the database
-  const mintRatioParam = await Param.get(getParamId("tokenomics", "mint_ratio"));
-
-  const mintRatio = mintRatioParam ? parseFloat(mintRatioParam.value) : 1; // Default to 1 if not found, meaning it was before the PIP-41
+  // Events carry their own mint_ratio attribute since v0.1.33; only those that do
+  // not fall back to the tokenomics mint_ratio param, loaded only then.
+  // reconcileParams (indexParams) runs before this handler in the same block, so the
+  // stored value is the one the chain holds at this height. The stored value is raw
+  // (0 before PIP-41); effectiveMintRatio turns it into the ratio the chain used.
+  let mintRatioFromParams: number | undefined;
+  const needsParamMintRatio = events.some(
+    (event) => !event.event.attributes.some((attribute) => attribute.key === "mint_ratio" && parseAttribute(attribute.value))
+  );
+  if (needsParamMintRatio) {
+    const { chainId, height } = events[0].block.header;
+    const mintRatioParam = await Param.get(getParamId("tokenomics", "mint_ratio"));
+    mintRatioFromParams = effectiveMintRatio(mintRatioParam?.value, height, chainId);
+  }
+  const getMintRatioFromParams = (): number => {
+    if (mintRatioFromParams === undefined) throw new Error("mint_ratio param requested for an event that carries its own");
+    return mintRatioFromParams;
+  };
 
   const eventsSettled = [];
   const modToAcctTransfersToSave = [];
@@ -1533,7 +1546,7 @@ export async function handleEventClaimSettled(
   }
 
   for (const event of events) {
-    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event, mintRatio, getEffectiveBurn);
+    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event, getMintRatioFromParams, getEffectiveBurn);
     eventsSettled.push(eventSettled);
     serviceIdByEventSettledId.set(eventSettled.id as string, eventSettled.serviceId as string);
 

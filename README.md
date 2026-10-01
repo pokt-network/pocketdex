@@ -180,11 +180,8 @@ yarn run codegen
 
 ### 3. Switch between networks:
 
-Modify .env `NETWORK` value between: `mainnet`, `beta`, `alpha` or `localnet`
+Modify .env `NETWORK` value between: `mainnet`, `beta` or `localnet`
 
-For this last one you can do this in two ways:
-
-1. Run this from `poktroll` repository using `make localnet_up` and modify `indexer.enabled=true` at
-   `localnet_config.yaml` on that repository.
-2. Copy a localnet genesis file here and uncomment `ENDPOINT` which you should point to a `localnet` fullnode RPC
-   endpoint.
+`localnet` brings up its own single Pocket Shannon validator in the local cluster (`tilt/localnet`, test keys only) and
+indexes it from genesis. To index another localnet instead, uncomment `ENDPOINT` and point it at that fullnode's RPC, and
+point `GENESIS_PATH` at its genesis file with a path relative to the repo root; an absolute path does not work.

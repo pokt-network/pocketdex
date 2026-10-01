@@ -48,10 +48,12 @@ COPY --chown=app:app ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.j
 COPY --chown=app:app src /home/app/src
 COPY --chown=app:app proto /home/app/proto
 
-# For production builds: build and prune dev dependencies
+# For production builds: build, run the unit tests (this is the build CI runs) and prune dev dependencies
 RUN if [ "$BUILD_MODE" = "production" ]; then \
       yarn run build && \
+      yarn run test:unit && \
       yarn workspaces focus --production && \
+      node scripts/check-dist-requires.js && \
       rm -rf /home/app/src; \
     fi
 

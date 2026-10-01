@@ -7,7 +7,6 @@ import { MsgUpdateParams as MsgUpdateGovParams } from "cosmjs-types/cosmos/gov/v
 import { MsgUpdateParams as MsgUpdateMintParams } from "cosmjs-types/cosmos/mint/v1beta1/tx";
 import { MsgUpdateParams as MsgUpdateSlashingParams } from "cosmjs-types/cosmos/slashing/v1beta1/tx";
 import { MsgUpdateParams as MsgUpdateStakingParams } from "cosmjs-types/cosmos/staking/v1beta1/tx";
-import { snakeCase } from "lodash";
 import {
   MsgUpdateParam as MsgUpdateApplicationParam,
   MsgUpdateParams as MsgUpdateApplicationParams,
@@ -43,10 +42,12 @@ import {
   MsgUpdateParam as MsgUpdateTokenomicsParam,
   MsgUpdateParams as MsgUpdateTokenomicsParams,
 } from "../../client/pocket/tokenomics/tx";
-import { ParamProps } from "../../types/models/Param";
+import { Param } from "../../types";
+import type { ParamProps } from "../../types/models/Param";
 import { EncodedMsg } from "../types";
-import { getParamId } from "../utils/ids";
-import { sanitize } from "../utils/json";
+import { fetchPaginatedRecords } from "../utils/db";
+import { reconcileParamsAt } from "../utils/params_history";
+import getQueryClient from "../utils/query_client";
 
 
 const msgUpdateParamsMap: Record<string, {
@@ -80,61 +81,55 @@ const msgUpdateParamsMap: Record<string, {
   "/cosmos.gov.v1.MsgUpdateParams": MsgUpdateGovParams,
 };
 
-export type UpdateParamResult = {
-  decodedMsg: unknown
-  params: Array<ParamProps>
-}
-
-export function _handleUpdateParam(encodedMsg: EncodedMsg, blockId: bigint): UpdateParamResult | null {
+// decodeUpdateParamMsg decodes a MsgUpdateParam(s) wrapped in an authz MsgExec so
+// the sub-message can be stored as a Message row. It returns null for any other
+// type. It no longer produces Param rows: the message only says what was
+// requested, not what the chain applied or when (upgrades change params with no
+// message at all, and some updates only take effect at the next session), so the
+// params table is written by reconcileParams from the chain state instead.
+export function decodeUpdateParamMsg(encodedMsg: EncodedMsg): unknown | null {
   if (!(encodedMsg.typeUrl in msgUpdateParamsMap)) {
-    // this will help us to identify other param types without ignore them
     return null;
   }
 
-  const params: Array<ParamProps> = [];
+  return msgUpdateParamsMap[encodedMsg.typeUrl].decode(new Uint8Array(Object.values(encodedMsg.value)));
+}
 
-  const msgCodec = msgUpdateParamsMap[encodedMsg.typeUrl];
-  const decodedMsg = msgCodec.decode(new Uint8Array(Object.values(encodedMsg.value)));
+// reconcileParams writes the params of every module as the chain holds them at
+// `height`. Same shape as reconcileValidators: read the authoritative state
+// pinned to the block height (every module in parallel), compare it with the
+// value currently stored per key, and write a new Param version only for the
+// keys whose value changed — same id `${namespace}-${key}`, so SubQuery closes
+// the previous _block_range. The steady state is one read per module and zero
+// writes.
+//
+// Reading state instead of decoding MsgUpdateParam(s) is what makes the history
+// exact: chain upgrades change params without any message, deferred updates
+// (shared/session) apply at a later height than their message, and gov
+// proposals were never decoded at all.
+//
+// Nothing is tolerated: a read that fails after the transport's retries, or
+// that cannot be verified, throws and fails the block (utils/params_history.ts
+// reconcileParamsAt), because a skipped block would record a change late.
+export async function reconcileParams(height: number, chainId: string): Promise<void> {
+  const queryClient = getQueryClient(height);
+  const blockId = BigInt(height);
 
-  const decodedJsonMsg = msgCodec.toJSON(decodedMsg) as Record<string, unknown>;
-  const namespace: string = encodedMsg.typeUrl.split(".")[1];
-
-  const entity: Pick<ParamProps, "namespace" | "blockId"> = {
-    namespace,
-    blockId,
-  };
-
-  if (encodedMsg.typeUrl.includes('MsgUpdateParam')) {
-    if (encodedMsg.typeUrl.endsWith("MsgUpdateParams")) {
-      for (const [key, value] of Object.entries(decodedJsonMsg.params as Record<string, unknown>)) {
-        const snakeKey = snakeCase(key);
-        params.push({
-          id: getParamId(namespace, snakeKey),
-          // we handle the key as snake case because is the same way it is coming on the genesis file.
-          key: snakeKey,
-          value: sanitize(value),
-          ...entity,
-        });
-      }
-    } else {
-      for (const key of Object.keys(decodedJsonMsg)) {
-        const value = decodedJsonMsg[key];
-        if (key.startsWith("as")) {
-          const snakeKey = snakeCase(decodedJsonMsg.name as string);
-          params.push({
-            id: getParamId(namespace, snakeKey),
-            // we handle the key as snake case because is the same way it is coming on the genesis file.
-            key: snakeKey,
-            value: sanitize(value),
-            ...entity,
-          });
-        }
-      }
-    }
-  }
-
-  return {
-    decodedMsg,
-    params,
-  };
+  await reconcileParamsAt(height, chainId, (path, h, data) => queryClient.params.raw(path, h, data), {
+    current: async () => new Map(
+      (await fetchPaginatedRecords<Param>({
+        fetchFn: (options) => Param.getByFields([], options),
+        initialOptions: {},
+      })).map((p) => [p.id, p.value]),
+    ),
+    save: (rows) => store.bulkCreate("Param", rows.map((row): ParamProps => ({
+      id: row.id,
+      namespace: row.namespace,
+      key: row.key,
+      value: row.value,
+      activeAt: BigInt(row.activeAt),
+      blockId,
+    }))),
+    remove: (ids) => store.bulkRemove("Param", ids),
+  });
 }

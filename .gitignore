@@ -76,3 +76,5 @@ Thumbs.db
 
 # root genesis file required to run on host instead of docker. (debug purposes only)
 genesis.json
+# the localnet validator's genesis is tracked (tilt/localnet/validator/README.md)
+!tilt/localnet/validator/genesis.json
