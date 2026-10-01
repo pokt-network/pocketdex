@@ -3,6 +3,6 @@ kind: ConfigMap
 metadata:
   name: pokt-shannon
 data:
-  chain_id: "pocket-beta"
-  genesis: "https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/testnet-beta/genesis.json"
-  rpc_endpoint: "https://shannon-testnet-grove-rpc.beta.poktroll.com"
+  chain_id: "pocket-lego-testnet"
+  genesis: "https://raw.githubusercontent.com/pokt-network/pocket-network-genesis/refs/heads/master/shannon/testnet-lego/genesis.json"
+  rpc_endpoint: "https://sauron-rpc.beta.infra.pocket.network"
