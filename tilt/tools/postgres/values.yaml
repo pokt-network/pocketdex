@@ -14,6 +14,16 @@ image:
   repository: bitnamilegacy/postgresql
   tag: 17.5.0-debian-12-r16
 primary:
+  # Explicit resources instead of the chart's "nano" preset (192Mi limit): the
+  # beta (pocket-lego-testnet) genesis account bulk insert got the database
+  # OOMKilled at 192Mi; with these limits it peaked at ~1.3Gi (cgroup memory.peak).
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
   initdb:
     scripts:
       01-extensions.sql: |
