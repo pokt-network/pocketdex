@@ -66,6 +66,7 @@ import {
   GenesisTransaction,
 } from "../types/genesis";
 import { optimizedBulkCreate } from "../utils/db";
+import { genesisInitialHeight } from "../utils/genesis_height";
 import {
   getAppDelegatedToGatewayId,
   getAuthzId,
@@ -163,8 +164,8 @@ export async function loadGenesisFile(): Promise<Genesis> {
 export async function handleGenesis(block: CosmosBlock): Promise<void> {
   const genesis: Genesis = await loadGenesisFile();
 
-  // use 1 in case genesis initial height is 0
-  const initialHeight = genesis.initial_height === 0 ? 1 : genesis.initial_height;
+  // a number or a numeric string (a node's /genesis), 0 meaning 1; anything else throws
+  const initialHeight = genesisInitialHeight(genesis.initial_height);
 
   // IMPORTANT: Return early if this is not the genesis initial height as this is called for block indexed!
   if (block.block.header.height !== initialHeight) {

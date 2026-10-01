@@ -133,7 +133,8 @@ interface GenUtil<T extends AllMessages = AllMessages> {
 }
 
 export interface Genesis {
-  initial_height: number,
+  // a number in the published files, a string ("1") from a node's /genesis
+  initial_height: number | string,
   // CometBFT consensus params. app_state.consensus is not where they live (on
   // mainnet it holds an unrelated fragment), so the consensus Param rows come from
   // here: consensus_params in a CometBFT GenesisDoc, consensus.params in a
