@@ -114,6 +114,13 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     // Covering index for blocks timestamp→id lookups (enables index-only scans).
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_blocks_timestamp_id
       ON ${dbSchema}.blocks (timestamp, id)`,
+    // The settlement catalog functions (settlement/functions.ts) read the first settlement height
+    // (ORDER BY block_id LIMIT 1, on every call) and join entity rows to their block by id; the GIST
+    // indexes SubQuery creates cannot serve either. Both already exist on mainnet under these names.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_claim_settleds_block_id
+      ON ${dbSchema}.event_claim_settleds (block_id)`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_blocks_id
+      ON ${dbSchema}.blocks (id)`,
     // GIN index for array overlap queries on the domains column.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_domains
       ON ${dbSchema}.supplier_service_configs USING GIN (domains)`,
