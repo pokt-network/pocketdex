@@ -2,6 +2,7 @@
 //   MONEY_TEST_PG=postgres://postgres:postgres@127.0.0.1:5432/postgres yarn test:money
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { addEntityColumnsFn } from "../../src/mappings/dbFunctions/entityColumns";
 import { getTotalSupplyByDay } from "../../src/mappings/dbFunctions/supply";
 import { getTotalSupplyByDayBefore } from "./fixtures/supply_by_day_before";
 
@@ -153,5 +154,34 @@ describe("get_total_supply_by_day (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     ).rows[0];
     assert.equal(r.diff, "0");
     assert.ok(Number(r.answered) > 500, `answered ${r.answered} of ${r.n}`);
+  });
+});
+
+describe("entity columns added at start (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set" }, () => {
+  const c = new Client({ connectionString: URL });
+  const E = "entity_columns_ci";
+  before(async () => {
+    await c.connect();
+    await c.query(`DROP SCHEMA IF EXISTS ${E} CASCADE; CREATE SCHEMA ${E};`);
+    // validators as a database indexed before Validator.delegatorShares has it
+    await c.query(`CREATE TABLE ${E}.validators (id text, stake_amount numeric, _block_range int8range);
+      INSERT INTO ${E}.validators VALUES ('poktvaloper1a', 10, int8range(1, NULL));`);
+  });
+  after(async () => {
+    await c.query(`DROP SCHEMA IF EXISTS ${E} CASCADE`);
+    await c.end();
+  });
+
+  it("adds delegator_shares to a validators table indexed before it, keeps its rows, and runs again as a no-op", async () => {
+    await c.query(addEntityColumnsFn(E));
+    await c.query(addEntityColumnsFn(E));
+    const col = await c.query(
+      `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'validators'
+         AND column_name = 'delegator_shares'`,
+      [E]
+    );
+    assert.deepEqual(col.rows, [{ data_type: "text" }]);
+    const rows = await c.query(`SELECT id, stake_amount::text, delegator_shares FROM ${E}.validators`);
+    assert.deepEqual(rows.rows, [{ id: "poktvaloper1a", stake_amount: "10", delegator_shares: null }]);
   });
 });

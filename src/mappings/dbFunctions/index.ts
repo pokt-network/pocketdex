@@ -11,6 +11,7 @@ import {
   getPerformanceIndexSqls,
   refreshDomainServiceDailyRewardsFn,
 } from "./domainRewards";
+import { addEntityColumnsFn } from "./entityColumns";
 import { createModToAcctTransfersTableFn, createModToAcctTransfersSummarizedTableFn } from "./modToAcctTransfers";
 import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
 import { getComputeUnitsToTokensMultiplierEvolutionFn } from "./params";
@@ -93,6 +94,8 @@ export async function createDbFunctions(): Promise<void> {
   logger.debug('[createDbFunctions] creating db functions')
 
   const schema = getDbSchema()
+  // first: columns of entity fields added after a database was created (entityColumns.ts), which the handlers read
+  await createFunctions(schema, addEntityColumnsFn)
   // these are the function used to generate the aggregated data saved by block
   await createFunctions(
     schema,
