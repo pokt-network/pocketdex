@@ -47,3 +47,30 @@ jobs:
       # Pull requests build without ever touching the registry credentials.
       push: ${{ matrix.environment == 'production' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
+  money-db:
+    # The settlement money writer and its golden fixtures against a real PostgreSQL: the unit tests in the
+    # image build cannot reach a database.
+    name: 'Money tables (PostgreSQL)'
+    needs: draft
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: recursive
+      - name: Build the development image
+        run: docker build -f tilt/docker/indexer.dockerfile --build-arg BUILD_MODE=development -t pocketdex-ci .
+      - name: Run the money writer test
+        run: >-
+          docker run --rm --network host --entrypoint yarn
+          -v "$PWD/test:/home/app/test:ro"
+          -e MONEY_TEST_PG=postgres://postgres:postgres@127.0.0.1:5432/postgres
+          pocketdex-ci test:money

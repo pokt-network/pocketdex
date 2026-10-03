@@ -1,0 +1,14 @@
+# localnet runs as chain id "pocket" from a recent poktroll: its settlements are batched_vrd from height 1, which
+# the mainnet era table would label settlement_result (src/mappings/money/write.ts settlementEraAt).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indexer
+spec:
+  template:
+    spec:
+      containers:
+        - name: indexer
+          env:
+            - name: POCKETDEX_SETTLEMENT_ERA
+              value: "batched_vrd"
