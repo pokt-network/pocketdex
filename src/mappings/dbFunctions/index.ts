@@ -42,6 +42,10 @@ import {
 } from "./rewardsByAddressesAndTime";
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByServicesAddressesAndTime";
 import { getAmountOfBlocksAndSuppliersByTimesFn, servicesPerformanceBetweenTimesFn } from "./servicePerformance";
+import { createSettlementFunctionsFn } from "./settlement/functions";
+import { createSettlementTablesFn } from "./settlement/schema";
+import { createSettlementSmartTagsFn } from "./settlement/smartTags";
+import { createSettlementWriterFn } from "./settlement/writer";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
 import {
   getBurnBreakdownBetweenDatesFn,
@@ -127,6 +131,16 @@ export async function createDbFunctions(): Promise<void> {
     createModToAcctTransfersSummarizedTableFn,
     createDomainServiceDailyRewardsTableFn,
     refreshDomainServiceDailyRewardsFn,
+  )
+  // settlement money tables, their single writer (src/mappings/money) and the catalog functions over them;
+  // a failure here is fatal
+  await createFunctions(
+    schema,
+    createSettlementTablesFn,
+    createSettlementWriterFn,
+    createSettlementFunctionsFn,
+    // after the objects it tags; hides tables and helpers from the GraphQL API
+    createSettlementSmartTagsFn,
   )
   // CONCURRENT indexes must run outside any transaction, one query each
   await createIndexesConcurrently(getPerformanceIndexSqls(schema))

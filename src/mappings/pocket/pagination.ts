@@ -2,6 +2,7 @@ import {
   Application,
   ApplicationGateway,
   ApplicationService,
+  Delegation,
   EventClaimSettled,
   Gateway,
   StakeStatus,
@@ -166,5 +167,14 @@ export async function fetchAllEventClaimSettled(blockId: bigint): Promise<EventC
       // orderBy: 'id', // Order results by ID
       // orderDirection: 'ASC', // Ascending order
     },
+  });
+}
+
+// delegation
+
+export async function fetchAllDelegationByValidator(validatorOperator: string): Promise<Delegation[]> {
+  return fetchPaginatedRecords({
+    fetchFn: (options) => Delegation.getByValidatorOperator(validatorOperator, options),
+    initialOptions: {},
   });
 }

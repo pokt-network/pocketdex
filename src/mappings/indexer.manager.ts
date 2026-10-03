@@ -24,12 +24,16 @@ import {
   EventHandlers,
   MsgHandlers,
 } from "./handlers";
+import { stakingEventValidators } from "./money/delegations";
+import { EVENT_CLAIM_SETTLED } from "./money/payload";
+import { REPLAY_ERAS } from "./money/replay";
+import { blockStakingEvents, indexMoney, moneyFromHeight, settlementEraAt } from "./money/write";
 import { handleEventClaimSettled } from "./pocket/relays";
 import { handleAddBlockReports } from "./pocket/reports";
 import { indexSupplier } from "./pocket/suppliers";
 import { reconcileApplications } from "./pocket/applications";
 import { reconcileParams } from "./pocket/params";
-import { reconcileValidators } from "./pocket/validator";
+import { reconcileValidators, ValidatorSnapshot } from "./pocket/validator";
 import {
   handleBlock,
   handleGenesis,
@@ -129,7 +133,7 @@ async function indexBalances(block: CosmosBlock, msgByType: MessageByType, event
 }
 
 // any validator messages or events
-async function indexValidators(block: CosmosBlock, msgByType: MessageByType, eventByType: EventByType): Promise<void> {
+async function indexValidators(block: CosmosBlock, msgByType: MessageByType, eventByType: EventByType): Promise<ValidatorSnapshot> {
   const msgTypes = [
     "/cosmos.staking.v1beta1.MsgCreateValidator",
   ];
@@ -164,9 +168,20 @@ async function indexValidators(block: CosmosBlock, msgByType: MessageByType, eve
   // validators), and reconcileValidators only writes the rows whose values
   // actually changed, so the steady state is one read and zero writes.
   //
-  // A failed chain read is tolerated inside reconcileValidators (the next block
-  // reads the same set again); a failed write is not, and still fails the block.
-  await reconcileValidators(block.header.height);
+  // A failed chain read or write fails the block, which SubQuery retries.
+  //
+  // The same pass keeps the delegation history: it re-reads the delegations of
+  // the validators whose delegator_shares moved or that the block's staking
+  // events name, and of every validator on a settlement block that writes
+  // money, where the snapshot it returns splits validator rewards per delegator.
+  const height = block.header.height;
+  return reconcileValidators(height, {
+    stakingValidators: stakingEventValidators(blockStakingEvents(block)),
+    // batched_vrd splits per delegator; 288,180–788,944 replays the chain's split (money/replay.ts)
+    fullDelegationRead: height >= moneyFromHeight(block.header.chainId) &&
+      ["batched_vrd", ...REPLAY_ERAS].includes(settlementEraAt(block.header.chainId, height)) &&
+      block.events.some((e) => e.event.type === EVENT_CLAIM_SETTLED),
+  });
 }
 
 // any message or event related to relays
@@ -704,6 +719,11 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   if (unhandledMsgTypes.size > 0) {
     logger.warn(`[indexer.manager] unhandledMsgTypes=${stringify(Array.from(unhandledMsgTypes))} msgsByType=${stringify(msgsByType, jsonArrayCounter, 0)}`);
   }
+  const settledClaims = eventsByType["pocket.tokenomics.EventClaimSettled"]?.length ?? 0;
+  if (settledClaims > 0) {
+    // Input sizes of a settlement block, to relate the step timings below (profilerWrap) to the work they do.
+    logger.info(`[indexer.manager] settlement inputs height=${block.header.height} claims=${settledClaims} coin_received=${eventsByType[CoinReceiveType]?.length ?? 0} coin_spent=${eventsByType[CoinSpentType]?.length ?? 0} txs=${block.transactions.length} messages=${block.messages.length} events=${filteredEvents.length}`);
+  }
   if (unhandledEventTypes.size > 0) {
     logger.warn(`[indexer.manager] unhandledEventTypes=${stringify(Array.from(unhandledEventTypes))} eventsByType=${stringify(eventsByType, jsonArrayCounter, 0)}`);
   }
@@ -717,7 +737,7 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
   // Params needs to run before relays to have the param 'mint_ratio' updated
   await profilerWrap(indexParams, "indexingHandler", "indexParams")(block, msgsByType as MessageByType)
 
-  await Promise.all([
+  const [, , , , , validatorSnapshot] = await Promise.all([
     profilerWrap(indexStake, "indexingHandler", "indexStake")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexRelays, "indexingHandler", "indexRelays")(msgsByType as MessageByType, eventsByType),
     profilerWrap(indexBalances, "indexingHandler", "indexBalances")(block, msgsByType as MessageByType, eventsByType),
@@ -726,6 +746,10 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     profilerWrap(indexValidators, "indexingHandler", "indexValidators")(block, msgsByType as MessageByType, eventsByType),
     profilerWrap(indexMigrationAccounts, "indexingHandler", "indexMigrationAccounts")(msgsByType as MessageByType),
   ]);
+
+  // Settlement money: after the entity handlers (validators are reconciled by then) and in the same block
+  // transaction, so a failed check fails the block and nothing of it is kept.
+  await profilerWrap(indexMoney, "indexingHandler", "indexMoney")(block, validatorSnapshot);
 
   await profilerWrap(generateReports, "indexingHandler", "generateReports")(block);
 }

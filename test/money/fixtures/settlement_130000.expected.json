@@ -1,0 +1,12 @@
+{
+"source": "make_e0_fixtures.py, from block_results, independent of pocketdex's parser",
+"claims": 7,
+"income": {
+"pokt14dvky6q6wqu0xsmc8ztzhsw376gqsujuzrndw0|rev_share|relay": "5231",
+"pokt1dd5rkaf8m9tm466mr2rytphv46jqx638a5m5er|dao|global": "7",
+"pokt1dd5rkaf8m9tm466mr2rytphv46jqx638a5m5er|dao|reimb_escrow": "7",
+"pokt1m5572zcgtlzds2luak0t5jgcln44vqrl2x5g3v|rev_share|relay": "108",
+"pokt1rvx0krv2ftwasprr88vxv0vcy05za64tgn3340|rev_share|relay": "3214",
+"pokt1zw4ne9vq6cnknqlvnn43wevny5hgfa6yrg2tw4|rev_share|relay": "60"
+}
+}

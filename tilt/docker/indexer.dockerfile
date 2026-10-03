@@ -47,6 +47,8 @@ RUN yarn run vendors:build && \
 COPY --chown=app:app ./project.ts ./schema.graphql ./tsconfig.json ./.eslintrc.js ./.eslintignore ./nodemon.json /home/app/
 COPY --chown=app:app src /home/app/src
 COPY --chown=app:app proto /home/app/proto
+# The unit tests read the mainnet fixtures (about 2 MB); the production RUN removes them with src.
+COPY --chown=app:app test/money/fixtures /home/app/test/money/fixtures
 
 # For production builds: build, run the unit tests (this is the build CI runs) and prune dev dependencies
 RUN if [ "$BUILD_MODE" = "production" ]; then \
@@ -54,7 +56,7 @@ RUN if [ "$BUILD_MODE" = "production" ]; then \
       yarn run test:unit && \
       yarn workspaces focus --production && \
       node scripts/check-dist-requires.js && \
-      rm -rf /home/app/src; \
+      rm -rf /home/app/src /home/app/test; \
     fi
 
 # Remove build dependencies to reduce final image size (for all modes)

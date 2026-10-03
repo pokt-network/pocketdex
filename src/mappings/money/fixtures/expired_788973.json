@@ -1,0 +1,329 @@
+{
+"source": "make_d_fixtures.py: EventClaimExpired at mainnet 788973 (v0.1.34, carries num_estimated_relays)",
+"expired": [
+{
+"num_claimed_compute_units": "21536040",
+"num_estimated_compute_units": "92687885",
+"num_estimated_relays": "33914",
+"num_relays": "7880"
+},
+{
+"num_claimed_compute_units": "20809062",
+"num_estimated_compute_units": "89559081",
+"num_estimated_relays": "32769",
+"num_relays": "7614"
+},
+{
+"num_claimed_compute_units": "20841858",
+"num_estimated_compute_units": "89700230",
+"num_estimated_relays": "32821",
+"num_relays": "7626"
+},
+{
+"num_claimed_compute_units": "21341997",
+"num_estimated_compute_units": "91852753",
+"num_estimated_relays": "33608",
+"num_relays": "7809"
+},
+{
+"num_claimed_compute_units": "21090561",
+"num_estimated_compute_units": "90770610",
+"num_estimated_relays": "33212",
+"num_relays": "7717"
+},
+{
+"num_claimed_compute_units": "20153142",
+"num_estimated_compute_units": "86736100",
+"num_estimated_relays": "31736",
+"num_relays": "7374"
+},
+{
+"num_claimed_compute_units": "15578640",
+"num_estimated_compute_units": "88196445",
+"num_estimated_relays": "71588",
+"num_relays": "12645"
+},
+{
+"num_claimed_compute_units": "15574944",
+"num_estimated_compute_units": "88175520",
+"num_estimated_relays": "71571",
+"num_relays": "12642"
+},
+{
+"num_claimed_compute_units": "15566320",
+"num_estimated_compute_units": "88126697",
+"num_estimated_relays": "71531",
+"num_relays": "12635"
+},
+{
+"num_claimed_compute_units": "15493632",
+"num_estimated_compute_units": "87715183",
+"num_estimated_relays": "71197",
+"num_relays": "12576"
+},
+{
+"num_claimed_compute_units": "15281728",
+"num_estimated_compute_units": "86515516",
+"num_estimated_relays": "70223",
+"num_relays": "12404"
+},
+{
+"num_claimed_compute_units": "15600816",
+"num_estimated_compute_units": "88321991",
+"num_estimated_relays": "71689",
+"num_relays": "12663"
+},
+{
+"num_claimed_compute_units": "16315376",
+"num_estimated_compute_units": "92367380",
+"num_estimated_relays": "74973",
+"num_relays": "13243"
+},
+{
+"num_claimed_compute_units": "15955632",
+"num_estimated_compute_units": "90330736",
+"num_estimated_relays": "73320",
+"num_relays": "12951"
+},
+{
+"num_claimed_compute_units": "15436960",
+"num_estimated_compute_units": "87394342",
+"num_estimated_relays": "70936",
+"num_relays": "12530"
+},
+{
+"num_claimed_compute_units": "16311680",
+"num_estimated_compute_units": "92346455",
+"num_estimated_relays": "74956",
+"num_relays": "13240"
+},
+{
+"num_claimed_compute_units": "15674736",
+"num_estimated_compute_units": "88740480",
+"num_estimated_relays": "72029",
+"num_relays": "12723"
+},
+{
+"num_claimed_compute_units": "15831200",
+"num_estimated_compute_units": "89626280",
+"num_estimated_relays": "72748",
+"num_relays": "12850"
+},
+{
+"num_claimed_compute_units": "15425872",
+"num_estimated_compute_units": "87331568",
+"num_estimated_relays": "70886",
+"num_relays": "12521"
+},
+{
+"num_claimed_compute_units": "15574944",
+"num_estimated_compute_units": "88175520",
+"num_estimated_relays": "71571",
+"num_relays": "12642"
+},
+{
+"num_claimed_compute_units": "15689520",
+"num_estimated_compute_units": "88824177",
+"num_estimated_relays": "72097",
+"num_relays": "12735"
+},
+{
+"num_claimed_compute_units": "15556464",
+"num_estimated_compute_units": "88070898",
+"num_estimated_relays": "71486",
+"num_relays": "12627"
+},
+{
+"num_claimed_compute_units": "15207808",
+"num_estimated_compute_units": "86097027",
+"num_estimated_relays": "69883",
+"num_relays": "12344"
+},
+{
+"num_claimed_compute_units": "15455440",
+"num_estimated_compute_units": "87498964",
+"num_estimated_relays": "71021",
+"num_relays": "12545"
+},
+{
+"num_claimed_compute_units": "15624224",
+"num_estimated_compute_units": "88454513",
+"num_estimated_relays": "71797",
+"num_relays": "12682"
+},
+{
+"num_claimed_compute_units": "15636544",
+"num_estimated_compute_units": "88524261",
+"num_estimated_relays": "71854",
+"num_relays": "12692"
+},
+{
+"num_claimed_compute_units": "15366736",
+"num_estimated_compute_units": "86996778",
+"num_estimated_relays": "70614",
+"num_relays": "12473"
+},
+{
+"num_claimed_compute_units": "15462832",
+"num_estimated_compute_units": "87540813",
+"num_estimated_relays": "71055",
+"num_relays": "12551"
+},
+{
+"num_claimed_compute_units": "15790544",
+"num_estimated_compute_units": "89396112",
+"num_estimated_relays": "72561",
+"num_relays": "12817"
+},
+{
+"num_claimed_compute_units": "15456672",
+"num_estimated_compute_units": "87505939",
+"num_estimated_relays": "71027",
+"num_relays": "12546"
+},
+{
+"num_claimed_compute_units": "15531824",
+"num_estimated_compute_units": "87931402",
+"num_estimated_relays": "71372",
+"num_relays": "12607"
+},
+{
+"num_claimed_compute_units": "15561392",
+"num_estimated_compute_units": "88098797",
+"num_estimated_relays": "71508",
+"num_relays": "12631"
+},
+{
+"num_claimed_compute_units": "15637776",
+"num_estimated_compute_units": "88531235",
+"num_estimated_relays": "71859",
+"num_relays": "12693"
+},
+{
+"num_claimed_compute_units": "15502256",
+"num_estimated_compute_units": "87764007",
+"num_estimated_relays": "71237",
+"num_relays": "12583"
+},
+{
+"num_claimed_compute_units": "15592192",
+"num_estimated_compute_units": "88273168",
+"num_estimated_relays": "71650",
+"num_relays": "12656"
+},
+{
+"num_claimed_compute_units": "15326080",
+"num_estimated_compute_units": "86766609",
+"num_estimated_relays": "70427",
+"num_relays": "12440"
+},
+{
+"num_claimed_compute_units": "15488704",
+"num_estimated_compute_units": "87687284",
+"num_estimated_relays": "71174",
+"num_relays": "12572"
+},
+{
+"num_claimed_compute_units": "15576176",
+"num_estimated_compute_units": "88182495",
+"num_estimated_relays": "71576",
+"num_relays": "12643"
+},
+{
+"num_claimed_compute_units": "15327312",
+"num_estimated_compute_units": "86773584",
+"num_estimated_relays": "70433",
+"num_relays": "12441"
+},
+{
+"num_claimed_compute_units": "15397536",
+"num_estimated_compute_units": "87171148",
+"num_estimated_relays": "70755",
+"num_relays": "12498"
+},
+{
+"num_claimed_compute_units": "15406160",
+"num_estimated_compute_units": "87219972",
+"num_estimated_relays": "70795",
+"num_relays": "12505"
+},
+{
+"num_claimed_compute_units": "15270640",
+"num_estimated_compute_units": "86452743",
+"num_estimated_relays": "70172",
+"num_relays": "12395"
+},
+{
+"num_claimed_compute_units": "16572864",
+"num_estimated_compute_units": "93825115",
+"num_estimated_relays": "76156",
+"num_relays": "13452"
+},
+{
+"num_claimed_compute_units": "15772064",
+"num_estimated_compute_units": "89291489",
+"num_estimated_relays": "72476",
+"num_relays": "12802"
+},
+{
+"num_claimed_compute_units": "18700097",
+"num_estimated_compute_units": "84798768",
+"num_estimated_relays": "53704",
+"num_relays": "11843"
+},
+{
+"num_claimed_compute_units": "21267551",
+"num_estimated_compute_units": "96441325",
+"num_estimated_relays": "61077",
+"num_relays": "13469"
+},
+{
+"num_claimed_compute_units": "21487032",
+"num_estimated_compute_units": "97436599",
+"num_estimated_relays": "61707",
+"num_relays": "13608"
+},
+{
+"num_claimed_compute_units": "18700097",
+"num_estimated_compute_units": "84798768",
+"num_estimated_relays": "53704",
+"num_relays": "11843"
+},
+{
+"num_claimed_compute_units": "40510000",
+"num_estimated_compute_units": "241974332",
+"num_estimated_relays": "48394",
+"num_relays": "8102"
+},
+{
+"num_claimed_compute_units": "29532798",
+"num_estimated_compute_units": "93924929",
+"num_estimated_relays": "34366",
+"num_relays": "10806"
+},
+{
+"num_claimed_compute_units": "53797737",
+"num_estimated_compute_units": "214885914",
+"num_estimated_relays": "42695",
+"num_relays": "10689"
+},
+{
+"num_claimed_compute_units": "26151468",
+"num_estimated_compute_units": "104457593",
+"num_estimated_relays": "20754",
+"num_relays": "5196"
+},
+{
+"num_claimed_compute_units": "29045443",
+"num_estimated_compute_units": "116017084",
+"num_estimated_relays": "23051",
+"num_relays": "5771"
+},
+{
+"num_claimed_compute_units": "24193631",
+"num_estimated_compute_units": "96637346",
+"num_estimated_relays": "19200",
+"num_relays": "4807"
+}
+]
+}

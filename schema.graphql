@@ -472,12 +472,27 @@ type Validator @entity {
   stakeDenom: String!
   stakeAmount: BigInt!
   stakeStatus: StakeStatus! @index
+  # total shares issued to the validator's delegators, as cosmos LegacyDec atomics (value × 1e18); a change
+  # here is what makes reconcileValidators re-read the validator's delegations
+  delegatorShares: String
   transaction: Transaction!
   createMsg: MsgCreateValidator!
   # @TBD: This need to be reviewed again once Validators are permissionless and fully integrated with CosmosSDK
   #updateMsg: [MsgEditValidator]!
   commissions: [ValidatorCommission] @derivedFrom(field: "validator")
   rewards: [ValidatorReward] @derivedFrom(field: "validator")
+}
+
+# A delegation of the cosmos staking module, versioned by _block_range: one version per change of its shares.
+# Written by reconcileValidators; the settlement money layer reads it to split validator rewards per
+# delegator. Shares are LegacyDec atomics (value × 1e18) as the chain stores them; tokens are not kept
+# because they move with every slash and reward without any message.
+type Delegation @entity {
+  # validator operator address + "-" + delegator address
+  id: ID!
+  validatorOperator: String! @index
+  delegator: String! @index
+  shares: String!
 }
 
 # Captures the cut taken by the validator before distributing the rest.

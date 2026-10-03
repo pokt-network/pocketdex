@@ -1,0 +1,676 @@
+import type { SettlementPayload } from "../../money/payload";
+
+// write_settlement(h, payload) writes one settlement height into the tables of ./schema.ts and adds its
+// contribution to the rollups. It is the only writer of those tables: the indexer calls it inside the
+// block transaction, and history jobs call it one height per transaction. Writing a height that is
+// already there first subtracts its old contribution, then rewrites it, so a block retry or a reindex
+// leaves the same rows. A history job that writes the heights of a settlement_gaps row (./schema.ts)
+// deletes that row in the same transaction as its last height.
+//
+// The payload is built by src/mappings/money/payload.ts and arrives as one jsonb bind parameter, or in parts
+// when it has more than MAX_ROWS_PER_CALL rows (writeSettlementCalls). Chain
+// strings only reach SQL through jsonb_to_recordset: no EXECUTE and no format() in these procedures.
+//
+// Every check raises, which fails the block. The identities checked are ones the chain emits itself
+// (verified on mainnet 943,373 / 943,393 / 943,413):
+// - the detailed rows of all claims, summed per (op_reason, recipient), equal the batch mod_to_acct rows;
+// - per claim, the reimbursement request equals the claim's escrow-to-DAO leg;
+// - Σ relay_to_stakers_upokt (minted minus the claim's relay legs) equals the batch relay validator and delegator rows,
+//   and both families of those rows equal the validator distributions' pool shares.
+
+// Bump when a rollup is added or computed differently. A height written under another version cannot be
+// rewritten (its subtraction would use the new rules on rows added under the old ones); rebuild the
+// rollups from the base tables with rebuild_rollups first.
+// 2: daily_claims_by_supplier.claims_with_proof, and daily_validator_rewards.commission_na_count.
+// 3: monthly_income_by_address_supplier_service.
+// 4: daily_delegator_rewards_by_validator.replayed_count.
+export const ROLLUP_VERSION = 4;
+
+export const writeSettlementProcName = "write_settlement";
+
+// Rows per CALL. The largest mainnet settlement sampled (885,513: 4,172 claims) is ~38k rows and 9.4 MB of
+// JSON, so today every height goes in one call. A bigger one goes in parts: one bind parameter must stay far
+// from jsonb's size cap (~256 MB) and from V8's string length limit.
+export const MAX_ROWS_PER_CALL = 50000;
+
+const PAYLOAD_ARRAYS = [
+  "claims",
+  "detailed",
+  "batch",
+  "vrd",
+  "reimb",
+  "expired",
+  "discarded",
+  "slashed",
+  "dv",
+] as const;
+
+export interface WriterCall {
+  sql: string;
+  bind: Array<number | string>;
+}
+
+// The statements that write one height, in order: _stage_settlement for every part but the last, then
+// write_settlement with the last part, ts, era and row_source. Each part holds at most maxRows rows.
+export function writeSettlementCalls(
+  dbSchema: string,
+  height: number,
+  payload: SettlementPayload,
+  maxRows = MAX_ROWS_PER_CALL
+): WriterCall[] {
+  const writeCall = (part: object): WriterCall => ({
+    sql: `CALL ${dbSchema}.${writeSettlementProcName}($1::bigint, $2::jsonb)`,
+    bind: [height, JSON.stringify(part)],
+  });
+  const total = PAYLOAD_ARRAYS.reduce((n, key) => n + payload[key].length, 0);
+  // the rows of every array the whole height must have staged once the last part is in: write_settlement checks
+  // them, so a part lost between calls (outside one transaction the staging tables drop at commit) stops the block
+  const counts = Object.fromEntries(PAYLOAD_ARRAYS.map((key) => [key, payload[key].length]));
+  if (total <= maxRows) return [writeCall({ ...payload, counts })];
+  const parts: Array<Record<string, unknown[]>> = [{}];
+  let rows = 0;
+  for (const key of PAYLOAD_ARRAYS) {
+    const all: unknown[] = payload[key];
+    for (let i = 0; i < all.length; ) {
+      if (rows === maxRows) {
+        parts.push({});
+        rows = 0;
+      }
+      const take = all.slice(i, i + maxRows - rows);
+      const part = parts[parts.length - 1];
+      part[key] = (part[key] ?? []).concat(take);
+      rows += take.length;
+      i += take.length;
+    }
+  }
+  const last = parts.pop() as Record<string, unknown[]>;
+  return [
+    ...parts.map((part) => ({ sql: `CALL ${dbSchema}._stage_settlement($1::jsonb)`, bind: [JSON.stringify(part)] })),
+    writeCall({ ...last, ts: payload.ts, era: payload.era, row_source: payload.row_source, counts }),
+  ];
+}
+
+export function createSettlementWriterFn(dbSchema: string): string {
+  const s = dbSchema;
+  return `
+CREATE OR REPLACE VIEW ${s}.v_income_base AS
+SELECT sp.height, sp.recipient_id AS address, 'rev_share'::text AS role, 'relay'::text AS family, sp.supplier_id,
+       sp.service_id, sp.relay_upokt AS amount_upokt, 1 AS transfer_count
+FROM ${s}.shareholder_payouts sp WHERE sp.relay_upokt > 0
+UNION ALL
+SELECT sp.height, sp.recipient_id, 'rev_share', 'global', sp.supplier_id, sp.service_id, sp.global_upokt, 1
+FROM ${s}.shareholder_payouts sp WHERE sp.global_upokt > 0
+UNION ALL
+SELECT c.height, sb.dao_address, 'dao', 'relay', c.supplier_id, c.service_id, c.relay_to_dao_upokt, 1
+FROM ${s}.claim_settlements c JOIN ${s}.settlement_blocks sb USING (height) WHERE c.relay_to_dao_upokt > 0
+UNION ALL
+SELECT c.height, sb.dao_address, 'dao', 'global', c.supplier_id, c.service_id, c.global_to_dao_upokt, 1
+FROM ${s}.claim_settlements c JOIN ${s}.settlement_blocks sb USING (height) WHERE c.global_to_dao_upokt > 0
+UNION ALL
+SELECT c.height, sb.dao_address, 'dao', 'reimb_escrow', c.supplier_id, c.service_id, c.reimbursement_to_dao_upokt, 1
+FROM ${s}.claim_settlements c JOIN ${s}.settlement_blocks sb USING (height) WHERE c.reimbursement_to_dao_upokt > 0
+UNION ALL
+SELECT c.height, c.source_owner_id, 'source_owner', 'relay', c.supplier_id, c.service_id, c.relay_to_source_owner_upokt, 1
+FROM ${s}.claim_settlements c WHERE c.relay_to_source_owner_upokt > 0
+UNION ALL
+SELECT c.height, c.source_owner_id, 'source_owner', 'global', c.supplier_id, c.service_id, c.global_to_source_owner_upokt, 1
+FROM ${s}.claim_settlements c WHERE c.global_to_source_owner_upokt > 0
+UNION ALL
+SELECT c.height, c.application_id, 'application', 'relay', c.supplier_id, c.service_id, c.relay_to_application_upokt, 1
+FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0
+UNION ALL
+SELECT c.height, c.application_id, 'application', 'global', c.supplier_id, c.service_id, c.global_to_application_upokt, 1
+FROM ${s}.claim_settlements c WHERE c.global_to_application_upokt > 0
+UNION ALL
+SELECT p.height, p.recipient_id, p.role, p.family, '', '', p.amount_upokt, 1
+FROM ${s}.staker_payouts p;
+
+-- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
+CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
+DECLARE d date; hr timestamptz;
+BEGIN
+  SELECT day, date_trunc('hour', block_time, 'UTC') INTO d, hr FROM ${s}.settlement_blocks WHERE height = h;
+  IF d IS NULL THEN RETURN; END IF;
+
+  CREATE TEMP TABLE IF NOT EXISTS _inc (address text, role text, family text, supplier_id text, service_id text,
+                                        amount_upokt bigint, transfer_count bigint, contribution_count bigint) ON COMMIT DROP;
+  TRUNCATE _inc;
+  INSERT INTO _inc
+  SELECT address, role, family, supplier_id, service_id, sum(amount_upokt), sum(transfer_count), count(*)
+  FROM ${s}.v_income_base WHERE height = h
+  GROUP BY address, role, family, supplier_id, service_id;
+
+  -- per settlement: not incremental, a height owns its rows
+  IF sg < 0 THEN
+    DELETE FROM ${s}.settlement_income_by_address WHERE height = h;
+    DELETE FROM ${s}.settlement_supply_flows WHERE height = h;
+    DELETE FROM ${s}.settlement_claims_by_application_service WHERE height = h;
+  ELSE
+    INSERT INTO ${s}.settlement_claims_by_application_service
+    SELECT h, min(block_time), application_id, service_id, count(*), sum(claimed_upokt), sum(settled_upokt), sum(overservicing_loss_upokt),
+           sum(global_minted_upokt), sum(relays), sum(estimated_relays), sum(claimed_compute_units), sum(estimated_compute_units)
+    FROM ${s}.claim_settlements WHERE height = h GROUP BY application_id, service_id;
+    INSERT INTO ${s}.settlement_income_by_address
+    SELECT h, address, role, family, sum(amount_upokt), sum(transfer_count) FROM _inc GROUP BY address, role, family;
+    INSERT INTO ${s}.settlement_supply_flows
+    SELECT h, coalesce(sum(settled_upokt),0), coalesce(sum(relay_minted_upokt),0), coalesce(sum(mint_ratio_unminted_upokt),0),
+           coalesce(sum(overservicing_loss_upokt),0), coalesce(sum(relay_to_supplier_upokt),0), coalesce(sum(relay_to_dao_upokt),0),
+           coalesce(sum(relay_to_source_owner_upokt),0), coalesce(sum(relay_to_application_upokt),0), coalesce(sum(relay_to_stakers_upokt),0),
+           coalesce(sum(global_to_supplier_upokt),0), coalesce(sum(global_to_dao_upokt),0), coalesce(sum(global_to_source_owner_upokt),0),
+           coalesce(sum(global_to_application_upokt),0), coalesce(sum(reimbursement_to_dao_upokt),0)
+    FROM ${s}.claim_settlements WHERE height = h;
+  END IF;
+
+  INSERT INTO ${s}.monthly_income_by_address_supplier AS t
+  SELECT date_trunc('month', d)::date, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
+  FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
+  ON CONFLICT (address, month, supplier_id, role, family) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+
+  INSERT INTO ${s}.daily_income_by_address AS t
+  SELECT d, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count) FROM _inc GROUP BY address, role, family
+  ON CONFLICT (address, day, role, family) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+
+  INSERT INTO ${s}.daily_income_by_address_supplier AS t
+  SELECT d, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
+  FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
+  UNION ALL
+  SELECT d, supplier_id, '', 'stakers', 'relay', sg * sum(relay_to_stakers_upokt),
+         sg * count(*) FILTER (WHERE relay_to_stakers_upokt > 0), sg * count(*)
+  FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id
+  ON CONFLICT (supplier_id, day, address, role, family) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+
+  INSERT INTO ${s}.hourly_income_by_address_supplier AS t
+  SELECT address, hr, supplier_id, sg * sum(amount_upokt), sg * sum(contribution_count)
+  FROM _inc WHERE supplier_id <> '' GROUP BY address, supplier_id
+  ON CONFLICT (address, hour, supplier_id) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count;
+
+  INSERT INTO ${s}.daily_income_by_address_service AS t
+  SELECT d, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
+  FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
+  ON CONFLICT (address, day, role, family, service_id) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+
+  INSERT INTO ${s}.monthly_income_by_address_service AS t
+  SELECT date_trunc('month', d)::date, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
+  FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
+  ON CONFLICT (address, month, role, family, service_id) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+
+  INSERT INTO ${s}.monthly_income_by_address_supplier_service AS t
+  SELECT date_trunc('month', d)::date, address, supplier_id, service_id, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
+  FROM _inc WHERE supplier_id <> '' AND service_id <> '' GROUP BY address, supplier_id, service_id, role, family
+  ON CONFLICT (address, month, supplier_id, service_id, role, family) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+
+  INSERT INTO ${s}.daily_claims_by_application_service AS t
+  SELECT d, application_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(relay_minted_upokt),
+         sg * sum(overservicing_loss_upokt), sg * sum(mint_ratio_unminted_upokt), sg * sum(global_minted_upokt),
+         sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
+         sg * sum(relay_to_supplier_upokt), sg * sum(relay_to_dao_upokt), sg * sum(relay_to_source_owner_upokt), sg * sum(relay_to_application_upokt), sg * sum(relay_to_stakers_upokt),
+         sg * sum(global_to_supplier_upokt), sg * sum(global_to_dao_upokt), sg * sum(global_to_source_owner_upokt), sg * sum(global_to_application_upokt), sg * sum(reimbursement_to_dao_upokt)
+  FROM ${s}.claim_settlements WHERE height = h GROUP BY application_id, service_id
+  ON CONFLICT (application_id, day, service_id) DO UPDATE SET
+    claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
+    relay_minted_upokt = t.relay_minted_upokt + excluded.relay_minted_upokt, overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt,
+    mint_ratio_unminted_upokt = t.mint_ratio_unminted_upokt + excluded.mint_ratio_unminted_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
+    relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
+    claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
+    relay_to_supplier_upokt = t.relay_to_supplier_upokt + excluded.relay_to_supplier_upokt, relay_to_dao_upokt = t.relay_to_dao_upokt + excluded.relay_to_dao_upokt,
+    relay_to_source_owner_upokt = t.relay_to_source_owner_upokt + excluded.relay_to_source_owner_upokt, relay_to_application_upokt = t.relay_to_application_upokt + excluded.relay_to_application_upokt,
+    relay_to_stakers_upokt = t.relay_to_stakers_upokt + excluded.relay_to_stakers_upokt,
+    global_to_supplier_upokt = t.global_to_supplier_upokt + excluded.global_to_supplier_upokt, global_to_dao_upokt = t.global_to_dao_upokt + excluded.global_to_dao_upokt,
+    global_to_source_owner_upokt = t.global_to_source_owner_upokt + excluded.global_to_source_owner_upokt, global_to_application_upokt = t.global_to_application_upokt + excluded.global_to_application_upokt,
+    reimbursement_to_dao_upokt = t.reimbursement_to_dao_upokt + excluded.reimbursement_to_dao_upokt;
+
+  INSERT INTO ${s}.daily_delegator_rewards_by_validator AS t
+  SELECT d, delegator, validator_operator, family, sg * sum(amount_upokt), sg * count(*),
+         sg * count(*) FILTER (WHERE row_source IN ('replay', 'derived_split'))
+  FROM ${s}.delegator_validator_payouts WHERE height = h GROUP BY delegator, validator_operator, family
+  ON CONFLICT (delegator, day, validator_operator, family) DO UPDATE
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count,
+        replayed_count = t.replayed_count + excluded.replayed_count;
+
+  INSERT INTO ${s}.daily_claims_by_supplier_application_service AS t
+  SELECT d, supplier_id, application_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt),
+         sg * sum(overservicing_loss_upokt), sg * sum(global_minted_upokt), sg * sum(relays), sg * sum(estimated_relays),
+         sg * sum(claimed_compute_units), sg * sum(estimated_compute_units), sg * count(*) FILTER (WHERE settled_with_proof)
+  FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id, application_id, service_id
+  ON CONFLICT (supplier_id, day, application_id, service_id) DO UPDATE SET
+    claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
+    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
+    relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
+    claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
+    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
+
+  INSERT INTO ${s}.daily_claims_by_supplier AS t
+  SELECT d, supplier_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(overservicing_loss_upokt),
+         sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
+         sg * count(*) FILTER (WHERE settled_with_proof)
+  FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id
+  ON CONFLICT (supplier_id, day) DO UPDATE SET
+    claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
+    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt,
+    relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
+    claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
+    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
+
+  -- commission: the sum of the contributions that have one, and how many have none (the replayed rows, NULL); NULL
+  -- + x keeps x, so a day mixing both keeps the real commission. A row whose contributions all lack one is NULL.
+  INSERT INTO ${s}.daily_validator_rewards AS t
+  SELECT d, validator_operator, family, sg * count(*),
+         sg * sum(pool_share_upokt), sg * sum(commission_upokt), sg * sum(self_delegation_upokt), sg * sum(to_delegators_upokt),
+         sg * count(*) FILTER (WHERE commission_upokt IS NULL)
+  FROM ${s}.validator_distributions WHERE height = h GROUP BY validator_operator, family
+  ON CONFLICT (validator_operator, day, family) DO UPDATE SET
+    contribution_count = t.contribution_count + excluded.contribution_count, pool_share_upokt = t.pool_share_upokt + excluded.pool_share_upokt,
+    commission_upokt = CASE WHEN t.commission_upokt IS NULL THEN excluded.commission_upokt
+                            WHEN excluded.commission_upokt IS NULL THEN t.commission_upokt
+                            ELSE t.commission_upokt + excluded.commission_upokt END,
+    self_delegation_upokt = t.self_delegation_upokt + excluded.self_delegation_upokt, to_delegators_upokt = t.to_delegators_upokt + excluded.to_delegators_upokt,
+    commission_na_count = t.commission_na_count + excluded.commission_na_count;
+
+  IF sg < 0 THEN
+    -- A row whose contributions are all gone must be back at zero, and no row may go negative. Anything else
+    -- means it was added under other rules than the ones subtracting it now. Only the rows this height
+    -- touched can have changed, so each check probes them by primary key: the keys come from _inc and from
+    -- the height's base rows, which are deleted only after this subtraction. The LIMIT 1 laterals keep it a
+    -- probe per key; as a plain join the planner prefers scanning the whole rollup for the bad rows.
+    IF EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
+                 SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address t
+                 WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family LIMIT 1) t
+               WHERE t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0)))
+       OR EXISTS (SELECT 1 FROM (SELECT supplier_id, address, role, family FROM _inc WHERE supplier_id <> ''
+                                 UNION ALL
+                                 SELECT supplier_id, '', 'stakers', 'relay' FROM ${s}.claim_settlements WHERE height = h) i
+                  CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address_supplier t
+                    WHERE t.supplier_id = i.supplier_id AND t.day = d AND t.address = i.address AND t.role = i.role
+                      AND t.family = i.family LIMIT 1) t
+                  WHERE t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0)))
+       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address_service t
+                    WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family
+                      AND t.service_id = i.service_id LIMIT 1) t
+                  WHERE i.service_id <> ''
+                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_supplier t
+                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
+                      AND t.role = i.role AND t.family = i.family LIMIT 1) t
+                  WHERE i.supplier_id <> ''
+                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_service t
+                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.role = i.role
+                      AND t.family = i.family AND t.service_id = i.service_id LIMIT 1) t
+                  WHERE i.service_id <> ''
+                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_supplier_service t
+                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
+                      AND t.service_id = i.service_id AND t.role = i.role AND t.family = i.family LIMIT 1) t
+                  WHERE i.supplier_id <> '' AND i.service_id <> ''
+                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.amount_upokt FROM ${s}.hourly_income_by_address_supplier t
+                    WHERE t.address = i.address AND t.hour = hr AND t.supplier_id = i.supplier_id LIMIT 1) t
+                  WHERE i.supplier_id <> '' AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
+       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
+                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays FROM ${s}.daily_claims_by_application_service t
+                    WHERE t.application_id = c.application_id AND t.day = d AND t.service_id = c.service_id LIMIT 1) t
+                  WHERE c.height = h
+                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
+                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays, t.claims_with_proof
+                    FROM ${s}.daily_claims_by_supplier t
+                    WHERE t.supplier_id = c.supplier_id AND t.day = d LIMIT 1) t
+                  WHERE c.height = h
+                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
+                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
+                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays, t.claims_with_proof
+                    FROM ${s}.daily_claims_by_supplier_application_service t
+                    WHERE t.supplier_id = c.supplier_id AND t.day = d AND t.application_id = c.application_id
+                      AND t.service_id = c.service_id LIMIT 1) t
+                  WHERE c.height = h
+                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
+                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.delegator_validator_payouts p CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.amount_upokt, t.replayed_count FROM ${s}.daily_delegator_rewards_by_validator t
+                    WHERE t.delegator = p.delegator AND t.day = d AND t.validator_operator = p.validator_operator
+                      AND t.family = p.family LIMIT 1) t
+                  WHERE p.height = h AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR t.replayed_count < 0
+                                          OR t.replayed_count > t.contribution_count
+                                          OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
+       OR EXISTS (SELECT 1 FROM ${s}.validator_distributions v CROSS JOIN LATERAL (
+                    SELECT t.contribution_count, t.pool_share_upokt, t.commission_upokt, t.commission_na_count
+                    FROM ${s}.daily_validator_rewards t
+                    WHERE t.validator_operator = v.validator_operator AND t.day = d AND t.family = v.family LIMIT 1) t
+                  WHERE v.height = h
+                    AND (t.contribution_count < 0 OR t.pool_share_upokt < 0
+                         OR t.commission_na_count < 0 OR t.commission_na_count > t.contribution_count
+                         -- with no contribution that has a commission left, what is left of the commission must be 0
+                         -- (it becomes NULL below); anything else was added under other rules
+                         OR (t.commission_na_count = t.contribution_count AND coalesce(t.commission_upokt, 0) <> 0)
+                         OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0))) THEN
+      RAISE EXCEPTION 'rollup drift at height %: subtracting it left a rollup row negative, or at contribution_count = 0 with a non-zero amount', h;
+    END IF;
+    DELETE FROM ${s}.daily_income_by_address WHERE day = d AND contribution_count = 0;
+    DELETE FROM ${s}.daily_income_by_address_supplier WHERE day = d AND contribution_count = 0;
+    DELETE FROM ${s}.daily_income_by_address_service WHERE day = d AND contribution_count = 0;
+    DELETE FROM ${s}.daily_claims_by_application_service WHERE day = d AND claim_count = 0;
+    DELETE FROM ${s}.daily_claims_by_supplier WHERE day = d AND claim_count = 0;
+    DELETE FROM ${s}.daily_claims_by_supplier_application_service WHERE day = d AND claim_count = 0;
+    DELETE FROM ${s}.monthly_income_by_address_supplier WHERE month = date_trunc('month', d)::date AND contribution_count = 0;
+    DELETE FROM ${s}.monthly_income_by_address_service WHERE month = date_trunc('month', d)::date AND contribution_count = 0;
+    -- by the height's keys, not the whole month: the table has no month index
+    DELETE FROM ${s}.monthly_income_by_address_supplier_service t USING _inc i
+    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
+      AND t.service_id = i.service_id AND t.role = i.role AND t.family = i.family AND t.contribution_count = 0;
+    DELETE FROM ${s}.hourly_income_by_address_supplier WHERE hour = hr AND contribution_count = 0;
+    DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day = d AND contribution_count = 0;
+    DELETE FROM ${s}.daily_validator_rewards WHERE day = d AND contribution_count = 0;
+  END IF;
+  -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it
+  UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL
+  WHERE day = d AND commission_na_count = contribution_count AND commission_upokt IS NOT NULL;
+END $$;
+
+-- Appends one part of a settlement payload to the staging tables, which live until the end of the transaction.
+-- A payload above MAX_ROWS_PER_CALL rows arrives as several _stage_settlement calls followed by
+-- write_settlement with the last part (writeSettlementCalls below), so no single bind parameter nears jsonb's
+-- size cap; write_settlement checks and writes the whole height and empties the staging tables.
+CREATE OR REPLACE PROCEDURE ${s}._stage_settlement(p jsonb) LANGUAGE plpgsql AS $$
+BEGIN
+  CREATE TEMP TABLE IF NOT EXISTS _stg_claims (event_idx int, supplier_id text, supplier_owner_id text, application_id text,
+    service_id text, session_id text, session_end bigint, claimed_upokt bigint, settled_upokt bigint, relay_minted_upokt bigint,
+    overservicing_loss_upokt bigint, mint_ratio_unminted_upokt bigint, relays bigint, estimated_relays bigint,
+    claimed_compute_units bigint, estimated_compute_units bigint, proof_status int, mint_ratio numeric) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_detailed (event_idx int, recipient_id text, op_reason text, role text, family text,
+    amount_upokt bigint) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_batch (event_idx int, op_type text, op_reason text, sender_module text,
+    recipient_id text, role text, family text, amount_upokt bigint, num_claims bigint) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_vrd (event_idx int, op_reason text, family text, validator_operator text,
+    validator_account text, commission_rate numeric, pool_share_upokt bigint, commission_upokt bigint, self_delegation_upokt bigint,
+    to_delegators_upokt bigint, total_delegated_stake_upokt bigint, delegator_count int, row_source text) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_reimb (event_idx int, application_id text, supplier_id text, supplier_owner_id text,
+    service_id text, session_id text, amount_upokt bigint) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_dv (delegator text, validator_operator text, family text, amount_upokt bigint,
+    row_source text) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_expired (event_idx int, supplier_id text, application_id text, service_id text,
+    session_end bigint, claimed_upokt bigint, reason text, relays bigint, estimated_relays bigint,
+    claimed_compute_units bigint, estimated_compute_units bigint) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_discarded (event_idx int, supplier_id text, application_id text, service_id text,
+    session_end bigint, error text) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS _stg_slashed (event_idx int, supplier_id text, application_id text, service_id text,
+    session_end bigint, penalty_upokt bigint, stake_after_upokt bigint) ON COMMIT DROP;
+  INSERT INTO _stg_claims SELECT * FROM jsonb_to_recordset(p->'claims') AS x(event_idx int, supplier_id text,
+    supplier_owner_id text, application_id text, service_id text, session_id text, session_end bigint, claimed bigint,
+    settled bigint, minted bigint, overservicing_loss bigint, deflation_loss bigint, num_relays bigint,
+    num_estimated_relays bigint, num_claimed_cu bigint, num_estimated_cu bigint, proof_status int, mint_ratio numeric);
+  INSERT INTO _stg_detailed SELECT * FROM jsonb_to_recordset(p->'detailed') AS x(event_idx int, recipient_id text,
+    op_reason text, role text, family text, amount bigint);
+  INSERT INTO _stg_batch SELECT * FROM jsonb_to_recordset(p->'batch') AS x(event_idx int, op_type text, op_reason text,
+    sender_module text, recipient_id text, role text, family text, amount bigint, num_claims bigint);
+  INSERT INTO _stg_vrd SELECT * FROM jsonb_to_recordset(p->'vrd') AS x(event_idx int, op_reason text, family text,
+    validator_operator text, validator_account text, commission_rate numeric, pool_share bigint, commission bigint,
+    self_delegation bigint, delegators bigint, total_delegated_stake bigint, num_delegators int, row_source text);
+  INSERT INTO _stg_reimb SELECT * FROM jsonb_to_recordset(p->'reimb') AS x(event_idx int, application_id text,
+    supplier_id text, supplier_owner_id text, service_id text, session_id text, amount bigint);
+  INSERT INTO _stg_dv SELECT * FROM jsonb_to_recordset(p->'dv') AS x(delegator text, validator_operator text,
+    family text, amount bigint, row_source text);
+  INSERT INTO _stg_expired SELECT * FROM jsonb_to_recordset(p->'expired') AS x(event_idx int, supplier_id text,
+    application_id text, service_id text, session_end bigint, claimed bigint, reason text, num_relays bigint,
+    num_estimated_relays bigint, num_claimed_cu bigint, num_estimated_cu bigint);
+  INSERT INTO _stg_discarded SELECT * FROM jsonb_to_recordset(p->'discarded') AS x(event_idx int, supplier_id text,
+    application_id text, service_id text, session_end bigint, error text);
+  INSERT INTO _stg_slashed SELECT * FROM jsonb_to_recordset(p->'slashed') AS x(event_idx int, supplier_id text,
+    application_id text, service_id text, session_end bigint, penalty bigint, stake_after bigint);
+END $$;
+
+CREATE OR REPLACE PROCEDURE ${s}.${writeSettlementProcName}(h bigint, p jsonb) LANGUAGE plpgsql AS $$
+DECLARE
+  v_ts timestamptz := (p->>'ts')::timestamptz;
+  v_era text := p->>'era';
+  v_row_source text := p->>'row_source';
+  v_old_version int;
+  v_bad text;
+  v_lock_timeout text := current_setting('lock_timeout');
+BEGIN
+  -- One writer at a time: the indexer and the history jobs share this procedure. The wait is bounded so a
+  -- live block queued behind a history job fails fast (SubQuery retries it) instead of stalling the
+  -- indexer; the timeout applies to this lock only and the caller's value is restored after it.
+  PERFORM set_config('lock_timeout', '30s', true);
+  PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
+  PERFORM set_config('lock_timeout', v_lock_timeout, true);
+  IF v_ts IS NULL OR v_era IS NULL OR v_row_source IS NULL THEN
+    RAISE EXCEPTION 'settlement payload for height % has no ts, era or row_source', h;
+  END IF;
+
+  CALL ${s}._stage_settlement(p);
+  IF p->'counts' IS NULL
+     OR (SELECT count(*) FROM _stg_claims) <> (p->'counts'->>'claims')::bigint
+     OR (SELECT count(*) FROM _stg_detailed) <> (p->'counts'->>'detailed')::bigint
+     OR (SELECT count(*) FROM _stg_batch) <> (p->'counts'->>'batch')::bigint
+     OR (SELECT count(*) FROM _stg_vrd) <> (p->'counts'->>'vrd')::bigint
+     OR (SELECT count(*) FROM _stg_reimb) <> (p->'counts'->>'reimb')::bigint
+     OR (SELECT count(*) FROM _stg_expired) <> (p->'counts'->>'expired')::bigint
+     OR (SELECT count(*) FROM _stg_discarded) <> (p->'counts'->>'discarded')::bigint
+     OR (SELECT count(*) FROM _stg_slashed) <> (p->'counts'->>'slashed')::bigint
+     OR (SELECT count(*) FROM _stg_dv) <> (p->'counts'->>'dv')::bigint THEN
+    RAISE EXCEPTION 'settlement payload for height %: the staged rows differ from the counts sent with it (a part was lost, or the parts ran outside one transaction)', h;
+  END IF;
+
+  -- rewrite: subtract the old contribution from the rollups before deleting the base rows
+  SELECT rollup_version INTO v_old_version FROM ${s}.settlement_blocks WHERE height = h;
+  IF v_old_version IS NOT NULL THEN
+    IF v_old_version <> ${ROLLUP_VERSION} THEN
+      RAISE EXCEPTION 'height % was written with rollup version %, this code is version ${ROLLUP_VERSION}: run rebuild_rollups first',
+        h, v_old_version;
+    END IF;
+    CALL ${s}._rollup_apply(h, -1);
+  END IF;
+
+  DELETE FROM ${s}.claim_settlements WHERE height = h;
+  DELETE FROM ${s}.shareholder_payouts WHERE height = h;
+  DELETE FROM ${s}.staker_payouts WHERE height = h;
+  DELETE FROM ${s}.validator_distributions WHERE height = h;
+  DELETE FROM ${s}.delegator_validator_payouts WHERE height = h;
+  DELETE FROM ${s}.claim_expirations WHERE height = h;
+  DELETE FROM ${s}.claim_discards WHERE height = h;
+  DELETE FROM ${s}.supplier_slashes WHERE height = h;
+  DELETE FROM ${s}.settlement_blocks WHERE height = h;
+
+  IF (SELECT count(DISTINCT recipient_id) FROM _stg_detailed WHERE role = 'dao') > 1 THEN
+    RAISE EXCEPTION 'more than one DAO address at height %', h;
+  END IF;
+  IF (SELECT count(DISTINCT mint_ratio) FROM _stg_claims) > 1 THEN
+    RAISE EXCEPTION 'height %: the claims settled with more than one mint_ratio', h;
+  END IF;
+
+  -- I1: the claims' detailed legs, per (op_reason, recipient), are exactly the batch mod_to_acct rows. The
+  -- settlement_result era has no batch: E0 below checks its legs against the claims instead. The map eras' batch rows
+  -- are only their staker legs, aggregated from the bank: M1 below checks the global family instead.
+  IF v_era <> 'settlement_result' AND left(v_era, 4) <> 'map_' THEN
+    SELECT string_agg(coalesce(dd.op_reason, bb.op_reason) || ' ' || coalesce(dd.recipient_id, bb.recipient_id), ', ')
+    INTO v_bad
+    FROM (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_detailed GROUP BY 1, 2) dd
+    FULL JOIN (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_batch
+               WHERE op_type = 'mod_to_acct' AND role NOT IN ('validator', 'delegator') GROUP BY 1, 2) bb
+      ON bb.op_reason = dd.op_reason AND bb.recipient_id = dd.recipient_id
+    WHERE dd.amount_upokt IS DISTINCT FROM bb.amount_upokt;
+    IF v_bad IS NOT NULL THEN
+      RAISE EXCEPTION 'height %: detailed legs differ from the settlement batch for %', h, left(v_bad, 500);
+    END IF;
+  END IF;
+
+  INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio)
+  VALUES (h, v_ts, v_era, (SELECT min(recipient_id) FROM _stg_detailed WHERE role = 'dao'),
+          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims));
+
+  INSERT INTO ${s}.claim_settlements
+  SELECT h, c.event_idx, v_ts, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id, c.service_id,
+         c.session_id, c.session_end, d.source_owner_id,
+         c.claimed_upokt, c.settled_upokt, c.relay_minted_upokt, c.overservicing_loss_upokt, c.mint_ratio_unminted_upokt, coalesce(r.amount_upokt, 0),
+         c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units,
+         coalesce(d.relay_to_supplier_upokt, 0), coalesce(d.relay_to_dao_upokt, 0), coalesce(d.relay_to_source_owner_upokt, 0), coalesce(d.relay_to_application_upokt, 0),
+         c.relay_minted_upokt - coalesce(d.relay_to_supplier_upokt, 0) - coalesce(d.relay_to_dao_upokt, 0) - coalesce(d.relay_to_source_owner_upokt, 0)
+                  - coalesce(d.relay_to_application_upokt, 0),
+         coalesce(d.global_to_supplier_upokt, 0), coalesce(d.global_to_dao_upokt, 0), coalesce(d.global_to_source_owner_upokt, 0), coalesce(d.global_to_application_upokt, 0),
+         coalesce(d.reimbursement_to_dao_upokt, 0),
+         v_row_source, 1, c.proof_status = 1
+  FROM _stg_claims c
+  LEFT JOIN (
+    SELECT event_idx,
+      sum(amount_upokt) FILTER (WHERE family = 'relay' AND role = 'rev_share') relay_to_supplier_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'relay' AND role = 'dao') relay_to_dao_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'relay' AND role = 'source_owner') relay_to_source_owner_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'relay' AND role = 'application') relay_to_application_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'global' AND role = 'rev_share') global_to_supplier_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'global' AND role = 'dao') global_to_dao_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'global' AND role = 'source_owner') global_to_source_owner_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'global' AND role = 'application') global_to_application_upokt,
+      sum(amount_upokt) FILTER (WHERE family = 'reimb_escrow') reimbursement_to_dao_upokt,
+      min(recipient_id) FILTER (WHERE role = 'source_owner') source_owner_id
+    FROM _stg_detailed GROUP BY event_idx
+  ) d ON d.event_idx = c.event_idx
+  LEFT JOIN _stg_reimb r ON r.supplier_id = c.supplier_id AND r.session_id = c.session_id
+                        AND r.application_id = c.application_id;
+
+  -- the CHECK on claim_settlements.relay_to_stakers_upokt rejects a claim whose relay legs exceed what it minted
+
+  -- I2: per claim, the reimbursement request equals the claim's escrow-to-DAO leg
+  IF EXISTS (SELECT 1 FROM ${s}.claim_settlements WHERE height = h AND global_minted_upokt <> reimbursement_to_dao_upokt) THEN
+    RAISE EXCEPTION 'height %: a claim''s reimbursement request differs from its escrow-to-DAO leg', h;
+  END IF;
+
+  INSERT INTO ${s}.shareholder_payouts
+  SELECT h, d.event_idx, c.supplier_id, c.service_id, d.recipient_id,
+         coalesce(sum(d.amount_upokt) FILTER (WHERE d.family = 'relay'), 0),
+         coalesce(sum(d.amount_upokt) FILTER (WHERE d.family = 'global'), 0),
+         v_row_source, 1
+  FROM _stg_detailed d JOIN _stg_claims c ON c.event_idx = d.event_idx
+  WHERE d.role = 'rev_share'
+  GROUP BY d.event_idx, c.supplier_id, c.service_id, d.recipient_id;
+
+  -- the batch staker rows (in the map eras, the staker legs aggregated per recipient and family); in the
+  -- settlement_result era, the proposer's leg of each claim
+  INSERT INTO ${s}.staker_payouts
+  SELECT h, event_idx, recipient_id, op_reason, role, family, amount_upokt, v_row_source, 1
+  FROM _stg_batch WHERE op_type = 'mod_to_acct' AND role IN ('validator', 'delegator')
+  UNION ALL
+  SELECT h, event_idx, recipient_id, op_reason, role, family, amount_upokt, v_row_source, 1
+  FROM _stg_detailed WHERE role IN ('validator', 'delegator');
+
+  INSERT INTO ${s}.validator_distributions
+  SELECT h, event_idx, op_reason, family, validator_operator, validator_account, commission_rate, pool_share_upokt, commission_upokt,
+         self_delegation_upokt, to_delegators_upokt, total_delegated_stake_upokt, delegator_count, coalesce(row_source, 'event'), 1
+  FROM _stg_vrd;
+
+  -- each row says how it was made: replay, derived_split or unattributed for 288,180–788,944 (replay.ts); batched_vrd
+  -- derives the split per validator (de2.ts)
+  INSERT INTO ${s}.delegator_validator_payouts
+  SELECT h, delegator, validator_operator, family, amount_upokt,
+         coalesce(row_source, CASE WHEN v_era = 'batched_vrd' THEN 'derived' ELSE v_row_source END), 1
+  FROM _stg_dv;
+
+  INSERT INTO ${s}.claim_expirations
+  SELECT h, event_idx, supplier_id, application_id, service_id, session_end, claimed_upokt, reason,
+         relays, estimated_relays, claimed_compute_units, estimated_compute_units
+  FROM _stg_expired;
+  INSERT INTO ${s}.claim_discards
+  SELECT h, event_idx, supplier_id, application_id, service_id, session_end, error FROM _stg_discarded;
+  INSERT INTO ${s}.supplier_slashes
+  SELECT h, event_idx, supplier_id, application_id, service_id, session_end, penalty_upokt, stake_after_upokt FROM _stg_slashed;
+
+  -- E0: in the settlement_result era, per claim, the relay legs sum to the relay mint and the global legs (the
+  -- proposer's included) to the global mint, which is the reimbursement request (I2 ties it to the escrow leg)
+  IF v_era = 'settlement_result' THEN
+    SELECT string_agg(c.event_idx::text, ', ') INTO v_bad
+    FROM ${s}.claim_settlements c
+    LEFT JOIN (SELECT event_idx, sum(amount_upokt) FILTER (WHERE family = 'relay') relay_upokt,
+                      sum(amount_upokt) FILTER (WHERE family = 'global') global_upokt
+               FROM _stg_detailed GROUP BY 1) d USING (event_idx)
+    WHERE c.height = h AND (coalesce(d.relay_upokt, 0) <> c.relay_minted_upokt OR coalesce(d.global_upokt, 0) <> c.global_minted_upokt);
+    IF v_bad IS NOT NULL THEN
+      RAISE EXCEPTION 'height %: settlement_result legs differ from the claims'' mints at events %', h, left(v_bad, 500);
+    END IF;
+  END IF;
+
+  -- M1: in the map eras, the global legs of the claims plus the global staker rows equal the claims' global mints
+  -- (the relay family is I3a: relay_to_stakers_upokt is what the claims' relay legs leave of their mint)
+  IF left(v_era, 4) = 'map_' AND (SELECT coalesce(sum(amount_upokt), 0) FROM _stg_detailed WHERE family = 'global')
+       + (SELECT coalesce(sum(amount_upokt), 0) FROM _stg_batch WHERE family = 'global')
+       <> (SELECT coalesce(sum(global_minted_upokt), 0) FROM ${s}.claim_settlements WHERE height = h) THEN
+    RAISE EXCEPTION 'height %: map global legs and staker rows differ from the claims'' global mints', h;
+  END IF;
+
+  -- I3a: Σ relay_to_stakers_upokt = the batch relay staker rows
+  IF (SELECT coalesce(sum(relay_to_stakers_upokt), 0) FROM ${s}.claim_settlements WHERE height = h)
+     <> (SELECT coalesce(sum(amount_upokt), 0) FROM ${s}.staker_payouts WHERE height = h AND family = 'relay') THEN
+    RAISE EXCEPTION 'height %: sum of relay_to_stakers_upokt differs from the batch relay staker rows', h;
+  END IF;
+  -- D1: in the replayed eras (288,180–788,944), Σ delegator_validator_payouts per (address, family) = the batch staker
+  -- rows of both roles, validator and delegator (in the map eras, the staker legs aggregated from the bank). The rows
+  -- come from the replay, checked against the same amounts; this guards the payload → SQL path.
+  IF v_era IN ('map_proposer_operator', 'map_all_bonded', 'map_all_bonded_deflation', 'detailed_batch') THEN
+    SELECT string_agg(coalesce(dv.delegator, bb.recipient_id) || ' ' || coalesce(dv.family, bb.family), ', ') INTO v_bad
+    FROM (SELECT delegator, family, sum(amount_upokt) AS amount_upokt FROM _stg_dv GROUP BY 1, 2) dv
+    FULL JOIN (SELECT recipient_id, family, sum(amount_upokt) AS amount_upokt FROM _stg_batch
+               WHERE op_type = 'mod_to_acct' AND role IN ('validator', 'delegator') GROUP BY 1, 2) bb
+      ON bb.recipient_id = dv.delegator AND bb.family = dv.family
+    WHERE dv.amount_upokt IS DISTINCT FROM bb.amount_upokt;
+    IF v_bad IS NOT NULL THEN
+      RAISE EXCEPTION 'height %: staker payouts per validator differ from the settlement batch for %', h, left(v_bad, 500);
+    END IF;
+  END IF;
+
+  -- I3b: per family, the batch staker rows = Σ pool_share_upokt. batched_vrd has a validator distribution for every
+  -- family it pays; a replayed era has one for every family it attributed (an unattributed family has none).
+  SELECT string_agg(coalesce(sp.family, vd.family), ', ') INTO v_bad
+  FROM (SELECT family, sum(amount_upokt) AS amount_upokt FROM ${s}.staker_payouts WHERE height = h GROUP BY 1) sp
+  FULL JOIN (SELECT family, sum(pool_share_upokt) AS amount_upokt FROM ${s}.validator_distributions WHERE height = h GROUP BY 1) vd
+    USING (family)
+  WHERE (v_era = 'batched_vrd' OR vd.family IS NOT NULL) AND sp.amount_upokt IS DISTINCT FROM vd.amount_upokt;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'height %: batch staker rows differ from the validator distributions for %', h, v_bad;
+  END IF;
+
+  CALL ${s}._rollup_apply(h, 1);
+  -- the parts staged for this height are consumed: the next height in the transaction starts empty
+  TRUNCATE _stg_claims, _stg_detailed, _stg_batch, _stg_vrd, _stg_reimb, _stg_dv, _stg_expired, _stg_discarded,
+    _stg_slashed;
+END $$;
+
+-- Recomputes every rollup from the base tables, from the first day of from_day's month on (the monthly
+-- rollup cannot be rebuilt from mid-month). Needed after adding a rollup or bumping the rollup version.
+CREATE OR REPLACE PROCEDURE ${s}.rebuild_rollups(from_day date) LANGUAGE plpgsql AS $$
+DECLARE m date := date_trunc('month', from_day)::date; h bigint;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
+  DELETE FROM ${s}.settlement_income_by_address WHERE height IN (SELECT height FROM ${s}.settlement_blocks WHERE day >= m);
+  DELETE FROM ${s}.settlement_supply_flows WHERE height IN (SELECT height FROM ${s}.settlement_blocks WHERE day >= m);
+  DELETE FROM ${s}.settlement_claims_by_application_service WHERE height IN (SELECT height FROM ${s}.settlement_blocks WHERE day >= m);
+  DELETE FROM ${s}.monthly_income_by_address_supplier WHERE month >= m;
+  DELETE FROM ${s}.monthly_income_by_address_service WHERE month >= m;
+  DELETE FROM ${s}.monthly_income_by_address_supplier_service WHERE month >= m;
+  DELETE FROM ${s}.daily_income_by_address WHERE day >= m;
+  DELETE FROM ${s}.daily_income_by_address_supplier WHERE day >= m;
+  DELETE FROM ${s}.daily_income_by_address_service WHERE day >= m;
+  DELETE FROM ${s}.daily_claims_by_application_service WHERE day >= m;
+  DELETE FROM ${s}.daily_claims_by_supplier WHERE day >= m;
+  DELETE FROM ${s}.daily_claims_by_supplier_application_service WHERE day >= m;
+  DELETE FROM ${s}.hourly_income_by_address_supplier WHERE hour >= m::timestamp AT TIME ZONE 'UTC';
+  DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day >= m;
+  DELETE FROM ${s}.daily_validator_rewards WHERE day >= m;
+  FOR h IN SELECT height FROM ${s}.settlement_blocks WHERE day >= m ORDER BY height LOOP
+    CALL ${s}._rollup_apply(h, 1);
+  END LOOP;
+  UPDATE ${s}.settlement_blocks SET rollup_version = ${ROLLUP_VERSION} WHERE day >= m;
+END $$;
+`;
+}
