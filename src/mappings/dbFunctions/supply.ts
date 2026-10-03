@@ -5,6 +5,11 @@ export function getTotalSupplyByDay(dbSchema: string): string {
 )
 RETURNS JSON AS $$
 BEGIN
+    -- the answer the range query gives in these cases; checked first because GREATEST/LEAST below skip NULLs
+    -- and an empty blocks table leaves the day series unbounded
+    IF start_date IS NULL OR end_date IS NULL OR NOT EXISTS (SELECT 1 FROM ${dbSchema}.blocks) THEN
+        RETURN NULL;
+    END IF;
     RETURN (
         SELECT json_agg(
             json_build_object(
@@ -19,16 +24,29 @@ BEGIN
             ORDER BY day_ts
         )
         FROM (
+			-- The last block of each day with an upokt supply, read per day backwards on
+			-- idx_blocks_timestamp_id instead of joining and sorting every block of the range.
 			WITH latest_blocks_per_day AS (
-			  SELECT DISTINCT ON (date_trunc('day', b.timestamp))
-			    date_trunc('day', b.timestamp) AS day_ts,
-			    b.id AS block_id,
-			    sp.amount AS shannon_supply
-			  FROM ${dbSchema}.blocks b
-			  INNER JOIN ${dbSchema}.block_supplies bs ON bs.block_id = b.id
-			  INNER JOIN ${dbSchema}.supplies sp ON sp.id = bs.supply_id
-			  WHERE sp.denom = 'upokt' AND b.timestamp BETWEEN start_date AND end_date
-			  ORDER BY date_trunc('day', b.timestamp), b.timestamp DESC
+			  SELECT d.day_ts, lb.block_id, lb.shannon_supply
+			  -- the series is clamped to the indexed blocks: an infinite or far-off bound would never end or probe
+			  -- empty days, and days without blocks are not in the answer anyway
+			  FROM generate_series(
+			    date_trunc('day', GREATEST(start_date, (SELECT min(timestamp) FROM ${dbSchema}.blocks))),
+			    LEAST(end_date, (SELECT max(timestamp) FROM ${dbSchema}.blocks)),
+			    interval '1 day'
+			  ) AS d(day_ts)
+			  CROSS JOIN LATERAL (
+			    SELECT b.id AS block_id, sp.amount AS shannon_supply
+			    FROM ${dbSchema}.blocks b
+			    INNER JOIN ${dbSchema}.block_supplies bs ON bs.block_id = b.id
+			    INNER JOIN ${dbSchema}.supplies sp ON sp.id = bs.supply_id
+			    WHERE sp.denom = 'upokt'
+			      AND b.timestamp >= GREATEST(d.day_ts, start_date)
+			      AND b.timestamp < d.day_ts + interval '1 day'
+			      AND b.timestamp <= end_date
+			    ORDER BY b.timestamp DESC
+			    LIMIT 1
+			  ) lb
 			),
 			unclaimed_accounts AS (
 			  SELECT
@@ -73,7 +91,7 @@ BEGIN
         ) subquery
     );
 END;
-$$ LANGUAGE plpgsql STABLE;`
+$$ LANGUAGE plpgsql STABLE SET jit = off;`
 }
 
 export function getBurnBreakdownBetweenDatesFn(dbSchema: string): string {

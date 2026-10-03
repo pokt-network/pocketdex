@@ -124,6 +124,12 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     // GIN index for array overlap queries on the domains column.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_domains
       ON ${dbSchema}.supplier_service_configs USING GIN (domains)`,
+    // get_supplier_stats_by_domains reads only the live configs (upper_inf(_block_range)); without this
+    // it seq-scans every config version (713k pages on mainnet for 243k live rows), and idx_ssc_domains
+    // indexes all versions, so it does not help.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_supplier_domains
+      ON ${dbSchema}.supplier_service_configs (supplier_id) INCLUDE (domains)
+      WHERE upper_inf(_block_range)`,
     // Indexes for the domain_service_daily_rewards summary table.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dsdr_domain_day
       ON ${dbSchema}.domain_service_daily_rewards (domain, day)`,
@@ -138,6 +144,11 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS transactions_block_id_desc_live_idx
       ON ${dbSchema}.transactions (block_id DESC, _id) INCLUDE (_block_range)
       WHERE id IS NOT NULL`,
+    // The PostGraphile `transactions` connection filtered by signer (`signer_address = $ ORDER BY
+    // block_id DESC, _id LIMIT n`): the GIST (signer_address, _block_range) finds the rows but cannot
+    // order them, so every transaction of the signer was read from the heap and sorted.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS transactions_signer_block_id_desc_idx
+      ON ${dbSchema}.transactions (signer_address, block_id DESC, _id) INCLUDE (_block_range)`,
     // Functional btree for the balances "reopen rows closed at this height" UPDATE
     // in updateBalances (src/mappings/bank/balanceChange.ts):
     //   UPDATE balances SET _block_range = int8range(lower(_block_range), NULL, '[)')
