@@ -16,9 +16,13 @@ import {
 import { Application as ChainApplication } from "../../client/pocket/application/types";
 import {
   QueryClientImpl as StakingQueryClientImpl,
+  QueryValidatorDelegationsRequest,
   QueryValidatorsRequest,
 } from "../../client/cosmos/staking/v1beta1/query";
-import { Validator as ChainValidator } from "../../client/cosmos/staking/v1beta1/staking";
+import {
+  Delegation as ChainDelegation,
+  Validator as ChainValidator,
+} from "../../client/cosmos/staking/v1beta1/staking";
 import { positiveIntFromEnv } from "./env";
 
 // High default page size: with the current validator/app counts a single page is
@@ -38,6 +42,8 @@ interface PocketdexExtension {
     // Returns every validator known to the chain (any bond status) at the
     // configured height, following pagination across as many pages as needed.
     readonly allValidators: () => Promise<ChainValidator[]>;
+    // Returns every delegation to one validator at the configured height, following pagination.
+    readonly validatorDelegations: (validatorOperator: string) => Promise<ChainDelegation[]>;
   }
   readonly application: {
     // Returns every application known to the chain at the configured height,
@@ -145,6 +151,11 @@ export function createProtobufRpcClient(base: QueryClient, height?: number): Pro
     request: async (service: string, method: string, data: Uint8Array): Promise<Uint8Array> => {
       const path = `/${service}/${method}`;
       const response = await queryAbci(base, path, data, height);
+      // A node that answers for another height than the one asked would make the block read state that
+      // is not its own.
+      if (height !== undefined && response.height !== height) {
+        throw new Error(`abci query ${path}: asked for height ${height}, the node answered for ${response.height}`);
+      }
       return response.value;
     },
   };
@@ -202,6 +213,32 @@ const setupPocketdexExtension = (height?: number) => (base: QueryClient): Pocket
         } while (nextKey && nextKey.length > 0);
 
         return validators;
+      },
+      validatorDelegations: async (validatorOperator: string) => {
+        const delegations: ChainDelegation[] = [];
+        let nextKey: Uint8Array | undefined;
+
+        do {
+          const response = await stakingQueryService.ValidatorDelegations(
+            QueryValidatorDelegationsRequest.fromPartial({
+              validatorAddr: validatorOperator,
+              pagination: PageRequest.fromPartial({
+                key: nextKey ?? new Uint8Array(),
+                limit: DEFAULT_PAGE_LIMIT,
+              }),
+            }),
+          );
+
+          for (const r of response.delegationResponses) {
+            if (!r.delegation) {
+              throw new Error(`delegation response for validator ${validatorOperator} has no delegation`);
+            }
+            delegations.push(r.delegation);
+          }
+          nextKey = response.pagination?.nextKey;
+        } while (nextKey && nextKey.length > 0);
+
+        return delegations;
       },
     },
     application: {

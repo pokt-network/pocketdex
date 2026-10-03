@@ -756,6 +756,10 @@ async function _handleApplicationUnbondingEndEvent(
   // stakeStatus is owned by reconcile — app will be absent from AllApplications at this height, so reconcile marks it Unstaked via the tracked loop. unstakingReason was already set by handleApplicationUnbondingBeginEvent; don't overwrite it here.
 
   const applicationServices = (await fetchAllApplicationServiceByApplicationId(applicationAddress)).map(item => item.id);
+  // The chain deletes the whole application at unbonding end (x/application RemoveApplication), its gateway
+  // delegations included, without a per-gateway event. Close them here too, or the gateway keeps being
+  // credited with what the application spends after it stakes again.
+  const applicationGateways = (await fetchAllApplicationGatewayByApplicationId(applicationAddress)).map(item => item.id);
 
   const eventId = getEventId(event);
 
@@ -770,6 +774,7 @@ async function _handleApplicationUnbondingEndEvent(
       eventId,
     }).save(),
     store.bulkRemove("ApplicationService", applicationServices),
+    store.bulkRemove("ApplicationGateway", applicationGateways),
   ]);
 
   return application;

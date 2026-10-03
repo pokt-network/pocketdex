@@ -20,6 +20,8 @@ import {
 } from "./fixtures/golden";
 import {
   effectiveMintRatio,
+  eraAtHeight,
+  firstEraFrom,
   nextSessionStartHeight,
   ParamsStore,
   ParamWrite,
@@ -542,5 +544,46 @@ describe("queryAbci transport", () => {
     };
     await Promise.all(Array.from({ length: 40 }, () => queryAbci(base, "/p", new Uint8Array(), 1)));
     assert.equal(peak, 6);
+  });
+});
+
+describe("eraAtHeight", () => {
+  it("switches at each mainnet boundary, on the boundary height itself", () => {
+    const bounds: Array<[number, string]> = [
+      [1, "settlement_result"],
+      [247893, "map_proposer_consensus"],
+      [263093, "map_no_stakers"],
+      [288180, "map_proposer_operator"],
+      [382250, "map_all_bonded"],
+      [636543, "map_all_bonded_deflation"],
+      [703870, "detailed_batch"],
+      [788945, "batched_vrd"],
+    ];
+    for (let i = 0; i < bounds.length; i++) {
+      const [from, era] = bounds[i];
+      assert.equal(eraAtHeight(MAINNET, from), era);
+      if (i > 0) assert.equal(eraAtHeight(MAINNET, from - 1), bounds[i - 1][1]);
+    }
+    assert.equal(eraAtHeight(MAINNET, 946400), "batched_vrd");
+    assert.equal(firstEraFrom(MAINNET), 1);
+  });
+
+  it("knows beta from height 1: the map format with bonded stakers, then mint_ratio 0.975, then v0.1.33 and v0.1.34", () => {
+    const bounds: Array<[number, string]> = [
+      [1, "map_all_bonded"],
+      [19672, "map_all_bonded_deflation"],
+      [153479, "detailed_batch"],
+      [348821, "batched_vrd"],
+    ];
+    for (let i = 0; i < bounds.length; i++) {
+      const [from, era] = bounds[i];
+      assert.equal(eraAtHeight("pocket-lego-testnet", from), era);
+      if (i > 0) assert.equal(eraAtHeight("pocket-lego-testnet", from - 1), bounds[i - 1][1]);
+    }
+    assert.equal(firstEraFrom("pocket-lego-testnet"), 1);
+  });
+
+  it("throws for a chain with no era table", () => {
+    assert.throws(() => eraAtHeight("pocket-beta", 1000), /unknown settlement era/);
   });
 });

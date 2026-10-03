@@ -121,6 +121,7 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   // relay
   // EventClaimSettled is being handled separately because it needs access to EventApplicationOverserviced events
   "pocket.tokenomics.EventClaimSettled": noOp,
+  "pocket.tokenomics.EventClaimDiscarded": noOp, // - written by indexMoney (src/mappings/money)
   "pocket.tokenomics.EventClaimExpired": handleEventClaimExpired,
   "pocket.tokenomics.EventSupplierSlashed": noOp, // - now handled in indexSupplier
   "pocket.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,

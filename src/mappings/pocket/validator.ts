@@ -8,14 +8,21 @@ import {
   isEmpty,
   isNil,
 } from "lodash";
-import { BondStatus } from "../../client/cosmos/staking/v1beta1/staking";
+import { BondStatus, Validator as ChainValidator } from "../../client/cosmos/staking/v1beta1/staking";
 import { parseCoins } from "../../cosmjs/utils";
 import {
+  Delegation,
   StakeStatus,
   Validator,
 } from "../../types";
+import {
+  DelegationShares,
+  delegationId,
+  diffDelegations,
+  parseShares,
+} from "../money/delegations";
 import getQueryClient from "../utils/query_client";
-import { fetchAllValidatorByStatus } from "./pagination";
+import { fetchAllDelegationByValidator, fetchAllValidatorByStatus } from "./pagination";
 import { MsgCreateValidator as MsgCreateValidatorEntity } from "../../types/models/MsgCreateValidator";
 import { ValidatorCommissionProps } from "../../types/models/ValidatorCommission";
 import { ValidatorRewardProps } from "../../types/models/ValidatorReward";
@@ -233,7 +240,24 @@ const reportedMissingFromChain = new Set<string>();
 // signerId, createMsgId, transactionId, ...) are preserved. Validators that the
 // chain no longer returns (fully unbonded => removed from the staking store) are
 // marked Unstaked with zero stake.
-export async function reconcileValidators(height: number): Promise<void> {
+export interface ReconcileValidatorsOptions {
+  // Validators named by the block's staking events (money/delegations.ts stakingEventValidators).
+  stakingValidators?: ReadonlySet<string>;
+  // Re-read the delegations of every validator, not only the ones that moved: a settlement block, whose
+  // validator rewards are split per delegator from this snapshot.
+  fullDelegationRead?: boolean;
+}
+
+// The chain's validators and, after a full delegation read, every validator's delegations at the height.
+export interface ValidatorSnapshot {
+  chainValidators: ChainValidator[];
+  delegations: Map<string, DelegationShares[]> | null;
+}
+
+export async function reconcileValidators(
+  height: number,
+  options: ReconcileValidatorsOptions = {},
+): Promise<ValidatorSnapshot> {
   const queryClient = getQueryClient(height);
 
   // The read is pinned to the block height. A read that still fails after the
@@ -245,6 +269,10 @@ export async function reconcileValidators(height: number): Promise<void> {
   const chainValidators = await queryClient.staking.allValidators();
 
   const seen = new Set<string>();
+  // validators whose delegator_shares changed since the stored row: their delegations changed
+  const sharesMoved = new Set<string>();
+  // validators with a stored row, whose delegator_shares could be compared
+  const withRow = new Set<string>();
   // Collect every mutated entity and persist them in a single batched upsert
   // (store.bulkCreate => one statement) instead of issuing an individual
   // save()/UPDATE per validator.
@@ -258,12 +286,16 @@ export async function reconcileValidators(height: number): Promise<void> {
     reportedMissingFromChain.delete(id);
 
     const validator = await Validator.get(id);
+    if (!isNil(validator) && validator.delegatorShares !== cv.delegatorShares) {
+      sharesMoved.add(id);
+    }
     if (isNil(validator)) {
       // Created earlier in this same block by handleValidatorMsgCreate (which
       // runs before reconcile); if it is not persisted yet there is nothing to
       // refresh and the next block will pick it up.
       continue;
     }
+    withRow.add(id);
 
     const description = cv.description ?? validator.description;
     const commission = cv.commission?.commissionRates ?? validator.commission;
@@ -279,7 +311,8 @@ export async function reconcileValidators(height: number): Promise<void> {
       validator.stakeAmount === stakeAmount &&
       validator.minSelfDelegation === minSelfDelegation &&
       jsonFieldEquals(validator.description, description) &&
-      jsonFieldEquals(validator.commission, commission)
+      jsonFieldEquals(validator.commission, commission) &&
+      validator.delegatorShares === cv.delegatorShares
     ) {
       continue;
     }
@@ -289,6 +322,7 @@ export async function reconcileValidators(height: number): Promise<void> {
     validator.minSelfDelegation = minSelfDelegation;
     validator.stakeAmount = stakeAmount;
     validator.stakeStatus = stakeStatus;
+    validator.delegatorShares = cv.delegatorShares;
 
     toUpsert.push(validator);
   }
@@ -331,4 +365,68 @@ export async function reconcileValidators(height: number): Promise<void> {
   if (toUpsert.length > 0) {
     await store.bulkCreate("Validator", toUpsert);
   }
+
+  const delegations = await reconcileDelegations(height, queryClient, chainValidators, sharesMoved, withRow, options);
+  return { chainValidators, delegations };
+}
+
+// reconcileDelegations re-reads the delegations of the validators that moved (delegator_shares changed, or
+// named by a staking event) and writes the differences, so the Delegation history changes at the height
+// the chain changed. With fullDelegationRead it re-reads every validator; a difference on a validator that
+// did not move means a change this code missed, and fails the block. The exception is a validator with no
+// stored row (its delegator_shares cannot be compared): its delegations are only re-read on events and
+// full reads, and written without failing.
+async function reconcileDelegations(
+  height: number,
+  queryClient: ReturnType<typeof getQueryClient>,
+  chainValidators: ReadonlyArray<ChainValidator>,
+  sharesMoved: ReadonlySet<string>,
+  withRow: ReadonlySet<string>,
+  options: ReconcileValidatorsOptions,
+): Promise<Map<string, DelegationShares[]> | null> {
+  const moved = new Set<string>([...sharesMoved, ...(options.stakingValidators ?? [])]);
+  const toRead = options.fullDelegationRead
+    ? new Set<string>([...chainValidators.map((v) => v.operatorAddress), ...moved])
+    : moved;
+  if (toRead.size === 0) return null;
+
+  const read = await Promise.all([...toRead].map(async (operator) => {
+    const [chain, stored] = await Promise.all([
+      queryClient.staking.validatorDelegations(operator),
+      fetchAllDelegationByValidator(operator),
+    ]);
+    const chainShares = chain.map((d) => {
+      if (d.validatorAddress !== operator) {
+        throw new Error(`[reconcileDelegations] delegation of ${d.delegatorAddress} to ${operator} came back for ${d.validatorAddress}`);
+      }
+      return { delegator: d.delegatorAddress, shares: parseShares(d.shares, `${operator}/${d.delegatorAddress}`) };
+    });
+    return { operator, chainShares, diff: diffDelegations(operator, chainShares, stored) };
+  }));
+
+  const upserts: Delegation[] = [];
+  const removes: string[] = [];
+  for (const { diff, operator } of read) {
+    if (diff.upserts.length === 0 && diff.removes.length === 0) continue;
+    if (!moved.has(operator) && withRow.has(operator)) {
+      throw new Error(
+        `[reconcileDelegations] delegations of ${operator} changed at or before height ${height} without a change ` +
+          `of its delegator_shares or a staking event (${diff.upserts.length} upserts, ${diff.removes.length} removals)`
+      );
+    }
+    for (const u of diff.upserts) {
+      upserts.push(Delegation.create({
+        id: delegationId(operator, u.delegator),
+        validatorOperator: operator,
+        delegator: u.delegator,
+        shares: u.shares,
+      }));
+    }
+    removes.push(...diff.removes);
+  }
+  if (upserts.length > 0) await store.bulkCreate("Delegation", upserts);
+  if (removes.length > 0) await store.bulkRemove("Delegation", removes);
+
+  if (!options.fullDelegationRead) return null;
+  return new Map(read.map((r) => [r.operator, r.chainShares]));
 }

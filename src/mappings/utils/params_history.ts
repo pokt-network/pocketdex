@@ -57,17 +57,18 @@ export interface ChainUpgradeHeights {
 
 export const CHAIN_UPGRADE_HEIGHTS: Record<string, ChainUpgradeHeights | undefined> = {
   // mainnet: AppliedPlan v0.1.31 = 635,506 (mint_ratio 0 → 1 there, measured by
-  // the params history rebuild) and v0.1.35 = 883,667.
+  // the params history rebuild), v0.1.34 = 788,945 and v0.1.35 = 883,667.
   pocket: { mintRatioFrom: 635506, sessionHistoryFrom: 635506, sharedPinsFrom: 883667 },
-  // beta (sauron-rpc.beta.infra.pocket.network), measured 2026-09-30. It never
-  // applied v0.1.27/v0.1.29–v0.1.32; AppliedPlan v0.1.33 = 153,479,
-  // v0.1.34 = 348,821, v0.1.35 = 553,663. mint_ratio is absent (0) from genesis
-  // to 16,569 and 1 from 16,570 (bisection over abci_query; no tx and no module
-  // version change in that block, cause not identified). sessionHistoryFrom is
-  // INFERRED as v0.1.33, the first applied upgrade carrying the v0.1.31 code;
-  // the session params never changed on beta (50 at every sampled height, no
-  // session MsgUpdateParam(s) tx), so no row depends on it.
-  "pocket-lego-testnet": { mintRatioFrom: 16570, sessionHistoryFrom: 153479, sharedPinsFrom: 553663 },
+  // beta (sauron-rpc.beta.infra.pocket.network), measured 2026-09-30 and
+  // 2026-10-03. AppliedPlan v0.1.31-beta-2 = 16,570, v0.1.33 = 153,479,
+  // v0.1.34 = 348,821, v0.1.35 = 553,663. The v0.1.31-beta-2 handler sets
+  // mint_ratio to 1 where it is 0 (absent from genesis to 16,569) and starts the
+  // session and shared params history at its height. The session params never
+  // changed on beta (50 at every sampled height, no session MsgUpdateParam(s)
+  // tx), so no row depends on sessionHistoryFrom.
+  "pocket-lego-testnet": {
+    mintRatioFrom: 16570, sessionHistoryFrom: 16570, sharedPinsFrom: 553663,
+  },
   // TODO: chain id of the old beta network; no RPC known for it. Indexing it
   // throws until it is filled in.
   "pocket-beta": undefined,
@@ -83,6 +84,66 @@ export function chainUpgradeHeights(chainId: string): ChainUpgradeHeights {
     );
   }
   return heights;
+}
+
+// The settlement event format a height's settlements are emitted in, per chain id: an ordered list of the
+// first height of each era. The money parser and writer read the era to know which events and checks
+// apply. Mainnet boundaries are from the era survey (.local/ab/eras/REPORT.md §0, sampled block_results):
+//   settlement_result         v0.1.26 and earlier: per-claim settlement_result with a reason per leg
+//   map_proposer_consensus    v0.1.27: reward_distribution map, proposer paid at its consensus address
+//   map_no_stakers            proposer allocation 0 (params at 263,093)
+//   map_proposer_operator     v0.1.28: proposer paid at its operator account (params at 288,180)
+//   map_all_bonded            v0.1.29: stakers = every bonded validator, mint 1:1
+//   map_all_bonded_deflation  v0.1.31: mint_ratio 0.975 (params at 636,543)
+//   detailed_batch            v0.1.33: reward_distribution_detailed and EventSettlementBatch, no validator distribution
+//   batched_vrd               v0.1.34: EventValidatorRewardDistribution
+// Beta started on the map format with every bonded validator as staker (its first settlement is at 3,333) and
+// minted 1:1 until mint_ratio 0.975 (MsgUpdateParams at 19,672); it never applied v0.1.27–v0.1.30 or v0.1.32
+// (.local/ab/eras/beta: block_results and params at 3,333–153,453).
+export interface SettlementEraStart {
+  from: number;
+  era: string;
+}
+
+export const SETTLEMENT_ERAS: Record<string, ReadonlyArray<SettlementEraStart> | undefined> = {
+  pocket: [
+    { from: 1, era: "settlement_result" },
+    { from: 247893, era: "map_proposer_consensus" },
+    { from: 263093, era: "map_no_stakers" },
+    { from: 288180, era: "map_proposer_operator" },
+    { from: 382250, era: "map_all_bonded" },
+    { from: 636543, era: "map_all_bonded_deflation" },
+    { from: 703870, era: "detailed_batch" },
+    { from: 788945, era: "batched_vrd" },
+  ],
+  "pocket-lego-testnet": [
+    { from: 1, era: "map_all_bonded" },
+    { from: 19672, era: "map_all_bonded_deflation" },
+    { from: 153479, era: "detailed_batch" },
+    { from: 348821, era: "batched_vrd" },
+  ],
+};
+
+function settlementEras(chainId: string): ReadonlyArray<SettlementEraStart> {
+  const eras = SETTLEMENT_ERAS[chainId];
+  if (!eras) throw new Error(`unknown settlement era: no era table for chain "${chainId}" in SETTLEMENT_ERAS`);
+  return eras;
+}
+
+// eraAtHeight is the settlement era of `height` on `chainId`; it throws below the first known era.
+export function eraAtHeight(chainId: string, height: number): string {
+  let era: string | undefined;
+  for (const e of settlementEras(chainId)) {
+    if (e.from > height) break;
+    era = e.era;
+  }
+  if (era === undefined) throw new Error(`unknown settlement era at height ${height} on chain "${chainId}"`);
+  return era;
+}
+
+// firstEraFrom is the first height of the oldest era known on `chainId`.
+export function firstEraFrom(chainId: string): number {
+  return settlementEras(chainId)[0].from;
 }
 
 // Shared params whose live value only changes when the EndBlocker promotes a
