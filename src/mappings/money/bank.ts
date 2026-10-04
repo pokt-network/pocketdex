@@ -4,7 +4,8 @@
 // operations in turn: mints, module-to-module transfers, module-to-account transfers, burns
 // (x/tokenomics/keeper/settle_pending_claims.go:208-240 at v0.1.27), so per claim the EndBlock has, in order:
 //   coinbase M (relay mint), coinbase G (global mint), the module → account transfers, burn S (the settlement).
-// The burns of supplier slashes come after the last claim's burn, one before each EventSupplierSlashed.
+// The burns of supplier slashes come after the last claim's burn, one before each EventSupplierSlashed (or before the
+// EventSupplierUnbondingBegin that precedes it when the slash takes the stake below the minimum).
 // Measured on mainnet 250053, 260013, 270033, 300033, 350013, 430053 and 699993: 14,846/14,846 claims
 // (.local/ab/eras/bank_segmentation.py, map_positional.py).
 import { sha256 } from "@cosmjs/crypto";
@@ -90,15 +91,25 @@ function bankItems(height: number, events: ReadonlyArray<RawEvent>): BankItem[] 
   return items;
 }
 
+// A slash burn is followed by its EventSupplierSlashed, with the supplier's EventSupplierUnbondingBegin in between when
+// the slash takes its stake below the minimum (poktroll x/tokenomics/keeper/settle_pending_claims.go emits both
+// events after the burn, unbonding first; beta 133,593).
+function isSlashBurn(events: ReadonlyArray<RawEvent>, idx: number): boolean {
+  let next = idx + 1;
+  if (events[next]?.type === "pocket.supplier.EventSupplierUnbondingBegin") next++;
+  return events[next]?.type === "pocket.tokenomics.EventSupplierSlashed";
+}
+
 // segmentBank cuts the EndBlock bank events into one ClaimBank per claim, in claim order: for claim k, two
 // coinbases, then the transfers whose per-recipient sums equal its reward_distribution (`maps[k]`, non-zero entries),
 // then one burn. The settlement is one run inside the tokenomics end blocker, from the first claim's coinbase to its
 // last burn, and nothing else interleaves with it. Other end blockers' bank events may come before or after it: a
 // supplier or application unbonding returning stake (sent by the supplier or application module), a gov deposit
 // burn. Those are skipped; a transfer sent by the tokenomics module outside the run stops the height, since only the
-// settlement pays from it. Each slash burn is the event right before its EventSupplierSlashed (measured on 270033,
-// 300033, 350013, 430053), and there must be one per slash. No sample has an unbonding return or a gov burn in a
-// settlement block, so the skipping is reasoned from the end blocker order, not measured.
+// settlement pays from it. Each slash burn comes right before its EventSupplierSlashed (measured on 270033, 300033,
+// 350013, 430053) or before the EventSupplierUnbondingBegin that precedes it (isSlashBurn), and there must be one per
+// slash. No sample has an unbonding return or a gov burn in a settlement block, so the skipping is reasoned from the
+// end blocker order, not measured.
 export function segmentBank(
   height: number,
   events: ReadonlyArray<RawEvent>,
@@ -149,7 +160,7 @@ export function segmentBank(
   let slashBurns = 0;
   for (const it of items.slice(i)) {
     outside(it);
-    if (it.kind === "burn" && events[it.idx + 1]?.type === "pocket.tokenomics.EventSupplierSlashed") slashBurns++;
+    if (it.kind === "burn" && isSlashBurn(events, it.idx)) slashBurns++;
   }
   if (slashBurns !== slashes) {
     throw new Error(`[money] height ${height}: ${slashBurns} slash burns after the last claim, expected ${slashes}`);
