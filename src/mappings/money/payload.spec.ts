@@ -692,6 +692,21 @@ describe("map era (poktroll v0.1.27–v0.1.32) events", () => {
     }
   });
 
+  it("reads a slash that takes the supplier below its minimum stake: the unbonding event sits between burn and slash", () => {
+    // beta 133,593: poktroll emits EventSupplierUnbondingBegin (BELOW_MIN_STAKE) after the slash burn and before
+    // EventSupplierSlashed (x/tokenomics/keeper/settle_pending_claims.go, slashSupplierStake)
+    const { events, height, state } = mapFixture("beta_133593");
+    const p = buildSettlementPayload(height, TS, eraAtHeight("pocket-lego-testnet", height), events, state)!;
+    assert.equal(p.era, "map_all_bonded_deflation");
+    assert.equal(p.claims.length, 31);
+    // the block's 31 EventClaimSettled claim 18 upokt each; its burns add up to 559 = 558 + the 1 upokt slash
+    assert.equal(p.claims.reduce((a, c) => a + BigInt(c.claimed), BigInt(0)), BigInt(558));
+    assert.deepEqual(
+      p.slashed.map((x) => [x.supplier_id, x.penalty]),
+      [["pokt18na0p7t37du6s5yufvajfatwhkv362qyjytxvz", "1"]]
+    );
+  });
+
   it("reads beta's map heights as mainnet's, and a claim of 0 upokt with no request and no bank legs", () => {
     // beta (pocket-lego-testnet) settles in the map format from its first settlement; at 3,333, 9 of 22 claims
     // (service pnf-anvil) claimed 0 upokt: the chain skipped the token logic modules for them, so they have no

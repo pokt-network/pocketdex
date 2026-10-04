@@ -105,6 +105,17 @@ describe("segmentBank", () => {
     ]);
   });
 
+  it("counts a slash burn followed by the supplier's unbonding, and nothing else, before its slash", () => {
+    const unbonding = { type: "pocket.supplier.EventSupplierUnbondingBegin", attributes: [] };
+    const slashed = { type: "pocket.tokenomics.EventSupplierSlashed", attributes: [] };
+    const run = events.slice(0, -2);
+    assert.equal(segmentBank(1, [...run, burn(1), unbonding, slashed], maps, 1).length, 2);
+    assert.throws(
+      () => segmentBank(1, [...run, burn(1), ev("message", {}), slashed], maps, 1),
+      /0 slash burns after the last claim, expected 1/
+    );
+  });
+
   it("matches a claim with many legs per recipient", () => {
     const n = 20000;
     const many = [coinbase(n), coinbase(1)];
