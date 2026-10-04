@@ -67,7 +67,8 @@ jobs:
         with:
           file: tilt/docker/indexer.dockerfile
           cache-from: type=gha
-          cache-to: type=gha,mode=min
+          # a cache export that loses a race with another run must not fail the build
+          cache-to: type=gha,mode=min,ignore-error=true
           build-args: |
             BUILD_MODE=production
           platforms: ${{ inputs.platform }}
