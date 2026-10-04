@@ -118,9 +118,9 @@ const DESCRIPTIONS: Record<string, string> = {
   get_supplier_earnings:
     "Supplier earnings: claimed and settled upokt, overservicing loss, relays, compute units and settled claims (with and without a proof); suppliers NULL = every supplier, or owners = the suppliers they own now; by_service, by_application, by_supplier.",
   get_supplier_distribution:
-    "Supplier distribution: how what a supplier generated was paid out (each shareholder, the DAO, the service owner; stakers in one row); by_reason (relay / global), by_supplier; owners in place of suppliers.",
+    "Supplier distribution: how what a supplier generated was paid out (each shareholder, the DAO, the service owner; stakers in one row); by_reason (in the family column: relay / global), by_supplier; owners in place of suppliers.",
   get_income:
-    "Income of any address (shareholder, DAO, service owner, application, validator, delegator) by role; by_reason, by_supplier (the supplier that generated it), by_service, by_address.",
+    "Income of any address (shareholder, DAO, service owner, application, validator, delegator) by role; by_reason (in the family column: relay / global), by_supplier (the supplier that generated it), by_service, by_address.",
   get_validator_rewards:
     "Validator rewards: commission (NULL when no distribution had one; with commission_unknown_count > 0 it is the sum of the known ones only, a partial sum), self-delegation, what went to delegators, the distributions and how many were replayed, and the delegated stake seen per validator (average, minimum, maximum; for an APR; NULL with by_validator false, which mixes validators); validators NULL = every validator; by_validator.",
   get_delegator_income:
