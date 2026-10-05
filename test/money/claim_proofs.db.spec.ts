@@ -339,6 +339,43 @@ describe("get_claim_proofs_data_by_time over claims_by_block (PostgreSQL)", { sk
     ["-infinity", "infinity", "day"],
   ];
 
+  it("keeps the row of a height the indexer commits while a fill chunk is running", async () => {
+    // A third session holds a row of the fill's range, so the chunk stalls after reading the head; the indexer commits
+    // the next height meanwhile. The chunk must not drop that height's row (review of 2026-10-05, race.sh).
+    const top = await maxHeight();
+    const h = top + 1;
+    const holder = new Client({ connectionString: URL });
+    const fill = new Client({ connectionString: URL });
+    const indexer = new Client({ connectionString: URL });
+    await Promise.all([holder.connect(), fill.connect(), indexer.connect()]);
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`SELECT 1 FROM ${S}.claims_by_block WHERE block_id = (SELECT min(block_id) FROM ${S}.claims_by_block) FOR UPDATE`);
+      const chunk = fill.query(`SELECT ${S}.write_claims_by_block(1, $1)`, [top]);
+      await new Promise((r) => setTimeout(r, 300));
+      await indexer.query("BEGIN");
+      await indexer.query(`INSERT INTO ${S}.blocks VALUES ($1::bigint, timestamp '2026-07-07 12:00', int8range($1::bigint, NULL))`, [h]);
+      await indexer.query(`INSERT INTO ${S}.msg_create_claims VALUES ($1::bigint || '-c-race', $1::bigint, 3, 3, 3, 3, 3, int8range($1::bigint, NULL))`, [h]);
+      await indexer.query(`SELECT ${S}.write_claims_by_block($1, $1)`, [h]);
+      await indexer.query("COMMIT");
+      await holder.query("COMMIT");
+      await chunk;
+      const row = (await c.query(`SELECT count(*)::text n FROM ${S}.claims_by_block WHERE block_id = $1`, [h])).rows[0];
+      assert.equal(row.n, "1");
+      assert.match(await coverage(), new RegExp(`/${h}$`));
+      const r = await both("2026-07-07 00:00", "2026-07-08 00:00", "hour");
+      assert.equal(r.now, r.before);
+    } finally {
+      await holder.end();
+      await fill.end();
+      await indexer.end();
+      await c.query(`DELETE FROM ${S}.msg_create_claims WHERE block_id = $1`, [h]);
+      await c.query(`DELETE FROM ${S}.blocks WHERE id = $1`, [h]);
+      await c.query(`DELETE FROM ${S}.claims_by_block WHERE block_id = $1`, [h]);
+      await c.query(`UPDATE ${S}.claims_by_block_coverage SET covered_from_height = 1, written_to_height = $1`, [top]);
+    }
+  });
+
   for (const when of ["at the start", "on the next block written"]) {
     it(`sends the heights an image without the writer indexed to the raw tables, found ${when}`, async () => {
       await c.query("BEGIN");

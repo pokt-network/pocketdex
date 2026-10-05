@@ -205,8 +205,12 @@ DECLARE written INTEGER; head BIGINT;
 BEGIN
   SELECT max(id) INTO head FROM ${s}.blocks;
   DELETE FROM ${s}.claims_by_block WHERE block_id BETWEEN from_height AND to_height;
-  -- rows of heights a rewind removed from blocks (SubQuery's rewind does not touch this table); none otherwise
-  DELETE FROM ${s}.claims_by_block WHERE block_id > head;
+  -- rows of heights a rewind removed from blocks (SubQuery's rewind does not touch this table); none otherwise. Only on
+  -- the indexer's call, and with the head read in the same statement: a height the indexer commits while a fill chunk
+  -- runs has its block and its row committed together, so this snapshot sees both or neither and never drops the row
+  IF to_height >= head THEN
+    DELETE FROM ${s}.claims_by_block WHERE block_id > (SELECT max(id) FROM ${s}.blocks);
+  END IF;
   INSERT INTO ${s}.claims_by_block
   SELECT b.id, b.timestamp, ${cols("c")}, ${cols("p")}, ${cols("e")}
   FROM ${s}.blocks b
@@ -222,7 +226,7 @@ BEGIN
     -- the indexer's block: a stretch above written_to_height that nothing wrote moves the coverage up to it
     UPDATE ${s}.claims_by_block_coverage
     SET covered_from_height = CASE WHEN from_height > written_to_height + 1 THEN from_height ELSE covered_from_height END,
-        written_to_height = head;
+        written_to_height = GREATEST(written_to_height, head);
   END IF;
   UPDATE ${s}.claims_by_block_coverage SET covered_from_height = from_height
   WHERE from_height < covered_from_height AND to_height + 1 >= covered_from_height;
