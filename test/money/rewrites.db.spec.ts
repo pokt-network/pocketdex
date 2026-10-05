@@ -6,7 +6,9 @@ import {
   getAmountOfBlocksAndSuppliersByTimesFn,
   servicesPerformanceBetweenTimesFn,
 } from "../../src/mappings/dbFunctions/servicePerformance";
+import { getOverservicedsByDelegatorAddressesAndTimesFn } from "../../src/mappings/dbFunctions/overserviced";
 import { getAmountOfBlocksAndSuppliersByTimesBefore } from "./fixtures/blocks_and_suppliers_before";
+import { getOverservicedByAddressesAndTimeBefore } from "./fixtures/overserviced_before";
 import { servicesPerformanceBetweenTimesBefore } from "./fixtures/services_performance_before";
 
 interface PgClient {
@@ -82,6 +84,18 @@ describe("report functions rewritten for speed (PostgreSQL)", { skip: !URL && "M
         WHERE g % length(s) <> 0 OR s = 'svc1';
       -- a supplier configured twice for one service counts once
       INSERT INTO ${S}.supplier_service_configs VALUES ('sup1', 'svc2', int8range(31, NULL));
+      -- rev share: sup1..sup40 share with pokt1op<g % 3>; sup1..sup5 also with pokt1both; a closed config shares with pokt1old
+      ALTER TABLE ${S}.supplier_service_configs ADD COLUMN rev_share jsonb;
+      UPDATE ${S}.supplier_service_configs SET rev_share = jsonb_build_array(
+        jsonb_build_object('address', 'pokt1op' || (substr(supplier_id, 4)::int % 3), 'revSharePercentage', 90),
+        jsonb_build_object('address', CASE WHEN substr(supplier_id, 4)::int <= 5 THEN 'pokt1both' ELSE 'pokt1other' END));
+      UPDATE ${S}.supplier_service_configs SET rev_share = rev_share || '[{"address": "pokt1old"}]' WHERE upper(_block_range) = 30;
+
+      -- overserviced events on every 9th block, from suppliers sup1..sup12
+      CREATE TABLE ${S}.event_application_overserviceds (block_id numeric, supplier_id text, expected_burn numeric, effective_burn numeric);
+      INSERT INTO ${S}.event_application_overserviceds
+        SELECT b.id, 'sup' || (b.id % 12 + 1), b.id * 3, b.id * 2 FROM ${S}.blocks b WHERE b.id % 9 = 0;
+
       -- staked suppliers per block: services svc1..svc3 on every block, svc4 from 07-05
       CREATE TABLE ${S}.staked_suppliers_by_block_and_services (block_id numeric, service_id text, amount numeric, tokens numeric);
       INSERT INTO ${S}.staked_suppliers_by_block_and_services
@@ -92,6 +106,8 @@ describe("report functions rewritten for speed (PostgreSQL)", { skip: !URL && "M
     await c.query(servicesPerformanceBetweenTimesBefore(S));
     await c.query(getAmountOfBlocksAndSuppliersByTimesFn(S));
     await c.query(getAmountOfBlocksAndSuppliersByTimesBefore(S));
+    await c.query(getOverservicedsByDelegatorAddressesAndTimesFn(S));
+    await c.query(getOverservicedByAddressesAndTimeBefore(S));
   });
   after(async () => {
     await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE`);
@@ -189,6 +205,47 @@ describe("report functions rewritten for speed (PostgreSQL)", { skip: !URL && "M
     ] as const) {
       it(`answers byte for byte what the previous version answered: ${name}`, async () => {
         const r = await both(a, b);
+        assert.equal(r.now, r.before);
+      });
+    }
+  });
+
+  describe("get_overserviced_by_addresses_and_time", () => {
+    const both = async (addresses: string[] | null, a: string | null, b: string | null, i: string | null) => {
+      const r = (
+        await c.query(
+          `SELECT ${S}.get_overserviced_by_addresses_and_time($1, $2, $3, $4)::text n,
+                  ${S}.get_overserviced_by_addresses_and_time_before($1, $2, $3, $4)::text o`,
+          [addresses, a, b, i]
+        )
+      ).rows[0];
+      return { now: r.n, before: r.o };
+    };
+    it("answers the seeded events with real values", async () => {
+      const { now } = await both(["pokt1op1"], "2026-07-02 00:00", "2026-07-08 23:59:59", "day");
+      assert.ok(now);
+      assert.equal((JSON.parse(now) as unknown[]).length, 7);
+    });
+    const calls: [string, string[] | null, string | null, string | null, string | null][] = [
+      ["one address, 7 days by day", ["pokt1op1"], "2026-07-02 00:00", "2026-07-08 23:59:59", "day"],
+      ["two addresses sharing suppliers, by hour", ["pokt1op1", "pokt1both"], "2026-07-03 01:00", "2026-07-04 00:00", "hour"],
+      ["every operator, the whole seed", ["pokt1op0", "pokt1op1", "pokt1op2"], "2026-07-01", "2026-07-10 23:50", "day"],
+      ["edges between blocks", ["pokt1op2"], "2026-07-03 10:05", "2026-07-05 12:15", "hour"],
+      ["edges on blocks", ["pokt1op2"], "2026-07-03 10:30", "2026-07-05 12:00", "hour"],
+      ["only a closed config's address", ["pokt1old"], "2026-07-01", "2026-07-10", "day"],
+      ["an unknown address", ["pokt1nobody"], "2026-07-01", "2026-07-10", "day"],
+      ["no addresses", [], "2026-07-01", "2026-07-10", "day"],
+      ["no blocks", ["pokt1op1"], "2026-08-01", "2026-08-02", "day"],
+      ["start after end", ["pokt1op1"], "2026-07-05", "2026-07-03", "day"],
+      ["infinite", ["pokt1op1"], "-infinity", "infinity", "week"],
+      ["no start", ["pokt1op1"], null, "2026-07-03", "day"],
+      ["no end", ["pokt1op1"], "2026-07-03", null, "day"],
+      ["no interval", ["pokt1op1"], "2026-07-03", "2026-07-04", null],
+      ["no address list", null, "2026-07-03", "2026-07-04", "day"],
+    ];
+    for (const [name, addresses, a, b, i] of calls) {
+      it(`answers byte for byte what the previous version answered: ${name}`, async () => {
+        const r = await both(addresses, a, b, i);
         assert.equal(r.now, r.before);
       });
     }

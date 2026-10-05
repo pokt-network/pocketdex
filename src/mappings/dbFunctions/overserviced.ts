@@ -9,8 +9,17 @@ export function getOverservicedsByDelegatorAddressesAndTimesFn (dbSchema: string
 RETURNS jsonb
 LANGUAGE sql
 STABLE
+SET jit = off
 AS $$
-WITH matched_suppliers AS (
+-- the range's first and last block: block time only grows with the height, so the range's events are the ones whose
+-- block_id is between them. Overserviced events are few: they are read by supplier and joined to their own block,
+-- instead of probing them for every block of the range.
+WITH range_blocks AS MATERIALIZED (
+    SELECT
+      (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_ts ORDER BY timestamp, id LIMIT 1) lo,
+      (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= end_ts ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+  ),
+  matched_suppliers AS MATERIALIZED (
   	SELECT
       distinct ssc.supplier_id
     FROM ${dbSchema}.supplier_service_configs ssc
@@ -28,7 +37,8 @@ WITH matched_suppliers AS (
 		SUM(o.effective_burn) effective_burn
 	FROM ${dbSchema}.event_application_overserviceds o
 	INNER JOIN ${dbSchema}.blocks b ON b.id = o.block_id
-	WHERE o.supplier_id IN (SELECT supplier_id FROM matched_suppliers) AND b.timestamp BETWEEN start_ts AND end_ts
+	WHERE o.supplier_id IN (SELECT supplier_id FROM matched_suppliers)
+	  AND o.block_id BETWEEN (SELECT lo FROM range_blocks) AND (SELECT hi FROM range_blocks)
 	GROUP BY date_truncated
   ORDER BY date_truncated
   )
