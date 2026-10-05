@@ -23,7 +23,9 @@ AS $$
   )
   -- A block has one row per service (upsert_staked_suppliers_by_block_and_services deletes and regroups it), so
   -- count(*) is the distinct block count, without sorting every row by block; the sort that COUNT(DISTINCT) needed
-  -- returned the services in service_id order, which the ORDER BY keeps.
+  -- returned the services in service_id order, which the ORDER BY keeps. No constraint enforces it: on 2026-10-05 no
+  -- (block_id, service_id) repeated on mainnet or beta, and COUNT(DISTINCT) took 3.9 s instead of 0.6 s over 30 days
+  -- (9.6 s instead of 1.3 s over 89). A duplicate would count its block twice.
   SELECT jsonb_agg(to_jsonb(row)) FROM (
     SELECT
         ss.service_id,
