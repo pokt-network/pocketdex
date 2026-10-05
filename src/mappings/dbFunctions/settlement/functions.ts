@@ -76,10 +76,6 @@ BEGIN
   END IF;
   -- Which buckets a range allows, to stay within the latency budget: hour up to 7 days, day up to
   -- 92 days (three months), week up to 366 days, month/year any range. The whole history allows a total, month or year.
-  -- The legacy_* functions run with money.legacy = on: the live functions they replace take any range.
-  IF coalesce(current_setting('money.legacy', true), 'off') = 'on' THEN
-    bucket := NULL;
-  END IF;
   IF bucket = 'hour' AND (range_start IS NULL OR range_end IS NULL OR range_end - range_start > interval '7 days') THEN
     RAISE EXCEPTION 'bucket=hour allows ranges up to 7 days; use day (up to 92 days), week, month or year for longer ones';
   END IF;
@@ -565,18 +561,20 @@ END $$;
 -- monthly_income_by_address_supplier (by supplier), daily_income_by_address_service / monthly_income_by_address_service (by service).
 -- Supplier AND service at once: whole months from monthly_income_by_address_supplier_service, everything else from the base.
 -- suppliers (with by_supplier) keeps only the income those suppliers generated, read by index
--- instead of filtering the result (the legacy_* functions). Unordered: get_income orders.
+-- instead of filtering the result (the legacy_* functions). capped = false lifts _validate's per-bucket range caps, for
+-- the legacy_* functions: the live functions they replace take any range. Unordered: get_income orders.
+DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[]);
 CREATE OR REPLACE FUNCTION ${s}._income(addresses text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false,
   by_service boolean DEFAULT false, by_address boolean DEFAULT true,
-  fill_empty_buckets boolean DEFAULT false, suppliers text[] DEFAULT NULL)
+  fill_empty_buckets boolean DEFAULT false, suppliers text[] DEFAULT NULL, capped boolean DEFAULT true)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, address text, role text, family text, supplier_id text, service_id text,
   amount_upokt numeric, transfer_count bigint)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; m1 date; m2 date; use_month boolean; use_month_svc boolean;
   mw1 timestamptz; mw2 timestamptz; use_month_triple boolean; hm1 bigint; hm2 bigint;
 BEGIN
-  PERFORM ${s}._validate(addresses, '', range_start, range_end, bucket);
+  PERFORM ${s}._validate(addresses, '', range_start, range_end, CASE WHEN capped THEN bucket END);
   sp := ${s}._span(range_start, range_end);
   rg := ${s}._ranges(range_start, range_end, bucket, by_supplier AND by_service);
   -- whole months inside the rollup days [d1, d2], only when the series needs no days
@@ -1218,8 +1216,8 @@ DROP FUNCTION IF EXISTS ${s}.money_rewards_by_suppliers_and_time_group_by_addres
 DROP FUNCTION IF EXISTS ${s}.money_mint_breakdown_between_dates(timestamp, timestamp);
 
 -- The live functions take any range and any date_trunc unit: a NULL end or start_date > end_date matches nothing
--- (BETWEEN), and no unit caps the range. So the legacy_* functions run with money.legacy = on, which lifts the per-bucket
--- range caps of _validate, and answer an empty range as the live ones, without the coverage check. The rewards series:
+-- (BETWEEN), and no unit caps the range. So the legacy_* functions read _income with capped = false, which lifts the
+-- per-bucket range caps of _validate, and answer an empty range as the live ones, without the coverage check. The rewards series:
 -- hour, day, week, month and year come from _income; quarter, decade, century and millennium from its months; any other
 -- unit date_trunc takes (minute, second, ...) per settlement height from the base tables. suppliers NULL = income from
 -- any supplier and the stakers; a list = only what those suppliers' claims paid.
@@ -1267,11 +1265,11 @@ BEGIN
           WHERE h.address = ANY(addresses) AND h.hour >= h1 AND h.hour < h2 AND h.supplier_id = ANY(suppliers)
           UNION ALL
           SELECT i.address, i.bucket_start, i.amount_upokt
-          FROM ${s}._income(addresses, f, h1, 'hour', false, true, fill_empty_buckets => false, suppliers => suppliers) i
+          FROM ${s}._income(addresses, f, h1, 'hour', false, true, fill_empty_buckets => false, suppliers => suppliers, capped => false) i
           WHERE e1
           UNION ALL
           SELECT i.address, i.bucket_start, i.amount_upokt
-          FROM ${s}._income(addresses, h2, t, 'hour', false, true, fill_empty_buckets => false, suppliers => suppliers) i
+          FROM ${s}._income(addresses, h2, t, 'hour', false, true, fill_empty_buckets => false, suppliers => suppliers, capped => false) i
           WHERE e2) x
     GROUP BY 1, 2;
   ELSIF u IS NULL OR u IN ('hour', 'day', 'week', 'month', 'year', 'quarter', 'decade', 'century', 'millennium') THEN
@@ -1282,7 +1280,7 @@ BEGIN
                 ELSE date_trunc(u, i.bucket_start AT TIME ZONE 'UTC') END,
            sum(i.amount_upokt)::numeric
     FROM ${s}._income(addresses, f, t, CASE WHEN u IN ('hour', 'day', 'week', 'month', 'year') THEN u WHEN u IS NOT NULL THEN 'month' END,
-                      false, suppliers IS NOT NULL, fill_empty_buckets => false, suppliers => suppliers) i
+                      false, suppliers IS NOT NULL, fill_empty_buckets => false, suppliers => suppliers, capped => false) i
     GROUP BY 1, 2;
   ELSE
     -- an invalid unit raises date_trunc's own error, as in the live function (only when a row is truncated)
@@ -1299,13 +1297,13 @@ END $$;
 
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time(addresses text[], start_date timestamp,
   end_date timestamp)
-RETURNS numeric LANGUAGE sql STABLE SET money.legacy = on AS $$
+RETURNS numeric LANGUAGE sql STABLE AS $$
   SELECT coalesce(sum(i.amount_upokt), 0)::numeric FROM ${s}._legacy_series(addresses, NULL, start_date, end_date, NULL) i
 $$;
 
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_date(addresses text[], start_date timestamp,
   end_date timestamp, trunc_interval text)
-RETURNS json LANGUAGE sql STABLE SET money.legacy = on AS $$
+RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_agg(json_build_object('date_truncated', t, 'total_amount', a) ORDER BY t)
   FROM (SELECT i.date_truncated t, sum(i.amount_upokt)::numeric a
         FROM ${s}._legacy_series(addresses, NULL, start_date, end_date, trunc_interval) i GROUP BY 1) s
@@ -1313,7 +1311,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_address_and_date(addresses text[],
   start_date timestamp, end_date timestamp, trunc_interval text)
-RETURNS json LANGUAGE sql STABLE SET money.legacy = on AS $$
+RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_agg(json_build_object('address', i.address, 'date_truncated', i.date_truncated, 'total_amount', i.amount_upokt)
                   ORDER BY i.date_truncated)
   FROM ${s}._legacy_series(addresses, NULL, start_date, end_date, trunc_interval) i
@@ -1321,14 +1319,14 @@ $$;
 
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_of_addresses_by_suppliers_and_time(addresses text[],
   supplier_addresses text[], start_date timestamp, end_date timestamp)
-RETURNS numeric LANGUAGE sql STABLE SET money.legacy = on AS $$
+RETURNS numeric LANGUAGE sql STABLE AS $$
   SELECT coalesce(sum(i.amount_upokt), 0)::numeric
   FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), start_date, end_date, NULL) i
 $$;
 
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(addresses text[],
   supplier_addresses text[], start_date timestamp, end_date timestamp, trunc_interval text)
-RETURNS json LANGUAGE sql STABLE SET money.legacy = on AS $$
+RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_agg(json_build_object('address', i.address, 'date_truncated', i.date_truncated, 'total_amount', i.amount_upokt)
                   ORDER BY i.date_truncated)
   FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), start_date, end_date, trunc_interval) i
@@ -1341,7 +1339,7 @@ $$;
 -- The chain did mint them (block_results of beta 153513: 32 reimbursement requests of 1 upokt and a 32 upokt coinbase),
 -- so this function matches the chain there and the live one undercounts.
 CREATE OR REPLACE FUNCTION ${s}.legacy_mint_breakdown_between_dates(start_date timestamp, end_date timestamp)
-RETURNS json LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+RETURNS json LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
     RETURN json_build_object('reimbursement', 0, 'inflation', 0, 'mint_burn', 0);
@@ -1355,7 +1353,7 @@ END $$;
 
 -- burn_mint: what the applications burned for the claims settled in the range (get_supply_flows' burn).
 CREATE OR REPLACE FUNCTION ${s}.legacy_burn_breakdown_between_dates(start_date timestamp, end_date timestamp)
-RETURNS json LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+RETURNS json LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
     RETURN json_build_object('burn_mint', 0);
@@ -1393,7 +1391,7 @@ END $$;
 -- in the range on it (zeros for an empty range, as the live function); services ordered by id.
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_suppliers_and_time_group_by_service(operator_addresses text[],
   start_ts timestamp, end_ts timestamp)
-RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE
   f timestamptz := start_ts AT TIME ZONE 'UTC';
   t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
@@ -1428,7 +1426,7 @@ END $$;
 -- 553,512,909 live, 277,061,678 per claim; net 209,138,830 in both.
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_service(addresses text[],
   start_ts timestamp, end_ts timestamp)
-RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE
   f timestamptz := start_ts AT TIME ZONE 'UTC';
   t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
