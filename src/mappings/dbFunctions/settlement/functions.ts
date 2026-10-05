@@ -1295,6 +1295,8 @@ END $$;
 -- the DAO, mint_burn the relay mint: the same JSON as the live function since #94 (md5 equal on mainnet over 24 h, 7 d
 -- and 30 d, and on beta month by month, 2026-10-05), except at beta heights 153513, 153573, 153633 and 153693, whose 32
 -- claims each carry a 1 upokt escrow here and none in the indexer's event_claim_settleds.mints (128 upokt in March 2026).
+-- The chain did mint them (block_results of beta 153513: 32 reimbursement requests of 1 upokt and a 32 upokt coinbase),
+-- so this function matches the chain there and the live one undercounts.
 CREATE OR REPLACE FUNCTION ${s}.legacy_mint_breakdown_between_dates(start_date timestamp, end_date timestamp)
 RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object(
