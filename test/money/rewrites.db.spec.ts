@@ -282,4 +282,38 @@ describe("report functions rewritten for speed (PostgreSQL)", { skip: !URL && "M
       });
     }
   });
+
+  it("answers what the previous versions answered with missing block ids and rows of blocks that are not indexed", async () => {
+    await c.query("BEGIN");
+    try {
+      // gaps in the block ids, as on mainnet (694937 and 694938 have no block): their rows stay behind as orphans,
+      // and more orphans point past the last block
+      await c.query(`
+        DELETE FROM ${S}.blocks WHERE id IN (400, 401, 402, 777, 1001);
+        INSERT INTO ${S}.relay_by_block_and_services VALUES (5000, 'svc1', 9, 9, 99999, 99999, 9);
+        INSERT INTO ${S}.staked_suppliers_by_block_and_services VALUES (5000, 'svc1', 9, 90);
+        INSERT INTO ${S}.event_application_overserviceds VALUES (5000, 'sup1', 9, 9);`);
+      const orphans = (
+        await c.query(`SELECT count(*)::text n FROM ${S}.relay_by_block_and_services r
+          WHERE NOT EXISTS (SELECT 1 FROM ${S}.blocks b WHERE b.id = r.block_id)`)
+      ).rows[0].n;
+      assert.ok(Number(orphans) > 5, `orphans ${orphans}`);
+      const pairs: [string, string, string, string][] = [
+        // [function now, function before, arguments, why]
+        ["services_performance_between_times", "services_performance_between_times_before", "'2026-07-05', '2026-07-03', '2026-07-01'", "gaps in both periods"],
+        ["services_performance_between_times", "services_performance_between_times_before", "'2026-07-03 18:30', '2026-07-03 18:20', '2026-07-03 18:10'", "a period whose only blocks are missing"],
+        ["services_performance_between_times", "services_performance_between_times_before", "'infinity', '2026-07-05', '-infinity'", "orphans past the last block"],
+        ["get_amount_of_blocks_and_suppliers_by_times", "get_amount_of_blocks_and_suppliers_by_times_before", "'2026-07-01', '2026-07-09'", "gaps"],
+        ["get_amount_of_blocks_and_suppliers_by_times", "get_amount_of_blocks_and_suppliers_by_times_before", "'-infinity', 'infinity'", "orphans past the last block"],
+        ["get_overserviced_by_addresses_and_time", "get_overserviced_by_addresses_and_time_before", "ARRAY['pokt1op0', 'pokt1op1', 'pokt1op2'], '2026-07-01', '2026-07-09', 'hour'", "gaps"],
+        ["get_overserviced_by_addresses_and_time", "get_overserviced_by_addresses_and_time_before", "ARRAY['pokt1op1'], '-infinity', 'infinity', 'day'", "orphans past the last block"],
+      ];
+      for (const [now, prev, args, why] of pairs) {
+        const r = (await c.query(`SELECT ${S}.${now}(${args})::text n, ${S}.${prev}(${args})::text o`)).rows[0];
+        assert.equal(r.n, r.o, `${now}: ${why}`);
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
 });

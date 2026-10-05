@@ -10,11 +10,16 @@ LANGUAGE sql
 STABLE
 SET jit = off
 AS $$
-  -- the range's first and last block, then the ids between them (see services_performance_between_times)
+  -- the range's first and last block, then the ids between them less the missing ones (see services_performance_between_times)
   WITH range_blocks AS MATERIALIZED (
-    SELECT
+    SELECT ends.lo, ends.hi, ARRAY(
+        SELECT g FROM (SELECT id, lead(id) OVER (ORDER BY id) nx FROM ${dbSchema}.blocks WHERE id BETWEEN ends.lo AND ends.hi) b,
+        generate_series(b.id + 1, b.nx - 1) g WHERE b.nx > b.id + 1
+    ) missing
+    FROM (SELECT
       (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_date ORDER BY timestamp, id LIMIT 1) lo,
       (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= end_date ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+    ) ends
   )
   -- A block has one row per service (upsert_staked_suppliers_by_block_and_services deletes and regroups it), so
   -- count(*) is the distinct block count, without sorting every row by block; the sort that COUNT(DISTINCT) needed
@@ -26,6 +31,7 @@ AS $$
         SUM(ss.amount) suppliers_staked
     FROM ${dbSchema}.staked_suppliers_by_block_and_services ss
     WHERE ss.block_id BETWEEN (SELECT lo FROM range_blocks) AND (SELECT hi FROM range_blocks)
+      AND ss.block_id <> ALL ((SELECT missing FROM range_blocks)::numeric[])
     GROUP BY ss.service_id
     ORDER BY ss.service_id
   ) row;
@@ -49,17 +55,29 @@ STABLE
 SET jit = off
 AS $$
     -- Each period is turned into its first and last block, two probes on idx_blocks_timestamp_id: block time only
-    -- grows with the height, so the period's blocks are the ids between them. A SQL function is planned without its
-    -- argument values, and joining blocks by timestamp let the planner scan and hash far more than the range.
+    -- grows with the height, so the period's blocks are the ids between them, less the ids with no block (mainnet
+    -- lacks 694937 and 694938): the previous join to blocks never counted rows of a block that is not indexed.
+    -- A SQL function is planned without its argument values, and joining blocks by timestamp let the planner scan
+    -- and hash far more than the range.
     with current_blocks AS MATERIALIZED (
-        SELECT
+        SELECT ends.lo, ends.hi, ARRAY(
+            SELECT g FROM (SELECT id, lead(id) OVER (ORDER BY id) nx FROM ${dbSchema}.blocks WHERE id BETWEEN ends.lo AND ends.hi) b,
+            generate_series(b.id + 1, b.nx - 1) g WHERE b.nx > b.id + 1
+        ) missing
+        FROM (SELECT
             (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_current_and_end_previous ORDER BY timestamp, id LIMIT 1) lo,
             (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= end_current ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+        ) ends
     ),
     previous_blocks AS MATERIALIZED (
-        SELECT
+        SELECT ends.lo, ends.hi, ARRAY(
+            SELECT g FROM (SELECT id, lead(id) OVER (ORDER BY id) nx FROM ${dbSchema}.blocks WHERE id BETWEEN ends.lo AND ends.hi) b,
+            generate_series(b.id + 1, b.nx - 1) g WHERE b.nx > b.id + 1
+        ) missing
+        FROM (SELECT
             (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_previous ORDER BY timestamp, id LIMIT 1) lo,
             (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= start_current_and_end_previous ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+        ) ends
     ),
     c as (
         SELECT
@@ -71,6 +89,7 @@ AS $$
             SUM(r.claimed_upokt) claimed_upokt
         FROM ${dbSchema}.relay_by_block_and_services r
         WHERE r.block_id BETWEEN (SELECT lo FROM current_blocks) AND (SELECT hi FROM current_blocks)
+          AND r.block_id <> ALL ((SELECT missing FROM current_blocks)::numeric[])
         GROUP BY r.service_id
     ),
     p as (
@@ -79,6 +98,7 @@ AS $$
             SUM(r.estimated_computed_units) estimated_computed_units
         FROM ${dbSchema}.relay_by_block_and_services r
         WHERE r.block_id BETWEEN (SELECT lo FROM previous_blocks) AND (SELECT hi FROM previous_blocks)
+          AND r.block_id <> ALL ((SELECT missing FROM previous_blocks)::numeric[])
         GROUP BY r.service_id
     ),
     apps as (
