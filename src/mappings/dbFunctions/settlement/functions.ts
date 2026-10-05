@@ -25,7 +25,7 @@ import { ROLLUP_VERSION } from "./writer";
 // gives a row per id, false sums the whole list into one row with 'all' (a fleet or group total). Every requested id
 // gets its row or series even without activity (0), and an idle list its zero group row, only with
 // fill_empty_buckets => true; such a row says 'all' in the breakdown columns it has no value for.
-// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs (with no owners either),
+// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs, get_supplier_penalties (with no owners either),
 // get_validator_rewards and get_delegator_income, so a caller never has to send the list; get_delegator_income also
 // takes validators, keeping the income its delegators got from those validators. The size of such an answer is set by
 // the bucket and the by_* flags, and GraphQL caps its rows (--query-limit).
@@ -908,18 +908,20 @@ CREATE OR REPLACE FUNCTION ${s}.get_supplier_penalties(suppliers text[], range_s
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, kind text, reason text, events bigint, claimed_upokt numeric,
   slashed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record;
+DECLARE rg record; sp record; all_suppliers boolean;
 BEGIN
-  IF (suppliers IS NULL) = (owners IS NULL) THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now)';
+  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
+    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
   END IF;
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     -- no cap: an owner can have any number of suppliers
     suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
   ELSE
-    PERFORM ${s}._validate(suppliers, 'suppliers', range_start, range_end, bucket);
+    -- NULL suppliers (and no owners): every supplier
+    PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
+  all_suppliers := suppliers IS NULL;
   sp := ${s}._span(range_start, range_end);
   rg := ${s}._ranges(range_start, range_end, bucket, true);
   RETURN QUERY
@@ -927,11 +929,11 @@ BEGIN
   WITH x AS (
     SELECT e.height, e.supplier_id, e.service_id, 'expired'::text kind, e.reason, e.claimed_upokt, NULL::bigint slashed,
            e.relays, e.estimated_relays, e.claimed_compute_units, e.estimated_compute_units
-    FROM ${s}.claim_expirations e WHERE e.supplier_id = ANY(suppliers) AND e.height BETWEEN rg.lo1 AND rg.hi1
+    FROM ${s}.claim_expirations e WHERE (all_suppliers OR e.supplier_id = ANY(suppliers)) AND e.height BETWEEN rg.lo1 AND rg.hi1
     UNION ALL
     SELECT e.height, e.supplier_id, e.service_id, 'discarded', left(e.error, 60), NULL::bigint, NULL::bigint, NULL::bigint, NULL::bigint,
            NULL::bigint, NULL::bigint
-    FROM ${s}.claim_discards e WHERE e.supplier_id = ANY(suppliers) AND e.height BETWEEN rg.lo1 AND rg.hi1
+    FROM ${s}.claim_discards e WHERE (all_suppliers OR e.supplier_id = ANY(suppliers)) AND e.height BETWEEN rg.lo1 AND rg.hi1
     UNION ALL
     -- the chain slashes every expired claim, whatever the expiration reason: the slash takes its claim's reason
     SELECT s.height, s.supplier_id, s.service_id, 'slashed', coalesce(e.reason, 'unknown'), NULL::bigint, s.penalty_upokt,
@@ -939,7 +941,7 @@ BEGIN
     FROM ${s}.supplier_slashes s
     LEFT JOIN ${s}.claim_expirations e ON e.height = s.height AND e.supplier_id = s.supplier_id
       AND e.application_id = s.application_id AND e.service_id = s.service_id AND e.session_end = s.session_end
-    WHERE s.supplier_id = ANY(suppliers) AND s.height BETWEEN rg.lo1 AND rg.hi1
+    WHERE (all_suppliers OR s.supplier_id = ANY(suppliers)) AND s.height BETWEEN rg.lo1 AND rg.hi1
   )
   SELECT ${s}._bucket(bucket, sb.block_time, sp.f), ${s}._bucket_end(bucket, sb.block_time, sp.t), CASE WHEN by_supplier THEN x.supplier_id ELSE 'all' END, CASE WHEN by_service THEN x.service_id ELSE 'all' END, x.kind, x.reason,
          count(*)::bigint, sum(x.claimed_upokt)::numeric,
@@ -958,7 +960,7 @@ BEGIN
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
   SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 'all', 0::bigint, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric
-  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND cardinality(suppliers) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL

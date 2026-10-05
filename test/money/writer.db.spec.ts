@@ -894,6 +894,36 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("get_supplier_penalties with no suppliers and no owners answers for every supplier", async () => {
+    await c.query("BEGIN");
+    try {
+      const h = (await c.query(`SELECT max(height) h FROM ${S}.settlement_blocks`)).rows[0].h as string;
+      await c.query(
+        `INSERT INTO ${S}.claim_expirations VALUES ($1, 900001, 'sup-x', 'app-x', 'svc-x', 100, 50, 'PROOF_INVALID', 7, 7, 7, 7),
+           ($1, 900002, 'sup-y', 'app-x', 'svc-x', 100, 20, 'PROOF_MISSING', 3, 3, 3, 3)`,
+        [h]
+      );
+      await c.query(`INSERT INTO ${S}.supplier_slashes VALUES ($1, 900002, 'sup-y', 'app-x', 'svc-x', 100, 30, 970)`, [h]);
+      const listed = (
+        await c.query(`SELECT array_agg(DISTINCT supplier_id) l FROM (
+          SELECT supplier_id FROM ${S}.claim_expirations UNION SELECT supplier_id FROM ${S}.claim_discards
+          UNION SELECT supplier_id FROM ${S}.supplier_slashes) x`)
+      ).rows[0].l as unknown as string[];
+      assert.ok(listed.length >= 2);
+      const q = (arg: string) =>
+        c.query(
+          `SELECT kind, reason, events::text, claimed_upokt::text, slashed_upokt::text
+           FROM ${S}.get_supplier_penalties(${arg}, NULL, NULL, by_supplier => false) ORDER BY kind, reason`,
+          arg === "$1" ? [listed] : []
+        );
+      const every = (await q("NULL")).rows;
+      assert.ok(every.some((r) => r.kind === "slashed"));
+      assert.deepEqual(every, (await q("$1")).rows);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("get_delegator_income gives the same total per delegator with and without by_validator", async () => {
     // a mid-day range reads the base edges; the whole history reads the rollup
     for (const [from, to] of [
