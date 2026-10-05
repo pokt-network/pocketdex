@@ -1236,6 +1236,17 @@ BEGIN
   IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
     RETURN;
   END IF;
+  -- date_trunc's aliases (days, hrs, mon, y, qtr, ...) take the path of the unit they mean: one probe timestamp truncates
+  -- differently under each unit. An invalid unit keeps its text, so it still raises only when a row is truncated.
+  IF u IS NOT NULL THEN
+    BEGIN
+      SELECT x INTO u FROM unnest(ARRAY['microseconds', 'milliseconds', 'second', 'minute', 'hour', 'day', 'week', 'month',
+        'quarter', 'year', 'decade', 'century', 'millennium']) x
+      WHERE date_trunc(x, timestamp '2134-08-17 20:38:40.123456') = date_trunc(trunc_interval, timestamp '2134-08-17 20:38:40.123456');
+    EXCEPTION WHEN invalid_parameter_value OR feature_not_supported THEN
+      u := lower(trunc_interval);
+    END;
+  END IF;
   IF u = 'hour' AND suppliers IS NOT NULL THEN
     -- hourly_income_by_address_supplier has exactly this grain (address, hour, supplier): the whole hours inside the
     -- range from it, the partial hours at its edges from the base tables through _income
