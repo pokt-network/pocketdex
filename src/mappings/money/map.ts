@@ -212,8 +212,9 @@ export function decodeMapClaims(
       if (sum !== amount) {
         while (j < legs.length && legs[j].sender === SUPPLIER_MODULE) sum += legs[j++].amount;
         const byRecipient = new Map<string, bigint[]>();
-        for (const l of legs.slice(start, j))
+        for (const l of legs.slice(start, j)) {
           byRecipient.set(l.recipient, [...(byRecipient.get(l.recipient) ?? []), l.amount]);
+        }
         const repeated = [...byRecipient.values()].filter((a) => a.length > 1);
         if (repeated.length === 0 || repeated.some((a) => a.some((x) => x !== a[0]))) {
           throw fail(`${family} shareholders: the bank legs at position ${j} do not pay the formula amount ${amount}`);
