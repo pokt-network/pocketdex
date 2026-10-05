@@ -1,6 +1,10 @@
 import { getDbSchema, getSequelize } from "../utils/db";
 import { getLatestBlocksByDayFn } from "./blocks";
-import { getClaimProofsDataByDelegatorsAndTimeFn, getClaimProofsDataByTimeFn } from "./claimProofs";
+import {
+  createClaimsByBlockFn,
+  getClaimProofsDataByDelegatorsAndTimeFn,
+  getClaimProofsDataByTimeFn,
+} from "./claimProofs";
 import { getDaoBalanceAtHeightFn } from "./dao";
 import { getDataByDelegatorAddressesAndBlocksFn } from "./dataByDelegatorAddressesAndBlocks";
 import {
@@ -134,6 +138,8 @@ export async function createDbFunctions(): Promise<void> {
     createModToAcctTransfersSummarizedTableFn,
     createDomainServiceDailyRewardsTableFn,
     refreshDomainServiceDailyRewardsFn,
+    // the per-block claim counts get_claim_proofs_data_by_time reads, and their writer
+    createClaimsByBlockFn,
   )
   // settlement money tables, their single writer (src/mappings/money) and the catalog functions over them;
   // a failure here is fatal

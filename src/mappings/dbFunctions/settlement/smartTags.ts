@@ -1,7 +1,6 @@
-// PostGraphile smart tags for the settlement money layer. The GraphQL API exposes the catalog functions
-// only: the tables and the view behind them, the internal helpers and the money_* functions kept for the
-// later switch of the existing get_rewards_* are hidden with @omit. Without it PostGraphile would publish a
-// collection (with filters and aggregates) for every table, which lets one query scan a whole table.
+// PostGraphile smart tags for the settlement money layer. The GraphQL API exposes the catalog functions and the
+// legacy_* ones: the tables and the view behind them and the internal helpers are hidden with @omit. Without it
+// PostGraphile would publish a collection (with filters and aggregates) for every table, which lets one query scan a whole table.
 //
 // The catalog functions that return rows, those named in DESCRIPTIONS (get_*, money_coverage), are tagged
 // @simpleCollections only, so GraphQL exposes each as a plain list (getIncomeList, ...). As a connection it fails in
@@ -99,13 +98,39 @@ const OMITTED_FUNCTIONS = [
   "_check_coverage",
   "_require_current_rollups",
   "_json_strings",
-  "money_rewards_by_addresses_and_time",
-  "money_rewards_by_addresses_and_time_group_by_date",
-  "money_rewards_by_addresses_and_time_group_by_address_and_date",
-  "money_rewards_of_addresses_by_suppliers_and_time",
-  "money_rewards_by_suppliers_and_time_group_by_address_and_date",
-  "money_mint_breakdown_between_dates",
+  "_legacy_claims_by_service",
+  "_legacy_series",
 ];
+
+// The legacy_* functions (functions.ts): what each replaces, for its GraphQL description. GraphQL publishes them as
+// legacyRewardsByAddressesAndTime, ...; a consumer switches by renaming the field it calls.
+const LEGACY_REPLACES: Record<string, string> = {
+  legacy_rewards_by_addresses_and_time: "get_rewards_by_addresses_and_time (getRewardsByAddressesAndTime)",
+  legacy_rewards_by_addresses_and_time_group_by_date:
+    "get_rewards_by_addresses_and_time_group_by_date (getRewardsByAddressesAndTimeGroupByDate)",
+  legacy_rewards_by_addresses_and_time_group_by_address_and_date:
+    "get_rewards_by_addresses_and_time_group_by_address_and_date (getRewardsByAddressesAndTimeGroupByAddressAndDate)",
+  legacy_rewards_of_addresses_by_suppliers_and_time:
+    "get_rewards_of_addresses_by_suppliers_and_time (getRewardsOfAddressesBySuppliersAndTime)",
+  legacy_rewards_by_suppliers_and_time_group_by_address_and_date:
+    "get_rewards_by_suppliers_and_time_group_by_address_and_date (getRewardsBySuppliersAndTimeGroupByAddressAndDate)",
+  legacy_rewards_by_suppliers_and_time_group_by_service:
+    "get_rewards_by_suppliers_and_time_group_by_service (getRewardsBySuppliersAndTimeGroupByService)",
+  legacy_rewards_by_addresses_and_time_group_by_service:
+    "get_rewards_by_addresses_and_time_group_by_service (getRewardsByAddressesAndTimeGroupByService)",
+  legacy_mint_breakdown_between_dates: "get_mint_breakdown_between_dates (getMintBreakdownBetweenDates)",
+  legacy_burn_breakdown_between_dates: "get_burn_breakdown_between_dates (getBurnBreakdownBetweenDates)",
+};
+const LEGACY_SAME =
+  "Same arguments, the same ranges and date_trunc units accepted (any length; an empty, inverted or half-NULL range answers as the live function, which matches nothing), and the same JSON, read from the settlement money tables. Differs only where said here: a non-empty range the money tables do not cover (money_coverage: before the first written settlement, or over a settlement gap) raises an error where the live function answers.";
+// What else differs from the live function's JSON.
+const BY_SERVICE_ORDER = "Elements are ordered by service_id; the live function leaves their order to its plan.";
+const LEGACY_DIFFERS: Record<string, string> = {
+  legacy_rewards_by_suppliers_and_time_group_by_service: BY_SERVICE_ORDER,
+  legacy_rewards_by_addresses_and_time_group_by_service: `${BY_SERVICE_ORDER} gross_rewards, relays, estimated_relays, computed_units and estimated_computed_units count each claim that paid the addresses once: the live function adds a claim once per transfer (relay and global mint, and each address of the list), 2x and more. service_id and net_rewards are the same.`,
+  legacy_mint_breakdown_between_dates:
+    "At beta heights 153513 to 153693, reimbursement and inflation include 128 upokt the chain minted (a 1 upokt escrow per claim) that the live function misses.",
+};
 
 // What each catalog function answers, for its GraphQL description (COMMENT ON FUNCTION) and its _json twin's.
 const DESCRIPTIONS: Record<string, string> = {
@@ -128,7 +153,7 @@ const DESCRIPTIONS: Record<string, string> = {
   get_supply_flows:
     "Network supply flows: burn, relay mint (mint_equals_burn), mint_ratio_unminted, overservicing loss, global mint and reimbursement, each by receiving role (by_role), plus slashes. Mainnet 690,685 to 716,533: one supplier paid a shareholder twice (poktroll v0.1.29 to v0.1.33), and the supplier role of mint_equals_burn and global_mint includes that overpayment (about 39 POKT), which came from the supplier module, not from the mint.",
   get_supplier_penalties:
-    "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; by_service, by_supplier; owners in place of suppliers.",
+    "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; suppliers NULL = every supplier; by_service, by_supplier; owners in place of suppliers.",
   get_service_usage:
     "Service usage: claimed and settled upokt, relays, compute units and claims per service; services, or top_by_settled = N for the N services that settled the most (rank_by_settled); by_service.",
   get_app_auto_unstakes:
@@ -152,6 +177,10 @@ export function createSettlementSmartTagsFn(dbSchema: string): string {
     .map(([name, what]) => `('${name}', '${what.replace(/'/g, "''")}')`)
     .join(", ");
   const unused = UNUSED_ENTITY_TABLES.map((t) => `'${t}'`).join(", ");
+  const legacy = Object.entries(LEGACY_REPLACES)
+    .map(([name, live]) => [name, `Replaces ${live}. ${LEGACY_SAME} ${LEGACY_DIFFERS[name] ?? ""}`.trim()])
+    .map(([name, what]) => `('${name}', '${what.replace(/'/g, "''")}')`)
+    .join(", ");
   return `
 ${tables}
 COMMENT ON VIEW ${s}.v_income_base IS E'@omit';
@@ -184,6 +213,11 @@ BEGIN
            WHERE n.nspname = '${s}' AND p.prokind = 'f' LOOP
     EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, what || ' ' || ${JSON_NOTE} || E'\n' || ${COMMON}
       || E'\nEach element has the columns of ' || replace(f::text, '_json(', '(') || '.');
+  END LOOP;
+  FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           JOIN (VALUES ${legacy}) d(name, what) ON d.name = p.proname
+           WHERE n.nspname = '${s}' AND p.prokind = 'f' LOOP
+    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, what);
   END LOOP;
 END $$;
 `;

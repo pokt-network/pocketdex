@@ -794,7 +794,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ["2026-09-01T12:00:00.000Z"]
     );
     const compat = await c.query(
-      `SELECT ${S}.money_rewards_by_addresses_and_time_group_by_date($1::text[], '2026-09-01 11:00', '2026-09-01 13:59:59',
+      `SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_date($1::text[], '2026-09-01 11:00', '2026-09-01 13:59:59',
          'hour') j`,
       [[address]]
     );
@@ -889,6 +889,36 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         { kind: "slashed", reason: "PROOF_INVALID", claimed: null, slashed: "30", relays: null },
         { kind: "slashed", reason: "unknown", claimed: null, slashed: "5", relays: null },
       ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_supplier_penalties with no suppliers and no owners answers for every supplier", async () => {
+    await c.query("BEGIN");
+    try {
+      const h = (await c.query(`SELECT max(height) h FROM ${S}.settlement_blocks`)).rows[0].h as string;
+      await c.query(
+        `INSERT INTO ${S}.claim_expirations VALUES ($1, 900001, 'sup-x', 'app-x', 'svc-x', 100, 50, 'PROOF_INVALID', 7, 7, 7, 7),
+           ($1, 900002, 'sup-y', 'app-x', 'svc-x', 100, 20, 'PROOF_MISSING', 3, 3, 3, 3)`,
+        [h]
+      );
+      await c.query(`INSERT INTO ${S}.supplier_slashes VALUES ($1, 900002, 'sup-y', 'app-x', 'svc-x', 100, 30, 970)`, [h]);
+      const listed = (
+        await c.query(`SELECT array_agg(DISTINCT supplier_id) l FROM (
+          SELECT supplier_id FROM ${S}.claim_expirations UNION SELECT supplier_id FROM ${S}.claim_discards
+          UNION SELECT supplier_id FROM ${S}.supplier_slashes) x`)
+      ).rows[0].l as unknown as string[];
+      assert.ok(listed.length >= 2);
+      const q = (arg: string) =>
+        c.query(
+          `SELECT kind, reason, events::text, claimed_upokt::text, slashed_upokt::text
+           FROM ${S}.get_supplier_penalties(${arg}, NULL, NULL, by_supplier => false) ORDER BY kind, reason`,
+          arg === "$1" ? [listed] : []
+        );
+      const every = (await q("NULL")).rows;
+      assert.ok(every.some((r) => r.kind === "slashed"));
+      assert.deepEqual(every, (await q("$1")).rows);
     } finally {
       await c.query("ROLLBACK");
     }
@@ -1027,7 +1057,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
   it("the compat functions take any number of addresses, the catalog functions at most 200", async () => {
     const many = Array.from({ length: 250 }, (_, i) => `pokt1fake${i}`);
     const { rows } = await c.query(
-      `SELECT ${S}.money_rewards_by_addresses_and_time($1::text[], '2026-09-01 00:00', '2026-09-02 00:00') a`,
+      `SELECT ${S}.legacy_rewards_by_addresses_and_time($1::text[], '2026-09-01 00:00', '2026-09-02 00:00') a`,
       [[...many, "x"]]
     );
     assert.equal(rows[0].a, "0");
@@ -1065,7 +1095,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         )
       ).rows[0].a as string;
       assert.ok(BigInt(want) > BigInt(0) && BigInt(want) < BigInt(total));
-      const d6 = await c.query(`SELECT ${S}.money_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, $3, $4)::text a`, [
+      const d6 = await c.query(`SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, $3, $4)::text a`, [
         address,
         some,
         from,
@@ -1073,7 +1103,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ]);
       assert.equal(d6.rows[0].a, want);
       const d5 = await c.query(
-        `SELECT ${S}.money_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'day') j`,
+        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'day') j`,
         [address, some, from, to]
       );
       const rows = d5.rows[0].j as unknown as { total_amount: number | string }[];
@@ -1082,19 +1112,19 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
     for (const list of [null, [], [""], ["pokt1nosuchsupplier"]]) {
       const none = await c.query(
-        `SELECT ${S}.money_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-02')::text a`,
+        `SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-02')::text a`,
         [address, list]
       );
       assert.deepEqual([list, none.rows[0].a], [list, "0"]);
     }
     // by month: the whole of September from the monthly rollup, the same total
     const month = await c.query(
-      `SELECT ${S}.money_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, '2026-09-01',
+      `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, '2026-09-01',
          '2026-09-30 23:59:59.999999', 'month') j`,
       [address, some]
     );
     const day = await c.query(
-      `SELECT ${S}.money_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-30 23:59:59.999999')::text a`,
+      `SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-30 23:59:59.999999')::text a`,
       [address, some]
     );
     const months = month.rows[0].j as unknown as { total_amount: number | string }[];
@@ -1105,7 +1135,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ["2026-09-01 11:30", "2026-09-01 12:30"],
     ]) {
       const hours = await c.query(
-        `SELECT ${S}.money_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'hour') j`,
+        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'hour') j`,
         [address, some, from, to]
       );
       const want = await c.query(
@@ -1124,7 +1154,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
     for (const list of [null, []]) {
       const d5 = await c.query(
-        `SELECT ${S}.money_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, '2026-09-01', '2026-09-02', 'day') j`,
+        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, '2026-09-01', '2026-09-02', 'day') j`,
         [address, list]
       );
       assert.deepEqual([list, d5.rows[0].j], [list, null]);

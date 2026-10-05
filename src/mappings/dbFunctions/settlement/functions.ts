@@ -25,7 +25,7 @@ import { ROLLUP_VERSION } from "./writer";
 // gives a row per id, false sums the whole list into one row with 'all' (a fleet or group total). Every requested id
 // gets its row or series even without activity (0), and an idle list its zero group row, only with
 // fill_empty_buckets => true; such a row says 'all' in the breakdown columns it has no value for.
-// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs (with no owners either),
+// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs, get_supplier_penalties (with no owners either),
 // get_validator_rewards and get_delegator_income, so a caller never has to send the list; get_delegator_income also
 // takes validators, keeping the income its delegators got from those validators. The size of such an answer is set by
 // the bucket and the by_* flags, and GraphQL caps its rows (--query-limit).
@@ -38,10 +38,11 @@ import { ROLLUP_VERSION } from "./writer";
 // were never written must not read as zero. money_coverage(range_start, range_end) lists the settlement heights in a
 // range that are missing, and the recorded gaps.
 //
-// The money_rewards_* and money_mint_breakdown_between_dates functions keep the signatures and JSON of
-// the live get_rewards_* / get_mint_breakdown_between_dates, which they do not replace. Their names swap
-// "get_" for "money_": a "money_" prefix would push two of them past PostgreSQL's 63-character limit.
-// Like the live functions, they take any number of addresses; the catalog functions take at most 200 ids.
+// The legacy_* functions answer the live get_rewards_* / get_mint_breakdown_between_dates /
+// get_burn_breakdown_between_dates with their signatures and JSON, from the money tables, for a consumer to switch to.
+// Their names swap "get_" for "legacy_" (a prefix would push two of them past PostgreSQL's 63-character limit). Like
+// the live functions, they take any number of addresses; the catalog functions take at most 200 ids. A range the money
+// tables do not cover (money_coverage) raises, where the live function would answer from its own tables.
 // The catalog functions that return rows: GraphQL lists (smartTags.ts) with a <name>_json twin (end of this file).
 export const CATALOG_FUNCTIONS = [
   "money_coverage",
@@ -65,7 +66,7 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
   return `
 CREATE OR REPLACE FUNCTION ${s}._validate(p_list text[], p_name text, range_start timestamptz, range_end timestamptz, bucket text)
-RETURNS void LANGUAGE plpgsql IMMUTABLE AS $$
+RETURNS void LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF p_name <> '' AND (p_list IS NULL OR cardinality(p_list) < 1 OR cardinality(p_list) > 200) THEN
     RAISE EXCEPTION '% must have between 1 and 200 elements (has %)', p_name, coalesce(cardinality(p_list), 0);
@@ -75,6 +76,10 @@ BEGIN
   END IF;
   -- Which buckets a range allows, to stay within the latency budget: hour up to 7 days, day up to
   -- 92 days (three months), week up to 366 days, month/year any range. The whole history allows a total, month or year.
+  -- The legacy_* functions run with money.legacy = on: the live functions they replace take any range.
+  IF coalesce(current_setting('money.legacy', true), 'off') = 'on' THEN
+    bucket := NULL;
+  END IF;
   IF bucket = 'hour' AND (range_start IS NULL OR range_end IS NULL OR range_end - range_start > interval '7 days') THEN
     RAISE EXCEPTION 'bucket=hour allows ranges up to 7 days; use day (up to 92 days), week, month or year for longer ones';
   END IF;
@@ -560,7 +565,7 @@ END $$;
 -- monthly_income_by_address_supplier (by supplier), daily_income_by_address_service / monthly_income_by_address_service (by service).
 -- Supplier AND service at once: whole months from monthly_income_by_address_supplier_service, everything else from the base.
 -- suppliers (with by_supplier) keeps only the income those suppliers generated, read by index
--- instead of filtering the result (the money_* compat functions). Unordered: get_income orders.
+-- instead of filtering the result (the legacy_* functions). Unordered: get_income orders.
 CREATE OR REPLACE FUNCTION ${s}._income(addresses text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false,
   by_service boolean DEFAULT false, by_address boolean DEFAULT true,
@@ -681,9 +686,9 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.address, chr(1)) = coalesce(k.address, chr(1)) AND coalesce(r.role, chr(1)) = coalesce(k.role, chr(1)) AND coalesce(r.family, chr(1)) = coalesce(k.family, chr(1)) AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)));
 END $$;
 
--- The API entry point: at most 200 addresses per call. The money_* compat functions call _income directly,
+-- The API entry point: at most 200 addresses per call. The legacy_* functions call _income directly,
 -- because the live functions they replace take any number of addresses (an owner with thousands of rev-share
--- accounts); they are not exposed through GraphQL.
+-- accounts).
 CREATE OR REPLACE FUNCTION ${s}.get_income(addresses text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false,
   by_service boolean DEFAULT false, by_address boolean DEFAULT true, fill_empty_buckets boolean DEFAULT false)
@@ -907,18 +912,20 @@ CREATE OR REPLACE FUNCTION ${s}.get_supplier_penalties(suppliers text[], range_s
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, kind text, reason text, events bigint, claimed_upokt numeric,
   slashed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record;
+DECLARE rg record; sp record; all_suppliers boolean;
 BEGIN
-  IF (suppliers IS NULL) = (owners IS NULL) THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now)';
+  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
+    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
   END IF;
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     -- no cap: an owner can have any number of suppliers
     suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
   ELSE
-    PERFORM ${s}._validate(suppliers, 'suppliers', range_start, range_end, bucket);
+    -- NULL suppliers (and no owners): every supplier
+    PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
+  all_suppliers := suppliers IS NULL;
   sp := ${s}._span(range_start, range_end);
   rg := ${s}._ranges(range_start, range_end, bucket, true);
   RETURN QUERY
@@ -926,11 +933,11 @@ BEGIN
   WITH x AS (
     SELECT e.height, e.supplier_id, e.service_id, 'expired'::text kind, e.reason, e.claimed_upokt, NULL::bigint slashed,
            e.relays, e.estimated_relays, e.claimed_compute_units, e.estimated_compute_units
-    FROM ${s}.claim_expirations e WHERE e.supplier_id = ANY(suppliers) AND e.height BETWEEN rg.lo1 AND rg.hi1
+    FROM ${s}.claim_expirations e WHERE (all_suppliers OR e.supplier_id = ANY(suppliers)) AND e.height BETWEEN rg.lo1 AND rg.hi1
     UNION ALL
     SELECT e.height, e.supplier_id, e.service_id, 'discarded', left(e.error, 60), NULL::bigint, NULL::bigint, NULL::bigint, NULL::bigint,
            NULL::bigint, NULL::bigint
-    FROM ${s}.claim_discards e WHERE e.supplier_id = ANY(suppliers) AND e.height BETWEEN rg.lo1 AND rg.hi1
+    FROM ${s}.claim_discards e WHERE (all_suppliers OR e.supplier_id = ANY(suppliers)) AND e.height BETWEEN rg.lo1 AND rg.hi1
     UNION ALL
     -- the chain slashes every expired claim, whatever the expiration reason: the slash takes its claim's reason
     SELECT s.height, s.supplier_id, s.service_id, 'slashed', coalesce(e.reason, 'unknown'), NULL::bigint, s.penalty_upokt,
@@ -938,7 +945,7 @@ BEGIN
     FROM ${s}.supplier_slashes s
     LEFT JOIN ${s}.claim_expirations e ON e.height = s.height AND e.supplier_id = s.supplier_id
       AND e.application_id = s.application_id AND e.service_id = s.service_id AND e.session_end = s.session_end
-    WHERE s.supplier_id = ANY(suppliers) AND s.height BETWEEN rg.lo1 AND rg.hi1
+    WHERE (all_suppliers OR s.supplier_id = ANY(suppliers)) AND s.height BETWEEN rg.lo1 AND rg.hi1
   )
   SELECT ${s}._bucket(bucket, sb.block_time, sp.f), ${s}._bucket_end(bucket, sb.block_time, sp.t), CASE WHEN by_supplier THEN x.supplier_id ELSE 'all' END, CASE WHEN by_service THEN x.service_id ELSE 'all' END, x.kind, x.reason,
          count(*)::bigint, sum(x.claimed_upokt)::numeric,
@@ -957,7 +964,7 @@ BEGIN
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
   SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 'all', 0::bigint, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric
-  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND cardinality(suppliers) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
@@ -1201,95 +1208,291 @@ BEGIN
   ORDER BY 3 DESC, 1, 2;
 END $$;
 
--- Compatibility: the signatures and JSON of the live functions, BETWEEN inclusive on UTC timestamps.
-CREATE OR REPLACE FUNCTION ${s}.money_rewards_by_addresses_and_time(addresses text[], start_date timestamp,
-  end_date timestamp)
-RETURNS numeric LANGUAGE sql STABLE AS $$
-  SELECT coalesce(sum(i.amount_upokt), 0)::numeric
-  FROM ${s}._income(addresses, start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC', fill_empty_buckets => false) i
-$$;
+-- Compatibility: the signatures and JSON of the live functions, BETWEEN inclusive on UTC timestamps. They were named
+-- money_* before; a database written by that version still has them.
+DROP FUNCTION IF EXISTS ${s}.money_rewards_by_addresses_and_time(text[], timestamp, timestamp);
+DROP FUNCTION IF EXISTS ${s}.money_rewards_by_addresses_and_time_group_by_date(text[], timestamp, timestamp, text);
+DROP FUNCTION IF EXISTS ${s}.money_rewards_by_addresses_and_time_group_by_address_and_date(text[], timestamp, timestamp, text);
+DROP FUNCTION IF EXISTS ${s}.money_rewards_of_addresses_by_suppliers_and_time(text[], text[], timestamp, timestamp);
+DROP FUNCTION IF EXISTS ${s}.money_rewards_by_suppliers_and_time_group_by_address_and_date(text[], text[], timestamp, timestamp, text);
+DROP FUNCTION IF EXISTS ${s}.money_mint_breakdown_between_dates(timestamp, timestamp);
 
-CREATE OR REPLACE FUNCTION ${s}.money_rewards_by_addresses_and_time_group_by_date(addresses text[], start_date timestamp,
-  end_date timestamp, trunc_interval text)
-RETURNS json LANGUAGE sql STABLE AS $$
-  SELECT json_agg(json_build_object('date_truncated', t, 'total_amount', a) ORDER BY t)
-  FROM (SELECT (CASE WHEN trunc_interval IS NOT NULL THEN i.bucket_start AT TIME ZONE 'UTC' END) t, sum(i.amount_upokt)::numeric a
-        FROM ${s}._income(addresses, start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC',
-                             trunc_interval, fill_empty_buckets => false) i GROUP BY 1) s
-$$;
-
-CREATE OR REPLACE FUNCTION ${s}.money_rewards_by_addresses_and_time_group_by_address_and_date(addresses text[],
-  start_date timestamp, end_date timestamp, trunc_interval text)
-RETURNS json LANGUAGE sql STABLE AS $$
-  SELECT json_agg(json_build_object('address', ad, 'date_truncated', t, 'total_amount', a) ORDER BY t)
-  FROM (SELECT i.address ad, (CASE WHEN trunc_interval IS NOT NULL THEN i.bucket_start AT TIME ZONE 'UTC' END) t, sum(i.amount_upokt)::numeric a
-        FROM ${s}._income(addresses, start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC',
-                             trunc_interval, fill_empty_buckets => false) i GROUP BY 1, 2) s
-$$;
-
-CREATE OR REPLACE FUNCTION ${s}.money_rewards_of_addresses_by_suppliers_and_time(addresses text[],
-  supplier_addresses text[], start_date timestamp, end_date timestamp)
-RETURNS numeric LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
-BEGIN
-  RETURN (SELECT coalesce(sum(i.amount_upokt), 0)::numeric
-          FROM ${s}._income(addresses, start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC',
-                               NULL, false, true, fill_empty_buckets => false, suppliers => coalesce(supplier_addresses, '{}')) i);
-END $$;
-
--- Hourly series read hourly_income_by_address_supplier, which has exactly this grain (address, hour, supplier), for the
--- hours inside the range; the partial hours at its edges come from the base tables through get_income.
-CREATE OR REPLACE FUNCTION ${s}.money_rewards_by_suppliers_and_time_group_by_address_and_date(addresses text[],
-  supplier_addresses text[], start_date timestamp, end_date timestamp, trunc_interval text)
-RETURNS json LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+-- The live functions take any range and any date_trunc unit: a NULL end or start_date > end_date matches nothing
+-- (BETWEEN), and no unit caps the range. So the legacy_* functions run with money.legacy = on, which lifts the per-bucket
+-- range caps of _validate, and answer an empty range as the live ones, without the coverage check. The rewards series:
+-- hour, day, week, month and year come from _income; quarter, decade, century and millennium from its months; any other
+-- unit date_trunc takes (minute, second, ...) per settlement height from the base tables. suppliers NULL = income from
+-- any supplier and the stakers; a list = only what those suppliers' claims paid.
+CREATE OR REPLACE FUNCTION ${s}._legacy_series(addresses text[], suppliers text[], start_date timestamp, end_date timestamp,
+  trunc_interval text)
+RETURNS TABLE(address text, date_truncated timestamp, amount_upokt numeric)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE
   f timestamptz := start_date AT TIME ZONE 'UTC';
   t timestamptz := (end_date + interval '1 microsecond') AT TIME ZONE 'UTC';
-  h1 timestamptz := date_trunc('hour', f, 'UTC');
-  h2 timestamptz := date_trunc('hour', t, 'UTC');
-  e1 boolean; e2 boolean;
+  u text := lower(trunc_interval);
+  h1 timestamptz; h2 timestamptz; e1 boolean; e2 boolean; lo bigint; hi bigint;
 BEGIN
-  IF trunc_interval IS DISTINCT FROM 'hour' THEN
-    RETURN (SELECT json_agg(json_build_object('address', ad, 'date_truncated', d, 'total_amount', a) ORDER BY d)
-            FROM (SELECT i.address ad, (CASE WHEN trunc_interval IS NOT NULL THEN i.bucket_start AT TIME ZONE 'UTC' END) d, sum(i.amount_upokt)::numeric a
-                  FROM ${s}._income(addresses, f, t, trunc_interval, false, true, fill_empty_buckets => false,
-                                    suppliers => coalesce(supplier_addresses, '{}')) i
-                  GROUP BY 1, 2) s);
+  IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
+    RETURN;
   END IF;
-  PERFORM ${s}._validate(addresses, '', f, t, 'hour');
-  PERFORM ${s}._check_coverage(f, t);
-  IF h1 < f THEN h1 := h1 + interval '1 hour'; END IF;  -- first whole hour
-  IF h1 >= h2 THEN h1 := t; h2 := t; END IF;  -- no whole hour: everything from the base
-  -- an edge with no settlement is skipped (end_date is inclusive, so a whole-hour range leaves a 1 µs tail)
-  e1 := f < h1 AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < h1);
-  e2 := h2 < t AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.block_time >= h2 AND sb.block_time < t);
-  RETURN (SELECT json_agg(json_build_object('address', ad, 'date_truncated', d, 'total_amount', a) ORDER BY d)
-          FROM (SELECT x.address ad, (x.hour AT TIME ZONE 'UTC') d, sum(x.amount_upokt)::numeric a
-                FROM (SELECT h.address, h.hour, h.amount_upokt FROM ${s}.hourly_income_by_address_supplier h
-                      WHERE h.address = ANY(addresses) AND h.hour >= h1 AND h.hour < h2
-                        AND h.supplier_id = ANY(supplier_addresses)
-                      UNION ALL
-                      SELECT i.address, i.bucket_start, i.amount_upokt
-                      FROM ${s}._income(addresses, f, h1, 'hour', false, true, fill_empty_buckets => false,
-                                        suppliers => coalesce(supplier_addresses, '{}')) i
-                      WHERE e1
-                      UNION ALL
-                      SELECT i.address, i.bucket_start, i.amount_upokt
-                      FROM ${s}._income(addresses, h2, t, 'hour', false, true, fill_empty_buckets => false,
-                                        suppliers => coalesce(supplier_addresses, '{}')) i
-                      WHERE e2) x
-                GROUP BY 1, 2) s);
+  -- date_trunc's aliases (days, hrs, mon, y, qtr, ...) take the path of the unit they mean: one probe timestamp truncates
+  -- differently under each unit. An invalid unit keeps its text, so it still raises only when a row is truncated.
+  IF u IS NOT NULL THEN
+    BEGIN
+      SELECT x INTO u FROM unnest(ARRAY['microseconds', 'milliseconds', 'second', 'minute', 'hour', 'day', 'week', 'month',
+        'quarter', 'year', 'decade', 'century', 'millennium']) x
+      WHERE date_trunc(x, timestamp '2134-08-17 20:38:40.123456') = date_trunc(trunc_interval, timestamp '2134-08-17 20:38:40.123456');
+    EXCEPTION WHEN invalid_parameter_value OR feature_not_supported THEN
+      u := lower(trunc_interval);
+    END;
+  END IF;
+  IF u = 'hour' AND suppliers IS NOT NULL THEN
+    -- hourly_income_by_address_supplier has exactly this grain (address, hour, supplier): the whole hours inside the
+    -- range from it, the partial hours at its edges from the base tables through _income
+    PERFORM ${s}._check_coverage(f, t);
+    h1 := date_trunc('hour', f, 'UTC');
+    h2 := date_trunc('hour', t, 'UTC');
+    IF h1 < f THEN h1 := h1 + interval '1 hour'; END IF;  -- first whole hour
+    IF h1 >= h2 THEN h1 := t; h2 := t; END IF;  -- no whole hour: everything from the base
+    IF h1 < h2 THEN
+      PERFORM ${s}._require_current_rollups((h1 AT TIME ZONE 'UTC')::date, ((h2 - interval '1 microsecond') AT TIME ZONE 'UTC')::date);
+    END IF;
+    -- an edge with no settlement is skipped (end_date is inclusive, so a whole-hour range leaves a 1 µs tail)
+    e1 := f < h1 AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < h1);
+    e2 := h2 < t AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.block_time >= h2 AND sb.block_time < t);
+    RETURN QUERY
+    SELECT x.address, x.hour AT TIME ZONE 'UTC', sum(x.amount_upokt)::numeric
+    FROM (SELECT h.address, h.hour, h.amount_upokt FROM ${s}.hourly_income_by_address_supplier h
+          WHERE h.address = ANY(addresses) AND h.hour >= h1 AND h.hour < h2 AND h.supplier_id = ANY(suppliers)
+          UNION ALL
+          SELECT i.address, i.bucket_start, i.amount_upokt
+          FROM ${s}._income(addresses, f, h1, 'hour', false, true, fill_empty_buckets => false, suppliers => suppliers) i
+          WHERE e1
+          UNION ALL
+          SELECT i.address, i.bucket_start, i.amount_upokt
+          FROM ${s}._income(addresses, h2, t, 'hour', false, true, fill_empty_buckets => false, suppliers => suppliers) i
+          WHERE e2) x
+    GROUP BY 1, 2;
+  ELSIF u IS NULL OR u IN ('hour', 'day', 'week', 'month', 'year', 'quarter', 'decade', 'century', 'millennium') THEN
+    RETURN QUERY
+    SELECT i.address,
+           CASE WHEN u IS NULL THEN NULL
+                WHEN u IN ('hour', 'day', 'week', 'month', 'year') THEN i.bucket_start AT TIME ZONE 'UTC'
+                ELSE date_trunc(u, i.bucket_start AT TIME ZONE 'UTC') END,
+           sum(i.amount_upokt)::numeric
+    FROM ${s}._income(addresses, f, t, CASE WHEN u IN ('hour', 'day', 'week', 'month', 'year') THEN u WHEN u IS NOT NULL THEN 'month' END,
+                      false, suppliers IS NOT NULL, fill_empty_buckets => false, suppliers => suppliers) i
+    GROUP BY 1, 2;
+  ELSE
+    -- an invalid unit raises date_trunc's own error, as in the live function (only when a row is truncated)
+    PERFORM ${s}._check_coverage(f, t);
+    SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < t;
+    RETURN QUERY
+    SELECT v.address, date_trunc(trunc_interval, sb.block_time AT TIME ZONE 'UTC'), sum(v.amount_upokt)::numeric
+    FROM ${s}.v_income_base v JOIN ${s}.settlement_blocks sb ON sb.height = v.height
+    WHERE v.address = ANY(addresses) AND v.height BETWEEN lo AND hi
+      AND (suppliers IS NULL OR nullif(v.supplier_id, '') = ANY(suppliers))
+    GROUP BY 1, 2;
+  END IF;
 END $$;
 
--- Unlike the live function, inflation is the whole global mint (every role, = TLM_GLOBAL_MINT_INFLATION)
--- and reimbursement is the application's escrow to the DAO counted once; mint_burn is the relay mint.
-CREATE OR REPLACE FUNCTION ${s}.money_mint_breakdown_between_dates(start_date timestamp, end_date timestamp)
-RETURNS json LANGUAGE sql STABLE AS $$
-  SELECT json_build_object(
+CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time(addresses text[], start_date timestamp,
+  end_date timestamp)
+RETURNS numeric LANGUAGE sql STABLE SET money.legacy = on AS $$
+  SELECT coalesce(sum(i.amount_upokt), 0)::numeric FROM ${s}._legacy_series(addresses, NULL, start_date, end_date, NULL) i
+$$;
+
+CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_date(addresses text[], start_date timestamp,
+  end_date timestamp, trunc_interval text)
+RETURNS json LANGUAGE sql STABLE SET money.legacy = on AS $$
+  SELECT json_agg(json_build_object('date_truncated', t, 'total_amount', a) ORDER BY t)
+  FROM (SELECT i.date_truncated t, sum(i.amount_upokt)::numeric a
+        FROM ${s}._legacy_series(addresses, NULL, start_date, end_date, trunc_interval) i GROUP BY 1) s
+$$;
+
+CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_address_and_date(addresses text[],
+  start_date timestamp, end_date timestamp, trunc_interval text)
+RETURNS json LANGUAGE sql STABLE SET money.legacy = on AS $$
+  SELECT json_agg(json_build_object('address', i.address, 'date_truncated', i.date_truncated, 'total_amount', i.amount_upokt)
+                  ORDER BY i.date_truncated)
+  FROM ${s}._legacy_series(addresses, NULL, start_date, end_date, trunc_interval) i
+$$;
+
+CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_of_addresses_by_suppliers_and_time(addresses text[],
+  supplier_addresses text[], start_date timestamp, end_date timestamp)
+RETURNS numeric LANGUAGE sql STABLE SET money.legacy = on AS $$
+  SELECT coalesce(sum(i.amount_upokt), 0)::numeric
+  FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), start_date, end_date, NULL) i
+$$;
+
+CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(addresses text[],
+  supplier_addresses text[], start_date timestamp, end_date timestamp, trunc_interval text)
+RETURNS json LANGUAGE sql STABLE SET money.legacy = on AS $$
+  SELECT json_agg(json_build_object('address', i.address, 'date_truncated', i.date_truncated, 'total_amount', i.amount_upokt)
+                  ORDER BY i.date_truncated)
+  FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), start_date, end_date, trunc_interval) i
+$$;
+
+-- inflation is the whole global mint (every role, = TLM_GLOBAL_MINT_INFLATION), reimbursement the application's escrow to
+-- the DAO, mint_burn the relay mint: the same JSON as the live function since #94 (md5 equal on mainnet over 24 h, 7 d
+-- and 30 d, and on beta month by month, 2026-10-05), except at beta heights 153513, 153573, 153633 and 153693, whose 32
+-- claims each carry a 1 upokt escrow here and none in the indexer's event_claim_settleds.mints (128 upokt in March 2026).
+-- The chain did mint them (block_results of beta 153513: 32 reimbursement requests of 1 upokt and a 32 upokt coinbase),
+-- so this function matches the chain there and the live one undercounts.
+CREATE OR REPLACE FUNCTION ${s}.legacy_mint_breakdown_between_dates(start_date timestamp, end_date timestamp)
+RETURNS json LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+BEGIN
+  IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
+    RETURN json_build_object('reimbursement', 0, 'inflation', 0, 'mint_burn', 0);
+  END IF;
+  RETURN (SELECT json_build_object(
     'reimbursement', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'reimbursement'), 0),
     'inflation', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'global_mint'), 0),
     'mint_burn', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'mint_equals_burn'), 0))
-  FROM ${s}.get_supply_flows(start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC') f
-$$;
+  FROM ${s}.get_supply_flows(start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC') f);
+END $$;
+
+-- burn_mint: what the applications burned for the claims settled in the range (get_supply_flows' burn).
+CREATE OR REPLACE FUNCTION ${s}.legacy_burn_breakdown_between_dates(start_date timestamp, end_date timestamp)
+RETURNS json LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+BEGIN
+  IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
+    RETURN json_build_object('burn_mint', 0);
+  END IF;
+  RETURN (SELECT json_build_object('burn_mint', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'burn'), 0))
+  FROM ${s}.get_supply_flows(start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC') f);
+END $$;
+
+-- The claims of these suppliers settled in [f, t), by service, from the daily rollup and the base at the edges, as
+-- get_supplier_earnings reads them; any number of suppliers. settled_upokt is the live functions' gross_rewards: the
+-- indexer's event_claim_settleds.claimed_amount is the settled amount (an overserviced claim's is below its claim),
+-- measured equal per settlement height over the whole money history of mainnet and beta (2026-10-05).
+CREATE OR REPLACE FUNCTION ${s}._legacy_claims_by_service(p_suppliers text[], f timestamptz, t timestamptz)
+RETURNS TABLE(service_id text, settled_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric,
+  estimated_compute_units numeric)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE rg record;
+BEGIN
+  rg := ${s}._ranges(f, t, NULL);
+  RETURN QUERY
+  SELECT r.service_id, sum(r.settled_upokt)::numeric, sum(r.relays)::numeric, sum(r.estimated_relays)::numeric,
+         sum(r.claimed_compute_units)::numeric, sum(r.estimated_compute_units)::numeric
+  FROM (
+    SELECT d.service_id, d.settled_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units
+    FROM ${s}.daily_claims_by_supplier_application_service d
+    WHERE d.supplier_id = ANY(p_suppliers) AND d.day BETWEEN rg.d1 AND rg.d2
+    UNION ALL
+    SELECT c.service_id, c.settled_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units
+    FROM ${s}.claim_settlements c
+    WHERE c.supplier_id = ANY(p_suppliers) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
+  ) r GROUP BY 1;
+END $$;
+
+-- One element per service the suppliers are configured for now (as the live function), with the claims they settled
+-- in the range on it (zeros for an empty range, as the live function); services ordered by id.
+CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_suppliers_and_time_group_by_service(operator_addresses text[],
+  start_ts timestamp, end_ts timestamp)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+DECLARE
+  f timestamptz := start_ts AT TIME ZONE 'UTC';
+  t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
+BEGIN
+  IF start_ts IS NULL OR end_ts IS NULL OR start_ts > end_ts THEN
+    RETURN (SELECT jsonb_agg(jsonb_build_object('service_id', sv.service_id, 'relays', 0, 'estimated_relays', 0,
+                     'computed_units', 0, 'estimated_computed_units', 0, 'gross_rewards', 0) ORDER BY sv.service_id)
+            FROM (SELECT DISTINCT ssc.service_id FROM ${s}.supplier_service_configs ssc
+                  WHERE ssc.supplier_id = ANY(operator_addresses) AND upper_inf(ssc._block_range)) sv);
+  END IF;
+  -- the claims are read only for listed services: an empty list must raise outside the coverage too
+  PERFORM ${s}._check_coverage(f, t);
+  RETURN (
+    SELECT jsonb_agg(jsonb_build_object(
+             'service_id', sv.service_id,
+             'relays', coalesce(c.relays, 0),
+             'estimated_relays', coalesce(c.estimated_relays, 0),
+             'computed_units', coalesce(c.compute_units, 0),
+             'estimated_computed_units', coalesce(c.estimated_compute_units, 0),
+             'gross_rewards', coalesce(c.settled_upokt, 0)) ORDER BY sv.service_id)
+    FROM (SELECT DISTINCT ssc.service_id FROM ${s}.supplier_service_configs ssc
+          WHERE ssc.supplier_id = ANY(operator_addresses) AND upper_inf(ssc._block_range)) sv
+    LEFT JOIN ${s}._legacy_claims_by_service(operator_addresses, f, t) c ON c.service_id = sv.service_id);
+END $$;
+
+-- One element per service of the staked suppliers whose current configuration shares revenue with the addresses (as the
+-- live function). net_rewards is what the addresses received from that service's claims, as the live function. The claim
+-- columns (gross_rewards, relays, computed_units and their estimates) differ on purpose: the live function adds a claim
+-- once per transfer that paid one of the addresses (relay and global mint, and each address of the list), here each claim
+-- that paid them counts once. Measured on mainnet: pokt1m0yk72fcvut72ujrs7hyf4mzgahe4c9ya429eh on 2026-10-03 got 27
+-- transfers from 20 claims (948613-finalize_block-3067 pays it twice): relays 577,473 live, 289,472 per claim; gross
+-- 553,512,909 live, 277,061,678 per claim; net 209,138,830 in both.
+CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_service(addresses text[],
+  start_ts timestamp, end_ts timestamp)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET money.legacy = on AS $$
+DECLARE
+  f timestamptz := start_ts AT TIME ZONE 'UTC';
+  t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
+  lo bigint; hi bigint; svcs text[];
+BEGIN
+  -- as a join on the distinct matched suppliers: written as IN (...) it plans 10x slower (3.4 s against 0.3 s on mainnet)
+  svcs := ARRAY(
+    SELECT DISTINCT ssc.service_id
+    FROM ${s}.supplier_service_configs ssc
+    JOIN (SELECT DISTINCT ssc2.supplier_id
+          FROM ${s}.supplier_service_configs ssc2
+          JOIN ${s}.suppliers su ON su.id = ssc2.supplier_id
+          CROSS JOIN jsonb_array_elements(ssc2.rev_share) AS elem
+          WHERE elem->>'address' = ANY(addresses) AND upper_inf(ssc2._block_range)
+            AND su.stake_status = 'Staked' AND upper_inf(su._block_range)) m ON m.supplier_id = ssc.supplier_id
+    WHERE upper_inf(ssc._block_range));
+  IF start_ts IS NULL OR end_ts IS NULL OR start_ts > end_ts THEN
+    RETURN (SELECT jsonb_agg(jsonb_build_object('service_id', sv, 'relays', 0, 'estimated_relays', 0, 'computed_units', 0,
+                     'estimated_computed_units', 0, 'gross_rewards', 0, 'net_rewards', 0) ORDER BY sv)
+            FROM unnest(svcs) sv);
+  END IF;
+  PERFORM ${s}._check_coverage(f, t);
+  SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < t;
+  RETURN (
+    WITH services AS (
+      SELECT sv.service_id FROM unnest(svcs) sv(service_id)
+    ), paid AS (
+      -- the claims that paid the addresses, each once: every role a claim pays (v_income_base's claim branches)
+      SELECT sp.height, sp.event_idx FROM ${s}.shareholder_payouts sp
+      WHERE sp.recipient_id = ANY(addresses) AND sp.height BETWEEN lo AND hi AND (sp.relay_upokt > 0 OR sp.global_upokt > 0)
+      UNION
+      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
+      WHERE c.source_owner_id = ANY(addresses) AND c.height BETWEEN lo AND hi
+        AND (c.relay_to_source_owner_upokt > 0 OR c.global_to_source_owner_upokt > 0)
+      UNION
+      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
+      WHERE c.application_id = ANY(addresses) AND c.height BETWEEN lo AND hi
+        AND (c.relay_to_application_upokt > 0 OR c.global_to_application_upokt > 0)
+      UNION
+      SELECT c.height, c.event_idx FROM ${s}.settlement_blocks sb JOIN ${s}.claim_settlements c USING (height)
+      WHERE sb.dao_address = ANY(addresses) AND sb.height BETWEEN lo AND hi
+        AND (c.relay_to_dao_upokt > 0 OR c.global_to_dao_upokt > 0 OR c.reimbursement_to_dao_upokt > 0)
+    ), claims AS (
+      SELECT c.service_id, sum(c.settled_upokt)::numeric settled_upokt, sum(c.relays)::numeric relays,
+             sum(c.estimated_relays)::numeric estimated_relays, sum(c.claimed_compute_units)::numeric compute_units,
+             sum(c.estimated_compute_units)::numeric estimated_compute_units
+      FROM paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx GROUP BY 1
+    ), net AS (
+      SELECT i.service_id, sum(i.amount_upokt) amount_upokt
+      FROM ${s}._income(addresses, f, t, NULL, false, false, true, false) i
+      WHERE i.service_id IS NOT NULL GROUP BY 1
+    )
+    SELECT jsonb_agg(jsonb_build_object(
+             'service_id', sv.service_id,
+             'relays', coalesce(c.relays, 0),
+             'estimated_relays', coalesce(c.estimated_relays, 0),
+             'computed_units', coalesce(c.compute_units, 0),
+             'estimated_computed_units', coalesce(c.estimated_compute_units, 0),
+             'gross_rewards', coalesce(c.settled_upokt, 0),
+             'net_rewards', coalesce(n.amount_upokt, 0)) ORDER BY sv.service_id)
+    FROM services sv
+    LEFT JOIN claims c ON c.service_id = sv.service_id
+    LEFT JOIN net n ON n.service_id = sv.service_id);
+END $$;
 
 -- Every number inside a jsonb (arrays and objects, at any depth) as a JSON string: the twins' nested values, such as
 -- coverage heights and get_supplier_proofs.invalid_by_reason counts.

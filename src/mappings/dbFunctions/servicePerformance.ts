@@ -8,16 +8,34 @@ export function getAmountOfBlocksAndSuppliersByTimesFn(dbSchema: string): string
 RETURNS jsonb
 LANGUAGE sql
 STABLE
+SET jit = off
 AS $$
+  -- the range's first and last block, then the ids between them less the missing ones (see services_performance_between_times)
+  WITH range_blocks AS MATERIALIZED (
+    SELECT ends.lo, ends.hi, ARRAY(
+        SELECT g FROM (SELECT id, lead(id) OVER (ORDER BY id) nx FROM ${dbSchema}.blocks WHERE id BETWEEN ends.lo AND ends.hi) b,
+        generate_series(b.id + 1, b.nx - 1) g WHERE b.nx > b.id + 1
+    ) missing
+    FROM (SELECT
+      (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_date ORDER BY timestamp, id LIMIT 1) lo,
+      (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= end_date ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+    ) ends
+  )
+  -- A block has one row per service (upsert_staked_suppliers_by_block_and_services deletes and regroups it), so
+  -- count(*) is the distinct block count, without sorting every row by block; the sort that COUNT(DISTINCT) needed
+  -- returned the services in service_id order, which the ORDER BY keeps. No constraint enforces it: on 2026-10-05 no
+  -- (block_id, service_id) repeated on mainnet or beta, and COUNT(DISTINCT) took 3.9 s instead of 0.6 s over 30 days
+  -- (9.6 s instead of 1.3 s over 89). A duplicate would count its block twice.
   SELECT jsonb_agg(to_jsonb(row)) FROM (
     SELECT
         ss.service_id,
-        COUNT(DISTINCT ss.block_id) blocks,
+        COUNT(*) blocks,
         SUM(ss.amount) suppliers_staked
     FROM ${dbSchema}.staked_suppliers_by_block_and_services ss
-    INNER JOIN ${dbSchema}.blocks b ON b.id = ss.block_id
-    WHERE b.timestamp BETWEEN start_date AND end_date
+    WHERE ss.block_id BETWEEN (SELECT lo FROM range_blocks) AND (SELECT hi FROM range_blocks)
+      AND ss.block_id <> ALL ((SELECT missing FROM range_blocks)::numeric[])
     GROUP BY ss.service_id
+    ORDER BY ss.service_id
   ) row;
 $$;
 
@@ -36,8 +54,34 @@ export function servicesPerformanceBetweenTimesFn(dbSchema: string): string {
 RETURNS jsonb
 LANGUAGE sql
 STABLE
+SET jit = off
 AS $$
-    with c as (
+    -- Each period is turned into its first and last block, two probes on idx_blocks_timestamp_id: block time only
+    -- grows with the height, so the period's blocks are the ids between them, less the ids with no block (mainnet
+    -- lacks 694937 and 694938): the previous join to blocks never counted rows of a block that is not indexed.
+    -- A SQL function is planned without its argument values, and joining blocks by timestamp let the planner scan
+    -- and hash far more than the range.
+    with current_blocks AS MATERIALIZED (
+        SELECT ends.lo, ends.hi, ARRAY(
+            SELECT g FROM (SELECT id, lead(id) OVER (ORDER BY id) nx FROM ${dbSchema}.blocks WHERE id BETWEEN ends.lo AND ends.hi) b,
+            generate_series(b.id + 1, b.nx - 1) g WHERE b.nx > b.id + 1
+        ) missing
+        FROM (SELECT
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_current_and_end_previous ORDER BY timestamp, id LIMIT 1) lo,
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= end_current ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+        ) ends
+    ),
+    previous_blocks AS MATERIALIZED (
+        SELECT ends.lo, ends.hi, ARRAY(
+            SELECT g FROM (SELECT id, lead(id) OVER (ORDER BY id) nx FROM ${dbSchema}.blocks WHERE id BETWEEN ends.lo AND ends.hi) b,
+            generate_series(b.id + 1, b.nx - 1) g WHERE b.nx > b.id + 1
+        ) missing
+        FROM (SELECT
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_previous ORDER BY timestamp, id LIMIT 1) lo,
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= start_current_and_end_previous ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+        ) ends
+    ),
+    c as (
         SELECT
             r.service_id,
             SUM(r.relays) relays,
@@ -46,8 +90,8 @@ AS $$
             SUM(r.estimated_computed_units) estimated_computed_units,
             SUM(r.claimed_upokt) claimed_upokt
         FROM ${dbSchema}.relay_by_block_and_services r
-        INNER JOIN ${dbSchema}.blocks b ON b.id = r.block_id
-        WHERE b.timestamp BETWEEN start_current_and_end_previous AND end_current
+        WHERE r.block_id BETWEEN (SELECT lo FROM current_blocks) AND (SELECT hi FROM current_blocks)
+          AND r.block_id <> ALL ((SELECT missing FROM current_blocks)::numeric[])
         GROUP BY r.service_id
     ),
     p as (
@@ -55,8 +99,8 @@ AS $$
             r.service_id,
             SUM(r.estimated_computed_units) estimated_computed_units
         FROM ${dbSchema}.relay_by_block_and_services r
-        INNER JOIN ${dbSchema}.blocks b ON b.id = r.block_id
-        WHERE b.timestamp BETWEEN start_previous AND start_current_and_end_previous
+        WHERE r.block_id BETWEEN (SELECT lo FROM previous_blocks) AND (SELECT hi FROM previous_blocks)
+          AND r.block_id <> ALL ((SELECT missing FROM previous_blocks)::numeric[])
         GROUP BY r.service_id
     ),
     apps as (
@@ -70,13 +114,17 @@ AS $$
         GROUP BY app_ser.service_id
     ),
     suppliers as (
+        -- a semi join: the staked suppliers are few, a nested loop over every live config probed each one's history
         SELECT
             supplier_ser.service_id,
-            COUNT(DISTINCT supplier.id) amount
-        FROM ${dbSchema}.suppliers supplier
-        INNER JOIN ${dbSchema}.supplier_service_configs supplier_ser ON supplier.id = supplier_ser.supplier_id
+            COUNT(DISTINCT supplier_ser.supplier_id) amount
+        FROM ${dbSchema}.supplier_service_configs supplier_ser
         WHERE
-            supplier.stake_status = 'Staked' AND upper_inf(supplier._block_range) AND upper_inf(supplier_ser._block_range)
+            upper_inf(supplier_ser._block_range)
+            AND supplier_ser.supplier_id IN (
+                SELECT supplier.id FROM ${dbSchema}.suppliers supplier
+                WHERE supplier.stake_status = 'Staked' AND upper_inf(supplier._block_range)
+            )
         GROUP BY supplier_ser.service_id
     )
   SELECT jsonb_agg(to_jsonb(row)) FROM (
@@ -101,12 +149,15 @@ AS $$
     LEFT JOIN suppliers ON c.service_id = suppliers.service_id
     LEFT JOIN ${dbSchema}.services s ON c.service_id = s.id
     WHERE upper_inf(s._block_range)
-    ORDER BY c.computed_units DESC
+    -- service_id breaks ties: without it the order of services with equal computed units came from the plan
+    -- (on beta several services had 200000 each and the previous version returned them in a different order)
+    ORDER BY c.computed_units DESC, c.service_id
   ) row;
 $$;
 
 COMMENT ON FUNCTION ${dbSchema}.services_performance_between_times(timestamp without time zone, timestamp without time zone, timestamp without time zone) IS
 '@name servicesPerformanceBetweenTimes
-Compares service performance metrics between two time periods, including relays, computed units, and staked actors.';
+Compares service performance metrics between two time periods, including relays, computed units, and staked actors.
+Rows come by computed units descending, then service_id (services tied on computed units, e.g. several at 200000 on beta, used to come in plan order).';
 `;
 }
