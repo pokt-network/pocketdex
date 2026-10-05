@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
-import type { SettlementPayload } from "./payload";
+import { buildSettlementPayload, SettlementPayload } from "./payload";
 import {
   addReplay,
   byPower,
@@ -333,4 +333,42 @@ describe("validator replay on mainnet heights", () => {
       }
     });
   }
+
+  it("716433 gives each claim the chain's staker share, also where a shareholder address paid twice leaves none", () => {
+    // supplier pokt1gfxp7… listed pokt1mvz6… twice in its rev share (15 % and 70 %): poktroll v0.1.33 paid the 70 %
+    // to both entries (distribution_supplier.go:27-50, :88), so the relay legs of its two claims exceed their mint
+    const gz = (name: string) => zlib.gunzipSync(fs.readFileSync(path.join(FIXTURES, name))).toString();
+    const fx = JSON.parse(gz("settlement_716433.json.gz"));
+    const payload = buildSettlementPayload(716433, new Date(0), "detailed_batch", fx.events)!;
+    addReplay(
+      716433,
+      payload,
+      (JSON.parse(gz("replay_716433.json.gz"), revive) as { input: Parameters<typeof addReplay>[2] }).input
+    );
+    const legs = new Map<number, bigint>();
+    for (const d of payload.detailed) {
+      if (d.family === "relay") legs.set(d.event_idx, (legs.get(d.event_idx) ?? n(0)) + BigInt(d.amount));
+    }
+    const residual = (c: SettlementPayload["claims"][number]) => BigInt(c.minted) - (legs.get(c.event_idx) ?? n(0));
+    const dup = payload.claims.filter((c) => c.supplier_id === "pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9");
+    // floor(157082 × 0.14) and floor(170 × 0.14); their legs leave −46,260 and −50
+    assert.deepEqual(
+      dup.map((c) => [c.relay_to_stakers, residual(c)]),
+      [
+        ["21991", n(-46260)],
+        ["23", n(-50)],
+      ]
+    );
+    // every other claim: the chain's share is what its legs leave
+    assert.ok(payload.claims.every((c) => dup.includes(c) || BigInt(c.relay_to_stakers!) === residual(c)));
+    // and the shares add up to the batch's relay validator and delegator rows
+    const batch = payload.batch
+      .filter((b) => b.role === "validator" || b.role === "delegator")
+      .reduce((a, b) => a + BigInt(b.amount), n(0));
+    assert.equal(
+      payload.claims.reduce((a, c) => a + BigInt(c.relay_to_stakers!), n(0)),
+      batch
+    );
+    assert.equal(batch, n(334264977));
+  });
 });

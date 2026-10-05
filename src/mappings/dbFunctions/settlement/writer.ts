@@ -17,6 +17,10 @@ import type { SettlementPayload } from "../../money/payload";
 // - per claim, the reimbursement request equals the claim's escrow-to-DAO leg;
 // - Σ relay_to_stakers_upokt (minted minus the claim's relay legs) equals the batch relay validator and delegator rows,
 //   and both families of those rows equal the validator distributions' pool shares.
+// One exception, by the chain's design: poktroll v0.1.29–v0.1.33 paid a shareholder address listed twice in a
+// supplier's rev share once per entry (mainnet 690,685–716,533, one supplier; map.ts takeShareholders). Its legs then
+// exceed the shareholders' slice, so what they leave of the mint is not the stakers' share: the readers of those eras
+// send each claim's share by the chain's rule (relay_to_stakers), and R1 below admits a difference only there.
 
 // Bump when a rollup is added or computed differently. A height written under another version cannot be
 // rewritten (its subtraction would use the new rules on rows added under the old ones); rebuild the
@@ -389,7 +393,8 @@ BEGIN
   CREATE TEMP TABLE IF NOT EXISTS _stg_claims (event_idx int, supplier_id text, supplier_owner_id text, application_id text,
     service_id text, session_id text, session_end bigint, claimed_upokt bigint, settled_upokt bigint, relay_minted_upokt bigint,
     overservicing_loss_upokt bigint, mint_ratio_unminted_upokt bigint, relays bigint, estimated_relays bigint,
-    claimed_compute_units bigint, estimated_compute_units bigint, proof_status int, mint_ratio numeric) ON COMMIT DROP;
+    claimed_compute_units bigint, estimated_compute_units bigint, proof_status int, mint_ratio numeric,
+    relay_to_stakers_upokt bigint, global_overpaid_upokt bigint) ON COMMIT DROP;
   CREATE TEMP TABLE IF NOT EXISTS _stg_detailed (event_idx int, recipient_id text, op_reason text, role text, family text,
     amount_upokt bigint) ON COMMIT DROP;
   CREATE TEMP TABLE IF NOT EXISTS _stg_batch (event_idx int, op_type text, op_reason text, sender_module text,
@@ -411,7 +416,8 @@ BEGIN
   INSERT INTO _stg_claims SELECT * FROM jsonb_to_recordset(p->'claims') AS x(event_idx int, supplier_id text,
     supplier_owner_id text, application_id text, service_id text, session_id text, session_end bigint, claimed bigint,
     settled bigint, minted bigint, overservicing_loss bigint, deflation_loss bigint, num_relays bigint,
-    num_estimated_relays bigint, num_claimed_cu bigint, num_estimated_cu bigint, proof_status int, mint_ratio numeric);
+    num_estimated_relays bigint, num_claimed_cu bigint, num_estimated_cu bigint, proof_status int, mint_ratio numeric,
+    relay_to_stakers bigint, global_overpaid bigint);
   INSERT INTO _stg_detailed SELECT * FROM jsonb_to_recordset(p->'detailed') AS x(event_idx int, recipient_id text,
     op_reason text, role text, family text, amount bigint);
   INSERT INTO _stg_batch SELECT * FROM jsonb_to_recordset(p->'batch') AS x(event_idx int, op_type text, op_reason text,
@@ -518,8 +524,9 @@ BEGIN
          c.claimed_upokt, c.settled_upokt, c.relay_minted_upokt, c.overservicing_loss_upokt, c.mint_ratio_unminted_upokt, coalesce(r.amount_upokt, 0),
          c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units,
          coalesce(d.relay_to_supplier_upokt, 0), coalesce(d.relay_to_dao_upokt, 0), coalesce(d.relay_to_source_owner_upokt, 0), coalesce(d.relay_to_application_upokt, 0),
-         c.relay_minted_upokt - coalesce(d.relay_to_supplier_upokt, 0) - coalesce(d.relay_to_dao_upokt, 0) - coalesce(d.relay_to_source_owner_upokt, 0)
-                  - coalesce(d.relay_to_application_upokt, 0),
+         coalesce(c.relay_to_stakers_upokt,
+                  c.relay_minted_upokt - coalesce(d.relay_to_supplier_upokt, 0) - coalesce(d.relay_to_dao_upokt, 0)
+                  - coalesce(d.relay_to_source_owner_upokt, 0) - coalesce(d.relay_to_application_upokt, 0)),
          coalesce(d.global_to_supplier_upokt, 0), coalesce(d.global_to_dao_upokt, 0), coalesce(d.global_to_source_owner_upokt, 0), coalesce(d.global_to_application_upokt, 0),
          coalesce(d.reimbursement_to_dao_upokt, 0),
          v_row_source, 1, c.proof_status = 1
@@ -542,6 +549,19 @@ BEGIN
                         AND r.application_id = c.application_id;
 
   -- the CHECK on claim_settlements.relay_to_stakers_upokt rejects a claim whose relay legs exceed what it minted
+
+  -- R1: a staker share sent by the reader is what the claim's relay legs leave of its mint, unless the claim paid a
+  -- shareholder address twice (the exception at the top of this file)
+  SELECT string_agg(c.event_idx::text, ', ') INTO v_bad
+  FROM ${s}.claim_settlements c
+  WHERE c.height = h
+    AND c.relay_to_stakers_upokt <> c.relay_minted_upokt - c.relay_to_supplier_upokt - c.relay_to_dao_upokt
+                                    - c.relay_to_source_owner_upokt - c.relay_to_application_upokt
+    AND NOT EXISTS (SELECT 1 FROM _stg_detailed d WHERE d.event_idx = c.event_idx AND d.family = 'relay' AND d.role = 'rev_share'
+                    GROUP BY d.recipient_id HAVING count(*) > 1);
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'height %: the staker share differs from what the relay legs leave of the mint at events %', h, left(v_bad, 500);
+  END IF;
 
   -- I2: per claim, the reimbursement request equals the claim's escrow-to-DAO leg
   IF EXISTS (SELECT 1 FROM ${s}.claim_settlements WHERE height = h AND global_minted_upokt <> reimbursement_to_dao_upokt) THEN
@@ -601,11 +621,13 @@ BEGIN
     END IF;
   END IF;
 
-  -- M1: in the map eras, the global legs of the claims plus the global staker rows equal the claims' global mints
-  -- (the relay family is I3a: relay_to_stakers_upokt is what the claims' relay legs leave of their mint)
+  -- M1: in the map eras, the global legs of the claims plus the global staker rows equal the claims' global mints, and
+  -- what a shareholder address listed twice was overpaid (the exception at the top of this file)
+  -- (the relay family is I3a: relay_to_stakers_upokt is what the claims' relay legs leave of their mint, or R1's exception)
   IF left(v_era, 4) = 'map_' AND (SELECT coalesce(sum(amount_upokt), 0) FROM _stg_detailed WHERE family = 'global')
        + (SELECT coalesce(sum(amount_upokt), 0) FROM _stg_batch WHERE family = 'global')
-       <> (SELECT coalesce(sum(global_minted_upokt), 0) FROM ${s}.claim_settlements WHERE height = h) THEN
+       <> (SELECT coalesce(sum(global_minted_upokt), 0) FROM ${s}.claim_settlements WHERE height = h)
+          + (SELECT coalesce(sum(global_overpaid_upokt), 0) FROM _stg_claims) THEN
     RAISE EXCEPTION 'height %: map global legs and staker rows differ from the claims'' global mints', h;
   END IF;
 

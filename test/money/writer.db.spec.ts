@@ -74,6 +74,7 @@ const CHAIN: Record<string, string> = {
   "899713": "pocket",
   "694993": "pocket-lego-testnet",
   "710013": "pocket",
+  "716433": "pocket",
   "130000": "pocket",
   "96860": "pocket",
   "200013": "pocket",
@@ -82,6 +83,7 @@ const CHAIN: Record<string, string> = {
   "350013": "pocket",
   "430053": "pocket",
   "699993": "pocket",
+  "694053": "pocket",
 };
 
 // The replay input kept for a height (test/money/fixtures/replay_<h>.json.gz): bigints as strings, Maps as entry lists.
@@ -225,6 +227,48 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.equal(dv.rows[0].n, pairs);
     });
   }
+
+  it("716433: a claim paying one shareholder address twice keeps the chain's legs and the chain's staker share", async () => {
+    // detailed_batch, where the history job stopped: the relay legs of the two claims of supplier pokt1gfxp7… exceed
+    // their mint (15 % + 70 % + 70 % to two addresses). What they leave is negative, the stakers' share is
+    // floor(minted × 0.14), and the shareholder is paid both legs. In a rolled-back transaction: the other tests count
+    // this day's heights.
+    await c.query("BEGIN");
+    try {
+      const { height, payload } = payloadOf("716433", false);
+      for (const { bind, sql } of writeSettlementCalls(S, height, payload)) await c.query(sql, bind);
+      const expected = JSON.parse(fs.readFileSync(path.join(FIXTURES, "settlement_716433.expected.json"), "utf8")) as {
+        claims: number;
+        income: Record<string, string>;
+      };
+      const got = await c.query(
+        `SELECT address || '|' || role || '|' || family AS k, sum(amount_upokt)::text AS a FROM ${S}.v_income_base WHERE height = $1 GROUP BY 1`,
+        [height]
+      );
+      assert.deepEqual(Object.fromEntries(got.rows.map((r) => [r.k, r.a])), expected.income);
+      const n = await c.query(
+        `SELECT (SELECT count(*)::int FROM ${S}.claim_settlements WHERE height = $1) claims,
+                (SELECT count(*)::int FROM ${S}.delegator_validator_payouts WHERE height = $1) dv`,
+        [height]
+      );
+      assert.deepEqual(n.rows[0], { claims: expected.claims, dv: 593 });
+      const rows = (
+        await c.query(
+          `SELECT relay_minted_upokt::text m, relay_to_supplier_upokt::text s, relay_to_stakers_upokt::text k, p.relay_upokt::text p
+           FROM ${S}.claim_settlements c
+           JOIN ${S}.shareholder_payouts p USING (height, event_idx)
+           WHERE c.height = 716433 AND c.supplier_id = 'pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9'
+             AND p.recipient_id = 'pokt1mvz6gf82quaal497gcpz2pt50qvynuxsp4up44' ORDER BY c.event_idx`
+        )
+      ).rows;
+      assert.deepEqual(rows, [
+        { m: "157082", s: "192345", k: "21991", p: "173730" },
+        { m: "170", s: "207", k: "23", p: "186" },
+      ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
 
   it("records each height's era and mint_ratio, and the detailed_batch expiration and slash as the chain had them", async () => {
     const blocks = await c.query(`SELECT height::int h, era, mint_ratio::text m FROM ${S}.settlement_blocks ORDER BY height`);
@@ -396,7 +440,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
 
   it("writes map-era heights with the slices their bank legs paid, and rewrites them identically", async () => {
     // in one rolled-back transaction, like the settlement_result test: older eras refuse validator rewards from 11:00
-    const names = ["250053", "270033", "350013", "430053", "699993"];
+    // 694053: a supplier paying one shareholder address twice (poktroll v0.1.31), its legs above the shareholders' slice
+    const names = ["250053", "270033", "350013", "430053", "699993", "694053"];
     const send = async (height: number, payload: SettlementPayload) => {
       for (const { bind, sql } of writeSettlementCalls(S, height, payload)) await c.query(sql, bind);
     };
@@ -438,6 +483,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         assert.equal(r.pool_upokt, replayed ? r.staker_upokt : "0", name);
         assert.equal(r.bank, 1);
       }
+      // the chain's staker share, floor(146342 × 0.14); its relay legs leave 146342 − 179196 − 6587 − 3658
+      const dup = await c.query(
+        `SELECT relay_to_stakers_upokt::text k, (relay_minted_upokt - relay_to_supplier_upokt - relay_to_dao_upokt
+                - relay_to_source_owner_upokt - relay_to_application_upokt)::text left_upokt
+         FROM ${S}.claim_settlements WHERE height = 694053 AND supplier_id = 'pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9'`
+      );
+      assert.deepEqual(dup.rows, [{ k: "20487", left_upokt: "-43099" }]);
       const before = await md5All();
       for (const name of names) {
         const { height, payload } = payloadOf(name, false);
