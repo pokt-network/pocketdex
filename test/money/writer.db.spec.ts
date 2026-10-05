@@ -85,6 +85,7 @@ const CHAIN: Record<string, string> = {
   "699993": "pocket",
   "694053": "pocket",
   "699213": "pocket",
+  "703773": "pocket",
 };
 
 // The replay input kept for a height (test/money/fixtures/replay_<h>.json.gz): bigints as strings, Maps as entry lists.
@@ -484,7 +485,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     // in one rolled-back transaction, like the settlement_result test: older eras refuse validator rewards from 11:00
     // 694053: a supplier paying one shareholder address twice (poktroll v0.1.31), its legs above the shareholders' slice
     // 699213: the same supplier with a global shareholder slice, paid twice too (M1)
-    const names = ["250053", "270033", "350013", "430053", "699993", "694053", "699213"];
+    // 703773: the same, with a slice so small that its first two legs already pay it
+    const names = ["250053", "270033", "350013", "430053", "699993", "694053", "699213", "703773"];
     const send = async (height: number, payload: SettlementPayload) => {
       for (const { bind, sql } of writeSettlementCalls(S, height, payload)) await c.query(sql, bind);
     };
@@ -543,6 +545,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
            AND p.recipient_id = 'pokt1mvz6gf82quaal497gcpz2pt50qvynuxsp4up44'`
       );
       assert.deepEqual(glob.rows, [{ g: "29", s: "36", p: "32" }]);
+      // 703773: G = 4, slice floor(4 × 0.8) = 3, legs 1 to the supplier and 2 twice to pokt1mvz6… (5, 2 overpaid)
+      const small = await c.query(
+        `SELECT c.global_minted_upokt::text g, c.global_to_supplier_upokt::text s, p.global_upokt::text p
+         FROM ${S}.claim_settlements c
+         JOIN ${S}.shareholder_payouts p USING (height, event_idx)
+         WHERE c.height = 703773 AND c.supplier_id = 'pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9'
+           AND p.recipient_id = 'pokt1mvz6gf82quaal497gcpz2pt50qvynuxsp4up44'`
+      );
+      assert.deepEqual(small.rows, [{ g: "4", s: "5", p: "4" }]);
       const before = await md5All();
       for (const name of names) {
         const { height, payload } = payloadOf(name, false);
