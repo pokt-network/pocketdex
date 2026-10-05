@@ -621,6 +621,16 @@ BEGIN
     END IF;
   END IF;
 
+  -- M1's exception: a claim may report a global overpayment only if it paid a global shareholder address twice
+  SELECT string_agg(c.event_idx::text, ', ') INTO v_bad
+  FROM _stg_claims c
+  WHERE coalesce(c.global_overpaid_upokt, 0) <> 0
+    AND NOT EXISTS (SELECT 1 FROM _stg_detailed d WHERE d.event_idx = c.event_idx AND d.family = 'global' AND d.role = 'rev_share'
+                    GROUP BY d.recipient_id HAVING count(*) > 1);
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'height %: a global overpayment without a repeated shareholder address at events %', h, left(v_bad, 500);
+  END IF;
+
   -- M1: in the map eras, the global legs of the claims plus the global staker rows equal the claims' global mints, and
   -- what a shareholder address listed twice was overpaid (the exception at the top of this file)
   -- (the relay family is I3a: relay_to_stakers_upokt is what the claims' relay legs leave of their mint, or R1's exception)
