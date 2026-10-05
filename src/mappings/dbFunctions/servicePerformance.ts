@@ -8,16 +8,26 @@ export function getAmountOfBlocksAndSuppliersByTimesFn(dbSchema: string): string
 RETURNS jsonb
 LANGUAGE sql
 STABLE
+SET jit = off
 AS $$
+  -- the range's first and last block, then the ids between them (see services_performance_between_times)
+  WITH range_blocks AS MATERIALIZED (
+    SELECT
+      (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_date ORDER BY timestamp, id LIMIT 1) lo,
+      (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= end_date ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+  )
+  -- A block has one row per service (upsert_staked_suppliers_by_block_and_services deletes and regroups it), so
+  -- count(*) is the distinct block count, without sorting every row by block; the sort that COUNT(DISTINCT) needed
+  -- returned the services in service_id order, which the ORDER BY keeps.
   SELECT jsonb_agg(to_jsonb(row)) FROM (
     SELECT
         ss.service_id,
-        COUNT(DISTINCT ss.block_id) blocks,
+        COUNT(*) blocks,
         SUM(ss.amount) suppliers_staked
     FROM ${dbSchema}.staked_suppliers_by_block_and_services ss
-    INNER JOIN ${dbSchema}.blocks b ON b.id = ss.block_id
-    WHERE b.timestamp BETWEEN start_date AND end_date
+    WHERE ss.block_id BETWEEN (SELECT lo FROM range_blocks) AND (SELECT hi FROM range_blocks)
     GROUP BY ss.service_id
+    ORDER BY ss.service_id
   ) row;
 $$;
 
@@ -36,8 +46,22 @@ export function servicesPerformanceBetweenTimesFn(dbSchema: string): string {
 RETURNS jsonb
 LANGUAGE sql
 STABLE
+SET jit = off
 AS $$
-    with c as (
+    -- Each period is turned into its first and last block, two probes on idx_blocks_timestamp_id: block time only
+    -- grows with the height, so the period's blocks are the ids between them. A SQL function is planned without its
+    -- argument values, and joining blocks by timestamp let the planner scan and hash far more than the range.
+    with current_blocks AS MATERIALIZED (
+        SELECT
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_current_and_end_previous ORDER BY timestamp, id LIMIT 1) lo,
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= end_current ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+    ),
+    previous_blocks AS MATERIALIZED (
+        SELECT
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp >= start_previous ORDER BY timestamp, id LIMIT 1) lo,
+            (SELECT id FROM ${dbSchema}.blocks WHERE timestamp <= start_current_and_end_previous ORDER BY timestamp DESC, id DESC LIMIT 1) hi
+    ),
+    c as (
         SELECT
             r.service_id,
             SUM(r.relays) relays,
@@ -46,8 +70,7 @@ AS $$
             SUM(r.estimated_computed_units) estimated_computed_units,
             SUM(r.claimed_upokt) claimed_upokt
         FROM ${dbSchema}.relay_by_block_and_services r
-        INNER JOIN ${dbSchema}.blocks b ON b.id = r.block_id
-        WHERE b.timestamp BETWEEN start_current_and_end_previous AND end_current
+        WHERE r.block_id BETWEEN (SELECT lo FROM current_blocks) AND (SELECT hi FROM current_blocks)
         GROUP BY r.service_id
     ),
     p as (
@@ -55,8 +78,7 @@ AS $$
             r.service_id,
             SUM(r.estimated_computed_units) estimated_computed_units
         FROM ${dbSchema}.relay_by_block_and_services r
-        INNER JOIN ${dbSchema}.blocks b ON b.id = r.block_id
-        WHERE b.timestamp BETWEEN start_previous AND start_current_and_end_previous
+        WHERE r.block_id BETWEEN (SELECT lo FROM previous_blocks) AND (SELECT hi FROM previous_blocks)
         GROUP BY r.service_id
     ),
     apps as (
@@ -70,13 +92,17 @@ AS $$
         GROUP BY app_ser.service_id
     ),
     suppliers as (
+        -- a semi join: the staked suppliers are few, a nested loop over every live config probed each one's history
         SELECT
             supplier_ser.service_id,
-            COUNT(DISTINCT supplier.id) amount
-        FROM ${dbSchema}.suppliers supplier
-        INNER JOIN ${dbSchema}.supplier_service_configs supplier_ser ON supplier.id = supplier_ser.supplier_id
+            COUNT(DISTINCT supplier_ser.supplier_id) amount
+        FROM ${dbSchema}.supplier_service_configs supplier_ser
         WHERE
-            supplier.stake_status = 'Staked' AND upper_inf(supplier._block_range) AND upper_inf(supplier_ser._block_range)
+            upper_inf(supplier_ser._block_range)
+            AND supplier_ser.supplier_id IN (
+                SELECT supplier.id FROM ${dbSchema}.suppliers supplier
+                WHERE supplier.stake_status = 'Staked' AND upper_inf(supplier._block_range)
+            )
         GROUP BY supplier_ser.service_id
     )
   SELECT jsonb_agg(to_jsonb(row)) FROM (
