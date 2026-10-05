@@ -126,7 +126,7 @@ const DESCRIPTIONS: Record<string, string> = {
   get_delegator_income:
     "Delegator income: what delegators received, and by_validator from which validator, with replayed_count = the contributions replayed from the delegations snapshot (288,180 to batched_vrd); delegators NULL = every delegator; validators keeps the income from those validators (their delegators); by_delegator.",
   get_supply_flows:
-    "Network supply flows: burn, relay mint (mint_equals_burn), mint_ratio_unminted, overservicing loss, global mint and reimbursement, each by receiving role (by_role), plus slashes.",
+    "Network supply flows: burn, relay mint (mint_equals_burn), mint_ratio_unminted, overservicing loss, global mint and reimbursement, each by receiving role (by_role), plus slashes. Mainnet 690,685 to 716,533: one supplier paid a shareholder twice (poktroll v0.1.29 to v0.1.33), and the supplier role of mint_equals_burn and global_mint includes that overpayment (about 39 POKT), which came from the supplier module, not from the mint.",
   get_supplier_penalties:
     "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; by_service, by_supplier; owners in place of suppliers.",
   get_service_usage:

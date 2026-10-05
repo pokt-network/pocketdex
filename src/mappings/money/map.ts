@@ -111,6 +111,10 @@ export interface MapClaimAmounts {
   settled: bigint;
   minted: bigint;
   globalMint: bigint;
+  // the relay staker slice, floor(M · proposer)
+  relayToStakers: bigint;
+  // what the global shareholder legs paid beyond their slice (a shareholder address listed twice); 0 otherwise
+  globalOverpaid: bigint;
 }
 
 // decodeMapClaims checks every claim's bank legs against its map entry and the formula slices, and returns the
@@ -162,10 +166,6 @@ export function decodeMapClaims(
     if (b.relayMint !== M || b.globalMint !== G) {
       throw fail(`mints (${b.relayMint}, ${b.globalMint}), expected (${M}, ${G})`);
     }
-    const mapTotal = [...c.map.values()].reduce((a, x) => a + x, ZERO);
-    if (mapTotal !== M + BigInt(2) * G) {
-      throw fail(`reward_distribution sums to ${mapTotal}, expected M + 2G = ${M + BigInt(2) * G}`);
-    }
     if (reimbursements[k] !== G) {
       throw fail(`reimbursement request ${reimbursements[k]} differs from the global mint ${G}`);
     }
@@ -197,6 +197,31 @@ export function decodeMapClaims(
       if (sum !== amount) throw fail(`${what}: the bank legs at position ${j} do not pay the formula amount ${amount}`);
       if (to !== undefined && got.some((l) => l.recipient !== to)) throw fail(`${what} is not paid to ${to}`);
       return got;
+    };
+    // The shareholder legs. poktroll v0.1.29–v0.1.33 pays each rev-share ENTRY the amount of its address in a map keyed
+    // by address (x/tokenomics/token_logic_module/distribution_supplier.go:27-50, :88 at v0.1.33): an address listed
+    // twice is paid its last entry's amount once per entry, so the legs differ from the slice (mainnet 690,685–716,533,
+    // one supplier). Only then may they: every supplier module leg at the position is the shareholders', and a
+    // recipient must repeat with equal legs.
+    const overpaid = { relay: ZERO, global: ZERO };
+    const takeShareholders = (family: "relay" | "global", amount: bigint): Leg[] => {
+      if (amount === ZERO) return [];
+      const start = j;
+      let sum = ZERO;
+      while (sum < amount && j < legs.length && legs[j].sender === SUPPLIER_MODULE) sum += legs[j++].amount;
+      if (sum !== amount) {
+        while (j < legs.length && legs[j].sender === SUPPLIER_MODULE) sum += legs[j++].amount;
+        const byRecipient = new Map<string, bigint[]>();
+        for (const l of legs.slice(start, j)) {
+          byRecipient.set(l.recipient, [...(byRecipient.get(l.recipient) ?? []), l.amount]);
+        }
+        const repeated = [...byRecipient.values()].filter((a) => a.length > 1);
+        if (repeated.length === 0 || repeated.some((a) => a.some((x) => x !== a[0]))) {
+          throw fail(`${family} shareholders: the bank legs at position ${j} do not pay the formula amount ${amount}`);
+        }
+        overpaid[family] = sum - amount;
+      }
+      return legs.slice(start, j);
     };
     const legRow = (l: Leg, reason: string) => {
       const info = REASONS[reason];
@@ -263,7 +288,7 @@ export function decodeMapClaims(
       }
     };
     const multi = stakersMode === "bonded";
-    for (const l of takeLegs("relay shareholders", rel.supplier, SUPPLIER_MODULE, true)) {
+    for (const l of takeShareholders("relay", rel.supplier)) {
       legRow(l, "TLM_RELAY_BURN_EQUALS_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION");
     }
     stakerRows(takeLegs("relay stakers", rel.proposer, TOKENOMICS_MODULE, multi), "relay");
@@ -275,7 +300,7 @@ export function decodeMapClaims(
     for (const l of takeLegs("relay application", rel.application, TOKENOMICS_MODULE, false, c.application_id)) {
       legRow(l, "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION");
     }
-    for (const l of takeLegs("global shareholders", glo.supplier, SUPPLIER_MODULE, true)) {
+    for (const l of takeShareholders("global", glo.supplier)) {
       legRow(l, "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION");
     }
     for (const l of takeLegs("global application", glo.application, TOKENOMICS_MODULE, false, c.application_id)) {
@@ -296,7 +321,12 @@ export function decodeMapClaims(
       legRow(l, "TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER");
     }
     if (j !== legs.length) throw fail(`${legs.length - j} bank legs left after the escrow`);
-    return { settled: S, minted: M, globalMint: G };
+    const mapTotal = [...c.map.values()].reduce((a, x) => a + x, ZERO);
+    const want = M + BigInt(2) * G + overpaid.relay + overpaid.global;
+    if (mapTotal !== want) {
+      throw fail(`reward_distribution sums to ${mapTotal}, expected M + 2G (+ shareholders overpaid) = ${want}`);
+    }
+    return { settled: S, minted: M, globalMint: G, relayToStakers: rel.proposer, globalOverpaid: overpaid.global };
   });
   const rows = [...stakers.values()].map(({ claims: n, ...row }) => ({ ...row, num_claims: String(n.size) }));
   return { amounts, detailed, stakers: rows, claimStakers };

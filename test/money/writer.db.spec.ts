@@ -74,6 +74,7 @@ const CHAIN: Record<string, string> = {
   "899713": "pocket",
   "694993": "pocket-lego-testnet",
   "710013": "pocket",
+  "716433": "pocket",
   "130000": "pocket",
   "96860": "pocket",
   "200013": "pocket",
@@ -82,6 +83,8 @@ const CHAIN: Record<string, string> = {
   "350013": "pocket",
   "430053": "pocket",
   "699993": "pocket",
+  "694053": "pocket",
+  "699213": "pocket",
 };
 
 // The replay input kept for a height (test/money/fixtures/replay_<h>.json.gz): bigints as strings, Maps as entry lists.
@@ -225,6 +228,89 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.equal(dv.rows[0].n, pairs);
     });
   }
+
+  it("716433: a claim paying one shareholder address twice keeps the chain's legs and the chain's staker share", async () => {
+    // detailed_batch, where the history job stopped: the relay legs of the two claims of supplier pokt1gfxp7… exceed
+    // their mint (15 % + 70 % + 70 % to two addresses). What they leave is negative, the stakers' share is
+    // floor(minted × 0.14), and the shareholder is paid both legs. In a rolled-back transaction: the other tests count
+    // this day's heights.
+    await c.query("BEGIN");
+    try {
+      const { height, payload } = payloadOf("716433", false);
+      for (const { bind, sql } of writeSettlementCalls(S, height, payload)) await c.query(sql, bind);
+      const expected = JSON.parse(fs.readFileSync(path.join(FIXTURES, "settlement_716433.expected.json"), "utf8")) as {
+        claims: number;
+        income: Record<string, string>;
+      };
+      const got = await c.query(
+        `SELECT address || '|' || role || '|' || family AS k, sum(amount_upokt)::text AS a FROM ${S}.v_income_base WHERE height = $1 GROUP BY 1`,
+        [height]
+      );
+      assert.deepEqual(Object.fromEntries(got.rows.map((r) => [r.k, r.a])), expected.income);
+      const n = await c.query(
+        `SELECT (SELECT count(*)::int FROM ${S}.claim_settlements WHERE height = $1) claims,
+                (SELECT count(*)::int FROM ${S}.delegator_validator_payouts WHERE height = $1) dv`,
+        [height]
+      );
+      assert.deepEqual(n.rows[0], { claims: expected.claims, dv: 593 });
+      const rows = (
+        await c.query(
+          `SELECT relay_minted_upokt::text m, relay_to_supplier_upokt::text s, relay_to_stakers_upokt::text k, p.relay_upokt::text p
+           FROM ${S}.claim_settlements c
+           JOIN ${S}.shareholder_payouts p USING (height, event_idx)
+           WHERE c.height = 716433 AND c.supplier_id = 'pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9'
+             AND p.recipient_id = 'pokt1mvz6gf82quaal497gcpz2pt50qvynuxsp4up44' ORDER BY c.event_idx`
+        )
+      ).rows;
+      assert.deepEqual(rows, [
+        { m: "157082", s: "192345", k: "21991", p: "173730" },
+        { m: "170", s: "207", k: "23", p: "186" },
+      ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("refuses a staker share or a global overpayment on a claim that does not repeat a shareholder address", async () => {
+    // R1 and M1 admit the exception only on the claims that paid one address twice: the same amounts moved to a normal
+    // claim are refused. Each case in its own rolled-back transaction.
+    const DUP = "pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9";
+    const refuses = async (name: string, change: (claims: SettlementPayload["claims"]) => void, message: RegExp) => {
+      const { height, payload } = payloadOf(name, false);
+      change(payload.claims);
+      await c.query("BEGIN");
+      try {
+        await assert.rejects(async () => {
+          for (const { bind, sql } of writeSettlementCalls(S, height, payload)) await c.query(sql, bind);
+        }, message);
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    };
+    // 716433: one staker upokt more on a claim of another supplier (I3a alone would refuse it with another message)
+    await refuses(
+      "716433",
+      (claims) => {
+        const normal = claims.find((x) => x.supplier_id !== DUP && x.relay_to_stakers !== undefined);
+        assert.ok(normal);
+        normal.relay_to_stakers = (BigInt(normal.relay_to_stakers as string) + BigInt(1)).toString();
+      },
+      /the staker share differs from what the relay legs leave of the mint/
+    );
+    // 699213: the duplicate claim's global overpayment moved to another claim keeps M1's sum, and is refused
+    await refuses(
+      "699213",
+      (claims) => {
+        const dup = claims.find((x) => x.supplier_id === DUP);
+        const normal = claims.find((x) => x.supplier_id !== DUP);
+        assert.ok(dup && normal);
+        assert.equal(dup.global_overpaid, "13");
+        normal.global_overpaid = dup.global_overpaid;
+        dup.global_overpaid = "0";
+      },
+      /a global overpayment without a repeated shareholder address/
+    );
+  });
 
   it("records each height's era and mint_ratio, and the detailed_batch expiration and slash as the chain had them", async () => {
     const blocks = await c.query(`SELECT height::int h, era, mint_ratio::text m FROM ${S}.settlement_blocks ORDER BY height`);
@@ -396,7 +482,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
 
   it("writes map-era heights with the slices their bank legs paid, and rewrites them identically", async () => {
     // in one rolled-back transaction, like the settlement_result test: older eras refuse validator rewards from 11:00
-    const names = ["250053", "270033", "350013", "430053", "699993"];
+    // 694053: a supplier paying one shareholder address twice (poktroll v0.1.31), its legs above the shareholders' slice
+    // 699213: the same supplier with a global shareholder slice, paid twice too (M1)
+    const names = ["250053", "270033", "350013", "430053", "699993", "694053", "699213"];
     const send = async (height: number, payload: SettlementPayload) => {
       for (const { bind, sql } of writeSettlementCalls(S, height, payload)) await c.query(sql, bind);
     };
@@ -438,6 +526,23 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         assert.equal(r.pool_upokt, replayed ? r.staker_upokt : "0", name);
         assert.equal(r.bank, 1);
       }
+      // the chain's staker share, floor(146342 × 0.14); its relay legs leave 146342 − 179196 − 6587 − 3658
+      const dup = await c.query(
+        `SELECT relay_to_stakers_upokt::text k, (relay_minted_upokt - relay_to_supplier_upokt - relay_to_dao_upokt
+                - relay_to_source_owner_upokt - relay_to_application_upokt)::text left_upokt
+         FROM ${S}.claim_settlements WHERE height = 694053 AND supplier_id = 'pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9'`
+      );
+      assert.deepEqual(dup.rows, [{ k: "20487", left_upokt: "-43099" }]);
+      // 699213, the same claim with a global slice: G = 29, the shareholders' slice floor(29 × 0.8) = 23, and the bank
+      // legs pay 4 to the supplier and 16 twice to pokt1mvz6… (36, 13 overpaid, which M1 adds)
+      const glob = await c.query(
+        `SELECT c.global_minted_upokt::text g, c.global_to_supplier_upokt::text s, p.global_upokt::text p
+         FROM ${S}.claim_settlements c
+         JOIN ${S}.shareholder_payouts p USING (height, event_idx)
+         WHERE c.height = 699213 AND c.supplier_id = 'pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9'
+           AND p.recipient_id = 'pokt1mvz6gf82quaal497gcpz2pt50qvynuxsp4up44'`
+      );
+      assert.deepEqual(glob.rows, [{ g: "29", s: "36", p: "32" }]);
       const before = await md5All();
       for (const name of names) {
         const { height, payload } = payloadOf(name, false);

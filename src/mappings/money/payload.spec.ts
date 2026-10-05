@@ -692,6 +692,47 @@ describe("map era (poktroll v0.1.27–v0.1.32) events", () => {
     }
   });
 
+  it("reads a supplier paying one shareholder address twice: the chain's legs, and the stakers' slice by the formula", () => {
+    // mainnet 694,053: supplier pokt1gfxp7… lists pokt1mvz6… twice (15 % and 70 %); poktroll v0.1.31 pays the 70 % to
+    // both entries (distribution_supplier.go:27-50, :88), so its shareholder legs exceed the slice floor(146342 × 0.79)
+    const DUP = "pokt1gfxp7uv8cdx4ef84xvc5y0davsul83acmutcf9";
+    const p = build("694053")!;
+    const claim = p.claims.find((c) => c.supplier_id === DUP)!;
+    const legs = p.detailed.filter((d) => d.event_idx === claim.event_idx && d.role === "rev_share" && d.family === "relay");
+    assert.deepEqual(
+      legs.map((d) => [d.recipient_id.slice(0, 10), d.amount]),
+      [
+        ["pokt1gfxp7", "17342"],
+        ["pokt1mvz6g", "80927"],
+        ["pokt1mvz6g", "80927"],
+      ]
+    );
+    assert.equal(claim.minted, "146342");
+    assert.equal(claim.relay_to_stakers, "20487");
+    assert.equal(claim.global_overpaid, "0");
+    // every other claim: the formula's slice, with nothing overpaid
+    assert.ok(p.claims.every((c) => c === claim || c.global_overpaid === "0"));
+    // the repeated address paid unequal legs (its map total kept in step) is not what the chain does: the height stops
+    const MVZ6 = "pokt1mvz6gf82quaal497gcpz2pt50qvynuxsp4up44";
+    assert.throws(
+      () =>
+        build("694053", (events) => {
+          const second = events.filter(
+            (e) => e.type === "transfer" && e.attributes.some((a) => a.key === "recipient" && a.value === MVZ6)
+          )[1];
+          attr(second, "amount").value = "80926upokt";
+          const settled = events.find(
+            (e) =>
+              e.type === "pocket.tokenomics.EventClaimSettled" &&
+              e.attributes.some((a) => a.key === "supplier_operator_address" && a.value.includes(DUP))
+          )!;
+          const rd = attr(settled, "reward_distribution");
+          rd.value = rd.value.replace(`"${MVZ6}":"161854upokt"`, `"${MVZ6}":"161853upokt"`);
+        }),
+      /relay shareholders: the bank legs at position \d+ do not pay the formula amount 115610/
+    );
+  });
+
   it("reads a slash that takes the supplier below its minimum stake: the unbonding event sits between burn and slash", () => {
     // beta 133,593: poktroll emits EventSupplierUnbondingBegin (BELOW_MIN_STAKE) after the slash burn and before
     // EventSupplierSlashed (x/tokenomics/keeper/settle_pending_claims.go, slashSupplierStake)

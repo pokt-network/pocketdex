@@ -410,8 +410,11 @@ function detailedInput(
     );
   }
   const p = parseRat(shares.relay, "mint_equals_burn_claim_distribution.proposer");
+  // each claim's share is the chain's floor(minted · proposer) (tlm_relay_burn_equals_mint.go:196-201 at v0.1.33), not
+  // what its relay legs leave of the mint: a supplier paying one shareholder address twice leaves less, or nothing
+  for (const c of payload.claims) c.relay_to_stakers = floorMul(BigInt(c.minted), p).toString();
   const reward = new Map<Family, bigint>([
-    ["relay", payload.claims.reduce((a, c) => a + floorMul(BigInt(c.minted), p), ZERO)],
+    ["relay", payload.claims.reduce((a, c) => a + BigInt(c.relay_to_stakers as string), ZERO)],
   ]);
   const batch = new Map<Family, Map<string, bigint>>();
   for (const b of payload.batch) {

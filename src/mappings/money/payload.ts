@@ -45,6 +45,11 @@ export interface ClaimRow {
   proof_status: string;
   // the tokenomics mint_ratio the claim settled with, as the chain prints it (e.g. "0.975")
   mint_ratio: string;
+  // the claim's relay staker share by the chain's rule, floor(minted × proposer), where the reader knows the params
+  // (the map eras and detailed_batch); absent, the writer takes what the claim's relay legs leave of its mint
+  relay_to_stakers?: string;
+  // the map eras: what the claim's global shareholder legs paid beyond their slice (map.ts takeShareholders); absent, 0
+  global_overpaid?: string;
 }
 
 export interface DetailedRow {
@@ -771,6 +776,8 @@ function readMapHeight(
     c.overservicing_loss = (BigInt(c.claimed) - settled).toString();
     c.deflation_loss = (settled - minted).toString();
     c.mint_ratio = ratio;
+    c.relay_to_stakers = decoded.amounts[k].relayToStakers.toString();
+    c.global_overpaid = decoded.amounts[k].globalOverpaid.toString();
   });
   p.detailed = decoded.detailed;
   p.batch = decoded.stakers;
