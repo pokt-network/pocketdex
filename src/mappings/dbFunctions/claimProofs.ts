@@ -187,6 +187,9 @@ COMMENT ON TABLE ${s}.claims_by_block_coverage IS E'@omit';
 CREATE OR REPLACE FUNCTION ${s}.write_claims_by_block(from_height BIGINT, to_height BIGINT)
 RETURNS INTEGER
 LANGUAGE plpgsql
+-- planned for the heights of each call: msg_create_claims and event_claim_expireds have only SubQuery's GiST
+-- (block_id, _block_range) index by block_id, which a generic plan over parameters may not choose
+SET plan_cache_mode = force_custom_plan
 AS $$
 DECLARE written INTEGER;
 BEGIN
@@ -220,6 +223,8 @@ export function getClaimProofsDataByTimeFn(dbSchema: string): string {
 RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
+-- planned for the range of each call, as the LANGUAGE sql version it replaces was
+SET plan_cache_mode = force_custom_plan
 AS $$
 BEGIN
   -- claims_by_block only when it holds every block of the range (see createClaimsByBlockFn)
