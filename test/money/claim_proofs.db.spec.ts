@@ -190,4 +190,109 @@ describe("get_claim_proofs_data_by_time over claims_by_block (PostgreSQL)", { sk
     }
     assert.equal(await table(), once);
   });
+
+  // coverage at M = 90 (a block with claims, mid-seed): the table is complete from M up; below it, as before the fill,
+  // it has nothing. A row of M is altered so that an answer read from the table shows it.
+  const M = 90;
+  const withCoverageAtM = async (fn: () => Promise<void>) => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`UPDATE ${S}.claims_by_block_coverage SET covered_from_height = $1`, [M]);
+      await c.query(`DELETE FROM ${S}.claims_by_block WHERE block_id < $1`, [M]);
+      await c.query(`UPDATE ${S}.claims_by_block SET claim_count = claim_count + 1000 WHERE block_id = $1`, [M]);
+      await fn();
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  };
+  const ts = async (h: number) =>
+    (await c.query(`SELECT timestamp::text t FROM ${S}.blocks WHERE id = $1`, [h])).rows[0].t as string;
+
+  it("reads claims_by_block when the range has no block below the coverage", async () => {
+    await withCoverageAtM(async () => {
+      const r = await both(await ts(M), "2026-07-06 23:59:59", "day");
+      assert.notEqual(r.now, r.before);
+    });
+  });
+
+  it("answers from the raw tables, as before, when the range starts below the coverage", async () => {
+    await withCoverageAtM(async () => {
+      for (const [a, b, tr] of [
+        ["2026-07-01 00:00", "2026-07-06 23:59:59", "day"],
+        ["2026-07-01 00:00", "2026-07-06 23:59:59", "hour"],
+        ["-infinity", "infinity", "day"],
+        [await ts(M - 50), await ts(M + 50), "hour"],
+      ]) {
+        const r = await both(a, b, tr);
+        assert.ok(r.now);
+        assert.equal(r.now, r.before);
+      }
+    });
+  });
+
+  it("switches at the coverage: from the block below it is raw, from just after that block it is the table", async () => {
+    await withCoverageAtM(async () => {
+      const below = await both(await ts(M - 1), "2026-07-06 23:59:59", "hour");
+      assert.equal(below.now, below.before);
+      const after = (
+        await c.query(`SELECT (timestamp + interval '1 microsecond')::text t FROM ${S}.blocks WHERE id = $1`, [M - 1])
+      ).rows[0].t as string;
+      for (const a of [after, await ts(M)]) {
+        const r = await both(a, "2026-07-06 23:59:59", "hour");
+        assert.notEqual(r.now, r.before);
+      }
+      // a range that ends before the coverage is raw too
+      const old = await both("2026-07-01 00:00", await ts(M - 1), "hour");
+      assert.equal(old.now, old.before);
+    });
+  });
+
+  it("answers byte for byte what the previous version answered on every 7-hour range with the table filled from the middle", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`UPDATE ${S}.claims_by_block_coverage SET covered_from_height = $1`, [M]);
+      await c.query(`DELETE FROM ${S}.claims_by_block WHERE block_id < $1`, [M]);
+      const r = (
+        await c.query(`
+          WITH h AS (SELECT t FROM generate_series(timestamp '2026-06-30 22:00', timestamp '2026-07-07 02:00', interval '7 hours') t)
+          SELECT count(*) FILTER (WHERE ${S}.get_claim_proofs_data_by_time(a.t, b.t, tr)::text
+                                    IS DISTINCT FROM ${S}.get_claim_proofs_data_by_time_before(a.t, b.t, tr)::text)::text diff
+          FROM h a CROSS JOIN h b CROSS JOIN (VALUES ('hour'), ('day')) v(tr)`)
+      ).rows[0];
+      assert.equal(r.diff, "0");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("starts the coverage at the next height to index, and lowers it only by writes that reach it", async () => {
+    const cov = async () =>
+      Number((await c.query(`SELECT covered_from_height::text h FROM ${S}.claims_by_block_coverage`)).rows[0].h);
+    await c.query("BEGIN");
+    try {
+      await c.query(`DROP TABLE ${S}.claims_by_block_coverage`);
+      await c.query(createClaimsByBlockFn(S));
+      const top = await maxHeight();
+      assert.equal(await cov(), top + 1);
+      // the start again keeps it
+      await c.query(createClaimsByBlockFn(S));
+      assert.equal(await cov(), top + 1);
+      // the indexer's next block keeps the table complete from the same height
+      await c.query(`SELECT ${S}.write_claims_by_block($1, $1)`, [top + 1]);
+      assert.equal(await cov(), top + 1);
+      // a range that leaves a gap below the coverage does not lower it
+      await c.query(`SELECT ${S}.write_claims_by_block(1, $1)`, [top - 1]);
+      assert.equal(await cov(), top + 1);
+      // the fill walking down from it lowers it chunk by chunk
+      await c.query(`SELECT ${S}.write_claims_by_block($1, $2)`, [top - 9, top]);
+      assert.equal(await cov(), top - 9);
+      await c.query(`SELECT ${S}.write_claims_by_block($1, $2)`, [top - 30, top - 10]);
+      assert.equal(await cov(), top - 30);
+      // rewriting heights inside the covered part leaves it as is
+      await c.query(`SELECT ${S}.write_claims_by_block($1, $1)`, [top - 5]);
+      assert.equal(await cov(), top - 30);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
 });
