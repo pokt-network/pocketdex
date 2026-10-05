@@ -127,7 +127,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     await c.query(`
       INSERT INTO ${S}.blocks SELECT height, block_time AT TIME ZONE 'UTC' FROM ${S}.settlement_blocks;
       INSERT INTO ${S}.event_claim_settleds
-        SELECT height || '-' || event_idx, height, supplier_id, service_id, claimed_upokt, relays, estimated_relays,
+        SELECT height || '-' || event_idx, height, supplier_id, service_id, settled_upokt, relays, estimated_relays,
                claimed_compute_units, estimated_compute_units, jsonb_build_array(jsonb_build_object('amount', settled_upokt || 'n'))
         FROM ${S}.claim_settlements;
       INSERT INTO ${S}.mod_to_acct_transfers
@@ -152,6 +152,11 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       INSERT INTO ${S}.supplier_service_configs
         SELECT supplier_id, 'idle-service', rev_share, int8range(1, NULL) FROM ${S}.supplier_service_configs
         WHERE supplier_id = (SELECT min(supplier_id) FROM ${S}.supplier_service_configs) LIMIT 1;`);
+    // the indexer's claimed_amount is the settled amount; the money tables keep the claim before overservicing apart.
+    // Every claim of this fixture settled whole, so make them differ: gross_rewards must follow settled_upokt.
+    await c.query(`
+      UPDATE ${S}.claim_settlements SET claimed_upokt = claimed_upokt + 1000;
+      UPDATE ${S}.daily_claims_by_supplier_application_service SET claimed_upokt = claimed_upokt + 1000 * claim_count;`);
     // a shareholder paid by several suppliers, in both families (the live group_by_service counts its claims twice)
     shareholder = (
       await c.query(`SELECT recipient_id FROM ${S}.shareholder_payouts WHERE relay_upokt > 0 AND global_upokt > 0

@@ -1290,8 +1290,9 @@ BEGIN
 END $$;
 
 -- inflation is the whole global mint (every role, = TLM_GLOBAL_MINT_INFLATION), reimbursement the application's escrow to
--- the DAO, mint_burn the relay mint: the same JSON as the live function since #94 (measured on mainnet, 2026-10-04:
--- 24 h, 7 d and 30 d windows, md5 equal).
+-- the DAO, mint_burn the relay mint: the same JSON as the live function since #94 (md5 equal on mainnet over 24 h, 7 d
+-- and 30 d, and on beta month by month, 2026-10-05), except at beta heights 153513, 153573, 153633 and 153693, whose 32
+-- claims each carry a 1 upokt escrow here and none in the indexer's event_claim_settleds.mints (128 upokt in March 2026).
 CREATE OR REPLACE FUNCTION ${s}.legacy_mint_breakdown_between_dates(start_date timestamp, end_date timestamp)
 RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object(
@@ -1309,23 +1310,25 @@ RETURNS json LANGUAGE sql STABLE AS $$
 $$;
 
 -- The claims of these suppliers settled in [f, t), by service, from the daily rollup and the base at the edges, as
--- get_supplier_earnings reads them; any number of suppliers.
+-- get_supplier_earnings reads them; any number of suppliers. settled_upokt is the live functions' gross_rewards: the
+-- indexer's event_claim_settleds.claimed_amount is the settled amount (an overserviced claim's is below its claim),
+-- measured equal per settlement height over the whole money history of mainnet and beta (2026-10-05).
 CREATE OR REPLACE FUNCTION ${s}._legacy_claims_by_service(p_suppliers text[], f timestamptz, t timestamptz)
-RETURNS TABLE(service_id text, claimed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric,
+RETURNS TABLE(service_id text, settled_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric,
   estimated_compute_units numeric)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record;
 BEGIN
   rg := ${s}._ranges(f, t, NULL);
   RETURN QUERY
-  SELECT r.service_id, sum(r.claimed_upokt)::numeric, sum(r.relays)::numeric, sum(r.estimated_relays)::numeric,
+  SELECT r.service_id, sum(r.settled_upokt)::numeric, sum(r.relays)::numeric, sum(r.estimated_relays)::numeric,
          sum(r.claimed_compute_units)::numeric, sum(r.estimated_compute_units)::numeric
   FROM (
-    SELECT d.service_id, d.claimed_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units
+    SELECT d.service_id, d.settled_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units
     FROM ${s}.daily_claims_by_supplier_application_service d
     WHERE d.supplier_id = ANY(p_suppliers) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
-    SELECT c.service_id, c.claimed_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units
+    SELECT c.service_id, c.settled_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units
     FROM ${s}.claim_settlements c
     WHERE c.supplier_id = ANY(p_suppliers) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
   ) r GROUP BY 1;
@@ -1350,7 +1353,7 @@ BEGIN
              'estimated_relays', coalesce(c.estimated_relays, 0),
              'computed_units', coalesce(c.compute_units, 0),
              'estimated_computed_units', coalesce(c.estimated_compute_units, 0),
-             'gross_rewards', coalesce(c.claimed_upokt, 0)) ORDER BY sv.service_id)
+             'gross_rewards', coalesce(c.settled_upokt, 0)) ORDER BY sv.service_id)
     FROM (SELECT DISTINCT ssc.service_id FROM ${s}.supplier_service_configs ssc
           WHERE ssc.supplier_id = ANY(operator_addresses) AND upper_inf(ssc._block_range)) sv
     LEFT JOIN ${s}._legacy_claims_by_service(operator_addresses, f, t) c ON c.service_id = sv.service_id);
@@ -1395,7 +1398,7 @@ BEGIN
              'estimated_relays', coalesce(c.estimated_relays, 0),
              'computed_units', coalesce(c.compute_units, 0),
              'estimated_computed_units', coalesce(c.estimated_compute_units, 0),
-             'gross_rewards', coalesce(c.claimed_upokt, 0),
+             'gross_rewards', coalesce(c.settled_upokt, 0),
              'net_rewards', coalesce(n.amount_upokt, 0)) ORDER BY sv.service_id)
     FROM services sv
     LEFT JOIN ${s}._legacy_claims_by_service(paying, f, t) c ON c.service_id = sv.service_id
