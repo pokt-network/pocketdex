@@ -35,6 +35,8 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       sequelize.query(`SELECT ${dbSchema}.${upsertAppsByBlockAndServicesFnName}(${height}::bigint);`, defaultOptions),
       // insert new records of relays by services and block
       sequelize.query(`SELECT ${dbSchema}.${upsertRelaysByBlockAndServicesFnName}(${height}::bigint);`, defaultOptions),
+      // rewrite this block's row of claims_by_block (claims created, settled and expired in it)
+      sequelize.query(`SELECT ${dbSchema}.write_claims_by_block(${height}::bigint, ${height}::bigint);`, defaultOptions),
       // refresh domain+service daily rewards summary — only on blocks with settlements
       hasClaimSettled && sequelize.query(`SELECT ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}(${height}::bigint);`, defaultOptions),
     ].filter(Boolean))
