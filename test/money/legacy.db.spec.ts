@@ -82,7 +82,11 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
 
   before(async () => {
     await c.connect();
-    await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE; CREATE SCHEMA ${S};`);
+    // as the indexer's role in pnf, not a superuser: the DDL must install without superuser rights (beta, 2026-10-05)
+    await c.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${S}_owner') THEN CREATE ROLE ${S}_owner NOSUPERUSER; END IF;
+    END $$`);
+    await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE; CREATE SCHEMA ${S} AUTHORIZATION ${S}_owner; SET ROLE ${S}_owner;`);
     await c.query(createSettlementTablesFn(S));
     await c.query(createSettlementWriterFn(S));
     await c.query(`
@@ -179,7 +183,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     assert.ok(suppliers.length >= 2 && pair.length >= 2, `${suppliers.length} suppliers, ${pair.length} shareholders`);
   });
   after(async () => {
-    await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE`);
+    await c.query(`RESET ROLE; DROP SCHEMA IF EXISTS ${S} CASCADE`);
     await c.end();
   });
 
@@ -425,7 +429,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         assert.equal(mint.rows[0].m, '{"reimbursement" : 0, "inflation" : 0, "mint_burn" : 0}');
       }
     }
-    // the catalog keeps its caps: money.legacy is set only inside the legacy_ functions
+    // the catalog keeps its caps: only the legacy_ functions read _income uncapped
     await assert.rejects(
       c.query(`SELECT * FROM ${S}.get_income($1, '2026-06-01T00:00:00Z', '2026-09-02T12:00:00Z', 'day')`, [
         [shareholder],
