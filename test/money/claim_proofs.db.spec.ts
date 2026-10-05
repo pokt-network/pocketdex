@@ -324,4 +324,50 @@ describe("get_claim_proofs_data_by_time over claims_by_block (PostgreSQL)", { sk
       await c.query("ROLLBACK");
     }
   });
+
+  // An image without the writer indexes five more blocks with claims (07-07), then this one runs again.
+  const indexWithoutWriter = async (top: number) => {
+    for (let h = top + 1; h <= top + 5; h++) {
+      await c.query(`INSERT INTO ${S}.blocks VALUES ($1::bigint, timestamp '2026-07-07 00:00' + $1::bigint * interval '1 minute', int8range($1::bigint, NULL))`, [h]);
+      await c.query(`INSERT INTO ${S}.msg_create_claims VALUES ($1::bigint || '-c-g', $1::bigint, 9, 9, 9, 9, 9, int8range($1::bigint, NULL))`, [h]);
+    }
+  };
+  const coverage = async () =>
+    (await c.query(`SELECT covered_from_height || '/' || written_to_height v FROM ${S}.claims_by_block_coverage`)).rows[0].v as string;
+  const gapRanges: [string, string, string][] = [
+    ["2026-07-06 00:00", "2026-07-08 00:00", "hour"],
+    ["-infinity", "infinity", "day"],
+  ];
+
+  for (const when of ["at the start", "on the next block written"]) {
+    it(`sends the heights an image without the writer indexed to the raw tables, found ${when}`, async () => {
+      await c.query("BEGIN");
+      try {
+        const top = await maxHeight();
+        assert.equal(await coverage(), `1/${top}`);
+        await indexWithoutWriter(top);
+        if (when === "at the start") {
+          await c.query(createClaimsByBlockFn(S));
+          assert.equal(await coverage(), `${top + 6}/${top + 5}`);
+        } else {
+          await c.query(`INSERT INTO ${S}.blocks VALUES ($1::bigint, timestamp '2026-07-07 01:00', int8range($1::bigint, NULL))`, [top + 6]);
+          await c.query(`SELECT ${S}.write_claims_by_block($1, $1)`, [top + 6]);
+          assert.equal(await coverage(), `${top + 6}/${top + 6}`);
+        }
+        for (const [a, b, tr] of gapRanges) {
+          const r = await both(a, b, tr);
+          assert.equal(r.now, r.before);
+        }
+        // the fill walking down from the coverage rewrites the stretch and brings the coverage back to 1
+        await c.query(`SELECT ${S}.write_claims_by_block(1, $1)`, [top + 5]);
+        assert.match(await coverage(), /^1\//);
+        for (const [a, b, tr] of gapRanges) {
+          const r = await both(a, b, tr);
+          assert.equal(r.now, r.before);
+        }
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+  }
 });

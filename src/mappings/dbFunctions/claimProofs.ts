@@ -129,6 +129,11 @@ Returns claim and proof statistics for specific delegator addresses aggregated o
 // it to from, so the fill, which walks down from it, extends it chunk by chunk. get_claim_proofs_data_by_time reads the
 // table only for a range without blocks below it, and the raw tables otherwise.
 //
+// written_to_height is the highest height a write that reached the head wrote. An image without this writer (a
+// rollback, then the new image again) indexes heights it never writes: the start, or the first write after them,
+// finds blocks above written_to_height + 1 and moves covered_from_height up to the next height written, so the
+// unwritten stretch goes to the raw tables until the fill, walking down again, rewrites it.
+//
 // Each row is counted from the raw tables exactly as get_claim_proofs_data_by_time did: COUNT(DISTINCT id) and
 // SUM over every row, only for heights present in blocks (the function joined blocks). An event id never spans two
 // blocks (it carries the tx hash or the height: src/mappings/utils/ids.ts), so a bucket's distinct count is the sum of
@@ -174,16 +179,21 @@ CREATE INDEX IF NOT EXISTS claims_by_block_timestamp_idx ON ${s}.claims_by_block
 COMMENT ON TABLE ${s}.claims_by_block IS E'@omit';
 CREATE TABLE IF NOT EXISTS ${s}.claims_by_block_coverage (
   singleton           BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
-  covered_from_height BIGINT  NOT NULL
+  covered_from_height BIGINT  NOT NULL,
+  written_to_height   BIGINT  NOT NULL
 );
 -- on the first start, at a height the indexer has not written yet: the next one it writes
-INSERT INTO ${s}.claims_by_block_coverage (covered_from_height)
-SELECT COALESCE(max(id), 0)::bigint + 1 FROM ${s}.blocks
+INSERT INTO ${s}.claims_by_block_coverage (covered_from_height, written_to_height)
+SELECT COALESCE(max(id), 0)::bigint + 1, COALESCE(max(id), 0)::bigint FROM ${s}.blocks
 ON CONFLICT (singleton) DO NOTHING;
+-- heights indexed by an image without the writer: complete only from the next height written
+UPDATE ${s}.claims_by_block_coverage cv SET covered_from_height = b.head + 1, written_to_height = b.head
+FROM (SELECT COALESCE(max(id), 0)::bigint AS head FROM ${s}.blocks) b
+WHERE b.head > cv.written_to_height;
 COMMENT ON TABLE ${s}.claims_by_block_coverage IS E'@omit';
 
--- Rewrites the rows of the heights [from_height, to_height] from the raw tables, and lowers the coverage to
--- from_height when the range reaches it; returns how many rows it wrote.
+-- Rewrites the rows of the heights [from_height, to_height] from the raw tables and keeps the coverage (see above):
+-- up after an unwritten stretch, down to from_height when the range reaches it; returns how many rows it wrote.
 CREATE OR REPLACE FUNCTION ${s}.write_claims_by_block(from_height BIGINT, to_height BIGINT)
 RETURNS INTEGER
 LANGUAGE plpgsql
@@ -208,6 +218,12 @@ BEGIN
   -- the indexer and the history fill may write the same height at once; both write the same values
   ON CONFLICT (block_id) DO UPDATE SET (${COLUMNS.join(", ")}) = (${COLUMNS.map((c) => `EXCLUDED.${c}`).join(", ")});
   GET DIAGNOSTICS written = ROW_COUNT;
+  IF to_height >= head THEN
+    -- the indexer's block: a stretch above written_to_height that nothing wrote moves the coverage up to it
+    UPDATE ${s}.claims_by_block_coverage
+    SET covered_from_height = CASE WHEN from_height > written_to_height + 1 THEN from_height ELSE covered_from_height END,
+        written_to_height = head;
+  END IF;
   UPDATE ${s}.claims_by_block_coverage SET covered_from_height = from_height
   WHERE from_height < covered_from_height AND to_height + 1 >= covered_from_height;
   RETURN written;
