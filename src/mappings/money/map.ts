@@ -209,7 +209,11 @@ export function decodeMapClaims(
       const start = j;
       let sum = ZERO;
       while (sum < amount && j < legs.length && legs[j].sender === SUPPLIER_MODULE) sum += legs[j++].amount;
-      if (sum !== amount) {
+      // A prefix of the legs can pay the slice exactly and still be followed by more shareholder legs: a slice of 2 to
+      // 6 upokt pays [1, 2, 2] for 3 (mainnet 703,773, G = 4). No other supplier module leg comes next: the relay
+      // shareholders are followed by tokenomics legs, among them the DAO's remainder, at least M × its share (0.045 to
+      // 0.1 over mainnet's map era), and the global ones by the escrow leg, G > 0 to the DAO.
+      if (sum !== amount || (j < legs.length && legs[j].sender === SUPPLIER_MODULE)) {
         while (j < legs.length && legs[j].sender === SUPPLIER_MODULE) sum += legs[j++].amount;
         const byRecipient = new Map<string, bigint[]>();
         for (const l of legs.slice(start, j)) {

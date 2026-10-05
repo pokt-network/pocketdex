@@ -10,7 +10,8 @@ import { writeSettlementCalls } from "../dbFunctions/settlement/writer";
 import { eraAtHeight } from "../utils/params_history";
 import { sha256 } from "@cosmjs/crypto";
 import { toBech32 } from "@cosmjs/encoding";
-import { MapState, proposerOperatorAccount } from "./map";
+import { SUPPLIER_MODULE, TOKENOMICS_MODULE } from "./bank";
+import { decodeMapClaims, MapState, proposerOperatorAccount } from "./map";
 import { buildSettlementPayload, estimatedRelays, RawEvent, SettlementPayload } from "./payload";
 
 const q = (v: string) => JSON.stringify(v);
@@ -731,6 +732,107 @@ describe("map era (poktroll v0.1.27–v0.1.32) events", () => {
         }),
       /relay shareholders: the bank legs at position \d+ do not pay the formula amount 115610/
     );
+  });
+
+  it("reads a duplicate shareholder's global legs when a prefix of them already pays the slice (G = 3, 4, 8)", () => {
+    // mainnet 703,773 event 3044: G = 4, slice floor(4 × 0.8) = 3, legs gfxp7 1, mvz6 2, mvz6 2. The first two pay the
+    // slice exactly, so a reader that stops there leaves mvz6's second leg where the global DAO leg belongs. The legs
+    // follow poktroll v0.1.31 GetSupplierShareholderAmountMap (distribution_supplier.go:27-50, :88): one amount per
+    // address, the last entry's, the remainder to the first address, paid once per entry, zero amounts skipped.
+    const [A, B, OWNER, DAO, APP] = ["pokt1a", "pokt1b", "pokt1owner", "pokt1dao", "pokt1app"];
+    const state: MapState = {
+      meb: { supplier: "0.79", proposer: "0", source_owner: "0.025", application: "0" },
+      mintAlloc: { supplier: "0.8", proposer: "0", source_owner: "0.1", application: "0" },
+      globalInflation: "0.000001",
+      mintRatio: "0.975",
+      dao: DAO,
+      validatorAccounts: new Set(),
+    };
+    const shareholderLegs = (x: bigint): Array<[string, bigint]> => {
+      const entries: Array<[string, bigint]> = [
+        [A, BigInt(15)],
+        [B, BigInt(15)],
+        [B, BigInt(70)],
+      ];
+      const byAddress = new Map<string, bigint>();
+      let total = BigInt(0);
+      for (const [addr, pct] of entries) {
+        byAddress.set(addr, (x * pct) / BigInt(100));
+        total += (x * pct) / BigInt(100);
+      }
+      byAddress.set(A, byAddress.get(A)! + x - total);
+      return entries.map(([addr]): [string, bigint] => [addr, byAddress.get(addr)!]).filter(([, n]) => n > BigInt(0));
+    };
+    const want: Array<[number, Array<[string, number]>, number]> = [
+      [
+        3,
+        [
+          [A, 1],
+          [B, 1],
+          [B, 1],
+        ],
+        1,
+      ],
+      [
+        4,
+        [
+          [A, 1],
+          [B, 2],
+          [B, 2],
+        ],
+        2,
+      ],
+      [
+        8,
+        [
+          [A, 2],
+          [B, 4],
+          [B, 4],
+        ],
+        4,
+      ],
+    ];
+    for (const [g, legsWant, overpaid] of want) {
+      const G = BigInt(g);
+      const S = G * BigInt(1000000);
+      const M = (S * BigInt(975)) / BigInt(1000);
+      const relSupplier = (M * BigInt(79)) / BigInt(100);
+      const relOwner = (M * BigInt(25)) / BigInt(1000);
+      const gloSupplier = (G * BigInt(8)) / BigInt(10);
+      const global = shareholderLegs(gloSupplier);
+      assert.deepEqual(
+        global.map(([a, n]) => [a, Number(n)]),
+        legsWant,
+        `G = ${g}`
+      );
+      const legs = [
+        { sender: SUPPLIER_MODULE, recipient: A, amount: relSupplier },
+        { sender: TOKENOMICS_MODULE, recipient: OWNER, amount: relOwner },
+        { sender: TOKENOMICS_MODULE, recipient: DAO, amount: M - relSupplier - relOwner },
+        ...global.map(([recipient, amount]) => ({ sender: SUPPLIER_MODULE, recipient, amount })),
+        { sender: TOKENOMICS_MODULE, recipient: DAO, amount: G - gloSupplier },
+        { sender: TOKENOMICS_MODULE, recipient: DAO, amount: G },
+      ];
+      const map = new Map<string, bigint>();
+      for (const l of legs) map.set(l.recipient, (map.get(l.recipient) ?? BigInt(0)) + l.amount);
+      const out = decodeMapClaims(
+        703773,
+        "map_all_bonded_deflation",
+        [{ event_idx: 7, application_id: APP, claimed: S, map }],
+        [{ relayMint: M, globalMint: G, burn: S, legs }],
+        [G],
+        state
+      );
+      assert.equal(out.amounts[0].globalOverpaid, BigInt(overpaid), `G = ${g}`);
+      const rows = out.detailed.filter(
+        (d) => d.op_reason === "TLM_GLOBAL_MINT_SUPPLIER_SHAREHOLDER_REWARD_DISTRIBUTION"
+      );
+      assert.deepEqual(
+        rows.map((d) => [d.recipient_id, Number(d.amount)]),
+        legsWant,
+        `G = ${g}`
+      );
+    }
   });
 
   it("reads a slash that takes the supplier below its minimum stake: the unbonding event sits between burn and slash", () => {
