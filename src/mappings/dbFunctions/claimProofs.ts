@@ -121,7 +121,7 @@ Returns claim and proof statistics for specific delegator addresses aggregated o
 // Plain DDL that SubQuery does not manage, like relay_by_block_and_services: its rewind does not touch it. Every
 // block calls write_claims_by_block(height, height) in the block transaction (src/mappings/pocket/reports.ts),
 // after the claim entities are written, and the function deletes the heights it writes first, so a reindexed
-// block is rewritten. The history is filled once with the same function over ranges of heights
+// block is rewritten, and the rows above the highest height in blocks, which a rewind leaves behind. The history is filled once with the same function over ranges of heights
 // (scripts/fill_claims_by_block.sql).
 //
 // claims_by_block_coverage holds covered_from_height: the table is complete from that height to the head. The first
@@ -191,9 +191,12 @@ LANGUAGE plpgsql
 -- (block_id, _block_range) index by block_id, which a generic plan over parameters may not choose
 SET plan_cache_mode = force_custom_plan
 AS $$
-DECLARE written INTEGER;
+DECLARE written INTEGER; head BIGINT;
 BEGIN
+  SELECT max(id) INTO head FROM ${s}.blocks;
   DELETE FROM ${s}.claims_by_block WHERE block_id BETWEEN from_height AND to_height;
+  -- rows of heights a rewind removed from blocks (SubQuery's rewind does not touch this table); none otherwise
+  DELETE FROM ${s}.claims_by_block WHERE block_id > head;
   INSERT INTO ${s}.claims_by_block
   SELECT b.id, b.timestamp, ${cols("c")}, ${cols("p")}, ${cols("e")}
   FROM ${s}.blocks b
@@ -257,6 +260,8 @@ BEGIN
           SUM(cb.expired_upokt) AS expired_upokt
         FROM ${dbSchema}.claims_by_block cb
         WHERE cb.timestamp BETWEEN start_ts AND end_ts
+          -- not the rows of heights a rewind removed, until the next write deletes them
+          AND cb.block_id <= (SELECT max(id) FROM ${dbSchema}.blocks)
         GROUP BY 1
       )
       SELECT jsonb_agg(

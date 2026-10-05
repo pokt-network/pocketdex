@@ -295,4 +295,33 @@ describe("get_claim_proofs_data_by_time over claims_by_block (PostgreSQL)", { sk
       await c.query("ROLLBACK");
     }
   });
+
+  it("answers like the raw tables after a rewind, before and after the indexer writes again", async () => {
+    await c.query("BEGIN");
+    try {
+      // SubQuery's rewind to 120 removes the blocks and the raw rows above it, and leaves claims_by_block as it was
+      await c.query(`DELETE FROM ${S}.blocks WHERE id > 120`);
+      for (const t of RAW) await c.query(`DELETE FROM ${S}.${t} WHERE block_id > 120 AND block_id < 100000`);
+      const ranges: [string, string, string][] = [
+        ["2026-07-01 00:00", "2026-07-06 23:59:59", "hour"],
+        ["-infinity", "infinity", "day"],
+      ];
+      for (const [a, b, tr] of ranges) {
+        const r = await both(a, b, tr);
+        assert.equal(r.now, r.before);
+      }
+      // the indexer writes 121 again, now with one claim only: the rows above it go
+      await c.query(`INSERT INTO ${S}.blocks VALUES (121, timestamp '2026-07-05 23:00', int8range(121, NULL))`);
+      await c.query(`INSERT INTO ${S}.msg_create_claims VALUES ('121-c-x', 121, 5, 5, 5, 5, 5, int8range(121, NULL))`);
+      await c.query(`SELECT ${S}.write_claims_by_block(121, 121)`);
+      const above = (await c.query(`SELECT count(*)::text n FROM ${S}.claims_by_block WHERE block_id > 121`)).rows[0];
+      assert.equal(above.n, "0");
+      for (const [a, b, tr] of ranges) {
+        const r = await both(a, b, tr);
+        assert.equal(r.now, r.before);
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
 });
