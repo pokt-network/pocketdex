@@ -832,6 +832,10 @@ END $$;
 -- family was written unattributed (no validator rows). Those rows are read from the base table (a few per height).
 -- The global staker share is 0 from 263,093 on mainnet (mint_allocation_percentages proposer; only
 -- map_proposer_consensus pays one, measured in the params), and the parser stops a detailed_batch height that has one.
+-- Known overstatement (follow-up): the claims that paid one shareholder address twice (mainnet 690,685–716,533, writer.ts)
+-- carry the overpayment in relay_to_supplier_upokt and global_to_supplier_upokt, so the supplier role of mint_equals_burn
+-- and global_mint includes it although it left the supplier module, not the mint: about 39 POKT of relay, a few upokt
+-- of global. Taking it out needs the overpayment per claim in the base table and its rollup.
 CREATE OR REPLACE FUNCTION ${s}.get_supply_flows(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL,
   by_role boolean DEFAULT false, fill_empty_buckets boolean DEFAULT false)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, flow text, role text, amount_upokt numeric)
