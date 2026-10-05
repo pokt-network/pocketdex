@@ -333,6 +333,101 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     }
   });
 
+  it("every legacy_ function accepts the ranges and units the live one accepts, and answers the same at the edges", async () => {
+    // [start, end, trunc]: longer than the catalog's caps, exactly 7 days by hour (end + 1 µs is past 7 days), units the
+    // catalog has no bucket for, an inverted range and a NULL end: the live function answers all of them
+    const EDGES: Array<[string | null, string | null, string | null]> = [
+      ["2026-06-01T00:00:00Z", "2026-09-02T12:00:00Z", "day"], // 93 days
+      ["2026-08-27T00:00:00Z", "2026-09-03T00:00:00Z", "hour"], // exactly 7 days
+      ["2026-01-01T00:00:00Z", "2026-12-31T00:00:00Z", "week"], // 364 days
+      ["2025-01-01T00:00:00Z", "2026-12-31T00:00:00Z", "week"], // past 366 days
+      ["2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z", "quarter"],
+      ["2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z", "DAY"],
+      ["2026-09-01T11:00:00Z", "2026-09-02T09:00:00Z", "minute"],
+      ["2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z", null],
+      ["2026-09-03T00:00:00Z", "2026-09-01T00:00:00Z", "day"], // inverted
+      [null, "2026-09-03T00:00:00Z", "day"],
+      ["2026-09-01T00:00:00Z", null, "day"],
+      ["2026-09-01T12:00:00Z", "2026-09-01T12:00:00Z", "hour"], // start = end: the settlement at that instant
+    ];
+    type Row = Record<string, unknown>;
+    const elements = (j: string | null) =>
+      j === null ? null : (JSON.parse(j) as Row[]).map((x) => JSON.stringify(x)).sort();
+    const some = suppliers.slice(0, 1);
+    for (const [s, e, tr] of EDGES) {
+      const at = `${s}..${e} ${tr}`;
+      for (const addrs of [[shareholder], pair]) {
+        for (const [live, legacy, args] of [
+          [
+            "get_rewards_by_addresses_and_time($1, $2, $3)",
+            "legacy_rewards_by_addresses_and_time($1, $2, $3)",
+            [addrs, s, e],
+          ],
+          [
+            "get_rewards_of_addresses_by_suppliers_and_time($1, $2, $3, $4)",
+            "legacy_rewards_of_addresses_by_suppliers_and_time($1, $2, $3, $4)",
+            [addrs, some, s, e],
+          ],
+          [
+            "get_rewards_by_addresses_and_time_group_by_date($1, $2, $3, $4)",
+            "legacy_rewards_by_addresses_and_time_group_by_date($1, $2, $3, $4)",
+            [addrs, s, e, tr],
+          ],
+        ] as Array<[string, string, unknown[]]>) {
+          const [l, n] = await both(live, legacy, args);
+          assert.equal(n, l, `${legacy} ${at}`);
+        }
+        for (const [live, legacy, args] of [
+          [
+            "get_rewards_by_addresses_and_time_group_by_address_and_date($1, $2, $3, $4)",
+            "legacy_rewards_by_addresses_and_time_group_by_address_and_date($1, $2, $3, $4)",
+            [addrs, s, e, tr],
+          ],
+          [
+            "get_rewards_by_suppliers_and_time_group_by_address_and_date($1, $2, $3, $4, $5)",
+            "legacy_rewards_by_suppliers_and_time_group_by_address_and_date($1, $2, $3, $4, $5)",
+            [addrs, some, s, e, tr],
+          ],
+        ] as Array<[string, string, unknown[]]>) {
+          const [l, n] = await both(live, legacy, args);
+          assert.deepEqual(elements(n), elements(l), `${legacy} ${at}`);
+        }
+        const [l, n] = await both(
+          "get_rewards_by_addresses_and_time_group_by_service($1, $2, $3)",
+          "legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)",
+          [addrs, s, e]
+        );
+        const net = (j: string | null) =>
+          sorted(j)?.map((x) => [x.service_id, String((x as unknown as Row).net_rewards)]);
+        assert.deepEqual(net(n), net(l), `addresses by service ${at}`);
+        if (s === null || e === null || s > e) assert.deepEqual(sorted(n), sorted(l), `addresses by service ${at}`);
+      }
+      const [l, n] = await both(
+        "get_rewards_by_suppliers_and_time_group_by_service($1, $2, $3)",
+        "legacy_rewards_by_suppliers_and_time_group_by_service($1, $2, $3)",
+        [suppliers, s, e]
+      );
+      assert.deepEqual(sorted(n), sorted(l), `suppliers by service ${at}`);
+      const burn = await both(
+        "get_burn_breakdown_between_dates($1, $2)",
+        "legacy_burn_breakdown_between_dates($1, $2)",
+        [s, e]
+      );
+      assert.equal(burn[1], burn[0], `burn ${at}`);
+      if (s === null || e === null || s > e) {
+        const mint = await c.query(`SELECT ${S}.legacy_mint_breakdown_between_dates($1, $2)::text m`, [s, e]);
+        assert.equal(mint.rows[0].m, '{"reimbursement" : 0, "inflation" : 0, "mint_burn" : 0}');
+      }
+    }
+    // the catalog keeps its caps: money.legacy is set only inside the legacy_ functions
+    await assert.rejects(
+      c.query(`SELECT * FROM ${S}.get_income($1, '2026-06-01T00:00:00Z', '2026-09-02T12:00:00Z', 'day')`, [
+        [shareholder],
+      ]),
+      /bucket=day allows ranges up to 92 days/
+    );
+  });
+
   it("every legacy_ function raises on a range the money tables do not cover, where the live one answers", async () => {
     // a settlement height before the first written one: the money tables do not cover what precedes it
     await c.query(`INSERT INTO ${S}.event_claim_settleds (id, block_id) VALUES ('1-0', 1)`);
@@ -381,13 +476,13 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
        ORDER BY 1`,
       [S]
     );
-    assert.equal(rows.length, 10);
+    assert.equal(rows.length, 11);
     for (const r of rows) {
-      if (r.proname === "_legacy_claims_by_service") assert.equal(r.tag, "@omit");
+      if (String(r.proname).startsWith("_legacy_")) assert.equal(r.tag, "@omit");
       else
         assert.match(
           String(r.tag),
-          /^Replaces get_[a-z_]+ \(get[A-Za-z]+\)\. Same arguments and the same JSON/,
+          /^Replaces get_[a-z_]+ \(get[A-Za-z]+\)\. Same arguments, the same ranges and date_trunc units accepted/,
           String(r.proname)
         );
     }

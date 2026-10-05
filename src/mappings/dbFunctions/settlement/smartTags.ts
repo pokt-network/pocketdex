@@ -99,6 +99,7 @@ const OMITTED_FUNCTIONS = [
   "_require_current_rollups",
   "_json_strings",
   "_legacy_claims_by_service",
+  "_legacy_series",
 ];
 
 // The legacy_* functions (functions.ts): what each replaces, for its GraphQL description. GraphQL publishes them as
@@ -121,11 +122,14 @@ const LEGACY_REPLACES: Record<string, string> = {
   legacy_burn_breakdown_between_dates: "get_burn_breakdown_between_dates (getBurnBreakdownBetweenDates)",
 };
 const LEGACY_SAME =
-  "Same arguments and the same JSON, read from the settlement money tables. A range they do not cover (money_coverage: before the first written settlement, or over a settlement gap) raises an error instead of answering 0.";
-// Where the JSON is not the same: the live function's bug, kept out of the replacement.
+  "Same arguments, the same ranges and date_trunc units accepted (any length; an empty, inverted or half-NULL range answers as the live function, which matches nothing), and the same JSON, read from the settlement money tables. Differs only where said here: a non-empty range the money tables do not cover (money_coverage: before the first written settlement, or over a settlement gap) raises an error where the live function answers.";
+// What else differs from the live function's JSON.
+const BY_SERVICE_ORDER = "Elements are ordered by service_id; the live function leaves their order to its plan.";
 const LEGACY_DIFFERS: Record<string, string> = {
-  legacy_rewards_by_addresses_and_time_group_by_service:
-    "Except gross_rewards, relays, estimated_relays, computed_units and estimated_computed_units, which here count each claim that paid the addresses once: the live function adds a claim once per transfer (relay and global mint, and each address of the list), 2x and more. service_id and net_rewards are the same.",
+  legacy_rewards_by_suppliers_and_time_group_by_service: BY_SERVICE_ORDER,
+  legacy_rewards_by_addresses_and_time_group_by_service: `${BY_SERVICE_ORDER} gross_rewards, relays, estimated_relays, computed_units and estimated_computed_units count each claim that paid the addresses once: the live function adds a claim once per transfer (relay and global mint, and each address of the list), 2x and more. service_id and net_rewards are the same.`,
+  legacy_mint_breakdown_between_dates:
+    "At beta heights 153513 to 153693, reimbursement and inflation include 128 upokt the chain minted (a 1 upokt escrow per claim) that the live function misses.",
 };
 
 // What each catalog function answers, for its GraphQL description (COMMENT ON FUNCTION) and its _json twin's.
