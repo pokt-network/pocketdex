@@ -1244,6 +1244,9 @@ BEGIN
     h2 := date_trunc('hour', t, 'UTC');
     IF h1 < f THEN h1 := h1 + interval '1 hour'; END IF;  -- first whole hour
     IF h1 >= h2 THEN h1 := t; h2 := t; END IF;  -- no whole hour: everything from the base
+    IF h1 < h2 THEN
+      PERFORM ${s}._require_current_rollups((h1 AT TIME ZONE 'UTC')::date, ((h2 - interval '1 microsecond') AT TIME ZONE 'UTC')::date);
+    END IF;
     -- an edge with no settlement is skipped (end_date is inclusive, so a whole-hour range leaves a 1 µs tail)
     e1 := f < h1 AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < h1);
     e2 := h2 < t AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.block_time >= h2 AND sb.block_time < t);
