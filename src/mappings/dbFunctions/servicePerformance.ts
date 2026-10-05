@@ -127,12 +127,15 @@ AS $$
     LEFT JOIN suppliers ON c.service_id = suppliers.service_id
     LEFT JOIN ${dbSchema}.services s ON c.service_id = s.id
     WHERE upper_inf(s._block_range)
-    ORDER BY c.computed_units DESC
+    -- service_id breaks ties: without it the order of services with equal computed units came from the plan
+    -- (on beta several services had 200000 each and the previous version returned them in a different order)
+    ORDER BY c.computed_units DESC, c.service_id
   ) row;
 $$;
 
 COMMENT ON FUNCTION ${dbSchema}.services_performance_between_times(timestamp without time zone, timestamp without time zone, timestamp without time zone) IS
 '@name servicesPerformanceBetweenTimes
-Compares service performance metrics between two time periods, including relays, computed units, and staked actors.';
+Compares service performance metrics between two time periods, including relays, computed units, and staked actors.
+Rows come by computed units descending, then service_id (services tied on computed units, e.g. several at 200000 on beta, used to come in plan order).';
 `;
 }

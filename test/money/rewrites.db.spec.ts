@@ -160,6 +160,38 @@ describe("report functions rewritten for speed (PostgreSQL)", { skip: !URL && "M
       });
     }
 
+    it("orders services tied on computed units by service_id, with the previous version's rows and sort key", async () => {
+      await c.query("BEGIN");
+      try {
+        // four services with the same computed units on every block, inserted out of name order
+        await c.query(`
+          INSERT INTO ${S}.services SELECT id, id, int8range(1, NULL) FROM unnest(ARRAY['tie-c', 'tie-a', 'tie-d', 'tie-b']) id;
+          INSERT INTO ${S}.relay_by_block_and_services
+            SELECT b.id, t, 1, 1, 100, 100, 1 FROM ${S}.blocks b CROSS JOIN unnest(ARRAY['tie-c', 'tie-a', 'tie-d', 'tie-b']) t;`);
+        type Row = { service_id: string; computed_units: number };
+        for (const [e, m, s] of [
+          ["2026-07-06 00:00", "2026-07-05 00:00", "2026-07-04 00:00"],
+          ["2026-07-10 23:50", "2026-07-05 12:00", "2026-07-01 00:00"],
+        ]) {
+          const r = await both(e, m, s);
+          const now = JSON.parse(r.now as string) as Row[];
+          const prev = JSON.parse(r.before as string) as Row[];
+          const key = (x: Row) => JSON.stringify(x);
+          assert.deepEqual(now.map(key).sort(), prev.map(key).sort());
+          assert.deepEqual(
+            now.map((x) => x.computed_units),
+            prev.map((x) => x.computed_units)
+          );
+          assert.deepEqual(
+            now.filter((x) => x.service_id.startsWith("tie-")).map((x) => x.service_id),
+            ["tie-a", "tie-b", "tie-c", "tie-d"]
+          );
+        }
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+
     it("answers byte for byte what the previous version answered on every 13-hour window pair of the seed", async () => {
       const r = (
         await c.query(`
