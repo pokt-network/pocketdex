@@ -1360,21 +1360,23 @@ BEGIN
 END $$;
 
 -- One element per service of the staked suppliers whose current configuration shares revenue with the addresses (as the
--- live function). net_rewards is what the addresses received from that service's claims. The claim columns
--- (gross_rewards, relays, computed_units and their estimates) differ from the live function on purpose: it adds a claim
--- once per transfer that paid one of the addresses (a claim with global mint pays a shareholder twice, so up to 2x and
--- more with several addresses); here they are the claims, each once, of the suppliers that paid the addresses in the range.
+-- live function). net_rewards is what the addresses received from that service's claims, as the live function. The claim
+-- columns (gross_rewards, relays, computed_units and their estimates) differ on purpose: the live function adds a claim
+-- once per transfer that paid one of the addresses (relay and global mint, and each address of the list), here each claim
+-- that paid them counts once. Measured on mainnet: pokt1m0yk72fcvut72ujrs7hyf4mzgahe4c9ya429eh on 2026-10-03 got 27
+-- transfers from 20 claims (948613-finalize_block-3067 pays it twice): relays 577,473 live, 289,472 per claim; gross
+-- 553,512,909 live, 277,061,678 per claim; net 209,138,830 in both.
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_service(addresses text[],
   start_ts timestamp, end_ts timestamp)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE
   f timestamptz := start_ts AT TIME ZONE 'UTC';
   t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
-  paying text[];
+  lo bigint; hi bigint;
 BEGIN
   PERFORM ${s}._validate(NULL, '', f, t, NULL);
-  paying := ARRAY(SELECT DISTINCT i.supplier_id FROM ${s}._income(addresses, f, t, NULL, false, true, false, false) i
-                  WHERE i.supplier_id IS NOT NULL);
+  PERFORM ${s}._check_coverage(f, t);
+  SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < t;
   RETURN (
     WITH matched_suppliers AS (
       SELECT DISTINCT ssc.supplier_id
@@ -1387,6 +1389,27 @@ BEGIN
       SELECT DISTINCT ssc.service_id
       FROM ${s}.supplier_service_configs ssc JOIN matched_suppliers m ON m.supplier_id = ssc.supplier_id
       WHERE upper_inf(ssc._block_range)
+    ), paid AS (
+      -- the claims that paid the addresses, each once: every role a claim pays (v_income_base's claim branches)
+      SELECT sp.height, sp.event_idx FROM ${s}.shareholder_payouts sp
+      WHERE sp.recipient_id = ANY(addresses) AND sp.height BETWEEN lo AND hi AND (sp.relay_upokt > 0 OR sp.global_upokt > 0)
+      UNION
+      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
+      WHERE c.source_owner_id = ANY(addresses) AND c.height BETWEEN lo AND hi
+        AND (c.relay_to_source_owner_upokt > 0 OR c.global_to_source_owner_upokt > 0)
+      UNION
+      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
+      WHERE c.application_id = ANY(addresses) AND c.height BETWEEN lo AND hi
+        AND (c.relay_to_application_upokt > 0 OR c.global_to_application_upokt > 0)
+      UNION
+      SELECT c.height, c.event_idx FROM ${s}.settlement_blocks sb JOIN ${s}.claim_settlements c USING (height)
+      WHERE sb.dao_address = ANY(addresses) AND sb.height BETWEEN lo AND hi
+        AND (c.relay_to_dao_upokt > 0 OR c.global_to_dao_upokt > 0 OR c.reimbursement_to_dao_upokt > 0)
+    ), claims AS (
+      SELECT c.service_id, sum(c.settled_upokt)::numeric settled_upokt, sum(c.relays)::numeric relays,
+             sum(c.estimated_relays)::numeric estimated_relays, sum(c.claimed_compute_units)::numeric compute_units,
+             sum(c.estimated_compute_units)::numeric estimated_compute_units
+      FROM paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx GROUP BY 1
     ), net AS (
       SELECT i.service_id, sum(i.amount_upokt) amount_upokt
       FROM ${s}._income(addresses, f, t, NULL, false, false, true, false) i
@@ -1401,7 +1424,7 @@ BEGIN
              'gross_rewards', coalesce(c.settled_upokt, 0),
              'net_rewards', coalesce(n.amount_upokt, 0)) ORDER BY sv.service_id)
     FROM services sv
-    LEFT JOIN ${s}._legacy_claims_by_service(paying, f, t) c ON c.service_id = sv.service_id
+    LEFT JOIN claims c ON c.service_id = sv.service_id
     LEFT JOIN net n ON n.service_id = sv.service_id);
 END $$;
 

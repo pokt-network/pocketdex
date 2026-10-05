@@ -299,29 +299,26 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
           n.map((x) => [x.service_id, String(x.net_rewards)]),
           l.map((x) => [x.service_id, String(x.net_rewards)])
         );
-        // the claim columns: the claims of the suppliers that paid the addresses, each once
-        const paying = (
+        // the claim columns: each claim that paid the addresses once (distinct claims of their transfers)
+        const once = (
           await c.query(
-            `SELECT array_agg(DISTINCT supplier_id) s FROM ${S}.shareholder_payouts sp JOIN ${S}.settlement_blocks sb USING (height)
-                         WHERE recipient_id = ANY($1) AND sb.block_time BETWEEN $2 AND $3`,
+            `SELECT e.service_id, sum(e.num_relays)::text relays, sum(e.num_estimated_relays)::text estimated_relays,
+                    sum(e.num_claimed_computed_units)::text computed_units,
+                    sum(e.num_estimated_computed_units)::text estimated_computed_units, sum(e.claimed_amount)::text gross_rewards
+             FROM ${S}.event_claim_settleds e
+             WHERE e.id IN (SELECT m.event_claim_settled_id FROM ${S}.mod_to_acct_transfers m JOIN ${S}.blocks b ON b.id = m.block_id
+                            WHERE m.recipient_id = ANY($1) AND b.timestamp BETWEEN $2 AND $3)
+             GROUP BY 1`,
             [addrs, s, e]
           )
-        ).rows[0].s as unknown as string[];
-        const once = sorted(
-          (
-            await c.query(`SELECT ${S}.get_rewards_by_suppliers_and_time_group_by_service($1, $2, $3)::text j`, [
-              paying,
-              s,
-              e,
-            ])
-          ).rows[0].j
-        ) as unknown as Row[];
+        ).rows as unknown as Row[];
+        assert.ok(once.length > 0);
         const cols = ["relays", "estimated_relays", "computed_units", "estimated_computed_units", "gross_rewards"];
         const pick = (rows: Row[]) =>
           Object.fromEntries(rows.map((x) => [x.service_id, cols.map((k) => String(x[k]))]));
         assert.deepEqual(
           Object.fromEntries(Object.entries(pick(n)).filter(([, v]) => v.some((x) => x !== "0"))),
-          Object.fromEntries(Object.entries(pick(once)).filter(([sv, v]) => sv in pick(n) && v.some((x) => x !== "0")))
+          Object.fromEntries(Object.entries(pick(once)).filter(([sv]) => sv in pick(n)))
         );
         // and the live function counts a claim once per transfer that paid an address: never less, and more where a
         // claim paid twice (both families, or both addresses of the pair)

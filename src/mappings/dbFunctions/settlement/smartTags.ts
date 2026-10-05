@@ -125,7 +125,7 @@ const LEGACY_SAME =
 // Where the JSON is not the same: the live function's bug, kept out of the replacement.
 const LEGACY_DIFFERS: Record<string, string> = {
   legacy_rewards_by_addresses_and_time_group_by_service:
-    "Except gross_rewards, relays, estimated_relays, computed_units and estimated_computed_units: the live function adds a claim once per transfer that paid one of the addresses (up to 2x); here each claim of the suppliers that paid the addresses in the range counts once. service_id and net_rewards are the same.",
+    "Except gross_rewards, relays, estimated_relays, computed_units and estimated_computed_units, which here count each claim that paid the addresses once: the live function adds a claim once per transfer (relay and global mint, and each address of the list), 2x and more. service_id and net_rewards are the same.",
 };
 
 // What each catalog function answers, for its GraphQL description (COMMENT ON FUNCTION) and its _json twin's.
