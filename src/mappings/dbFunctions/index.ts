@@ -1,3 +1,4 @@
+import { moneyFromHeightOverride } from "../money/write";
 import { getDbSchema, getSequelize } from "../utils/db";
 import { getLatestBlocksByDayFn } from "./blocks";
 import {
@@ -48,7 +49,7 @@ import {
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByServicesAddressesAndTime";
 import { getAmountOfBlocksAndSuppliersByTimesFn, servicesPerformanceBetweenTimesFn } from "./servicePerformance";
 import { createSettlementFunctionsFn } from "./settlement/functions";
-import { createSettlementTablesFn } from "./settlement/schema";
+import { createSettlementOverrideGapFn, createSettlementTablesFn } from "./settlement/schema";
 import { createSettlementSmartTagsFn } from "./settlement/smartTags";
 import { createSettlementWriterFn } from "./settlement/writer";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
@@ -146,6 +147,8 @@ export async function createDbFunctions(): Promise<void> {
   await createFunctions(
     schema,
     createSettlementTablesFn,
+    // the POCKETDEX_MONEY_FROM_HEIGHT window as a settlement gap, before any block is indexed
+    createSettlementOverrideGapFn(moneyFromHeightOverride(process.env)),
     createSettlementWriterFn,
     createSettlementFunctionsFn,
     // after the objects it tags; hides tables and helpers from the GraphQL API

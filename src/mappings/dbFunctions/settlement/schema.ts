@@ -30,9 +30,10 @@ CREATE TABLE IF NOT EXISTS ${s}.settlement_blocks (
 CREATE INDEX IF NOT EXISTS settlement_blocks_block_time_idx ON ${s}.settlement_blocks (block_time);
 CREATE INDEX IF NOT EXISTS settlement_blocks_day_idx ON ${s}.settlement_blocks (day);
 
--- Settlement heights left unwritten in the middle of the history: the indexer restarted with
--- POCKETDEX_MONEY_FROM_HEIGHT above the last written settlement (src/mappings/money/write.ts). The catalog
--- functions list one in the range of an answer that overlaps it. A history job that writes the gap's heights deletes its row.
+-- Settlement heights left unwritten: the indexer started with POCKETDEX_MONEY_FROM_HEIGHT above the last written
+-- settlement (createSettlementOverrideGapFn, at start-up), and the history job's [1, h-1]. Authoritative: the catalog
+-- functions cover what is indexed minus these rows (functions.ts _coverage). A history job that writes the gap's
+-- heights deletes its row.
 CREATE TABLE IF NOT EXISTS ${s}.settlement_gaps (
   from_height BIGINT PRIMARY KEY,
   to_height   BIGINT NOT NULL CHECK (to_height >= from_height)
@@ -321,4 +322,19 @@ ALTER TABLE ${s}.hourly_income_by_address_supplier SET (fillfactor = 90, autovac
 ALTER TABLE ${s}.daily_validator_rewards SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.daily_delegator_rewards_by_validator SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 `;
+}
+
+// POCKETDEX_MONEY_FROM_HEIGHT (money/write.ts moneyFromHeight) above the last written settlement leaves the heights in
+// between unwritten, whatever money event they hold (claims, expirations, discards, slashes, reimbursements,
+// distributions): recorded at start-up, before any block is indexed, as the settlement_gaps row
+// [last written + 1, override - 1], from 1 when nothing is written yet, so coverage never counts them. A no-op without
+// the override, or once a height at or past it is written; ON CONFLICT keeps a row an earlier start recorded.
+export function createSettlementOverrideGapFn(override: number): (dbSchema: string) => string {
+  return (s) =>
+    override > 0
+      ? `INSERT INTO ${s}.settlement_gaps (from_height, to_height)
+SELECT coalesce(max(height) + 1, 1), ${override}::bigint - 1 FROM ${s}.settlement_blocks
+HAVING coalesce(max(height) + 1, 1) <= ${override}::bigint - 1
+ON CONFLICT (from_height) DO NOTHING;`
+      : "";
 }

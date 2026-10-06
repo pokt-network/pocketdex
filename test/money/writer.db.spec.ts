@@ -180,7 +180,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       CREATE TABLE ${S}.application_gateways (gateway_id text, application_id text, _block_range int8range);
       CREATE TABLE ${S}.params (id text, namespace text, key text, value text, active_at numeric, _block_range int8range);
       CREATE TABLE ${S}.delegations (id text);
-      INSERT INTO ${S}.event_claim_settleds VALUES (694993), (710013), (899713);`);
+      INSERT INTO ${S}.event_claim_settleds VALUES (694993), (710013), (899713);
+      -- indexed from 1 Jan to 31 Dec 2026: the catalog's coverage (functions.ts _coverage) is what is indexed
+      INSERT INTO ${S}.blocks VALUES (1, '2026-01-01'), (999999999, '2026-12-31');`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
   });
@@ -1472,9 +1474,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(json.data, rows, fn);
       assert.deepEqual(
         Object.keys(json.range).sort(),
-        ["covered_from", "covered_to", "gaps", "requested_from", "requested_to"],
+        ["covered_from", "covered_to", "end_inclusive", "gaps", "requested_from", "requested_to"],
         fn
       );
+      assert.equal(json.range.end_inclusive, false, fn);
       const ms = (v: unknown) => (v === null ? null : Date.parse(String(v)));
       assert.deepEqual(
         [ms(json.range.covered_from), ms(json.range.covered_to)],
@@ -1911,7 +1914,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         CREATE TABLE ${S}.event_proof_validity_checkeds (supplier_id text, service_id text, block_id numeric,
           proof_validation_status text, failure_reason text);
         CREATE TABLE ${S}.event_application_unbonding_begins (application_id text, reason int, block_id numeric);
-        -- indexed from 10:30: the 11:00 bucket is covered (before the first indexed block nothing is)
+        -- indexed from 10:30 to 12:30: the 11:00 bucket is covered (before the first indexed block nothing is), and the
+        -- series over blocks end with the 12:00 bucket
+        DELETE FROM ${S}.blocks;
         INSERT INTO ${S}.blocks VALUES (600000, '2026-09-01 10:30'), (900000, '2026-09-01 12:30');`);
       const fns: [string, string, string][] = [
         ["get_application_spend", "applications", "by_application"],

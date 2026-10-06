@@ -55,8 +55,9 @@ export function moneyFromHeight(chainId: string, env: NodeJS.ProcessEnv = proces
   return env.POCKETDEX_SETTLEMENT_ERA ? 1 : firstEraFrom(chainId);
 }
 
-// POCKETDEX_MONEY_FROM_HEIGHT, or 0 when it is not set.
-function moneyFromHeightOverride(env: NodeJS.ProcessEnv): number {
+// POCKETDEX_MONEY_FROM_HEIGHT, or 0 when it is not set. The start-up records the heights it skips as a settlement gap
+// (dbFunctions/settlement/schema.ts createSettlementOverrideGapFn).
+export function moneyFromHeightOverride(env: NodeJS.ProcessEnv): number {
   return positiveIntFromEnv("POCKETDEX_MONEY_FROM_HEIGHT", env.POCKETDEX_MONEY_FROM_HEIGHT, 0);
 }
 
@@ -157,22 +158,6 @@ export async function writeSettlement(
   return { calls: calls.length, bytes };
 }
 
-// With POCKETDEX_MONEY_FROM_HEIGHT above the last written settlement, the settlement heights in between are
-// never written by this process: record them in settlement_gaps, so the catalog functions list them in the range
-// of an answer that overlaps them instead of returning totals that silently lack them. It runs before every write while the
-// override is set, inside the block transaction, so a block that rolls back cannot lose it; it is one
-// index probe, and a no-op once a height past the override is written or when no settlement is written yet
-// (the catalog's coverage check already handles a missing start).
-async function recordSettlementGap(override: number): Promise<void> {
-  const s = getDbSchema();
-  await getSequelize("Block").query(
-    `INSERT INTO ${s}.settlement_gaps (from_height, to_height)
-     SELECT max(height) + 1, $1::bigint - 1 FROM ${s}.settlement_blocks HAVING max(height) + 1 <= $1::bigint - 1
-     ON CONFLICT (from_height) DO NOTHING`,
-    { bind: [override], transaction: blockTransaction(), useMaster: true, raw: true }
-  );
-}
-
 let loggedBelowThreshold = false;
 
 // The bonded validators of the snapshot, in the shape the delegator × validator split takes.
@@ -229,8 +214,6 @@ export async function indexMoney(block: CosmosBlock, validators?: ValidatorSnaps
     });
   }
   const t2 = performance.now();
-  const override = moneyFromHeightOverride(process.env);
-  if (override > 0) await recordSettlementGap(override);
   const written = await writeSettlement(height, payload);
   const t3 = performance.now();
   // One line per settlement height: the payload's size and where indexMoney's time went, so the settlement

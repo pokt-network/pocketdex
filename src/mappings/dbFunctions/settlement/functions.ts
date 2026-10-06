@@ -34,11 +34,10 @@ import { ROLLUP_VERSION } from "./writer";
 // before a change of owner. An owner with no supplier returns no rows.
 //
 // Coverage: no function fails for it. Heights that were never written must not read as zero, so each answers for the
-// part of the range the money tables cover and says which part that is (_coverage): every row carries covered_from
-// (the later of range_start and the first written settlement, when the history before it is missing), covered_to (the
-// earlier of range_end and the latest indexed block, or the last written settlement while later ones are not written)
-// and covered_gaps (the settlement_gaps that overlap the range, whose heights read as nothing); the _json twins return
-// {range, data} with the same. A range that nothing written overlaps returns no rows, so only the _json twin tells
+// part of the range the money tables cover and says which part that is (_coverage: what is indexed minus the
+// settlement_gaps): every row carries covered_from and covered_to (the bounds of that part, half-open; both NULL when
+// nothing in the range is covered) and covered_gaps (the gaps that overlap the range, whose heights read as nothing);
+// the _json twins return {range, data} with the same. A range that nothing written overlaps returns no rows, so only the _json twin tells
 // "not covered" ([] with its range) from "nothing happened". money_coverage(range_start, range_end) lists the
 // settlement heights in a range that are missing, and the recorded gaps.
 //
@@ -71,8 +70,8 @@ const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
   // The start of every catalog function over the money tables, in one place so that none can skip it: the part of
-  // the range the money tables cover (_coverage), no rows when nothing written overlaps it, the data read from the
-  // first written settlement on, and the span its rows report (sp, from _span / _block_span; none for get_income,
+  // the range the money tables cover (_coverage), no rows when nothing covered overlaps it, the data read from
+  // covered_from on, and the span its rows report (sp, _span's / _block_span's bounds from cv; none for get_income,
   // which passes cv to _income; blocks for the functions over the indexer's own tables). Without a bucket a row's
   // bucket_start is the requested range_start: covered_from says where the data starts. The rows then carry
   // cv.covered_from, cv.covered_to and cv.gaps, and every fill keeps to cv.covered.
@@ -84,7 +83,12 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
       "  range_start := cv.data_from;",
       ...(span
         ? [
-            `  sp := ${s}.${span}(range_start, range_end);`,
+            // _span / _block_span from the bounds _coverage already read
+            span === "_span"
+              ? "  SELECT coalesce(range_start, cv.first_settled) f, coalesce(range_end, cv.last_settled) t,\n" +
+                "         least(range_end - interval '1 microsecond', cv.last_settled) t_last INTO sp;"
+              : "  SELECT coalesce(range_start, cv.first_block) f, coalesce(range_end, cv.last_block) t,\n" +
+                "         least(range_end - interval '1 microsecond', cv.last_block) t_last INTO sp;",
             "  IF bucket IS NULL AND cv.requested_from IS NOT NULL THEN sp.f := cv.requested_from; END IF;",
           ]
         : []),
@@ -116,64 +120,49 @@ BEGIN
 END $$;
 
 -- What the money tables cover of [range_start, range_end): ONE covered set per call, which every catalog and legacy_*
--- function reads, for its rows, its fills and its range.
--- The covered span starts at the later of range_start and the start of what is written: the block right after a
--- leading settlement_gaps row (the history job's [1, h-1]: the heights between it and the first written settlement are
--- classified, and settled nothing); the first written settlement when the history before it is missing otherwise (the
--- chain settled earlier, the min block_id of event_claim_settleds); otherwise the first indexed block (or the first
--- written settlement when the history reaches below it), as for the functions over the indexer's own tables
--- (p_blocks). It ends at the earlier of range_end and covered_until + 1 µs: covered_until is the latest indexed block,
--- or the last written settlement when the chain has settlement heights after it that are not written (a writer behind,
--- or an override); with the writer caught up, a block with no settlement legitimately settled nothing.
+-- function reads, for its rows, its fills and its range. settlement_gaps is authoritative: the history job keeps its
+-- [1, h-1] row, the start-up records the POCKETDEX_MONEY_FROM_HEIGHT window (schema.ts), so no money event table is
+-- probed here.
+-- The covered span runs from the later of range_start and the start of what is indexed (the earlier of the first
+-- indexed block and the first written settlement: the history job writes below the indexer's first block; the first
+-- indexed block for the functions over the indexer's own tables, p_blocks) to the earlier of range_end and the latest
+-- indexed block + 1 µs (half-open, like the range). Nothing indexed, or no settlement written yet: nothing covered.
 -- The gaps: each settlement_gaps row as the half-open time between the covered heights next to it, [the block before
 -- its first height + 1 µs, the block after its last height), falling back to the written settlement on that side when
 -- the blocks table lacks the block (NULL = unbounded); overlapping or contiguous gaps merge (range_agg).
 -- covered = the span minus the gaps (a tstzmultirange); covered_from / covered_to are its bounds, both NULL when it is
 -- empty (nothing covered: empty = true, nothing to read); gaps = the merged gaps that overlap the requested range, as
--- {from, to}, half-open like the range. data_from is the range_start to read with: moved up to covered_from, so the
--- data never sums heights that were not written (a NULL range_start stays NULL: it already starts there).
+-- {from, to}, half-open. data_from is the range_start to read with: moved up to covered_from, so the data never sums
+-- heights that were not written (a NULL range_start stays NULL: it already starts there). first_settled /
+-- last_settled / first_block / last_block are the bounds _span / _block_span would read again (covered()).
 -- Index probes only, and few gap rows (0.8 ms on the mainnet replica, 2026-10-06). jit = off: a settlement_gaps never
 -- analyzed is planned at ~200 rows, past jit_above_cost, and JIT compiling took ~30 ms per call (measured locally).
 DROP FUNCTION IF EXISTS ${s}._check_coverage(timestamptz, timestamptz);
--- its OUT columns changed: a database written before has it dropped
+-- its OUT columns changed: a database written before has it dropped (by the argument names: pg_get_function_result
+-- says only 'record' for OUT columns)
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = '_coverage'
-             AND pg_get_function_result(p.oid) NOT LIKE '%covered tstzmultirange%') THEN
+             AND p.proargnames <> ARRAY['range_start', 'range_end', 'p_blocks', 'requested_from', 'covered_from', 'covered_to', 'gaps', 'data_from', 'empty', 'covered', 'first_settled', 'last_settled', 'first_block', 'last_block']) THEN
     DROP FUNCTION ${s}._coverage(timestamptz, timestamptz, boolean);
   END IF;
 END $$;
 CREATE OR REPLACE FUNCTION ${s}._coverage(range_start timestamptz, range_end timestamptz, p_blocks boolean DEFAULT false,
   OUT requested_from timestamptz, OUT covered_from timestamptz, OUT covered_to timestamptz, OUT gaps jsonb,
-  OUT data_from timestamptz, OUT empty boolean, OUT covered_until timestamptz, OUT covered tstzmultirange)
+  OUT data_from timestamptz, OUT empty boolean, OUT covered tstzmultirange, OUT first_settled timestamptz,
+  OUT last_settled timestamptz, OUT first_block timestamptz, OUT last_block timestamptz)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
-DECLARE v_start timestamptz; v_end timestamptz; v_first bigint; v_first_ts timestamptz; v_last bigint;
-  v_last_ts timestamptz; v_chain_first numeric; v_chain_last numeric; v_gap_top bigint;
-  v_gaps tstzmultirange := '{}';
+DECLARE v_start timestamptz; v_end timestamptz; v_gaps tstzmultirange := '{}';
 BEGIN
-  requested_from := range_start; gaps := '[]'; covered := '{}';
-  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO covered_until FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
-  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO v_start FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1;
-  IF NOT p_blocks THEN
-    SELECT e.block_id INTO v_chain_first FROM ${s}.event_claim_settleds e ORDER BY e.block_id LIMIT 1;
-    SELECT sb.height, sb.block_time INTO v_first, v_first_ts FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
-    IF v_first IS NULL AND v_chain_first IS NOT NULL THEN
-      -- the chain settles claims and no settlement height is written yet: nothing is covered
-      empty := true; data_from := range_start; covered_until := NULL;
-      RETURN;
-    END IF;
-    SELECT max(gp.to_height) INTO v_gap_top FROM ${s}.settlement_gaps gp WHERE gp.from_height < v_first;
-    IF v_gap_top IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM ${s}.event_claim_settleds e WHERE e.block_id > v_gap_top AND e.block_id < v_first) THEN
-      v_start := least(v_first_ts, (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = v_gap_top + 1 LIMIT 1));
-    ELSIF v_gap_top IS NOT NULL OR v_first > v_chain_first THEN
-      v_start := v_first_ts;
-    ELSIF v_start IS NOT NULL THEN
-      v_start := least(v_start, v_first_ts);
-    END IF;
-    SELECT e.block_id INTO v_chain_last FROM ${s}.event_claim_settleds e ORDER BY e.block_id DESC LIMIT 1;
-    SELECT sb.height, sb.block_time INTO v_last, v_last_ts FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1;
-    IF v_chain_last > v_last THEN covered_until := v_last_ts; END IF;
+  requested_from := range_start; gaps := '[]'; covered := '{}'; data_from := range_start; empty := true;
+  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO last_block FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
+  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO first_block FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1;
+  SELECT sb.block_time INTO first_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
+  SELECT sb.block_time INTO last_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1;
+  IF p_blocks THEN
+    v_start := first_block;
+  ELSE
+    v_start := CASE WHEN first_settled IS NOT NULL THEN least(first_block, first_settled) END;
     SELECT coalesce(range_agg(tstzrange(g.f, g.t)), '{}') INTO v_gaps
     FROM (SELECT coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.from_height - 1 LIMIT 1),
                           (SELECT sb.block_time FROM ${s}.settlement_blocks sb WHERE sb.height < gp.from_height
@@ -186,25 +175,24 @@ BEGIN
     SELECT coalesce(jsonb_agg(jsonb_build_object('from', lower(r), 'to', upper(r)) ORDER BY lower(r) NULLS FIRST), '[]') INTO gaps
     FROM unnest(v_gaps) r WHERE r && tstzrange(range_start, range_end);
   END IF;
+  v_end := last_block + interval '1 microsecond';
+  IF v_start IS NULL OR v_end IS NULL THEN RETURN; END IF;  -- nothing indexed, or nothing written: nothing covered
   v_start := greatest(range_start, v_start);
-  v_end := least(range_end, covered_until + interval '1 microsecond');
-  IF v_start IS NULL OR v_end IS NULL OR v_start < v_end THEN
-    covered := tstzmultirange(tstzrange(v_start, v_end)) - v_gaps;
-  END IF;
+  v_end := least(range_end, v_end);
+  IF v_start < v_end THEN covered := tstzmultirange(tstzrange(v_start, v_end)) - v_gaps; END IF;
   empty := isempty(covered);
-  IF empty THEN
-    covered_until := NULL; data_from := range_start;
-  ELSE
+  IF NOT empty THEN
     covered_from := lower(covered); covered_to := upper(covered);
     data_from := CASE WHEN range_start IS NOT NULL THEN greatest(range_start, covered_from) END;
   END IF;
 END $$;
 
--- The range object of the _json twins: what was asked, and what the answer covers (_coverage).
+-- The range object of the _json twins: what was asked, and what the answer covers (_coverage); requested_to and
+-- covered_to are exclusive (end_inclusive false), gaps half-open.
 CREATE OR REPLACE FUNCTION ${s}._range_json(range_start timestamptz, range_end timestamptz, p_blocks boolean DEFAULT false)
 RETURNS jsonb LANGUAGE sql STABLE AS $$
   SELECT jsonb_build_object('requested_from', range_start, 'requested_to', range_end, 'covered_from', c.covered_from,
-                            'covered_to', c.covered_to, 'gaps', c.gaps)
+                            'covered_to', c.covered_to, 'gaps', c.gaps, 'end_inclusive', false)
   FROM ${s}._coverage(range_start, range_end, p_blocks) c
 $$;
 
@@ -1463,12 +1451,13 @@ BEGIN
   END IF;
 END $$;
 
--- A legacy_* range from _coverage's bounds: covered_to back to end_date's inclusive sense.
+-- A legacy_* range from _coverage's bounds: requested_to and covered_to inclusive, end_date's sense (end_inclusive
+-- true); gaps stay half-open.
 CREATE OR REPLACE FUNCTION ${s}._legacy_range_of(start_date timestamp, end_date timestamp, covered_from timestamptz,
   covered_to timestamptz, gaps jsonb)
 RETURNS json LANGUAGE sql IMMUTABLE AS $$
   SELECT json_build_object('requested_from', start_date AT TIME ZONE 'UTC', 'requested_to', end_date AT TIME ZONE 'UTC',
-    'covered_from', covered_from, 'covered_to', covered_to - interval '1 microsecond', 'gaps', gaps)
+    'covered_from', covered_from, 'covered_to', covered_to - interval '1 microsecond', 'gaps', gaps, 'end_inclusive', true)
 $$;
 
 -- The range of a legacy_* call ([start_date, end_date], inclusive) as the catalog's twins report it, with end_date as
@@ -1479,12 +1468,12 @@ $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = '_legacy_range'
-             AND pg_get_function_result(p.oid) NOT LIKE '%covered tstzmultirange%') THEN
+             AND p.proargnames <> ARRAY['start_date', 'end_date', 'range', 'start_from', 'empty']) THEN
     DROP FUNCTION ${s}._legacy_range(timestamp, timestamp);
   END IF;
 END $$;
 CREATE OR REPLACE FUNCTION ${s}._legacy_range(start_date timestamp, end_date timestamp, OUT range json, OUT start_from timestamp,
-  OUT empty boolean, OUT covered tstzmultirange)
+  OUT empty boolean)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE cv record;
 BEGIN
@@ -1497,7 +1486,7 @@ BEGIN
   cv := ${s}._coverage(start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC');
   range := ${s}._legacy_range_of(start_date, end_date, cv.covered_from, cv.covered_to, cv.gaps);
   start_from := CASE WHEN cv.empty THEN 'infinity' ELSE cv.data_from AT TIME ZONE 'UTC' END;
-  empty := cv.empty; covered := cv.covered;
+  empty := cv.empty;
 END $$;
 
 -- The two scalar ones returned numeric before: dropped first, a return type CREATE OR REPLACE cannot change.
@@ -1761,7 +1750,8 @@ BEGIN
       SELECT jsonb_build_object(
         ''range'', coalesce(
           (SELECT jsonb_build_object(''requested_from'', range_start, ''requested_to'', range_end,
-                    ''covered_from'', r.covered_from, ''covered_to'', r.covered_to, ''gaps'', r.covered_gaps)
+                    ''covered_from'', r.covered_from, ''covered_to'', r.covered_to, ''gaps'', r.covered_gaps,
+                    ''end_inclusive'', false)
            FROM r ORDER BY r.ordinality LIMIT 1),
           ${s}._range_json(range_start, range_end, %L)),
         ''data'', (SELECT coalesce(jsonb_agg((SELECT jsonb_object_agg(e.k, CASE jsonb_typeof(e.v)
