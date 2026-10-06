@@ -16,12 +16,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 
-type Row = Record<string, unknown> & { lo: number; hi: number | null };
+// lo = hi = null is Postgres' 'empty' range: int8range(h, h) when a row created at h is closed at h
+type Row = Record<string, unknown> & { lo: number | null; hi: number | null };
 
 const tables: Record<string, Array<Row>> = {};
 let height = 0;
 
-const openAt = (row: Row, block: number) => row.lo <= block && (row.hi === null || block < row.hi);
+const openAt = (row: Row, block: number) => row.lo !== null && row.lo <= block && (row.hi === null || block < row.hi);
 
 const sequelize = {
   fn: (fn: string, ...args: Array<unknown>) => ({ fn, args }),
@@ -47,7 +48,10 @@ const model = (name: string) => {
       if (!where.__block_range) return;
       const ids = where.id[Symbol.for("in")];
       for (const row of tables[name]) {
-        if (ids.includes(row.id as string) && openAt(row, height)) row.hi = height;
+        if (!ids.includes(row.id as string) || !openAt(row, height)) continue;
+        if (row.lo === height) row.lo = null;
+        // int8range(h, h) is empty
+        else row.hi = height;
       }
     },
     bulkCreate: async (docs: Array<Record<string, unknown>>) => {
@@ -355,25 +359,23 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(open(S1), ["akash@120", "eth@120"]);
   });
 
-  it("a finalize_block event with an unknown mode fails the block", async () => {
+  it("a finalize_block event with an unknown mode is kept after the txs instead of failing the block", async () => {
     reset();
     await index(100, [stake(100, S1, ["akash"])], []);
     const [event] = activations(120, S1, ["akash"]);
-    const withMode = (mode: string) =>
-      ({
-        ...event,
-        event: {
-          ...event.event,
-          attributes: event.event.attributes.map((attribute) =>
-            attribute.key === "mode" ? { ...attribute, value: mode } : attribute
-          ),
-        },
-      } as CosmosEvent);
+    const middle = {
+      ...event,
+      event: {
+        ...event.event,
+        attributes: event.event.attributes.map((attribute) =>
+          attribute.key === "mode" ? { ...attribute, value: "Middle" } : attribute
+        ),
+      },
+    } as CosmosEvent;
 
-    await assert.rejects(
-      index(120, [], [withMode("Middle")]),
-      /has mode=Middle, expected BeginBlock, EndBlock or none/
-    );
+    // after the stake, as before this ordering existed: it stamps the new config
+    await index(120, [stake(120, S1, ["akash"])], [middle]);
+    assert.deepEqual(open(S1), ["akash@120"]);
   });
 
   it("a finalize_block event without a mode (PreBlock) runs before the block's txs", async () => {
@@ -433,5 +435,25 @@ describe("indexSupplier service configs", () => {
     await index(150, [claim], [claimUnbondingEnd(claim, S2)]);
     assert.deepEqual(open(S2), []);
     assert.equal(supplierStatus(S2), "Unstaked");
+  });
+
+  it("rows another writer created at the same height survive, unless this block closes them", async () => {
+    reset();
+    // handleGenesis writes these at the genesis height before indexSupplier runs on the same block
+    tables.Supplier = [{ id: S1, stakeStatus: "Staked", stakeAmount: BigInt(1), lo: 1, hi: null }];
+    tables.MsgStakeSupplier = [{ id: "genesis-msg", lo: 1, hi: null }];
+    tables.SupplierServiceConfig = [
+      { id: `${S1}-akash`, supplierId: S1, serviceId: "akash", lo: 1, hi: null },
+      { id: `${S2}-eth`, supplierId: S2, serviceId: "eth", lo: 1, hi: null },
+    ];
+
+    await index(1, [stake(1, S2, ["base"])], [unbondingEnd(1, S1)]);
+    assert.ok(tables.Supplier.some((row) => row.id === S1));
+    assert.ok(tables.MsgStakeSupplier.some((row) => row.id === "genesis-msg"));
+    // S2's genesis eth was replaced by its stake at the same height; S1's akash was closed by its unbonding end
+    // at the height it was created: both are deleted, not left with an empty range
+    assert.deepEqual(open(S2), ["base@-"]);
+    assert.deepEqual(configs(S1), []);
+    assert.equal(tables.SupplierServiceConfig.filter((row) => row.lo === null).length, 0);
   });
 });

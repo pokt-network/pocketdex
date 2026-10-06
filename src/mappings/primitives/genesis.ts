@@ -567,12 +567,19 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         revShare,
       });
 
+      // a config already active at genesis carries its activation height in the supplier's history (a proto3
+      // zero is omitted from the JSON); without that history it is left pending, as before
+      const activation = supplier.service_config_history?.find((update) =>
+        update.service?.service_id === service.service_id
+        && BigInt((update.activation_height ?? 0).toString()) <= BigInt(block.block.header.height));
+
       supplierServices.push({
         id: getStakeServiceId(supplier.operator_address, service.service_id),
         supplierId: supplier.operator_address,
         serviceId: service.service_id,
         endpoints,
         revShare,
+        ...(activation && { activatedAtId: BigInt((activation.activation_height ?? 0).toString()) }),
       });
     }
   }
