@@ -49,26 +49,33 @@ import { ROLLUP_VERSION } from "./writer";
 // {range, data}: data is the live function's JSON (the two totals' number) over the part of the range the money tables
 // cover (_legacy_range), so a consumer that switches also reads .data.
 // The catalog functions that return rows: GraphQL lists (smartTags.ts) with a <name>_json twin (end of this file).
-// The internal helpers whose stale overloads the DDL drops (createSettlementFunctionsFn), with their current input types.
-export const HELPER_SIGNATURES: Record<string, string> = {
+// The internal helpers this DDL reshaped, and their current signatures as pg_get_function_arguments gives them (input
+// and OUT columns, defaults): the DDL drops every other overload first (null: every overload), because two overloads
+// make the calls ambiguous and CREATE OR REPLACE cannot change OUT columns. They are created only by this DDL; a test
+// fails when one drifts.
+export const HELPER_SIGNATURES: Record<string, string | null> = {
   _income:
-    "text[], timestamp with time zone, timestamp with time zone, text, boolean, boolean, boolean, boolean, boolean, text[], boolean, tstzmultirange, timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone",
+    "addresses text[], range_start timestamp with time zone, range_end timestamp with time zone, bucket text DEFAULT NULL::text, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false, by_service boolean DEFAULT false, by_address boolean DEFAULT true, fill_empty_buckets boolean DEFAULT false, suppliers text[] DEFAULT NULL::text[], capped boolean DEFAULT true, p_covered tstzmultirange DEFAULT NULL::tstzmultirange, p_span_from timestamp with time zone DEFAULT NULL::timestamp with time zone, p_first timestamp with time zone DEFAULT NULL::timestamp with time zone, p_last timestamp with time zone DEFAULT NULL::timestamp with time zone, p_covered_to timestamp with time zone DEFAULT NULL::timestamp with time zone",
   _supply_flows:
-    "timestamp with time zone, timestamp with time zone, text, boolean, boolean, tstzmultirange, timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone",
+    "range_start timestamp with time zone, range_end timestamp with time zone, bucket text DEFAULT NULL::text, by_role boolean DEFAULT false, fill_empty_buckets boolean DEFAULT false, p_covered tstzmultirange DEFAULT NULL::tstzmultirange, p_span_from timestamp with time zone DEFAULT NULL::timestamp with time zone, p_first timestamp with time zone DEFAULT NULL::timestamp with time zone, p_last timestamp with time zone DEFAULT NULL::timestamp with time zone, p_covered_to timestamp with time zone DEFAULT NULL::timestamp with time zone",
   _covered_buckets:
-    "text, timestamp with time zone, timestamp with time zone, tstzmultirange",
+    "bucket text, span_first timestamp with time zone, span_last timestamp with time zone, covered tstzmultirange, OUT bucket_start timestamp with time zone, OUT bucket_end timestamp with time zone",
   _first_bucket:
-    "text, timestamp with time zone, timestamp with time zone, tstzmultirange",
+    "bucket text, span_first timestamp with time zone, span_last timestamp with time zone, covered tstzmultirange",
   _coverage:
-    "timestamp with time zone, timestamp with time zone, boolean",
+    "range_start timestamp with time zone, range_end timestamp with time zone, p_blocks boolean DEFAULT false, OUT requested_from timestamp with time zone, OUT covered_from timestamp with time zone, OUT covered_to timestamp with time zone, OUT gaps jsonb, OUT data_from timestamp with time zone, OUT empty boolean, OUT covered tstzmultirange, OUT first_settled timestamp with time zone, OUT last_settled timestamp with time zone, OUT first_block timestamp with time zone, OUT last_block timestamp with time zone",
   _legacy_range:
-    "timestamp without time zone, timestamp without time zone",
+    "start_date timestamp without time zone, end_date timestamp without time zone, OUT range json, OUT start_from timestamp without time zone, OUT empty boolean, OUT end_to timestamp without time zone",
   _range_json:
-    "timestamp with time zone, timestamp with time zone, boolean",
+    "range_start timestamp with time zone, range_end timestamp with time zone, p_blocks boolean DEFAULT false",
   _range_of:
-    "timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone, jsonb, boolean",
+    "requested_from timestamp with time zone, requested_to timestamp with time zone, covered_from timestamp with time zone, covered_to timestamp with time zone, gaps jsonb, end_inclusive boolean",
   _span:
-    "timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone",
+    "range_start timestamp with time zone, range_end timestamp with time zone, p_first timestamp with time zone, p_last timestamp with time zone, p_covered_to timestamp with time zone, OUT f timestamp with time zone, OUT t timestamp with time zone, OUT t_last timestamp with time zone",
+  // gone: every overload is dropped
+  _check_coverage: null,
+  _block_span: null,
+  _legacy_range_of: null,
 };
 
 export const CATALOG_FUNCTIONS = [
@@ -91,9 +98,9 @@ const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
-  // the reshaped helpers as SQL VALUES (name, input types): the DDL drops their other overloads
+  // the reshaped helpers as SQL VALUES (name, signature or NULL): the DDL drops their other overloads
   const helperValues = Object.entries(HELPER_SIGNATURES)
-    .map(([name, args]) => `('${name}', '${args}')`)
+    .map(([name, args]) => `('${name}', ${args === null ? "NULL" : `'${args}'`})`)
     .join(", ");
   // The start of every catalog function over the money tables, in one place so that none can skip it: the part of
   // the range the money tables cover (_coverage), no rows when nothing covered overlaps it, the data read from
@@ -146,16 +153,15 @@ BEGIN
   END IF;
 END $$;
 
--- The internal helpers this version reshaped: every overload but the current signature goes first (an earlier build
--- left another one; two would make the calls ambiguous). They are created only by this DDL. HELPER_SIGNATURES in
--- functions.ts lists the current input types; a test fails when one drifts.
+-- The internal helpers this version reshaped: every overload but the current signature goes first (HELPER_SIGNATURES:
+-- the full argument list, OUT columns included; NULL drops every overload).
 DO $$
 DECLARE f regprocedure;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            JOIN (VALUES
     ${helperValues}) h(name, args) ON h.name = p.proname
-           WHERE p.pronamespace = '${s}'::regnamespace AND oidvectortypes(p.proargtypes) <> h.args LOOP
+           WHERE p.pronamespace = '${s}'::regnamespace AND pg_get_function_arguments(p.oid) IS DISTINCT FROM h.args LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
 END $$;
@@ -182,16 +188,6 @@ END $$;
 -- last_settled / first_block / last_block are the span bounds (_span, covered()), read once here.
 -- Index probes only, and few gap rows (0.8 ms on the mainnet replica, 2026-10-06). jit = off: a settlement_gaps never
 -- analyzed is planned at ~200 rows, past jit_above_cost, and JIT compiling took ~30 ms per call (measured locally).
-DROP FUNCTION IF EXISTS ${s}._check_coverage(timestamptz, timestamptz);
--- its OUT columns changed: a database written before has it dropped (by the argument names: pg_get_function_result
--- says only 'record' for OUT columns)
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = '_coverage'
-             AND p.proargnames <> ARRAY['range_start', 'range_end', 'p_blocks', 'requested_from', 'covered_from', 'covered_to', 'gaps', 'data_from', 'empty', 'covered', 'first_settled', 'last_settled', 'first_block', 'last_block']) THEN
-    DROP FUNCTION ${s}._coverage(timestamptz, timestamptz, boolean);
-  END IF;
-END $$;
 CREATE OR REPLACE FUNCTION ${s}._coverage(range_start timestamptz, range_end timestamptz, p_blocks boolean DEFAULT false,
   OUT requested_from timestamptz, OUT covered_from timestamptz, OUT covered_to timestamptz, OUT gaps jsonb,
   OUT data_from timestamptz, OUT empty boolean, OUT covered tstzmultirange, OUT first_settled timestamptz,
@@ -332,8 +328,6 @@ END $$;
 -- bucket_end when there is no bucket, so a caller sees what was summed, and bucket_end equals covered_to. t_last is the last instant a series lists buckets for: the end of what is covered
 -- (p_covered_to, exclusive), so a covered bucket with nothing in it is a zero and one that is not covered is absent.
 -- Without bounds (the legacy_ callers, which pass both ends and fill nothing) it is range_end.
-DROP FUNCTION IF EXISTS ${s}._span(timestamptz, timestamptz);
-DROP FUNCTION IF EXISTS ${s}._block_span(timestamptz, timestamptz);
 CREATE OR REPLACE FUNCTION ${s}._span(range_start timestamptz, range_end timestamptz, p_first timestamptz,
   p_last timestamptz, p_covered_to timestamptz, OUT f timestamptz, OUT t timestamptz, OUT t_last timestamptz)
 LANGUAGE sql IMMUTABLE AS $$
@@ -746,8 +740,6 @@ END $$;
 -- the legacy_* functions: the live functions they replace take any range. p_covered / p_span_from / p_first / p_last /
 -- p_covered_to: get_income's coverage (covered(): the covered set, outside which no bucket is zero-filled, the requested
 -- range_start, the span bounds). Unordered: get_income orders.
-DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[]);
-DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[], boolean);
 CREATE OR REPLACE FUNCTION ${s}._income(addresses text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false,
   by_service boolean DEFAULT false, by_address boolean DEFAULT true,
@@ -1531,7 +1523,6 @@ BEGIN
   END IF;
 END $$;
 
-DROP FUNCTION IF EXISTS ${s}._legacy_range_of(timestamp, timestamp, timestamptz, timestamptz, jsonb);
 
 -- The range of a legacy_* call ([start_date, end_date], inclusive) as the catalog's twins report it, with end_date as
 -- requested_to and covered_to; start_from is the start_date to read with (moved up to covered_from, 'infinity' when
@@ -1539,13 +1530,6 @@ DROP FUNCTION IF EXISTS ${s}._legacy_range_of(timestamp, timestamp, timestamptz,
 -- covered overlaps, whose data is null in every legacy_* function (not a zero: nothing was read). end_to is the end_date to
 -- read with: no later than covered_to (inclusive). A range that matches
 -- nothing (NULL bound, start after end) reports no coverage (covered_from / covered_to NULL, gaps []).
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = '_legacy_range'
-             AND p.proargnames <> ARRAY['start_date', 'end_date', 'range', 'start_from', 'empty', 'end_to']) THEN
-    DROP FUNCTION ${s}._legacy_range(timestamp, timestamp);
-  END IF;
-END $$;
 CREATE OR REPLACE FUNCTION ${s}._legacy_range(start_date timestamp, end_date timestamp, OUT range json, OUT start_from timestamp,
   OUT empty boolean, OUT end_to timestamp)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1818,9 +1802,11 @@ BEGIN
            WHERE p.pronamespace = '${s}'::regnamespace AND p.proname IN (SELECT c || '_json' FROM unnest(${CATALOG_SQL}) c) LOOP
     EXECUTE format('DROP FUNCTION %s', f.sig);
   END LOOP;
+  -- blocks: the function covers the indexer's own tables (covered(..., true) in its body), and so does its twin's range
   FOR f IN SELECT p.proname, pg_get_function_arguments(p.oid) args,
                   (SELECT string_agg(format('%I => %I', n, n), ', ' ORDER BY i)
-                   FROM unnest(p.proargnames[1:p.pronargs]) WITH ORDINALITY a(n, i)) call
+                   FROM unnest(p.proargnames[1:p.pronargs]) WITH ORDINALITY a(n, i)) call,
+                  position('._coverage(range_start, range_end, true)' in p.prosrc) > 0 blocks
            FROM pg_proc p
            WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = ANY(${CATALOG_SQL}) LOOP
     EXECUTE format('CREATE FUNCTION ${s}.%I(%s) RETURNS jsonb LANGUAGE sql STABLE AS $f$
@@ -1829,14 +1815,14 @@ BEGIN
         ''range'', coalesce(
           (SELECT ${s}._range_of(range_start, range_end, r.covered_from, r.covered_to, r.covered_gaps, false)::jsonb
            FROM r ORDER BY r.ordinality LIMIT 1),
-          ${s}._range_json(range_start, range_end, %L)),
+          ${s}._range_json(range_start, range_end, %s)),
         ''data'', (SELECT coalesce(jsonb_agg((SELECT jsonb_object_agg(e.k, CASE jsonb_typeof(e.v)
                      WHEN ''number'' THEN to_jsonb(e.v #>> ''{}'')
                      WHEN ''array'' THEN ${s}._json_strings(e.v) WHEN ''object'' THEN ${s}._json_strings(e.v)
                      ELSE e.v END)
                    FROM jsonb_each(to_jsonb(r) - ''ordinality'' - ''covered_from'' - ''covered_to'' - ''covered_gaps'') e(k, v))
                    ORDER BY r.ordinality), ''[]''::jsonb) FROM r)) $f$', f.proname || '_json', f.args, f.proname, f.call,
-      f.proname IN ('get_app_auto_unstakes', 'get_param_history'));
+      f.blocks::text);
   END LOOP;
 END $$;
 `;

@@ -936,16 +936,25 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       ).rows;
     const before = await oids();
     assert.ok(before.some((r) => String(r.f).startsWith("_coverage(")) && before.some((r) => String(r.f).startsWith("_legacy_range(")));
-    // every reshaped helper has exactly its current signature (HELPER_SIGNATURES)
+    // every reshaped helper has exactly its current signature (HELPER_SIGNATURES), and the gone ones are gone
     const helpers = await c.query(
-      `SELECT p.proname, oidvectortypes(p.proargtypes) args FROM pg_proc p
+      `SELECT p.proname, pg_get_function_arguments(p.oid) args FROM pg_proc p
        WHERE p.pronamespace = $1::regnamespace AND p.proname = ANY($2::text[]) ORDER BY 1`,
       [S, Object.keys(HELPER_SIGNATURES)]
     );
     assert.deepEqual(
       helpers.rows.map((r) => [r.proname, r.args]),
-      Object.entries(HELPER_SIGNATURES).sort(([a], [b]) => (a < b ? -1 : 1))
+      Object.entries(HELPER_SIGNATURES)
+        .filter(([, args]) => args !== null)
+        .sort(([a], [b]) => (a < b ? -1 : 1))
     );
+    // the twins of the functions over the indexer's own tables report that coverage
+    const twins = await c.query(
+      `SELECT p.proname FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname LIKE '%\\_json'
+         AND position('_range_json(range_start, range_end, true)' in p.prosrc) > 0 ORDER BY 1`,
+      [S]
+    );
+    assert.deepEqual(twins.rows.map((r) => r.proname), ["get_app_auto_unstakes_json", "get_param_history_json"]);
     // an earlier build's overloads (installed here by hand) are dropped by the next start, and the calls stay unambiguous
     await c.query(`
       CREATE FUNCTION ${S}._income(addresses text[], range_start timestamptz, range_end timestamptz, bucket text,
