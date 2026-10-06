@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 const globals = globalThis as Record<string, unknown>;
 globals.logger = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
 
-const { genesisConfigActivatedAt } = require("./genesis") as typeof import("./genesis");
+const { genesisConfigActivatedAt } = require("./service_config_history") as typeof import("./service_config_history");
 
 const entry = (serviceId: string, activation: number, deactivation = 0) =>
   ({
