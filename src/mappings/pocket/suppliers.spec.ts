@@ -491,4 +491,64 @@ describe("indexSupplier service configs", () => {
       assert.equal(supplierStatus(S2), "Staked");
     });
   }
+
+  // one tx with several claims, each event tagged with its message's msg_index (block_results of mainnet 158648)
+  const multiClaimTx = (h: number, claims: Array<[string, string, boolean]>) => {
+    const events = claims.flatMap(([operator, stakeUpokt, unbondingEnded], i) => [
+      {
+        type: "pocket.migration.EventMorseSupplierClaimed",
+        attributes: [
+          { key: "claimed_balance", value: `"${i + 1}upokt"` },
+          { key: "claimed_supplier_stake", value: `"${stakeUpokt}upokt"` },
+          { key: "msg_index", value: `${i}` },
+        ],
+      },
+      ...(unbondingEnded
+        ? [
+            {
+              type: "pocket.supplier.EventSupplierUnbondingEnd",
+              attributes: [
+                { key: "operator_address", value: `"${operator}"` },
+                { key: "msg_index", value: `${i}` },
+              ],
+            },
+          ]
+        : []),
+    ]);
+    const tx = { hash: `MULTI${h}`, idx: 0, tx: { code: 0, events } };
+    const msgs = claims.map(
+      ([operator], i) => ({ ...claimMorse(h, operator, ["eth"]), idx: i, tx } as unknown as CosmosMessage)
+    );
+    const unbondingEnds = events
+      .filter(({ type }) => type === "pocket.supplier.EventSupplierUnbondingEnd")
+      .map((event, i) => ({ idx: 10 + i, kind: "tx", block: block(h), tx, event } as unknown as CosmosEvent));
+    return { msgs, unbondingEnds };
+  };
+
+  const stakeOf = (operator: string) =>
+    (tables.Supplier || []).find((row) => row.id === operator && openAt(row, height))?.stakeAmount;
+
+  it("claims in one tx each read their own amounts", async () => {
+    reset();
+    const { msgs } = multiClaimTx(150, [
+      [S1, "61102000000", false],
+      [S2, "60005000000", false],
+    ]);
+    await index(150, msgs, []);
+    assert.equal(stakeOf(S1), BigInt("61102000000"));
+    assert.equal(stakeOf(S2), BigInt("60005000000"));
+  });
+
+  it("two claims to the same staked operator in one tx: the short-circuited one does not mask the other", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    const { msgs, unbondingEnds } = multiClaimTx(150, [
+      [S1, "1000", true],
+      [S1, "5000", false],
+    ]);
+    await index(150, msgs, unbondingEnds);
+    assert.equal(supplierStatus(S1), "Staked");
+    assert.equal(stakeOf(S1), BigInt("60000005000"));
+    assert.deepEqual(open(S1), ["eth@-"]);
+  });
 });

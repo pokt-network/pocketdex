@@ -122,7 +122,9 @@ function _handleClaimSupplier(
 } {
   let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null, claimSignerType: string | null = null;
 
-  for (const event of msg.tx.tx.events) {
+  // A tx can carry many claims: read only the events of this message (cosmos-sdk tags tx events with msg_index;
+  // block_results of mainnet 158648).
+  for (const event of msg.tx.tx.events.filter((txEvent) => _isEventOfMessage(txEvent.attributes, msg))) {
     if (event.type === 'pocket.migration.EventMorseSupplierClaimed') {
       for (const attribute of event.attributes) {
         if (attribute.key === 'claim_signer_type') {
@@ -981,10 +983,29 @@ function _claimStakedNothingKey(msg: CosmosMessage, record: Record<string, Suppl
   if (msg.msg.typeUrl !== "/pocket.migration.MsgClaimMorseSupplier") return undefined;
 
   const operator = (msg.msg.decodedMsg as MsgClaimMorseSupplier).shannonOperatorAddress;
-  const unbondingEnded = msg.tx.tx.events.some(({ attributes, type }) =>
-    type === "pocket.supplier.EventSupplierUnbondingEnd" && _unbondingEndOperator(attributes) === operator);
+  const unbondingEnd = msg.tx.tx.events.find(({ attributes, type }) =>
+    type === "pocket.supplier.EventSupplierUnbondingEnd" && _isEventOfMessage(attributes, msg)
+    && _unbondingEndOperator(attributes) === operator);
 
-  return unbondingEnded && record[operator]?.supplier !== undefined ? `${msg.tx.hash}:${operator}` : undefined;
+  return unbondingEnd !== undefined && record[operator]?.supplier !== undefined
+    ? _claimKey(msg.tx.hash, unbondingEnd.attributes, operator)
+    : undefined;
+}
+
+// msg_index of a tx event, when the chain tagged it
+function _msgIndex(attributes: CosmosEvent["event"]["attributes"]): string | undefined {
+  const value = attributes.find(({ key }) => key === "msg_index")?.value;
+  return value === undefined ? undefined : value.toString().replaceAll('"', '');
+}
+
+// whether a tx event belongs to this message (an untagged event is attributed to every message, as before)
+function _isEventOfMessage(attributes: CosmosEvent["event"]["attributes"], msg: CosmosMessage): boolean {
+  const index = _msgIndex(attributes);
+  return index === undefined || index === String(msg.idx);
+}
+
+function _claimKey(txHash: string | undefined, attributes: CosmosEvent["event"]["attributes"], operator: string): string {
+  return `${txHash}:${_msgIndex(attributes) ?? operator}`;
 }
 
 // The end of an unbonding unstakes the supplier and closes its configs, except the one of such a claim. The
@@ -998,7 +1019,7 @@ function _applyUnbondingEnd(
 ): EventSupplierUnbondingEndProps {
   const operator = _unbondingEndOperator(event.event.attributes);
 
-  if (operator !== undefined && claimsThatStakedNothing.has(`${event.tx?.hash}:${operator}`)) {
+  if (operator !== undefined && claimsThatStakedNothing.has(_claimKey(event.tx?.hash, event.event.attributes, operator))) {
     const supplier = record[operator]?.supplier;
     const copy: Record<string, SupplierRecord> = { [operator]: { supplier: supplier && { ...supplier }, services: {} } };
     return _handleSupplierUnbondingEndEvent(event, copy).unbondingEndEvent;
