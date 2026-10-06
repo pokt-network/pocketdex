@@ -1041,12 +1041,16 @@ function processSupplierEventsAndMessages(
 }
 
 // Helper: Build lists of items to save
-function buildSupplierSaveLists(record: Record<string, SupplierRecord>): {
+function buildSupplierSaveLists(record: Record<string, SupplierRecord>, servicesToClose: Array<string>): {
   suppliersToSave: Array<SupplierProps>;
   servicesToSave: Array<SupplierServiceConfigProps>;
 } {
   const suppliersToSave: Array<SupplierProps> = [];
   const servicesToSave: Array<SupplierServiceConfigProps> = [];
+  // Only the configs this block closed get a new row. A config fetched for an event that then
+  // left it alone (an activation event for configs that are already activated) is still open,
+  // and inserting it again would leave two open rows for the same id.
+  const closedServices = new Set(servicesToClose);
 
   for (const { services, supplier } of Object.values(record)) {
     if (supplier) {
@@ -1054,7 +1058,7 @@ function buildSupplierSaveLists(record: Record<string, SupplierRecord>): {
     }
 
     if (services) {
-      servicesToSave.push(...Object.values(services));
+      servicesToSave.push(...Object.values(services).filter((service) => closedServices.has(service.id)));
     }
   }
 
@@ -1098,7 +1102,7 @@ export async function indexSupplier(msgByType: MessageByType, eventByType: Event
     unstakeMsgs
   } = processSupplierEventsAndMessages(eventsAndMessages, record, recordId);
 
-  const { servicesToSave, suppliersToSave } = buildSupplierSaveLists(record);
+  const { servicesToSave, suppliersToSave } = buildSupplierSaveLists(record, servicesToClose);
 
   await performSupplierDatabaseOperations({
     suppliersToSave,
