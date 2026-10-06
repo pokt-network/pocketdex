@@ -57,7 +57,10 @@ import {
   messageId,
 } from "../utils/ids";
 import { parseJson } from "../utils/json";
-import { getDenomAndAmount } from "../utils/primitives";
+import {
+  getDenomAndAmount,
+  isTxEventOfMessage,
+} from "../utils/primitives";
 import {
   Ed25519,
   pubKeyToAddress,
@@ -213,7 +216,8 @@ async function _handleMsgClaimMorseApplication(
 
   let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null;
 
-  for (const event of msg.tx.tx.events) {
+  // a tx can carry many claims: read only the events of this message
+  for (const event of msg.tx.tx.events.filter((txEvent) => isTxEventOfMessage(txEvent.attributes, msg))) {
     if (event.type === 'pocket.migration.EventMorseApplicationClaimed') {
       for (const attribute of event.attributes) {
         if (attribute.key === 'claimed_balance') {
