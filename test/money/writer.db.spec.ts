@@ -1911,7 +1911,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         CREATE TABLE ${S}.event_proof_validity_checkeds (supplier_id text, service_id text, block_id numeric,
           proof_validation_status text, failure_reason text);
         CREATE TABLE ${S}.event_application_unbonding_begins (application_id text, reason int, block_id numeric);
-        INSERT INTO ${S}.blocks VALUES (900000, '2026-09-01 12:30');`);
+        -- indexed from 10:30: the 11:00 bucket is covered (before the first indexed block nothing is)
+        INSERT INTO ${S}.blocks VALUES (600000, '2026-09-01 10:30'), (900000, '2026-09-01 12:30');`);
       const fns: [string, string, string][] = [
         ["get_application_spend", "applications", "by_application"],
         ["get_gateway_spend", "gateways", "by_gateway"],
@@ -2189,11 +2190,11 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
   it("the catalog functions answer a range that overlaps a settlement gap, and list the gap in its range", async () => {
     await c.query("BEGIN");
     try {
-      await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (700000, 800000)`);
+      await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (700000, 800000);
+                     INSERT INTO ${S}.blocks VALUES (699999, '2026-09-01 10:00'), (800001, '2026-09-01 11:00')`);
       const { rows } = await c.query(`SELECT * FROM ${S}.get_income(ARRAY['x'], NULL, NULL)`);
       assert.deepEqual(rows, []);
-      // the blocks of the gap are not indexed here: it spans the time between the written settlements around it, which
-      // this fixture writes at the same instant
+      // half-open between the covered blocks around it
       const j = (await c.query(`SELECT ${S}.get_income_json(ARRAY['x'], NULL, NULL) j`)).rows[0].j as unknown as {
         range: { gaps: Array<{ from: string; to: string }> };
         data: unknown[];
@@ -2201,7 +2202,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(j.data, []);
       assert.deepEqual(
         j.range.gaps.map((g) => [new Date(g.from).toISOString(), new Date(g.to).toISOString()]),
-        [["2026-09-01T12:00:00.000Z", "2026-09-01T11:59:59.999Z"]]
+        [["2026-09-01T10:00:00.000Z", "2026-09-01T11:00:00.000Z"]]
       );
     } finally {
       await c.query("ROLLBACK");
