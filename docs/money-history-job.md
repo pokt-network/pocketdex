@@ -15,8 +15,10 @@ with the indexer's own parser and writer (`src/mappings/money/history`, CLI `scr
 4. Records a `settlement_gaps` row `[1, lowest written height − 1]`. From then on the catalog functions answer only
    for the part of a range that is covered, and report the heights not walked yet as a gap in their `range` (they
    never read as zero). If a gap already reaches that range, it must be this job's row (it starts at 1) and the job
-   resumes from it. Another gap row (the heights a `POCKETDEX_MONEY_FROM_HEIGHT` override skipped) is not its
-   territory, wherever it lies. As it lowers its row the job lowers `money_progress.from_height`, where coverage starts,
+   resumes from it. Without its row the job starts at `money_progress.from_height − 1`, never above: it never walks
+   heights the indexer's money step processed. Without a `money_progress` row it stops (the indexer creates it).
+   Another gap row (the heights a `POCKETDEX_MONEY_FROM_HEIGHT` override skipped) is not its territory, wherever it
+   lies, and the job does not fill it: reindexing those heights does. As it lowers its row the job lowers `money_progress.from_height`, where coverage starts,
    to the lowest height it has walked, and to 1 when it finishes. A job running an older version does not: when it
    finishes, `from_height` stays where it was, so the heights it walked read as not covered (never as zero) until a
    job of this version runs or `from_height` is set by hand.
@@ -66,7 +68,7 @@ TS_NODE_FILES=true node --max-old-space-size=12000 -r ts-node/register scripts/m
 
 | Option | Meaning |
 |---|---|
-| `--start H` | Only when nothing is written yet. With written heights the start is always the lowest one − 1. |
+| `--start H` | Optional: the start is always `money_progress.from_height − 1`; another value stops the job. |
 | `--to H` | Lowest height to walk in this run (default 1). The gap keeps what is below. |
 | `--workers N` | Heights downloaded and parsed ahead while one is written (default 1): up to N + 1 heights in memory. |
 | `--flush-every N`, `--flush-ms T` | Empty heights between two lowerings of the gap (default 2000), and the longest wait (default 30,000 ms). A crash re-reads at most that many. |

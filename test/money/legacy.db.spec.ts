@@ -30,8 +30,8 @@ import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlem
 import { createSettlementSmartTagsFn, OMITTED_TABLES } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import {
   createSettlementWriterFn,
-  recordMoneyProgressCalls,
-  recordSettlementGapCall,
+  recordMoneyProgressCall,
+  recordMoneySkipCall,
   writeSettlementCalls,
 } from "../../src/mappings/dbFunctions/settlement/writer";
 import { planGap } from "../../src/mappings/money/history/job";
@@ -211,12 +211,10 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
 
   // the money step's bookkeeping for a height it processes (money/write.ts), with an override when given
   const step = async (height: number, override = 0) => {
-    for (const { sql, bind } of [
-      ...(override > 0 ? [recordSettlementGapCall(S, override)] : []),
-      ...recordMoneyProgressCalls(S, height),
-    ])
-      await c.query(sql, bind);
+    const { sql, bind } = recordMoneyProgressCall(S, height, override);
+    await c.query(sql, bind);
   };
+  const one = async (sql: string, params: unknown[] = []) => (await c.query(sql, params)).rows[0];
   // [start, end] BETWEEN inclusive, as the consumers send them: whole history, a day, across midnight, partial hours
   const WINDOWS = [
     ["2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z", "day"],
@@ -1066,7 +1064,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
                      VALUES (899713, '${WRITES[0][1]}', 'batched_vrd', '2026-09-01', 99);
                      DELETE FROM ${S}.settlement_gaps; UPDATE ${S}.money_progress SET from_height = 1`);
       assert.deepEqual((await range("2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [first, head]);
-      assert.deepEqual(await plan(), { top: 899712, create: true });
+      assert.deepEqual(await plan(), { top: 0, create: false });
       await c.query("ROLLBACK TO SAVEPOINT s");
       // no settlement ever (a localnet): the progress advances, so a range over indexed blocks is covered, and 0
       for (const t of OMITTED_TABLES.filter((x) => x !== "delegations" && x !== "money_progress")) await c.query(`DELETE FROM ${S}.${t}`);
@@ -1135,6 +1133,37 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       assert.equal(all.l, covered.l);
       const live = (await one(`SELECT ${S}.get_rewards_by_addresses_and_time($1, '2026-09-01', '2026-09-03')::text a`, [[shareholder]])).a;
       assert.notEqual(all.l, live);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("the money step: a rewind then an override records the gap from where it really is; the job never walks processed heights", async () => {
+    const plan = () => planGap(c as unknown as Parameters<typeof planGap>[0], { schema: S } as unknown as Parameters<typeof planGap>[1]);
+    const skip = async (height: number) => {
+      const { sql, bind } = recordMoneySkipCall(S, height);
+      await c.query(sql, bind);
+    };
+    const rows = async () =>
+      (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps ORDER BY 1`)).rows;
+    await c.query("BEGIN");
+    try {
+      // processed up to 899773; the indexer rewinds to 899750 and runs on with POCKETDEX_MONEY_FROM_HEIGHT = 899900:
+      // each skipped height pulls the progress back, so the gap starts right after 899750, not after 899773
+      await skip(899751);
+      await skip(899752);
+      assert.equal((await one(`SELECT height::int h FROM ${S}.money_progress`)).h, 899750);
+      await step(899900, 899900);
+      assert.deepEqual(await rows(), [{ f: 899751, t: 899899 }]);
+      // the progress went back past the 899753 and 899773 settlements, so they are not covered until rewritten
+      await c.query(`DELETE FROM ${S}.settlement_gaps; UPDATE ${S}.money_progress SET height = 899773`);
+      // the money step processed 899700 to 899712 without money (its first height 899700, the lowest written 899713):
+      // the job plans [1, 899699], never over what the money step processed
+      await c.query(`UPDATE ${S}.money_progress SET from_height = 899700`);
+      assert.deepEqual(await plan(), { top: 899699, create: true });
+      // no money_progress row: the job stops with a clear message
+      await c.query(`DELETE FROM ${S}.money_progress`);
+      await assert.rejects(plan(), /money_progress has no row: the indexer's money step creates it/);
     } finally {
       await c.query("ROLLBACK");
     }

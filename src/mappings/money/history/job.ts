@@ -354,12 +354,20 @@ async function tokenomicsParamsAt(
 }
 
 // The gap row this job owns (from_height = 1). Returns the highest height left to walk, and whether the row is still
-// to be created (runHistory does it after the LCD preflight). Only that row is the job's: another gap row (the heights a
-// POCKETDEX_MONEY_FROM_HEIGHT override skipped) is not its territory, wherever it lies.
+// to be created (runHistory does it after the LCD preflight). The job walks only below money_progress.from_height,
+// where coverage starts: [1, from_height - 1], never heights the indexer's money step processed. Only that row is the
+// job's: another gap row (the heights a POCKETDEX_MONEY_FROM_HEIGHT override skipped) is not its territory, and the
+// job does not fill it (reindexing those heights does). Without a money_progress row it stops: the indexer creates it.
 export async function planGap(client: PgClient, o: HistoryOptions): Promise<{ top: number; create: boolean }> {
   const s = o.schema;
-  const low = await client.query(`SELECT min(height)::bigint AS h FROM ${s}.settlement_blocks`);
-  const lowest = low.rows[0].h === null ? null : Number(low.rows[0].h);
+  const progress = await client.query(`SELECT from_height::bigint AS f FROM ${s}.money_progress`);
+  if (progress.rows.length === 0) {
+    throw new Error(
+      `[history] ${s}.money_progress has no row: the indexer's money step creates it (or its start-up seeds it over ` +
+        "written settlements); run the indexer first"
+    );
+  }
+  const fromHeight = Number(progress.rows[0].f);
   const gaps = await client.query(
     `SELECT from_height::bigint AS f, to_height::bigint AS t FROM ${s}.settlement_gaps WHERE from_height = $1`,
     [GAP_FROM]
@@ -369,13 +377,10 @@ export async function planGap(client: PgClient, o: HistoryOptions): Promise<{ to
     if (o.start !== undefined) throw new Error(`[history] the gap ${list} exists: resume without --start`);
     return { top: Number(gaps.rows[0].t), create: false };
   }
-  if (lowest === null && o.start === undefined) {
-    throw new Error("[history] no settlement height is written yet and no --start is given");
+  const start = fromHeight - 1;
+  if (o.start !== undefined && o.start !== start) {
+    throw new Error(`[history] --start must be ${start}, one below money_progress.from_height`);
   }
-  if (lowest !== null && o.start !== undefined && o.start !== lowest - 1) {
-    throw new Error(`[history] --start must be ${lowest - 1}, one below the lowest written settlement height`);
-  }
-  const start = lowest !== null ? lowest - 1 : (o.start as number);
   return { top: start, create: start >= GAP_FROM };
 }
 
@@ -405,9 +410,15 @@ async function lowerGap(client: PgClient, schema: string, height: number): Promi
 
 // One height, one transaction: the CALLs of write_settlement, then the gap lowered below the height (which also
 // covers the heights with no money above it, already classified).
+// The lock order of the indexer's money step: money_progress first, then the settlement writer.
+async function lockProgress(client: PgClient, schema: string): Promise<void> {
+  await client.query(`SELECT 1 FROM ${schema}.money_progress FOR UPDATE`);
+}
+
 async function writeHeight(client: PgClient, o: HistoryOptions, p: Prepared): Promise<void> {
   await client.query("BEGIN");
   try {
+    await lockProgress(client, o.schema);
     for (const { bind, sql } of writeSettlementCalls(o.schema, p.height, p.payload)) await client.query(sql, bind);
     // a rewrite replaces what an earlier run recorded for the height, so no row claims what this one did not find
     for (const t of ["settlement_history_findings", "settlement_replay_snapshots"]) {
@@ -520,6 +531,7 @@ async function walk(client: PgClient, o: HistoryOptions): Promise<HistoryResult>
     if (!o.dryRun) {
       await client.query("BEGIN");
       try {
+        await lockProgress(client, o.schema);
         await lowerGap(client, o.schema, low);
         await client.query("COMMIT");
       } catch (e) {

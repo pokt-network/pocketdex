@@ -1328,9 +1328,11 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           )
         ).rows[0].a
       );
-    const before = await stakers();
     await c.query("BEGIN");
     try {
+      // the rows below go into the base tables only (not through the writer): read the base, not the rollups
+      await c.query("SET LOCAL money.no_rollup = on");
+      const before = await stakers();
       await c.query(
         `INSERT INTO ${S}.staker_payouts (height, event_idx, recipient_id, op_reason, role, family, amount_upokt, row_source, calc_version)
          VALUES ($1, -1, 'pokt1seededstaker', 'TLM_GLOBAL_MINT_VALIDATOR_REWARD_DISTRIBUTION', 'validator', 'global', 1000, 'event', 1)`,
@@ -1666,7 +1668,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         await assert.rejects(c.query(sql), /written with rollup version \d+ \(current \d+\): run rebuild_rollups first/, sql);
         await c.query("ROLLBACK TO SAVEPOINT r");
       }
-      // a range inside one day reads no rollup day: it answers
+      // a range that leaves part of a day's settlements out reads that day from the base: it answers (a settlement at
+      // 15:00 the range leaves out)
+      await c.query(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version)
+                     SELECT 899714, '2026-09-01T15:00:00Z', era, day, ${ROLLUP_VERSION} FROM ${S}.settlement_blocks WHERE height = 899713`);
       const edge = await c.query(
         `SELECT count(*)::int n FROM ${S}.get_supplier_earnings(ARRAY['${supplier}'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z')`
       );

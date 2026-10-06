@@ -107,10 +107,9 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
       `  cv := ${s}._coverage(range_start, range_end${blocks ? ", true" : ""});`,
       "  IF cv.empty THEN RETURN; END IF;",
       "  range_start := cv.data_from;",
-      // nothing past covered_to is read either: a rewind leaves rows above the progress until they are rewritten. Only
-      // then: with nothing written past covered_to the end stays as asked, so an open or later end keeps reading its
-      // edge day / month from the rollups
-      "  IF cv.last_settled >= cv.covered_to THEN range_end := least(range_end, cv.covered_to); END IF;",
+      // nothing past covered_to is read either (a rewind leaves rows above the progress until they are rewritten);
+      // _ranges keeps an edge day in the rollups when it holds no settlement outside the range
+      "  range_end := least(range_end, cv.covered_to);",
       ...(span
         ? [
             // _span from the bounds _coverage already read: settlements, or blocks for the indexer's tables
@@ -178,8 +177,8 @@ END $$;
 -- covered = the span minus the gaps (a tstzmultirange); covered_from / covered_to are its bounds, both NULL when it is
 -- empty (nothing covered: empty = true, nothing to read); gaps = the merged gaps that overlap the requested range, as
 -- {from, to}, half-open. data_from is the range_start to read with: covered_from, so the data never sums heights that
--- were not written (NULL for an open range_start when no gap cuts the start: the same data, and the first day from the
--- rollups). A row without a bucket reports covered_from as its bucket_start for an open range_start. first_settled /
+-- were not written (the callers clip the end to covered_to too). A row without a bucket reports covered_from as its
+-- bucket_start for an open range_start. first_settled /
 -- last_settled / first_block / last_block are the span bounds (_span, covered()), read once here.
 -- Index probes only, and few gap rows (0.8 ms on the mainnet replica, 2026-10-06). jit = off: a settlement_gaps never
 -- analyzed is planned at ~200 rows, past jit_above_cost, and JIT compiling took ~30 ms per call (measured locally).
@@ -235,9 +234,7 @@ BEGIN
   empty := isempty(covered);
   IF NOT empty THEN
     covered_from := lower(covered); covered_to := upper(covered);
-    -- an open start that nothing cuts (no gap before it) stays open, so a lifetime call reads its first day from the
-    -- rollups as before
-    data_from := CASE WHEN range_start IS NULL AND covered_from = v_start THEN NULL ELSE covered_from END;
+    data_from := covered_from;
   END IF;
 END $$;
 
@@ -287,7 +284,9 @@ BEGIN
 END $$;
 
 -- Rollup days [d1, d2] = the whole UTC days inside [from, to) (rollups are incremental: there is no
--- "closed day"). Base = heights in [lo1, hi1] and [lo2, hi2] (the edges). p_no_rollup, or the GUC
+-- "closed day"), and an edge day that holds no written settlement outside the range: its rollup sums exactly the range's
+-- part of it (two index probes; a range clipped to what is covered keeps its first and last day in the rollups).
+-- Base = heights in [lo1, hi1] and [lo2, hi2] (the edges). p_no_rollup, or the GUC
 -- money.no_rollup = on, sends everything to the base tables.
 CREATE OR REPLACE FUNCTION ${s}._ranges(range_start timestamptz, range_end timestamptz, bucket text, p_no_rollup boolean DEFAULT false,
   OUT d1 date, OUT d2 date, OUT lo1 bigint, OUT hi1 bigint, OUT lo2 bigint, OUT hi2 bigint)
@@ -300,6 +299,17 @@ BEGIN
                ELSE (range_start AT TIME ZONE 'UTC')::date + 1 END;
     d2 := CASE WHEN range_end IS NULL THEN (SELECT max(day) FROM ${s}.settlement_blocks)
                ELSE (range_end AT TIME ZONE 'UTC')::date - 1 END;
+    IF range_start IS NOT NULL AND d1 > (range_start AT TIME ZONE 'UTC')::date
+       AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
+                       WHERE sb.block_time >= ((range_start AT TIME ZONE 'UTC')::date::timestamp AT TIME ZONE 'UTC')
+                         AND sb.block_time < range_start) THEN
+      d1 := (range_start AT TIME ZONE 'UTC')::date;
+    END IF;
+    IF range_end IS NOT NULL AND range_end > ((d2 + 1)::timestamp AT TIME ZONE 'UTC')
+       AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
+                       WHERE sb.block_time >= range_end AND sb.block_time < ((d2 + 2)::timestamp AT TIME ZONE 'UTC')) THEN
+      d2 := d2 + 1;
+    END IF;
     IF d1 IS NULL OR d2 IS NULL OR d1 > d2 THEN d1 := NULL; END IF;
   END IF;
   IF d1 IS NULL THEN
@@ -762,11 +772,21 @@ BEGIN
   use_month_svc := by_service AND NOT by_supplier AND coalesce(bucket, 'month') IN ('month', 'year')
                    AND rg.d1 <= rg.d2 AND m1 <= m2;
   -- supplier AND service: whole UTC months [mw1, mw2) of the range from monthly_income_by_address_supplier_service, the
-  -- rest (and the staker rows, which have neither) from the base; an open end makes its edge month whole
+  -- rest (and the staker rows, which have neither) from the base; an open end, or an edge month that holds no written
+  -- settlement outside the range, is whole too
   mw1 := CASE WHEN range_start IS NULL THEN '-infinity'
               WHEN range_start = date_trunc('month', range_start, 'UTC') THEN range_start
+              WHEN NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
+                               WHERE sb.block_time >= date_trunc('month', range_start, 'UTC') AND sb.block_time < range_start)
+                THEN date_trunc('month', range_start, 'UTC')
               ELSE date_trunc('month', range_start, 'UTC') + interval '1 month' END;
-  mw2 := CASE WHEN range_end IS NULL THEN 'infinity' ELSE date_trunc('month', range_end, 'UTC') END;
+  mw2 := CASE WHEN range_end IS NULL THEN 'infinity'
+              WHEN range_end = date_trunc('month', range_end, 'UTC') THEN range_end
+              WHEN NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
+                               WHERE sb.block_time >= range_end
+                                 AND sb.block_time < date_trunc('month', range_end, 'UTC') + interval '1 month')
+                THEN date_trunc('month', range_end, 'UTC') + interval '1 month'
+              ELSE date_trunc('month', range_end, 'UTC') END;
   use_month_triple := by_supplier AND by_service AND coalesce(bucket, 'month') IN ('month', 'year') AND mw1 < mw2
                       AND coalesce(current_setting('money.no_rollup', true), 'off') <> 'on';
   IF use_month_triple THEN
@@ -1517,7 +1537,7 @@ DROP FUNCTION IF EXISTS ${s}._legacy_range_of(timestamp, timestamp, timestamptz,
 -- requested_to and covered_to; start_from is the start_date to read with (moved up to covered_from, 'infinity' when
 -- nothing is covered, which every legacy_* function reads as an empty range); empty = a well-formed range that nothing
 -- covered overlaps, whose data is null in every legacy_* function (not a zero: nothing was read). end_to is the end_date to
--- read with: no later than covered_to (inclusive) when settlements are written past it (a rewind), end_date otherwise. A range that matches
+-- read with: no later than covered_to (inclusive). A range that matches
 -- nothing (NULL bound, start after end) reports no coverage (covered_from / covered_to NULL, gaps []).
 DO $$
 BEGIN
@@ -1543,8 +1563,7 @@ BEGIN
                          cv.covered_to - interval '1 microsecond', cv.gaps, true);
   start_from := CASE WHEN cv.empty THEN 'infinity' ELSE cv.data_from AT TIME ZONE 'UTC' END;
   empty := cv.empty;
-  end_to := CASE WHEN NOT cv.empty AND cv.last_settled >= cv.covered_to
-                 THEN least(end_date, (cv.covered_to - interval '1 microsecond') AT TIME ZONE 'UTC') ELSE end_date END;
+  end_to := CASE WHEN cv.empty THEN end_date ELSE least(end_date, (cv.covered_to - interval '1 microsecond') AT TIME ZONE 'UTC') END;
 END $$;
 
 -- The two scalar ones returned numeric before: dropped first, a return type CREATE OR REPLACE cannot change.
