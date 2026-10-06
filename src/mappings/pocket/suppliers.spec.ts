@@ -168,6 +168,27 @@ const unbondingEnd = (h: number, operator: string): CosmosEvent =>
     },
   } as unknown as CosmosEvent);
 
+// EventSupplierUnbondingBegin as the chain emits it: the reason as its quoted enum name in every era (block_results
+// of mainnet 96850 and 461853, beta 23673 and 482553). BELOW_MIN_STAKE comes from the EndBlock settlement;
+// MIGRATION from a Morse claim's tx (mainnet 99160).
+const unbondingBegin = (h: number, operator: string, reason: "BELOW_MIN_STAKE" | "MIGRATION"): CosmosEvent =>
+  ({
+    idx: 800,
+    kind: reason === "BELOW_MIN_STAKE" ? "finalize_block" : "tx",
+    block: block(h),
+    ...(reason === "MIGRATION" && { tx: { hash: `MIGRATION${h}${operator}`, idx: 0, tx: { code: 0, events: [] } } }),
+    event: {
+      type: "pocket.supplier.EventSupplierUnbondingBegin",
+      attributes: [
+        { key: "reason", value: `"SUPPLIER_UNBONDING_REASON_${reason}"` },
+        { key: "session_end_height", value: `"${h}"` },
+        { key: "supplier", value: JSON.stringify({ operator_address: operator }) },
+        { key: "unbonding_end_height", value: `"${h + 100}"` },
+        ...(reason === "BELOW_MIN_STAKE" ? [{ key: "mode", value: "EndBlock" }] : []),
+      ],
+    },
+  } as unknown as CosmosEvent);
+
 const claimMorse = (h: number, operator: string, services: Array<string>, unbondingEnded = false): CosmosMessage =>
   ({
     idx: 0,
@@ -385,6 +406,30 @@ describe("indexSupplier service configs", () => {
 
     await index(180, [], activations(180, S1, ["akash"]));
     assert.deepEqual(open(S1), ["akash@180"]);
+  });
+
+  it("an unbonding for falling below the minimum stake closes the supplier's configs, as an unstake does", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+    await index(120, [], activations(120, S1, ["akash", "eth"]));
+
+    // poktroll settle_pending_claims.go schedules every config to deactivate, as MsgUnstakeSupplier does
+    await index(150, [], [unbondingBegin(150, S1, "BELOW_MIN_STAKE")]);
+    assert.deepEqual(open(S1), []);
+    assert.deepEqual(history(S1, "akash"), [
+      [100, 120, null],
+      [120, 150, 120],
+    ]);
+  });
+
+  it("an unbonding begun by a Morse migration leaves the supplier's configs declared", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    await index(120, [], activations(120, S1, ["akash"]));
+
+    // the claim of an unbonding Morse supplier schedules no deactivation
+    await index(150, [], [unbondingBegin(150, S1, "MIGRATION")]);
+    assert.deepEqual(open(S1), ["akash@120"]);
   });
 
   it("a stake-only restake during the unbonding declares nothing", async () => {
