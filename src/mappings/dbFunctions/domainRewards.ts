@@ -49,9 +49,8 @@ BEGIN
   -- claims: relay/reward aggregates from event_claim_settleds, each attributed to the config its supplier had
   --   declared for the service before the claim's session started (the block before the session start), which is
   --   the config that served the session: a stake in the session's first block activates at the next session, and
-  --   an activation at that block carries the config already declared before it. That is the one version live
-  --   then (one row even where the index still holds a duplicate of it), or else the latest one that started at or
-  --   before the session start (the configs written at genesis, at the first session's start).
+  --   an activation at that block carries the config already declared before it. That is the version live then
+  --   (the latest one where the index still holds a duplicate, so a claim counts once).
   --   The session start is the event's, or, when the event omits it (zero), session end - num_blocks_per_session
   --   + 1 with the param in force for that session (by active_at; equal to the event's start on every claim checked
   --   that carries one). Without either (no session heights), the settlement block is used, as before.
@@ -76,7 +75,8 @@ BEGIN
                       e.block_id::bigint + 1) - 1 AS declared_at
       FROM ${dbSchema}.event_claim_settleds e
       INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
-      -- the version in force for the session: the latest whose activation is at or before the session end
+      -- the version in force for the session: the latest active at or before its end. A join, not a subquery in the
+      -- CASE: memoized by session end it costs a few dozen probes a day, where the subquery ran once per claim
       LEFT JOIN LATERAL (
         SELECT p.value::bigint AS n FROM ${dbSchema}.params p
         WHERE p.namespace = 'shared' AND p.key = 'num_blocks_per_session'
@@ -87,19 +87,11 @@ BEGIN
       -- a fence: the config lookup below then probes the index with declared_at as one column
       OFFSET 0
     ) e
-    -- the first branch answers almost every claim; the second runs only when it finds nothing (LIMIT over Append)
     CROSS JOIN LATERAL (
-      SELECT x.domains FROM (
-        (SELECT ssc.domains FROM ${dbSchema}.supplier_service_configs ssc
-          WHERE ssc.supplier_id = e.supplier_id AND ssc.service_id = e.service_id
-            AND ssc._block_range @> e.declared_at
-          LIMIT 1)
-        UNION ALL
-        (SELECT o.domains FROM ${dbSchema}.supplier_service_configs o
-          WHERE o.supplier_id = e.supplier_id AND o.service_id = e.service_id
-            AND lower(o._block_range) <= e.declared_at + 1
-          ORDER BY lower(o._block_range) DESC LIMIT 1)
-      ) x LIMIT 1
+      SELECT ssc.domains FROM ${dbSchema}.supplier_service_configs ssc
+      WHERE ssc.supplier_id = e.supplier_id AND ssc.service_id = e.service_id
+        AND ssc._block_range @> e.declared_at
+      ORDER BY lower(ssc._block_range) DESC LIMIT 1
     ) d
     CROSS JOIN jsonb_array_elements_text(d.domains) AS domain
     WHERE d.domains IS NOT NULL
