@@ -239,6 +239,10 @@ function _handleEventSupplierServiceConfigActivated(
     if (key === "operator_address") {
       operatorAddress = (value as string).replaceAll('"', '');
     }
+
+    if (key === "service_id") {
+      serviceId = (value as string).replaceAll('"', '');
+    }
   }
 
   if (!activationHeight) {
@@ -251,6 +255,8 @@ function _handleEventSupplierServiceConfigActivated(
 
   let services: Array<SupplierServiceConfigProps> = []
 
+  // Since v0.1.27 the chain emits one event per activated service, with service_id. Before that it
+  // emitted one event per supplier (with the whole supplier and no service_id), activating all of them.
   if (serviceId) {
     const service = record[operatorAddress]?.services?.[getStakeServiceId(operatorAddress, serviceId)];
 
@@ -259,9 +265,7 @@ function _handleEventSupplierServiceConfigActivated(
         service
       ]
     }
-  }
-
-  if (services.length === 0) {
+  } else {
     services = Object.values(record[operatorAddress]?.services || {});
   }
 
@@ -1041,7 +1045,10 @@ function processSupplierEventsAndMessages(
 }
 
 // Helper: Build lists of items to save
-function buildSupplierSaveLists(record: Record<string, SupplierRecord>, servicesToClose: Array<string>): {
+function buildSupplierSaveLists(
+  record: Record<string, SupplierRecord>,
+  servicesToClose: Array<string>
+): {
   suppliersToSave: Array<SupplierProps>;
   servicesToSave: Array<SupplierServiceConfigProps>;
 } {
@@ -1136,13 +1143,16 @@ async function performSupplierDatabaseOperations(data: {
 }): Promise<void> {
   const block = store.context.getHistoricalUnit();
 
-  const removeRecords = (model: string) => {
+  const removeRecords = (model: string, ids?: Array<string>) => {
     const sequelize = getSequelize(model);
+    const createdAtBlock = sequelize.where(
+      sequelize.fn("lower", sequelize.col("_block_range")),
+      block
+    );
     return getStoreModel(model).model.destroy({
-      where: sequelize.where(
-        sequelize.fn("lower", sequelize.col("_block_range")),
-        block
-      ),
+      where: ids
+        ? { [Symbol.for("and")]: [createdAtBlock, { id: { [Symbol.for("in")]: ids } }] }
+        : createdAtBlock,
       transaction: store.context.transaction,
     });
   };
@@ -1154,7 +1164,16 @@ async function performSupplierDatabaseOperations(data: {
   const deletePromises: Array<Promise<unknown>> = [];
 
   if (data.suppliersToSave.length > 0) deletePromises.push(removeRecords("Supplier"));
-  if (data.servicesToSave.length > 0) deletePromises.push(removeRecords("SupplierServiceConfig"));
+  // Only the configs inserted again below: a config this block leaves alone keeps the row an earlier
+  // pass of this same block created.
+  if (data.servicesToSave.length > 0) {
+    deletePromises.push(
+      removeRecords(
+        "SupplierServiceConfig",
+        data.servicesToSave.map((service) => service.id)
+      )
+    );
+  }
   if (data.stakeMsgs.length > 0) deletePromises.push(removeRecords("MsgStakeSupplier"));
   if (data.claimMsgs.length > 0) deletePromises.push(removeRecords("MsgClaimMorseSupplier"));
   if (data.unstakeMsgs.length > 0) deletePromises.push(removeRecords("MsgUnstakeSupplier"));
@@ -1301,8 +1320,19 @@ function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<C
     }
   }
 
+  // Finalize-block events carry mode=BeginBlock|EndBlock. The BeginBlock ones (the service config
+  // activations of the supplier BeginBlocker) ran before the block's txs: a stake in the same block
+  // replaces configs they already activated, and must not be stamped as activated by them.
+  const isBeginBlockEvent = (event: CosmosEvent) =>
+    event.event.attributes.some(({ key, value }) => key === "mode" && value === "BeginBlock");
+
   return [
+    ...orderBy(finalizedEvents.filter(isBeginBlockEvent), ['idx'], ['asc']),
     ...orderBy(nonFinalizedData, ['tx.idx', 'rank', 'idx'], ['asc', 'asc', 'asc']),
-    ...orderBy(finalizedEvents, ['idx'], ['asc'])
+    ...orderBy(
+      finalizedEvents.filter((event) => !isBeginBlockEvent(event)),
+      ['idx'],
+      ['asc']
+    )
   ];
 }

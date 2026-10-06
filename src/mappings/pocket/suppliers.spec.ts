@@ -1,7 +1,15 @@
-// Unit test: indexSupplier keeps one open SupplierServiceConfig row per id, against fake SubQuery globals
-// (logger, store) backed by an in-memory versioned table that applies the same delete / close / insert
-// operations the handler sends to Postgres. Run with
+// Unit test: indexSupplier writes SupplierServiceConfig rows as the chain orders the block (BeginBlock
+// activations, then txs) and keeps one open row per id, against fake SubQuery globals (logger, store).
+// Run with
 //   yarn test:unit
+//
+// The fake store keeps an in-memory versioned table per model. It does not evaluate Sequelize predicates:
+// it reads only the shapes this handler sends and applies their meaning by hand, so a change to those
+// shapes needs this fake changed too:
+//   destroy  lower(_block_range) = height, optionally AND id IN (...)  -> drop the rows created at height
+//   update   id IN (...) AND __block_range @> height                  -> close those open rows at height
+//   bulkCreate                                                        -> insert at [height, null)
+//   getByFields [field, "in", values]                                 -> the rows open at height
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await, @typescript-eslint/no-var-requires */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -21,16 +29,20 @@ const sequelize = {
   transaction: async (_: unknown, cb: (tx: unknown) => Promise<unknown>) => cb({}),
 };
 
+type IdIn = { id: Record<symbol, Array<string>> };
+
 const model = (name: string) => {
   tables[name] = tables[name] || [];
   return {
     sequelize,
-    // removeRecords: rows created at this block
-    destroy: async () => {
-      tables[name] = tables[name].filter((row) => row.lo !== height);
+    destroy: async ({ where }: { where: Record<symbol, [unknown, IdIn]> }) => {
+      const and = where[Symbol.for("and")];
+      const ids = and ? and[1].id[Symbol.for("in")] : null;
+      tables[name] = tables[name].filter(
+        (row) => row.lo !== height || (ids !== null && !ids.includes(row.id as string))
+      );
     },
-    // close the open rows of these ids at this block
-    update: async (_: unknown, { where }: { where: { id: Record<symbol, Array<string>> } }) => {
+    update: async (_: unknown, { where }: { where: IdIn }) => {
       const ids = where.id[Symbol.for("in")];
       for (const row of tables[name]) {
         if (ids.includes(row.id as string) && openAt(row, height)) row.hi = height;
@@ -65,57 +77,61 @@ globals.store = {
 
 const { indexSupplier } = require("./suppliers") as typeof import("./suppliers");
 
-const OPERATOR = "pokt139eww6ul8dxcfvgp9z5xtnnhc2n30vnka6pm3p";
+const S1 = "pokt139eww6ul8dxcfvgp9z5xtnnhc2n30vnka6pm3p";
+const S2 = "pokt1xgjlnqqmrmc7v2hp0sc6xx46lr7z4y6j406ue9";
 const block = (h: number) => ({ block: { header: { height: h } } });
 
-const stake = (h: number, services: Array<string>): CosmosMessage =>
+const stake = (h: number, operator: string, services: Array<string>, txIdx = 0): CosmosMessage =>
   ({
     idx: 0,
     block: block(h),
-    tx: { hash: `STAKE${h}`, idx: 0, tx: { code: 0, events: [] } },
+    tx: { hash: `STAKE${h}${operator}`, idx: txIdx, tx: { code: 0, events: [] } },
     msg: {
       typeUrl: "/pocket.supplier.MsgStakeSupplier",
       decodedMsg: {
-        operatorAddress: OPERATOR,
-        ownerAddress: OPERATOR,
-        signer: OPERATOR,
+        operatorAddress: operator,
+        ownerAddress: operator,
+        signer: operator,
         stake: { amount: "60000000000", denom: "upokt" },
         services: services.map((serviceId) => ({ serviceId, endpoints: [], revShare: [] })),
       },
     },
-  }) as unknown as CosmosMessage;
+  } as unknown as CosmosMessage);
 
-const unstake = (h: number): CosmosMessage =>
+const unstake = (h: number, operator: string): CosmosMessage =>
   ({
     idx: 0,
     block: block(h),
-    tx: { hash: `UNSTAKE${h}`, idx: 0, tx: { code: 0, events: [] } },
+    tx: { hash: `UNSTAKE${h}${operator}`, idx: 0, tx: { code: 0, events: [] } },
     msg: {
       typeUrl: "/pocket.supplier.MsgUnstakeSupplier",
-      decodedMsg: { operatorAddress: OPERATOR, signer: OPERATOR },
+      decodedMsg: { operatorAddress: operator, signer: operator },
     },
-  }) as unknown as CosmosMessage;
+  } as unknown as CosmosMessage);
 
-// EventSupplierServiceConfigActivated as the chain emits it: one per service, in finalize_block_events
-// with mode=BeginBlock (block_results of mainnet 947061 and 947081).
-const activations = (h: number, services: Array<string>): Array<CosmosEvent> =>
-  services.map(
-    (serviceId, i) =>
-      ({
-        idx: 100 + i,
-        kind: "finalize_block",
-        block: block(h),
-        event: {
-          type: "pocket.supplier.EventSupplierServiceConfigActivated",
-          attributes: [
-            { key: "activation_height", value: `"${h}"` },
-            { key: "operator_address", value: `"${OPERATOR}"` },
-            { key: "service_id", value: `"${serviceId}"` },
-            { key: "mode", value: "BeginBlock" },
-          ],
-        },
-      }) as unknown as CosmosEvent
+const activation = (h: number, idx: number, attributes: Array<{ key: string; value: string }>): CosmosEvent =>
+  ({
+    idx,
+    kind: "finalize_block",
+    block: block(h),
+    event: {
+      type: "pocket.supplier.EventSupplierServiceConfigActivated",
+      attributes: [{ key: "activation_height", value: `"${h}"` }, ...attributes, { key: "mode", value: "BeginBlock" }],
+    },
+  } as unknown as CosmosEvent);
+
+// Since v0.1.27: one event per service, as in block_results of mainnet 947061 and 947081.
+const activations = (h: number, operator: string, services: Array<string>): Array<CosmosEvent> =>
+  services.map((serviceId, i) =>
+    activation(h, 100 + i, [
+      { key: "operator_address", value: `"${operator}"` },
+      { key: "service_id", value: `"${serviceId}"` },
+    ])
   );
+
+// Before v0.1.27: one event per supplier, carrying the supplier and no service_id.
+const legacyActivation = (h: number, operator: string): CosmosEvent =>
+  activation(h, 100, [{ key: "supplier", value: JSON.stringify({ operator_address: operator }) }]);
 
 const index = async (h: number, msgs: Array<CosmosMessage>, events: Array<CosmosEvent>) => {
   height = h;
@@ -135,57 +151,90 @@ const index = async (h: number, msgs: Array<CosmosMessage>, events: Array<Cosmos
   await indexSupplier(msgByType as never, eventByType as never);
 };
 
-const configs = () => tables.SupplierServiceConfig || [];
+const configs = (operator: string) => (tables.SupplierServiceConfig || []).filter((row) => row.supplierId === operator);
 
-// the open rows at the current height, as "<service>@<activatedAt>", plus the ids with more than one
-const openConfigs = () => {
-  const open = configs().filter((row) => openAt(row, height));
-  const ids = open.map((row) => row.id as string);
-  return {
-    open: open.map((row) => `${row.serviceId}@${row.activatedAtId ?? "-"}`).sort(),
-    duplicatedIds: ids.filter((id, i) => ids.indexOf(id) !== i),
-  };
-};
+// the configs open at the current height, as "<service>@<activatedAt>"
+const open = (operator: string) =>
+  configs(operator)
+    .filter((row) => openAt(row, height))
+    .map((row) => `${row.serviceId}@${row.activatedAtId ?? "-"}`)
+    .sort();
+
+// every row of one config, as [from, to, activatedAt]
+const history = (operator: string, serviceId: string) =>
+  configs(operator)
+    .filter((row) => row.serviceId === serviceId)
+    .map((row) => [row.lo, row.hi, row.activatedAtId === undefined ? null : Number(row.activatedAtId)]);
 
 const reset = () => {
   for (const name of Object.keys(tables)) delete tables[name];
 };
 
 describe("indexSupplier service configs", () => {
-  it("a stake in the block where the previous stake activates leaves one open row per config (mainnet 947060/61/81)", async () => {
+  it("a stake in the block where the previous stake activates waits for its own activation (mainnet 947060/61/81)", async () => {
     reset();
-    await index(947060, [stake(947060, ["akash", "eth"])], []);
-    // the activation of the 947060 stake and a new stake land in the same block
-    await index(947061, [stake(947061, ["akash", "eth"])], activations(947061, ["akash", "eth"]));
-    assert.deepEqual(openConfigs().duplicatedIds, []);
+    await index(947060, [stake(947060, S1, ["akash", "eth"])], []);
 
-    // the activation of the 947061 stake, one session later: the configs are already activated
-    await index(947081, [], activations(947081, ["akash", "eth"]));
-    const { duplicatedIds, open } = openConfigs();
-    assert.deepEqual(duplicatedIds, []);
-    assert.equal(open.length, 2);
+    // the BeginBlock activation of the 947060 stake, then a new stake in tx 0 of the same block
+    await index(947061, [stake(947061, S1, ["akash", "eth"])], activations(947061, S1, ["akash", "eth"]));
+    assert.deepEqual(open(S1), ["akash@-", "eth@-"]);
+
+    // the activation of the 947061 stake, one session later
+    await index(947081, [], activations(947081, S1, ["akash", "eth"]));
+    assert.deepEqual(open(S1), ["akash@947081", "eth@947081"]);
+    assert.deepEqual(history(S1, "akash"), [
+      [947060, 947061, null],
+      [947061, 947081, null],
+      [947081, null, 947081],
+    ]);
   });
 
   it("stake, activation, restake that changes services, activation, unstake", async () => {
     reset();
-    await index(100, [stake(100, ["akash", "eth"])], []);
-    assert.deepEqual(openConfigs(), { open: ["akash@-", "eth@-"], duplicatedIds: [] });
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+    assert.deepEqual(open(S1), ["akash@-", "eth@-"]);
 
-    await index(120, [], activations(120, ["akash", "eth"]));
-    assert.deepEqual(openConfigs(), { open: ["akash@120", "eth@120"], duplicatedIds: [] });
+    await index(120, [], activations(120, S1, ["akash", "eth"]));
+    assert.deepEqual(open(S1), ["akash@120", "eth@120"]);
 
-    await index(130, [stake(130, ["akash", "base"])], []);
-    assert.deepEqual(openConfigs(), { open: ["akash@-", "base@-"], duplicatedIds: [] });
-    assert.deepEqual(
-      configs().filter((row) => row.serviceId === "eth").map((row) => [row.lo, row.hi]),
-      [[100, 120], [120, 130]]
-    );
+    await index(130, [stake(130, S1, ["akash", "base"])], []);
+    assert.deepEqual(open(S1), ["akash@-", "base@-"]);
+    assert.deepEqual(history(S1, "eth"), [
+      [100, 120, null],
+      [120, 130, 120],
+    ]);
 
-    await index(140, [], activations(140, ["akash", "base"]));
-    assert.deepEqual(openConfigs(), { open: ["akash@140", "base@140"], duplicatedIds: [] });
+    await index(140, [], activations(140, S1, ["akash", "base"]));
+    assert.deepEqual(open(S1), ["akash@140", "base@140"]);
 
     // the unstake changes the supplier only
-    await index(150, [unstake(150)], []);
-    assert.deepEqual(openConfigs(), { open: ["akash@140", "base@140"], duplicatedIds: [] });
+    await index(150, [unstake(150, S1)], []);
+    assert.deepEqual(open(S1), ["akash@140", "base@140"]);
+  });
+
+  it("an activation carrying service_id activates that service only; one without it activates them all", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+
+    await index(120, [], activations(120, S1, ["akash"]));
+    assert.deepEqual(open(S1), ["akash@120", "eth@-"]);
+
+    await index(140, [], [legacyActivation(140, S1)]);
+    assert.deepEqual(open(S1), ["akash@120", "eth@140"]);
+  });
+
+  it("processing the same block twice leaves the same rows", async () => {
+    reset();
+    await index(190, [stake(190, S1, ["akash", "eth"])], []);
+
+    // S1 activates and S2 stakes in the same block, so the block deletes and re-inserts S2's configs only
+    const block200 = () => index(200, [stake(200, S2, ["akash"])], activations(200, S1, ["akash", "eth"]));
+    await block200();
+    const once = JSON.stringify([open(S1), open(S2), configs(S1).length, configs(S2).length]);
+    await block200();
+
+    assert.equal(JSON.stringify([open(S1), open(S2), configs(S1).length, configs(S2).length]), once);
+    assert.deepEqual(open(S1), ["akash@200", "eth@200"]);
+    assert.deepEqual(open(S2), ["akash@-"]);
   });
 });
