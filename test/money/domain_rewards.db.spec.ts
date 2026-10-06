@@ -51,7 +51,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       INSERT INTO ${S}.suppliers VALUES
         ('unstaked', 'Staked', int8range(100, 150)), ('unstaked', 'Unstaking', int8range(150, NULL)),
         ('restaked', 'Staked', int8range(100, NULL)),
-        ('at-start', 'Staked', int8range(100, 140)), ('at-start', 'Unstaking', int8range(140, NULL)),
+        ('genesis', 'Staked', int8range(141, NULL)), ('dup', 'Staked', int8range(100, NULL)),
+        ('no-heights', 'Staked', int8range(100, NULL)),
         ('started', 'Staked', int8range(100, NULL)),
         ('first-block', 'Staked', int8range(100, NULL));
       INSERT INTO ${S}.supplier_service_configs (supplier_id, service_id, domains, _block_range) VALUES
@@ -60,8 +61,13 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         -- restaked at 165 with another domain, after the session
         ('restaked', 'akash', '["b.com"]', int8range(100, 165)),
         ('restaked', 'akash', '["c.com"]', int8range(165, NULL)),
-        -- unstaked in the block before the session: no version covers 140, the latest one before it serves
-        ('at-start', 'akash', '["d.com"]', int8range(100, 140)),
+        -- written at the session's start, as genesis writes its configs at the first session: none before it
+        ('genesis', 'akash', '["d.com"]', int8range(141, NULL)),
+        -- an id the index still holds twice: one row serves the claim
+        ('dup', 'akash', '["i.com"]', int8range(100, NULL)),
+        ('dup', 'akash', '["i.com"]', int8range(120, NULL)),
+        -- a claim with no session heights: the config live at the settlement block
+        ('no-heights', 'akash', '["j.com"]', int8range(100, NULL)),
         -- the event carries its start (an older era): a version created inside the session does not serve it
         ('started', 'akash', '["e.com"]', int8range(100, 150)),
         ('started', 'akash', '["f.com"]', int8range(150, NULL)),
@@ -71,7 +77,9 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       INSERT INTO ${S}.event_claim_settleds VALUES
         ('unstaked', 'akash', 175, 0, 160, 1, 1, 10, 10, 1000),
         ('restaked', 'akash', 175, 0, 160, 2, 2, 20, 20, 2000),
-        ('at-start', 'akash', 175, 0, 160, 4, 4, 40, 40, 4000),
+        ('genesis', 'akash', 175, 0, 160, 4, 4, 40, 40, 4000),
+        ('dup', 'akash', 175, 0, 160, 32, 32, 320, 320, 32000),
+        ('no-heights', 'akash', 175, 0, 0, 64, 64, 640, 640, 64000),
         ('started', 'akash', 175, 141, 160, 8, 8, 80, 80, 8000),
         ('first-block', 'akash', 175, 0, 160, 16, 16, 160, 160, 16000);`);
     await c.query(`SELECT ${S}.refresh_domain_service_daily_rewards(175)`);
@@ -94,6 +102,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       { domain: "d.com", service_id: "akash", relays: "4", gross_rewards: "4000" },
       { domain: "e.com", service_id: "akash", relays: "8", gross_rewards: "8000" },
       { domain: "g.com", service_id: "akash", relays: "16", gross_rewards: "16000" },
+      { domain: "i.com", service_id: "akash", relays: "32", gross_rewards: "32000" },
+      { domain: "j.com", service_id: "akash", relays: "64", gross_rewards: "64000" },
     ]);
   });
 });
