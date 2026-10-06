@@ -63,6 +63,7 @@ import {
   Ed25519,
   pubKeyToAddress,
 } from "../utils/pub_key";
+import { endpointDomains } from "../utils/service_config_history";
 import { getAttributes, getClaimProofStatusFromSDK } from "./relays";
 
 function getMorseSupplierClaimSignerType(item: typeof MorseSupplierClaimSignerTypeSDKType | string | number): MorseSupplierClaimSignerType {
@@ -531,22 +532,7 @@ function getServices(
       configs: endpoint.configs,
     }));
 
-    // Extract unique root domains (last two hostname segments) from endpoint URLs.
-    const domains: string[] = [...new Set(
-      endpoints
-        .map((ep) => {
-          try {
-            const parts = new URL(ep.url).hostname.split('.');
-            return parts.length >= 2 ? parts.slice(-2).join('.') : parts[0];
-          } catch {
-            const match = ep.url.match(/https?:\/\/([^/:]+)/);
-            if (!match) return null;
-            const parts = match[1].split('.');
-            return parts.length >= 2 ? parts.slice(-2).join('.') : match[1];
-          }
-        })
-        .filter((d): d is string => d !== null)
-    )];
+    const domains = endpointDomains(endpoints.map((ep) => ep.url));
 
     const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,

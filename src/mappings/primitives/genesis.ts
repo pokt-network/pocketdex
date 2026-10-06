@@ -87,7 +87,7 @@ import {
   pubKeyToAddress,
   Secp256k1,
 } from "../utils/pub_key";
-import { genesisConfigActivatedAt } from "../utils/service_config_history";
+import { endpointDomains, genesisConfigActivatedAt } from "../utils/service_config_history";
 
 let genesisFile: Genesis | null = null;
 
@@ -580,6 +580,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         serviceId: service.service_id,
         endpoints,
         revShare,
+        domains: endpointDomains(service.endpoints.map((endpoint) => endpoint.url)),
         ...(activatedAtId !== undefined && { activatedAtId }),
       });
     }

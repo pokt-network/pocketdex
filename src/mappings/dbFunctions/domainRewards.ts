@@ -49,8 +49,11 @@ BEGIN
   -- claims: relay/reward aggregates from event_claim_settleds, each attributed to the config its supplier had
   --   declared for the service before the claim's session started (the block before the session start), which is
   --   the config that served the session: a stake in the session's first block activates at the next session, and
-  --   an activation at that block carries the config already declared before it. That is the version live then
-  --   (the latest one where the index still holds a duplicate, so a claim counts once).
+  --   an activation at that block carries the config already declared before it. In order of priority, among the
+  --   supplier's versions of that config with domains: the one live at that block; else the latest that started at
+  --   or before the session start (genesis writes its configs at the first session's start); else the earliest one,
+  --   so a claim is never dropped. Within each, the latest version (then _id) wins, so an id the index still holds
+  --   twice gives one row: a claim counts once. COALESCE evaluates the three in that order and stops at the first.
   --   The session start is the event's, or, when the event omits it (zero), session end - num_blocks_per_session
   --   + 1 with the param in force for that session (by active_at; equal to the event's start on every claim checked
   --   that carries one). Without either (no session heights), the settlement block is used, as before.
@@ -58,6 +61,9 @@ BEGIN
   --   or none after an unstake.
   -- staked: distinct suppliers staked at any point during the day per (domain, service_id),
   --   uses _block_range && v_block_range; COUNT(DISTINCT) deduplicates across restakes.
+  -- A row can carry rewards with suppliers_count 0 (or fewer suppliers than earned): a supplier that unstaked before
+  --   the day its claims settled earns on it without being staked on it. No pocketdex function divides by it; the one
+  --   consumer that does (igniter shareCalculations.ts, staked_suppliers) already skips a zero.
   WITH claims AS (
     SELECT
       domain,
@@ -70,9 +76,9 @@ BEGIN
     FROM (
       SELECT e.supplier_id, e.service_id, e.num_relays, e.num_estimated_relays, e.num_claimed_computed_units,
              e.num_estimated_computed_units, e.claimed_amount,
-             coalesce(CASE WHEN e.session_start_height > 0 THEN e.session_start_height::bigint
-                           WHEN e.session_end_height > 0 THEN e.session_end_height::bigint - p.n + 1 END,
-                      e.block_id::bigint + 1) - 1 AS declared_at
+             -- without session heights (or a derived start that is not a height), the settlement block, as before
+             coalesce(s.start - 1, e.block_id::bigint) AS declared_at,
+             coalesce(s.start, e.block_id::bigint) AS bound
       FROM ${dbSchema}.event_claim_settleds e
       INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
       -- the version in force for the session: the latest active at or before its end. A join, not a subquery in the
@@ -83,18 +89,34 @@ BEGIN
           AND coalesce(p.active_at, lower(p._block_range)) <= e.session_end_height
         ORDER BY coalesce(p.active_at, lower(p._block_range)) DESC LIMIT 1
       ) p ON TRUE
+      CROSS JOIN LATERAL (
+        SELECT nullif(greatest(CASE WHEN e.session_start_height > 0 THEN e.session_start_height::bigint
+                                    WHEN e.session_end_height > 0 THEN e.session_end_height::bigint - p.n + 1 END, 0),
+                      0) AS start
+      ) s
       WHERE b.timestamp::date = v_day
       -- a fence: the config lookup below then probes the index with declared_at as one column
       OFFSET 0
     ) e
     CROSS JOIN LATERAL (
-      SELECT ssc.domains FROM ${dbSchema}.supplier_service_configs ssc
-      WHERE ssc.supplier_id = e.supplier_id AND ssc.service_id = e.service_id
-        AND ssc._block_range @> e.declared_at
-      ORDER BY lower(ssc._block_range) DESC LIMIT 1
+      SELECT coalesce(
+        (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
+          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND c.domains IS NOT NULL
+            AND c._block_range @> e.declared_at
+          ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
+        (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
+          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND c.domains IS NOT NULL
+            AND lower(c._block_range) <= e.bound
+          ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
+        (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
+          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND c.domains IS NOT NULL
+            AND NOT isempty(c._block_range)
+          ORDER BY lower(c._block_range), c._id LIMIT 1)) AS domains
+      -- evaluated once per claim (inlined, a filter on it would run the lookups a second time)
+      OFFSET 0
     ) d
+    -- no row for a claim without domains (jsonb_array_elements_text of NULL is empty)
     CROSS JOIN jsonb_array_elements_text(d.domains) AS domain
-    WHERE d.domains IS NOT NULL
     GROUP BY domain, e.service_id
   ),
   staked AS (

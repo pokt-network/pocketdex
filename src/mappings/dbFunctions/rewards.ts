@@ -164,10 +164,10 @@ WITH rewards as (
       'computed_units', COALESCE(computed_units, 0),
       'estimated_computed_units', COALESCE(estimated_computed_units, 0),
       'gross_rewards', COALESCE(gross_rewards, 0)
-    )
+    ) ORDER BY service_id
   ) FROM (
 	SELECT 
-		COALESCE(s.service_id, r.service_id, '') as service_id,
+		s.service_id,
 		r.relays as relays,
 		r.estimated_relays as estimated_relays,
 		r.computed_units as computed_units,

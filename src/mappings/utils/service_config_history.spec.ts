@@ -35,3 +35,19 @@ describe("genesisConfigActivatedAt", () => {
     assert.equal(genesisConfigActivatedAt(undefined, "eth", BigInt(1)), undefined);
   });
 });
+
+describe("endpointDomains", () => {
+  const { endpointDomains } = require("./service_config_history") as typeof import("./service_config_history");
+
+  it("keeps each endpoint's root domain once, as a stake and genesis write SupplierServiceConfig.domains", () => {
+    assert.deepEqual(
+      endpointDomains([
+        "https://eth.node.d.com:443/v1",
+        "https://base.node.d.com",
+        "http://relay.e.io",
+        "https://localhost",
+      ]),
+      ["d.com", "e.io", "localhost"]
+    );
+  });
+});

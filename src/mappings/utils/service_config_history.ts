@@ -22,3 +22,23 @@ export function genesisConfigActivatedAt(
       heightOrZero(activation_height) <= genesisHeight && heightOrZero(deactivation_height) > genesisHeight);
   return active ? genesisHeight : undefined;
 }
+
+// The unique root domains (last two hostname segments) of a service config's endpoint URLs: what
+// SupplierServiceConfig.domains holds, for a stake (getServices) and for genesis alike.
+export function endpointDomains(urls: Array<string>): Array<string> {
+  return [...new Set(
+    urls
+      .map((url) => {
+        try {
+          const parts = new URL(url).hostname.split('.');
+          return parts.length >= 2 ? parts.slice(-2).join('.') : parts[0];
+        } catch {
+          const match = url.match(/https?:\/\/([^/:]+)/);
+          if (!match) return null;
+          const parts = match[1].split('.');
+          return parts.length >= 2 ? parts.slice(-2).join('.') : match[1];
+        }
+      })
+      .filter((d): d is string => d !== null)
+  )];
+}
