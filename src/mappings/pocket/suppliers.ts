@@ -55,6 +55,7 @@ import {
   filterMsgByTxStatus,
   getDenomAndAmount,
   getTxEventMsgIndex,
+  heightOrZero,
   isEventOfFinalizedBlockKind,
   isTxEventOfMessage,
 } from "../utils/primitives";
@@ -222,22 +223,20 @@ function _handleClaimSupplier(
 // strings: block_results of mainnet 247741): activate only the services whose config activates at this height,
 // not configs that were active already (e.g. from genesis). A config a restake cancelled before it activated
 // still activates, with deactivation_height equal to its activation_height: it activates nothing and is not a
-// miss. Without the history, every config of the supplier activates, as before.
+// miss. Without the history (absent or empty), every config of the supplier activates, as before.
 function _legacyActivatedServices(
   operator: string,
   legacySupplier: SupplierSDKType | undefined,
   activationHeight: bigint,
   record: Record<string, SupplierRecord>
 ): Array<SupplierServiceConfigProps> {
-  const history = legacySupplier?.service_config_history;
-  // the JSON encoder omits a proto3 zero, so a missing height means 0
-  const toHeight = (value: unknown) => BigInt(String(value ?? 0));
+  const history = legacySupplier?.service_config_history?.length ? legacySupplier.service_config_history : undefined;
   const activatedIds = new Set<string>(), cancelledIds = new Set<string>();
 
   for (const { activation_height, deactivation_height, service } of history || []) {
-    if (!service?.service_id || toHeight(activation_height) !== activationHeight) continue;
+    if (!service?.service_id || heightOrZero(activation_height) !== activationHeight) continue;
     const id = getStakeServiceId(operator, service.service_id);
-    (toHeight(deactivation_height) === activationHeight ? cancelledIds : activatedIds).add(id);
+    (heightOrZero(deactivation_height) === activationHeight ? cancelledIds : activatedIds).add(id);
   }
 
   if (history && activatedIds.size === 0 && cancelledIds.size === 0) {

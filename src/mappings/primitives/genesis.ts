@@ -83,6 +83,7 @@ import {
   GenesisParamsSource,
   normalizeGenesisParams,
 } from "../utils/params_normalize";
+import { heightOrZero } from "../utils/primitives";
 import {
   Ed25519,
   pubKeyToAddress,
@@ -464,7 +465,8 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
 // (supplier.services): the history entry for this service with no deactivation scheduled. It is active since
 // genesis (activatedAt = genesis height) when that entry activates at or before the genesis height, and pending
 // otherwise, until its own activation event. A service whose only entries are scheduled to end counts as active
-// if one of them is active at genesis. A proto3 zero is omitted from the JSON, so a missing height means 0.
+// if one of them is active at genesis. A missing height is read as 0 (not verified whether a genesis export omits
+// zeros: neither the mainnet nor the beta genesis carries suppliers).
 // Without history the config is left pending, as before. activatedEventId stays unset: genesis has no activation
 // event to point to.
 export function genesisConfigActivatedAt(
@@ -472,13 +474,12 @@ export function genesisConfigActivatedAt(
   serviceId: string,
   genesisHeight: bigint
 ): bigint | undefined {
-  const toHeight = (value: unknown) => BigInt(String(value ?? 0));
   const entries = (history ?? []).filter(({ service }) => service?.service_id === serviceId);
-  const declared = entries.find(({ deactivation_height }) => toHeight(deactivation_height) === BigInt(0));
+  const declared = entries.find(({ deactivation_height }) => heightOrZero(deactivation_height) === BigInt(0));
   const active = declared !== undefined
-    ? toHeight(declared.activation_height) <= genesisHeight
+    ? heightOrZero(declared.activation_height) <= genesisHeight
     : entries.some(({ activation_height, deactivation_height }) =>
-      toHeight(activation_height) <= genesisHeight && toHeight(deactivation_height) > genesisHeight);
+      heightOrZero(activation_height) <= genesisHeight && heightOrZero(deactivation_height) > genesisHeight);
   return active ? genesisHeight : undefined;
 }
 

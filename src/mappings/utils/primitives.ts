@@ -169,3 +169,9 @@ export function isTxEventOfMessage(attributes: CosmosEvent["event"]["attributes"
   const index = getTxEventMsgIndex(attributes);
   return index === undefined || index === String(msg.idx);
 }
+
+// A height of a service_config_history entry, as the chain JSON writes it (a string). The event encoder writes
+// zeros too (block_results of mainnet 247741); a missing height is read as 0.
+export function heightOrZero(value: unknown): bigint {
+  return BigInt(String(value ?? 0));
+}

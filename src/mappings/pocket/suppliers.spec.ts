@@ -425,6 +425,14 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(open(S1), ["akash@-", "eth@140"]);
   });
 
+  it("a pre-v0.1.27 activation with an empty history activates every config of the supplier", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+
+    await index(140, [], [legacyActivation(140, S1, [])]);
+    assert.deepEqual(open(S1), ["akash@140", "eth@140"]);
+  });
+
   it("a pre-v0.1.27 activation does not activate a config a restake cancelled at that height", async () => {
     reset();
     await index(100, [stake(100, S1, ["akash", "eth"])], []);
