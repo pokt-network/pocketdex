@@ -308,8 +308,8 @@ function _handleEventSupplierServiceConfigActivated(
       // grep-able: the chain activated a config this index does not hold. A warning, not a throw: until the
       // data patch that follows this fix runs, production still holds inconsistent rows (duplicated configs,
       // configs of unbonded suppliers left open), and failing the block here would halt the indexer. It also
-      // fires on normal chain behaviour (a config dropped by a restake before its activation keeps its
-      // activation, with deactivation_height = activation_height), so it is not a count of index drift.
+      // fires on normal chain behaviour (a config dropped by a restake or an unstake before its activation keeps
+      // its activation, with deactivation_height = activation_height), so it is not a count of index drift.
       logger.warn(`[SupplierServiceConfigActivationMiss] no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
     }
   } else {
@@ -895,7 +895,8 @@ function collectSupplierIds(
       ].includes(eventOrMsg.event.type)) {
         suppliers.push(...eventSuppliers);
 
-        // the end of the unbonding closes the supplier's configs, so they must be loaded
+        // the end of the unbonding closes the configs still open (a BELOW_MIN_STAKE or MIGRATION unbonding keeps
+        // them until then, as do rows indexed before the unstake closed them), so they must be loaded
         if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
           suppliersToFetchServices.push(...eventSuppliers);
         }
@@ -1031,8 +1032,10 @@ function _applyUnbondingEnd(
 // SupplierServiceConfig holds what the supplier declared. An unstake withdraws all of it: the chain schedules every
 // config to deactivate at the next session start (poktroll msg_server_unstake_supplier.go), so the rows close at
 // the unstake height. An unbonding for falling below the minimum stake does not withdraw it: settlement sets the
-// deactivation on an in-memory supplier it stores dehydrated, and the chain keeps reporting deactivation_height 0. A restake during the unbonding declares services again through the stake path; a stake-only
-// one declares none, as the chain keeps the deactivated history. The end of the unbonding then finds nothing open.
+// deactivation on an in-memory supplier it stores dehydrated, and the chain keeps reporting deactivation_height 0.
+// A restake during the unbonding declares services again through the stake path; a stake-only one declares none,
+// as the chain keeps the deactivated history. After an unstake the end of the unbonding finds nothing open; after
+// a BELOW_MIN_STAKE or MIGRATION unbonding it closes the configs then.
 function _closeDeclaredServices(supplierRecord: SupplierRecord, servicesToClose: Set<string>): void {
   for (const serviceId of Object.keys(supplierRecord.services || {})) {
     delete supplierRecord.services?.[serviceId];
