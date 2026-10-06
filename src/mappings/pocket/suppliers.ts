@@ -442,6 +442,10 @@ function _handleSupplierUnbondingEndEvent(
   }
 }
 
+// SupplierServiceConfig keeps one row per supplier and service: the latest config the supplier declared,
+// with activatedAt unset until the chain activates it. The chain keeps the previous config active until the
+// next session start (poktroll x/supplier/keeper/msg_server_stake_supplier.go), which this entity does not
+// represent: a restake replaces the row at the stake height, pending until its own activation.
 function getServices(
   rawServices: MsgStakeSupplier['services'],
   operatorAddress: string,
