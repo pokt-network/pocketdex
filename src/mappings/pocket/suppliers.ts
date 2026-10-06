@@ -247,7 +247,7 @@ function _handleEventSupplierServiceConfigActivated(
     }
   }
 
-  if (!activationHeight) {
+  if (activationHeight === null) {
     throw new Error(`[handleEventSupplierServiceConfigActivated] activation_height not found in event`);
   }
 
@@ -259,7 +259,7 @@ function _handleEventSupplierServiceConfigActivated(
 
   // Since v0.1.27 the chain emits one event per activated service, with service_id. Before that it
   // emitted one event per supplier (with the whole supplier and no service_id), activating all of them.
-  if (serviceId) {
+  if (serviceId !== undefined) {
     const service = record[operatorAddress]?.services?.[getStakeServiceId(operatorAddress, serviceId)];
 
     if (service) {
@@ -313,7 +313,7 @@ function _handleEventSupplierServiceConfigActivated(
 
   return {
     services: services
-      .filter((service) => !service.activatedAtId)
+      .filter((service) => service.activatedAtId === undefined || service.activatedAtId === null)
       .map((service) => {
         service.activatedAtId = activationHeight;
         service.activatedEventId = eventId;
@@ -962,29 +962,44 @@ async function fetchSupplierData(
   return record;
 }
 
-// A claim whose Morse unbonding already ended (or below the minimum stake) returns before staking anything
-// and emits EventSupplierUnbondingEnd in its own tx (poktroll msg_server_claim_morse_supplier.go, short
-// circuits #1 and #2). An operator already staked on Shannon keeps its supplier and configs.
-function _claimStakedNothing(msg: CosmosMessage, record: Record<string, SupplierRecord>): boolean {
-  return msg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier"
-    && msg.tx.tx.events.some(({ type }) => type === "pocket.supplier.EventSupplierUnbondingEnd")
-    && !!record[(msg.msg.decodedMsg as MsgClaimMorseSupplier).shannonOperatorAddress]?.supplier;
+// The operator an EventSupplierUnbondingEnd names: operator_address, or the supplier JSON in older eras.
+function _unbondingEndOperator(attributes: CosmosEvent["event"]["attributes"]): string | undefined {
+  for (const { key, value } of attributes) {
+    if (key === "operator_address") return (value as string).replaceAll('"', '');
+    if (key === "supplier") return (JSON.parse(value as string) as SupplierSDKType).operator_address;
+  }
+  return undefined;
 }
 
-// The end of an unbonding unstakes the supplier and closes its configs, except the one of such a claim:
-// that one is recorded only, computed on a copy of the record.
+// A claim whose Morse unbonding already ended (or below the minimum stake) returns before staking anything
+// and emits EventSupplierUnbondingEnd for its operator in its own tx (poktroll msg_server_claim_morse_supplier.go,
+// short circuits #1 and #2). An operator already staked on Shannon keeps its supplier and configs. Keyed by tx
+// and operator, so two claims in one tx do not cross-apply.
+function _claimStakedNothingKey(msg: CosmosMessage, record: Record<string, SupplierRecord>): string | undefined {
+  if (msg.msg.typeUrl !== "/pocket.migration.MsgClaimMorseSupplier") return undefined;
+
+  const operator = (msg.msg.decodedMsg as MsgClaimMorseSupplier).shannonOperatorAddress;
+  const unbondingEnded = msg.tx.tx.events.some(({ attributes, type }) =>
+    type === "pocket.supplier.EventSupplierUnbondingEnd" && _unbondingEndOperator(attributes) === operator);
+
+  return unbondingEnded && record[operator]?.supplier !== undefined ? `${msg.tx.hash}:${operator}` : undefined;
+}
+
+// The end of an unbonding unstakes the supplier and closes its configs, except the one of such a claim. The
+// chain did emit that event, so it is recorded, even though it names a supplier that stays Staked; it is
+// computed on a copy of that operator's record.
 function _applyUnbondingEnd(
   event: CosmosEvent,
   record: Record<string, SupplierRecord>,
   servicesToClose: Set<string>,
-  claimsThatStakedNothing: Set<string | undefined>
+  claimsThatStakedNothing: Set<string>
 ): EventSupplierUnbondingEndProps {
-  if (claimsThatStakedNothing.has(event.tx?.hash)) {
-    const copies: Record<string, SupplierRecord> = {};
-    for (const [id, { supplier }] of Object.entries(record)) {
-      copies[id] = { supplier: supplier && { ...supplier }, services: {} };
-    }
-    return _handleSupplierUnbondingEndEvent(event, copies).unbondingEndEvent;
+  const operator = _unbondingEndOperator(event.event.attributes);
+
+  if (operator !== undefined && claimsThatStakedNothing.has(`${event.tx?.hash}:${operator}`)) {
+    const supplier = record[operator]?.supplier;
+    const copy: Record<string, SupplierRecord> = { [operator]: { supplier: supplier && { ...supplier }, services: {} } };
+    return _handleSupplierUnbondingEndEvent(event, copy).unbondingEndEvent;
   }
 
   const { servicesToRemove, supplier, unbondingEndEvent } = _handleSupplierUnbondingEndEvent(event, record);
@@ -1016,7 +1031,7 @@ function processSupplierEventsAndMessages(
 } {
   const suppliersToClose: Array<string> = Object.keys(record).filter(id => record[id].supplier);
   const servicesToClose = new Set<string>();
-  const claimsThatStakedNothing = new Set<string | undefined>();
+  const claimsThatStakedNothing = new Set<string>();
   const stakeMsgs: Array<MsgStakeSupplierProps> = [];
   const claimMsgs: Array<MsgClaimMorseSupplierProps> = [];
   const unstakeMsgs: Array<MsgUnstakeSupplierProps> = [];
@@ -1081,9 +1096,11 @@ function processSupplierEventsAndMessages(
         }
       }
 
-      if (_claimStakedNothing(eventOrMsg, record)) {
+      const stakedNothingKey = _claimStakedNothingKey(eventOrMsg, record);
+
+      if (stakedNothingKey !== undefined) {
         claimMsgs.push(_handleClaimSupplier(eventOrMsg, record).msgClaimSupplier);
-        claimsThatStakedNothing.add(eventOrMsg.tx.hash);
+        claimsThatStakedNothing.add(stakedNothingKey);
       } else if (eventOrMsg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier") {
         const { msgClaimSupplier, services, servicesToRemove, supplier } = _handleClaimSupplier(eventOrMsg, record);
 

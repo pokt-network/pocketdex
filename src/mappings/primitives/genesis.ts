@@ -567,11 +567,18 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         revShare,
       });
 
-      // a config already active at genesis carries its activation height in the supplier's history (a proto3
-      // zero is omitted from the JSON); without that history it is left pending, as before
-      const activation = supplier.service_config_history?.find((update) =>
-        update.service?.service_id === service.service_id
-        && BigInt((update.activation_height ?? 0).toString()) <= BigInt(block.block.header.height));
+      // A config active at genesis carries its activation height in the supplier's history: the entry for this
+      // service that is not deactivated by the genesis height. A proto3 zero is omitted from the JSON; an
+      // activation at or before genesis (0 included) means active since genesis: activatedAt = genesis height.
+      // Without that history the config is left pending, as before.
+      const genesisHeight = BigInt(block.block.header.height);
+      const activation = supplier.service_config_history?.find(({ activation_height, deactivation_height, service: s }) => {
+        const deactivation = BigInt((deactivation_height ?? 0).toString());
+        return s?.service_id === service.service_id
+          && BigInt((activation_height ?? 0).toString()) <= genesisHeight
+          && (deactivation === BigInt(0) || deactivation > genesisHeight);
+      });
+      const activatedAtId = activation === undefined ? undefined : genesisHeight;
 
       supplierServices.push({
         id: getStakeServiceId(supplier.operator_address, service.service_id),
@@ -579,7 +586,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         serviceId: service.service_id,
         endpoints,
         revShare,
-        ...(activation && { activatedAtId: BigInt((activation.activation_height ?? 0).toString()) }),
+        ...(activatedAtId !== undefined && { activatedAtId }),
       });
     }
   }

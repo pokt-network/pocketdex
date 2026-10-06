@@ -185,7 +185,14 @@ const claimMorse = (h: number, operator: string, services: Array<string>, unbond
               { key: "claimed_supplier_stake", value: '"60000000000upokt"' },
             ],
           },
-          ...(unbondingEnded ? [{ type: "pocket.supplier.EventSupplierUnbondingEnd", attributes: [] }] : []),
+          ...(unbondingEnded
+            ? [
+                {
+                  type: "pocket.supplier.EventSupplierUnbondingEnd",
+                  attributes: [{ key: "operator_address", value: `"${operator}"` }],
+                },
+              ]
+            : []),
         ],
       },
     },
@@ -456,4 +463,31 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(configs(S1), []);
     assert.equal(tables.SupplierServiceConfig.filter((row) => row.lo === null).length, 0);
   });
+
+  for (const [label, order] of [
+    ["the short-circuited claim first", [0, 1]],
+    ["the staking claim first", [1, 0]],
+  ] as const) {
+    it(`two Morse claims in one tx do not cross-apply (${label})`, async () => {
+      reset();
+      // both operators are already staked on Shannon
+      await index(100, [stake(100, S1, ["akash"]), stake(100, S2, ["akash"], 1)], []);
+      await index(120, [], [...activations(120, S1, ["akash"]), ...activations(120, S2, ["akash"])]);
+
+      // one tx: S1's claim short-circuits (it stays as it was), S2's claim stakes eth
+      const shortCircuit = claimMorse(150, S1, ["eth"], true);
+      const staking = claimMorse(150, S2, ["eth"]);
+      const tx = { ...shortCircuit.tx, hash: "TWOCLAIMS" };
+      const claims = [
+        { ...shortCircuit, idx: order[0], tx },
+        { ...staking, idx: order[1], tx },
+      ] as Array<CosmosMessage>;
+      await index(150, claims, [{ ...claimUnbondingEnd(shortCircuit, S1), tx } as CosmosEvent]);
+
+      assert.deepEqual(open(S1), ["akash@120"]);
+      assert.equal(supplierStatus(S1), "Staked");
+      assert.deepEqual(open(S2), ["eth@-"]);
+      assert.equal(supplierStatus(S2), "Staked");
+    });
+  }
 });
