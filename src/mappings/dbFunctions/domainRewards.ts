@@ -50,9 +50,11 @@ BEGIN
   --   declared for the service before the claim's session started (the block before the session start), which is
   --   the config that served the session: a stake in the session's first block activates at the next session, and
   --   an activation at that block carries the config already declared before it. In order of priority, among the
-  --   supplier's versions of that config with at least one domain: the one live at that block; else the latest that
-  --   started at or before it (one that ended before it); else the earliest one (genesis writes its configs at the
-  --   first session's start), so a claim is never dropped. Within each, the latest version (then _id) wins, so an id the index
+  --   supplier's versions of that config: the one live at that block; else the latest that started at or before it
+  --   (one that ended before it); else the earliest one (genesis writes its configs at the first session's start),
+  --   so a claim always finds its version. The version is chosen by time alone: its domains are the claim's, and a
+  --   version without domains (NULL or []) credits none, as the staked part counts it under none. Skipping it for
+  --   another version's domains would credit a domain the supplier did not declare for that session. Within each, the latest version (then _id) wins, so an id the index
   --   still holds twice gives one row: a claim counts once. COALESCE evaluates the three in that order and stops at
   --   the first.
   --   The session start is the event's, or, when the event omits it (zero), session end - num_blocks_per_session
@@ -101,16 +103,15 @@ BEGIN
     CROSS JOIN LATERAL (
       SELECT coalesce(
         (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
-          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND jsonb_array_length(c.domains) > 0
+          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id
             AND c._block_range @> e.declared_at
           ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
         (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
-          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND jsonb_array_length(c.domains) > 0
+          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id
             AND lower(c._block_range) <= e.declared_at
           ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
         (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
-          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND jsonb_array_length(c.domains) > 0
-            AND NOT isempty(c._block_range)
+          WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND NOT isempty(c._block_range)
           ORDER BY lower(c._block_range), c._id LIMIT 1)) AS domains
       -- evaluated once per claim (inlined, a filter on it would run the lookups a second time)
       OFFSET 0

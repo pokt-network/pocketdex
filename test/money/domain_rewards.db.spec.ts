@@ -94,7 +94,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         -- the 20-block session starts at 141; with the change's 10 it would start at 151, under p.com
         ('param-change', 'akash', '["o.com"]', int8range(100, 150)),
         ('param-change', 'akash', '["p.com"]', int8range(150, NULL)),
-        -- the version live before the session has no domain (no endpoint URL parsed): the latest one with a domain
+        -- the version live before the session has no domain (no endpoint URL parsed): it credits none, not the
+        -- domain of another version
         ('empty', 'akash', '["q.com"]', int8range(100, 130)),
         ('empty', 'akash', '[]', int8range(130, NULL)),
         -- a gap before the session, then a version from its first block (which activates at the next session): the
@@ -140,7 +141,6 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       { domain: "l.com", service_id: "akash", relays: "128", gross_rewards: "128000" },
       { domain: "n.com", service_id: "akash", relays: "256", gross_rewards: "256000" },
       { domain: "o.com", service_id: "akash", relays: "512", gross_rewards: "512000" },
-      { domain: "q.com", service_id: "akash", relays: "1024", gross_rewards: "1024000" },
       { domain: "r.com", service_id: "akash", relays: "2048", gross_rewards: "2048000" },
     ]);
   });
@@ -152,8 +152,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       const r = (
         await c.query(`SELECT sum(relays)::text relays FROM ${S}.domain_service_daily_rewards WHERE day = '2026-10-01'`)
       ).rows[0];
-      // every claim is still there: 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 512 + 1024 + 2048
-      assert.equal(r.relays, "4095");
+      // every claim whose version has a domain is still there: all but the 1024 one, whose version has none
+      assert.equal(r.relays, "3071");
     } finally {
       await c.query("ROLLBACK");
     }

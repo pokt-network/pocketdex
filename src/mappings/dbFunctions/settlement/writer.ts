@@ -53,7 +53,11 @@ export function recordMoneyProgressCall(s: string, height: number, override: num
        INSERT INTO ${s}.settlement_gaps (from_height, to_height)
        SELECT greatest(mp.height + 1, mp.from_height), $2::bigint - 1 FROM ${s}.money_progress mp
        WHERE $2::bigint > 0 AND greatest(mp.height + 1, mp.from_height) <= $2::bigint - 1
-       ON CONFLICT (from_height) DO NOTHING RETURNING 1
+       -- two overrides past a rewind below from_height start at the same height: the later one extends the row (never
+       -- the history job's, which starts at 1)
+       ON CONFLICT (from_height) DO UPDATE SET to_height = greatest(settlement_gaps.to_height, EXCLUDED.to_height)
+       WHERE settlement_gaps.from_height <> 1
+       RETURNING 1
      ), dropped AS (
        DELETE FROM ${s}.settlement_gaps WHERE from_height <> 1 AND from_height = $1::bigint RETURNING 1
      ), trimmed AS (

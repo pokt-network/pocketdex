@@ -1202,6 +1202,10 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       await skip(899751);
       await step(899900, 899900);
       assert.deepEqual(await rows(), [{ f: 899760, t: 899899 }]);
+      // a second rewind below from_height and a higher override: the row that starts there grows, nothing is lost
+      await skip(899751);
+      await step(899950, 899950);
+      assert.deepEqual(await rows(), [{ f: 899760, t: 899949 }]);
       // the progress went back past the 899753 and 899773 settlements, so they are not covered until rewritten
       await c.query(`DELETE FROM ${S}.settlement_gaps; UPDATE ${S}.money_progress SET height = 899773`);
       // the money step processed 899700 to 899712 without money (its first height 899700, the lowest written 899713):
