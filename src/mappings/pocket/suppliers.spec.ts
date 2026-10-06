@@ -304,9 +304,10 @@ describe("indexSupplier service configs", () => {
     await index(140, [], activations(140, S1, ["akash", "base"]));
     assert.deepEqual(open(S1), ["akash@140", "base@140"]);
 
-    // the unstake changes the supplier only
+    // the unstake withdraws what the supplier declared
     await index(150, [unstake(150, S1)], []);
-    assert.deepEqual(open(S1), ["akash@140", "base@140"]);
+    assert.deepEqual(open(S1), []);
+    assert.equal(supplierStatus(S1), "Unstaking");
   });
 
   it("an activation carrying service_id activates that service only; one without it, the services its history activates", async () => {
@@ -343,18 +344,59 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(open(S1), ["akash@200", "eth@200"]);
     assert.deepEqual(open(S2), ["akash@-"]);
   });
-  it("the end of the unbonding closes the supplier's configs", async () => {
+  it("the unstake closes the supplier's configs, and the end of the unbonding finds none left", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+    await index(120, [], activations(120, S1, ["akash", "eth"]));
+    await index(150, [unstake(150, S1)], []);
+    assert.deepEqual(open(S1), []);
+
+    await index(200, [], [unbondingEnd(200, S1)]);
+    assert.deepEqual(open(S1), []);
+    assert.equal(supplierStatus(S1), "Unstaked");
+    assert.deepEqual(history(S1, "akash"), [
+      [100, 120, null],
+      [120, 150, 120],
+    ]);
+  });
+
+  it("the end of the unbonding closes configs still open (rows indexed before the unstake closed them)", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    await index(120, [], activations(120, S1, ["akash"]));
+    // the supplier row as an older index left it: Unstaking with its config open
+    await index(150, [unstake(150, S1)], []);
+    tables.SupplierServiceConfig.push({ id: `${S1}-akash`, supplierId: S1, serviceId: "akash", lo: 150, hi: null });
+
+    await index(200, [], [unbondingEnd(200, S1)]);
+    assert.deepEqual(open(S1), []);
+  });
+
+  it("a restake during the unbonding declares its services again", async () => {
     reset();
     await index(100, [stake(100, S1, ["akash", "eth"])], []);
     await index(120, [], activations(120, S1, ["akash", "eth"]));
     await index(150, [unstake(150, S1)], []);
 
-    await index(200, [], [unbondingEnd(200, S1)]);
+    // MsgStakeSupplier cancels the unbonding (poktroll msg_server_stake_supplier.go) and declares akash
+    await index(160, [stake(160, S1, ["akash"])], []);
+    assert.equal(supplierStatus(S1), "Staked");
+    assert.deepEqual(open(S1), ["akash@-"]);
+
+    await index(180, [], activations(180, S1, ["akash"]));
+    assert.deepEqual(open(S1), ["akash@180"]);
+  });
+
+  it("a stake-only restake during the unbonding declares nothing", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    await index(120, [], activations(120, S1, ["akash"]));
+    await index(150, [unstake(150, S1)], []);
+
+    // the chain keeps the history, every entry already scheduled to deactivate
+    await index(160, [stake(160, S1, [])], []);
+    assert.equal(supplierStatus(S1), "Staked");
     assert.deepEqual(open(S1), []);
-    assert.deepEqual(history(S1, "akash"), [
-      [100, 120, null],
-      [120, 200, 120],
-    ]);
   });
 
   it("a Morse claim declares configs that its activation activates", async () => {

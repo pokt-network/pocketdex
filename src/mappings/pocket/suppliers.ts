@@ -914,10 +914,8 @@ function collectSupplierIds(
       ].includes(eventOrMsg.msg.typeUrl)) {
         const id = get(eventOrMsg.msg.decodedMsg, entityIdPath);
         suppliers.push(id);
-
-        if (eventOrMsg.msg.typeUrl !== "/pocket.supplier.MsgUnstakeSupplier") {
-          suppliersToFetchServices.push(id);
-        }
+        // the unstake closes the supplier's configs, so they are loaded for it too
+        suppliersToFetchServices.push(id);
       }
     }
   }
@@ -1028,6 +1026,17 @@ function _applyUnbondingEnd(
 
   record[supplier.id].supplier = supplier;
   return { unbondingEndEvent, changedSupplierId: supplier.id };
+}
+
+// SupplierServiceConfig holds what the supplier declared. An unstake withdraws all of it: the chain schedules every
+// config to deactivate at the next session start (poktroll msg_server_unstake_supplier.go), so the rows close at
+// the unstake height. A restake during the unbonding declares services again through the stake path; a stake-only
+// one declares none, as the chain keeps the deactivated history. The end of the unbonding then finds nothing open.
+function _closeDeclaredServices(supplierRecord: SupplierRecord, servicesToClose: Set<string>): void {
+  for (const serviceId of Object.keys(supplierRecord.services || {})) {
+    delete supplierRecord.services?.[serviceId];
+    servicesToClose.add(serviceId);
+  }
 }
 
 // Helper: Process all events and messages
@@ -1156,6 +1165,7 @@ function processSupplierEventsAndMessages(
         const { supplier, unstakedMsg } = _handleUnstakeSupplierMsg(eventOrMsg, record);
         record[supplier.id].supplier = supplier;
         suppliersChanged.add(supplier.id);
+        _closeDeclaredServices(record[supplier.id], servicesToClose);
         unstakeMsgs.push(unstakedMsg);
       }
     }
