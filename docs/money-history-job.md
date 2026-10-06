@@ -12,16 +12,18 @@ with the indexer's own parser and writer (`src/mappings/money/history`, CLI `scr
 3. Checks that the LCD serves state at the lowest height of the run that needs it (map_proposer_operator through
    batched_vrd) and reports that height back. Nothing is recorded if it does not. The check goes by
    era: a run inside one of those eras needs `--lcd` even if its heights turn out not to read it.
-4. Records a `settlement_gaps` row `[1, lowest written height − 1]`. From then on the catalog functions answer only
-   for the part of a range that is covered, and report the heights not walked yet as a gap in their `range` (they
-   never read as zero). If a gap already reaches that range, it must be this job's row (it starts at 1) and the job
-   resumes from it. Without its row the job starts at `money_progress.from_height − 1`, never above: it never walks
-   heights the indexer's money step processed. Without a `money_progress` row it stops (the indexer creates it).
-   Another gap row (the heights a `POCKETDEX_MONEY_FROM_HEIGHT` override skipped) is not its territory, wherever it
-   lies, and the job does not fill it: reindexing those heights does. As it lowers its row the job lowers `money_progress.from_height`, where coverage starts,
-   to the lowest height it has walked, and to 1 when it finishes. A job running an older version does not: when it
-   finishes, `from_height` stays where it was, so the heights it walked read as not covered (never as zero) until a
-   job of this version runs or `from_height` is set by hand.
+4. Plans from `money_progress` (one row: `from_height`, where the money tables start, and `height`, the last height
+   the indexer's money step processed). The job owns only the `settlement_gaps` row that starts at 1: with it, it
+   resumes from its `to_height`; without it, it records `[1, from_height − 1]` and walks from there down. It never walks
+   heights the money step processed, and another gap row (the heights a `POCKETDEX_MONEY_FROM_HEIGHT` override
+   skipped) is not its territory, wherever it lies: reindexing those heights fills it. Without a `money_progress` row
+   it stops (the indexer creates it, or its start-up seeds it over written settlements). As it lowers its row the job
+   lowers `money_progress.from_height` to the lowest height it has walked, and to 1 when it finishes; each height's
+   transaction locks `money_progress` before writing, in the indexer's order. A job running an older version does not
+   lower `from_height`: when it finishes, the heights it walked read as not covered (never as zero) until a job of this
+   version runs or `from_height` is set by hand. The catalog functions cover the block at `from_height` to the block at
+   `money_progress.height` + 1 µs, minus the gap rows: the heights not walked yet read as not covered in their
+   `range`, never as zero.
 5. Walks down one height at a time. For each it reads `/block_results`. **A height counts as read only on positive
    proof**: the response is for the height asked (`result.height`), the body arrived whole and parsed, and
    `finalize_block_events` is there and not empty. Every real block has at least the mint of its BeginBlock (66
@@ -160,6 +162,20 @@ fresh database), no gap row is recorded: the skipped heights are below what it c
 `job.ts`), so that range stays not covered until a tool to rewrite a middle range exists.
 
 ## Known limits
+
+- **Setups outside the default** (documented, not handled in code):
+  - `START_BLOCK` > 1 plus this job: the job writes heights the indexer never indexed, and coverage starts at the first
+    indexed block at or after `money_progress.from_height`, so the history it writes below the indexer's start is
+    written but reads as not covered.
+  - The start-up seed (a database written before `money_progress` existed) on a database whose money started under an
+    override, with money events (expirations, slashes, reimbursements) before the first settled claim: the seed takes
+    the lowest written settlement or the chain's first settled claim as the start, and such earlier heights are not
+    covered, or are covered with what was written there. The seed was checked on mainnet (the job's row exists: start
+    one above it) and beta (no override start, no gap row, no money event below the first settlement, 3333: start at the
+    first block), read-only, 2026-10-06.
+  - A reindex from genesis with `POCKETDEX_MONEY_FROM_HEIGHT` still set: the heights below it are skipped again and the
+    progress is pulled back once at the first of them, so what a previous run wrote below the override stays written but
+    reads as not covered until the override is removed and those heights are processed again.
 
 - **Discards the chain never emitted.** If `expiringClaimsIterator.Value()` fails (poktroll settle_pending_claims.go
   ~70) the claim is counted as discarded with no event; no block shows it. Only the claims identity (created =

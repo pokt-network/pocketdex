@@ -1,4 +1,5 @@
-// The history job: walks EVERY height from the one below the live indexer's first written settlement down to height 1,
+// The history job: walks EVERY height from the one below money_progress.from_height (where the indexer's money step
+// started) down to height 1,
 // reading each block's /block_results from an archive RPC, and writes the settlement money of the heights that have
 // any with the indexer's own parser (buildSettlementPayload, the map state and the delegator × validator split) and
 // writer (write_settlement, which takes the same advisory lock). A height with no money event writes nothing.
@@ -6,9 +7,9 @@
 // Coverage stays honest at every moment: before the first height the job records settlement_gaps [1, start]. A
 // height with money is written in one transaction that also lowers the gap's to_height below it; heights with none
 // lower it in batches (every flushEvery heights or flushMs), and only over a contiguous run of heights already read
-// and classified, so the gap may lag behind the walk but never runs ahead of it. The catalog functions cover what is
-// indexed minus the gap, so the heights it still holds never read as zero; the row goes with height 1. The gap row is
-// also the resume point.
+// and classified, so the gap may lag behind the walk but never runs ahead of it; each lowering also lowers
+// money_progress.from_height, where the catalog functions' coverage starts. The heights the gap still holds read as not
+// covered, never as zero; the row goes with height 1. The gap row is also the resume point.
 //
 // A height counts as having no money only on positive proof: the response is for the height asked, its body parsed
 // whole, and finalize_block_events is there and not empty (every real block has at least the mint of its BeginBlock;

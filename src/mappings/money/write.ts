@@ -161,8 +161,8 @@ export async function writeSettlement(
 // heights the override skipped become a settlement_gaps row ([progress + 1, override - 1]: the first height past the
 // override records it, written or not), and the progress moves to the height (money_progress), so the catalog
 // functions cover what was processed and report the skipped heights as not covered instead of reading them as zero.
-// A height the override skips pulls the progress back below it (a rewind). Inside the block transaction, so a block
-// that rolls back cannot lose either; one statement (dbFunctions/settlement/writer.ts). This runs on EVERY block the money step processes, not only on settlement blocks,
+// The first height an override skips in a process pulls the progress back below it (a restart after a rewind). Inside
+// the block transaction, so a block that rolls back cannot lose either; one statement (dbFunctions/settlement/writer.ts). This runs on EVERY block the money step processes, not only on settlement blocks,
 // so the money step now needs the block transaction (--enable-cache=false) on every block: without it it throws, and
 // the indexer stops instead of moving the progress outside the block's transaction.
 async function recordMoneyProgress(height: number, skipped = false): Promise<void> {
@@ -174,6 +174,7 @@ async function recordMoneyProgress(height: number, skipped = false): Promise<voi
 }
 
 let loggedBelowThreshold = false;
+let skipRecorded = false;
 
 // The bonded validators of the snapshot, in the shape the delegator × validator split takes.
 export function de2Validators(snapshot: ValidatorSnapshot | undefined): De2Validator[] | null {
@@ -185,7 +186,12 @@ export async function indexMoney(block: CosmosBlock, validators?: ValidatorSnaps
   const height = block.header.height;
   const from = moneyFromHeight(block.header.chainId);
   if (height < from) {
-    if (moneyFromHeightOverride(process.env) > 0) await recordMoneyProgress(height, true);
+    // the first skipped height of the process pulls the progress back below it (a restart after a rewind); the rest
+    // leave it as it is
+    if (!skipRecorded && moneyFromHeightOverride(process.env) > 0) {
+      await recordMoneyProgress(height, true);
+      skipRecorded = true;
+    }
     if (!loggedBelowThreshold) {
       logger.info(`[indexMoney] settlement money is written from height ${from}; height ${height} is below it`);
       loggedBelowThreshold = true;
