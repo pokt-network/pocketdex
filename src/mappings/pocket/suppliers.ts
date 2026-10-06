@@ -269,24 +269,36 @@ function _handleEventSupplierServiceConfigActivated(
     } else {
       // grep-able: the chain activated a config this index does not hold. A warning, not a throw: until the
       // data patch that follows this fix runs, production still holds inconsistent rows (duplicated configs,
-      // configs of unbonded suppliers left open), and failing the block here would halt the indexer.
+      // configs of unbonded suppliers left open), and failing the block here would halt the indexer. It also
+      // fires on normal chain behaviour (a config dropped by a restake before its activation keeps its
+      // activation, with deactivation_height = activation_height), so it is not a count of index drift.
       logger.warn(`[SupplierServiceConfigActivationMiss] no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
     }
   } else {
-    // The pre-v0.1.27 event carries the supplier's service_config_history: activate only the services
-    // whose config activates at this height, not configs that were active already (e.g. from genesis).
+    // The pre-v0.1.27 event carries the supplier's service_config_history (snake_case JSON, activation
+    // heights as strings: block_results of mainnet 247741): activate only the services whose config
+    // activates at this height, not configs that were active already (e.g. from genesis).
     const operator = operatorAddress;
     const history = legacySupplier?.service_config_history;
     const activatedIds = history
       ? new Set(
-        history
-          .filter((update) => BigInt(update.activation_height.toString()) === activationHeight)
-          .map((update) => getStakeServiceId(operator, update.service?.service_id ?? ""))
+        history.flatMap(({ activation_height, service }) =>
+          service?.service_id && activation_height !== undefined && activation_height !== null
+            && BigInt(activation_height.toString()) === activationHeight
+            ? [getStakeServiceId(operator, service.service_id)]
+            : []
+        )
       )
       : null;
 
     services = Object.values(record[operatorAddress]?.services || {})
       .filter((service) => !activatedIds || activatedIds.has(service.id));
+
+    for (const id of activatedIds || []) {
+      if (!record[operator]?.services?.[id]) {
+        logger.warn(`[SupplierServiceConfigActivationMiss] no open config ${id} at activation height ${activationHeight}`);
+      }
+    }
   }
 
   const eventId = getEventId(event);
@@ -859,13 +871,13 @@ function collectSupplierIds(
     if ('event' in eventOrMsg) {
       const getEntityId = recordId[eventOrMsg.event.type] as GetIdFromEventAttribute;
       const ids = getEntityId(eventOrMsg.event.attributes);
+      const eventSuppliers: Array<string> = typeof ids === "string" ? [ids] : ids || [];
 
       if ([
         "pocket.tokenomics.EventSupplierSlashed",
         "pocket.supplier.EventSupplierUnbondingBegin",
         "pocket.supplier.EventSupplierUnbondingEnd",
       ].includes(eventOrMsg.event.type)) {
-        const eventSuppliers: Array<string> = typeof ids === "string" ? [ids] : ids || [];
         suppliers.push(...eventSuppliers);
 
         // the end of the unbonding closes the supplier's configs, so they must be loaded
@@ -875,11 +887,7 @@ function collectSupplierIds(
       }
 
       if (eventOrMsg.event.type === "pocket.supplier.EventSupplierServiceConfigActivated") {
-        if (typeof ids === "string") {
-          suppliersToFetchServices.push(ids);
-        } else if (ids) {
-          suppliersToFetchServices.push(...ids);
-        }
+        suppliersToFetchServices.push(...eventSuppliers);
       }
     } else {
       const entityIdPath = recordId[eventOrMsg.msg.typeUrl] as string;
@@ -964,6 +972,7 @@ function processSupplierEventsAndMessages(
 } {
   const suppliersToClose: Array<string> = Object.keys(record).filter(id => record[id].supplier);
   const servicesToClose = new Set<string>();
+  const claimsThatStakedNothing = new Set<string>();
   const stakeMsgs: Array<MsgStakeSupplierProps> = [];
   const claimMsgs: Array<MsgClaimMorseSupplierProps> = [];
   const unstakeMsgs: Array<MsgUnstakeSupplierProps> = [];
@@ -999,7 +1008,15 @@ function processSupplierEventsAndMessages(
         unbondingBeginEvents.push(unbondingBeginEvent);
       }
 
-      if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
+      if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd" && eventOrMsg.tx
+        && claimsThatStakedNothing.has(eventOrMsg.tx.hash)) {
+        // the claim kept an operator already staked on Shannon as it was: record the event only, on a copy
+        const copies: Record<string, SupplierRecord> = {};
+        for (const [id, { supplier }] of Object.entries(record)) {
+          copies[id] = { supplier: supplier && { ...supplier }, services: {} };
+        }
+        unbondingEndEvents.push(_handleSupplierUnbondingEndEvent(eventOrMsg, copies).unbondingEndEvent);
+      } else if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
         const { servicesToRemove, supplier, unbondingEndEvent } = _handleSupplierUnbondingEndEvent(eventOrMsg, record);
 
         for (const serviceId of servicesToRemove) {
@@ -1036,7 +1053,17 @@ function processSupplierEventsAndMessages(
         }
       }
 
-      if (eventOrMsg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier") {
+      // A claim whose Morse unbonding already ended (or below the minimum stake) returns before staking
+      // anything and emits EventSupplierUnbondingEnd in its own tx (poktroll msg_server_claim_morse_supplier.go,
+      // short circuits #1 and #2). An operator already staked on Shannon keeps its supplier and configs.
+      const stakedNothing = eventOrMsg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier"
+        && eventOrMsg.tx.tx.events.some(({ type }) => type === "pocket.supplier.EventSupplierUnbondingEnd")
+        && !!record[(eventOrMsg.msg.decodedMsg as MsgClaimMorseSupplier).shannonOperatorAddress]?.supplier;
+
+      if (stakedNothing) {
+        claimMsgs.push(_handleClaimSupplier(eventOrMsg, record).msgClaimSupplier);
+        claimsThatStakedNothing.add(eventOrMsg.tx.hash);
+      } else if (eventOrMsg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier") {
         const { msgClaimSupplier, services, servicesToRemove, supplier } = _handleClaimSupplier(eventOrMsg, record);
 
         claimMsgs.push(msgClaimSupplier);
@@ -1197,7 +1224,9 @@ async function performSupplierDatabaseOperations(data: {
   // Delete records created at this block
   const deletePromises: Array<Promise<unknown>> = [];
 
-  if (data.suppliersToSave.length > 0) deletePromises.push(removeRecords("Supplier"));
+  if (data.suppliersToSave.length > 0) {
+    deletePromises.push(removeRecords("Supplier", data.suppliersToSave.map((supplier) => supplier.id)));
+  }
   // Only the configs inserted again below: a config this block leaves alone keeps the row created at this
   // height by someone else, e.g. the genesis configs that handleGenesis inserts at the genesis height
   // before indexSupplier runs on the same block, or an earlier pass of this same block.
@@ -1369,12 +1398,11 @@ function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<C
 
     return mode !== "EndBlock";
   };
-  const isPreBlockEvent = (event: CosmosEvent) => !event.event.attributes.some(({ key }) => key === "mode");
-
+  // finalize_block_events lists PreBlock, BeginBlock then EndBlock events, so idx keeps PreBlock first
   const [beforeTxsEvents, endBlockEvents] = partition(finalizedEvents, runsBeforeTxs);
 
   return [
-    ...orderBy(beforeTxsEvents, [(event) => !isPreBlockEvent(event), 'idx'], ['asc', 'asc']),
+    ...orderBy(beforeTxsEvents, ['idx'], ['asc']),
     ...orderBy(nonFinalizedData, ['tx.idx', 'rank', 'idx'], ['asc', 'asc', 'asc']),
     ...orderBy(endBlockEvents, ['idx'], ['asc'])
   ];

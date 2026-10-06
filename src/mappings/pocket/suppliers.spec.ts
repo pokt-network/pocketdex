@@ -164,7 +164,7 @@ const unbondingEnd = (h: number, operator: string): CosmosEvent =>
     },
   } as unknown as CosmosEvent);
 
-const claimMorse = (h: number, operator: string, services: Array<string>): CosmosMessage =>
+const claimMorse = (h: number, operator: string, services: Array<string>, unbondingEnded = false): CosmosMessage =>
   ({
     idx: 0,
     block: block(h),
@@ -181,6 +181,7 @@ const claimMorse = (h: number, operator: string, services: Array<string>): Cosmo
               { key: "claimed_supplier_stake", value: '"60000000000upokt"' },
             ],
           },
+          ...(unbondingEnded ? [{ type: "pocket.supplier.EventSupplierUnbondingEnd", attributes: [] }] : []),
         ],
       },
     },
@@ -198,6 +199,25 @@ const claimMorse = (h: number, operator: string, services: Array<string>): Cosmo
       },
     },
   } as unknown as CosmosMessage);
+
+// the EventSupplierUnbondingEnd a Morse claim emits in its own tx when it stakes nothing
+const claimUnbondingEnd = (claim: CosmosMessage, operator: string): CosmosEvent =>
+  ({
+    idx: 1,
+    kind: "tx",
+    block: claim.block,
+    tx: claim.tx,
+    event: {
+      type: "pocket.supplier.EventSupplierUnbondingEnd",
+      attributes: [
+        { key: "operator_address", value: `"${operator}"` },
+        { key: "reason", value: '"SUPPLIER_UNBONDING_REASON_MIGRATION"' },
+      ],
+    },
+  } as unknown as CosmosEvent);
+
+const supplierStatus = (operator: string) =>
+  (tables.Supplier || []).find((row) => row.id === operator && openAt(row, height))?.stakeStatus;
 
 const index = async (h: number, msgs: Array<CosmosMessage>, events: Array<CosmosEvent>) => {
   height = h;
@@ -394,5 +414,24 @@ describe("indexSupplier service configs", () => {
       ]
     );
     assert.deepEqual(open(S1), ["akash@-", "eth@140"]);
+  });
+
+  it("a Morse claim that stakes nothing leaves an operator already staked on Shannon as it was", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    await index(120, [], activations(120, S1, ["akash"]));
+
+    const claim = claimMorse(150, S1, ["eth"], true);
+    await index(150, [claim], [claimUnbondingEnd(claim, S1)]);
+    assert.deepEqual(open(S1), ["akash@120"]);
+    assert.equal(supplierStatus(S1), "Staked");
+  });
+
+  it("a Morse claim that stakes nothing for a new operator leaves it unstaked without configs", async () => {
+    reset();
+    const claim = claimMorse(150, S2, ["eth"], true);
+    await index(150, [claim], [claimUnbondingEnd(claim, S2)]);
+    assert.deepEqual(open(S2), []);
+    assert.equal(supplierStatus(S2), "Unstaked");
   });
 });
