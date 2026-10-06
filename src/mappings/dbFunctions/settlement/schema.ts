@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS settlement_blocks_day_idx ON ${s}.settlement_blocks (
 
 -- Settlement heights left unwritten in the middle of the history: the indexer restarted with
 -- POCKETDEX_MONEY_FROM_HEIGHT above the last written settlement (src/mappings/money/write.ts). The catalog
--- functions raise on a range that overlaps one. A history job that writes the gap's heights deletes its row.
+-- functions list one in the range of an answer that overlaps it. A history job that writes the gap's heights deletes its row.
 CREATE TABLE IF NOT EXISTS ${s}.settlement_gaps (
   from_height BIGINT PRIMARY KEY,
   to_height   BIGINT NOT NULL CHECK (to_height >= from_height)

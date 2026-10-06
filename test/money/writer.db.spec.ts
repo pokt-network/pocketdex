@@ -806,7 +806,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     );
     const compat = await c.query(
       `SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_date($1::text[], '2026-09-01 11:00', '2026-09-01 13:59:59',
-         'hour') j`,
+         'hour')->'data' j`,
       [[address]]
     );
     assert.deepEqual(
@@ -1068,7 +1068,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
   it("the compat functions take any number of addresses, the catalog functions at most 200", async () => {
     const many = Array.from({ length: 250 }, (_, i) => `pokt1fake${i}`);
     const { rows } = await c.query(
-      `SELECT ${S}.legacy_rewards_by_addresses_and_time($1::text[], '2026-09-01 00:00', '2026-09-02 00:00') a`,
+      `SELECT ${S}.legacy_rewards_by_addresses_and_time($1::text[], '2026-09-01 00:00', '2026-09-02 00:00')->>'data' a`,
       [[...many, "x"]]
     );
     assert.equal(rows[0].a, "0");
@@ -1106,7 +1106,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         )
       ).rows[0].a as string;
       assert.ok(BigInt(want) > BigInt(0) && BigInt(want) < BigInt(total));
-      const d6 = await c.query(`SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, $3, $4)::text a`, [
+      const d6 = await c.query(`SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, $3, $4)->>'data' a`, [
         address,
         some,
         from,
@@ -1114,7 +1114,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ]);
       assert.equal(d6.rows[0].a, want);
       const d5 = await c.query(
-        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'day') j`,
+        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'day')->'data' j`,
         [address, some, from, to]
       );
       const rows = d5.rows[0].j as unknown as { total_amount: number | string }[];
@@ -1123,7 +1123,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
     for (const list of [null, [], [""], ["pokt1nosuchsupplier"]]) {
       const none = await c.query(
-        `SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-02')::text a`,
+        `SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-02')->>'data' a`,
         [address, list]
       );
       assert.deepEqual([list, none.rows[0].a], [list, "0"]);
@@ -1131,11 +1131,11 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     // by month: the whole of September from the monthly rollup, the same total
     const month = await c.query(
       `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, '2026-09-01',
-         '2026-09-30 23:59:59.999999', 'month') j`,
+         '2026-09-30 23:59:59.999999', 'month')->'data' j`,
       [address, some]
     );
     const day = await c.query(
-      `SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-30 23:59:59.999999')::text a`,
+      `SELECT ${S}.legacy_rewards_of_addresses_by_suppliers_and_time(ARRAY[$1], $2, '2026-09-01', '2026-09-30 23:59:59.999999')->>'data' a`,
       [address, some]
     );
     const months = month.rows[0].j as unknown as { total_amount: number | string }[];
@@ -1146,7 +1146,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ["2026-09-01 11:30", "2026-09-01 12:30"],
     ]) {
       const hours = await c.query(
-        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'hour') j`,
+        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, $3, $4, 'hour')->'data' j`,
         [address, some, from, to]
       );
       const want = await c.query(
@@ -1165,7 +1165,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
     for (const list of [null, []]) {
       const d5 = await c.query(
-        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, '2026-09-01', '2026-09-02', 'day') j`,
+        `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(ARRAY[$1], $2, '2026-09-01', '2026-09-02', 'day')->'data' j`,
         [address, list]
       );
       assert.deepEqual([list, d5.rows[0].j], [list, null]);
@@ -1218,7 +1218,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         const j = r.j as unknown as Record<string, unknown>;
         if (sparseCells.has(cell(r))) assert.equal(JSON.stringify(j), sparseCells.get(cell(r)), call);
         else
-          for (const [k, v] of Object.entries(j).filter(([k]) => !["bucket_start", "bucket_end", ...keys.split(", ")].includes(k)))
+          for (const [k, v] of Object.entries(j).filter(
+            ([k]) => !["bucket_start", "bucket_end", "covered_from", "covered_to", ...keys.split(", ")].includes(k)
+          ))
             assert.ok(v === 0 || v === null, `${call}: ${k} = ${JSON.stringify(v)} in a filled cell`);
       }
     }
@@ -1432,7 +1434,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
-  it("every <function>_json returns the rows of its function, in order, also above 1000 rows", async () => {
+  it("every <function>_json returns {range, data}: the rows of its function, in order, also above 1000 rows", async () => {
     const address = (await c.query(`SELECT address FROM ${S}.v_income_base ORDER BY 1 LIMIT 1`)).rows[0].address as string;
     const supplier = (await c.query(`SELECT supplier_id FROM ${S}.claim_settlements ORDER BY 1 LIMIT 1`)).rows[0]
       .supplier_id as string;
@@ -1448,12 +1450,33 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // the twin gives every number as a string (amounts past 2^53): compare against the rows with numbers as strings
       const str = (v: unknown): unknown =>
         typeof v === "number" ? String(v) : Array.isArray(v) ? v.map(str) : v;
-      const rows = (await c.query(`SELECT to_jsonb(r) j FROM ${S}.${fn}(${args}) r`, values)).rows.map((r) =>
-        Object.fromEntries(Object.entries(r.j as unknown as Record<string, unknown>).map(([k, v]) => [k, str(v)]))
+      // data has the columns of the rows but covered_from / covered_to, which every row repeats and range carries
+      const all = (await c.query(`SELECT to_jsonb(r) j FROM ${S}.${fn}(${args}) r`, values)).rows.map(
+        (r) => r.j as unknown as Record<string, unknown>
       );
-      const json = (await c.query(`SELECT ${S}.${fn}_json(${args}) j`, values)).rows[0].j;
+      const rows = all.map((r) =>
+        Object.fromEntries(
+          Object.entries(r).filter(([k]) => k !== "covered_from" && k !== "covered_to").map(([k, v]) => [k, str(v)])
+        )
+      );
+      const json = (await c.query(`SELECT ${S}.${fn}_json(${args}) j`, values)).rows[0].j as unknown as {
+        range: Record<string, unknown>;
+        data: unknown[];
+      };
       assert.ok(rows.length >= min, `${fn}: ${rows.length} rows`);
-      assert.deepEqual(json, rows, fn);
+      assert.deepEqual(Object.keys(json).sort(), ["data", "range"], fn);
+      assert.deepEqual(json.data, rows, fn);
+      assert.deepEqual(
+        Object.keys(json.range).sort(),
+        ["covered_from", "covered_to", "gaps", "requested_from", "requested_to"],
+        fn
+      );
+      const ms = (v: unknown) => (v === null ? null : Date.parse(String(v)));
+      assert.deepEqual(
+        [ms(json.range.covered_from), ms(json.range.covered_to)],
+        [ms(all[0].covered_from), ms(all[0].covered_to)],
+        fn
+      );
     }
   });
 
@@ -1492,12 +1515,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         typeof v === "number" ? [path] : v !== null && typeof v === "object"
           ? Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => numbers(x, `${path}.${k}`)) : [];
       for (const [fn, args] of Object.entries(calls)) {
-        const j = (await c.query(`SELECT ${S}.${fn}_json(${args}) j`)).rows[0].j as unknown as unknown[];
-        assert.ok(j.length > 0, fn);
+        const j = (await c.query(`SELECT ${S}.${fn}_json(${args}) j`)).rows[0].j as unknown as { data: unknown[] };
+        assert.ok(j.data.length > 0, fn);
         assert.deepEqual(numbers(j, fn), []);
       }
-      const proofs = (await c.query(`SELECT ${S}.get_supplier_proofs_json(NULL, NULL, NULL) j`)).rows[0].j as unknown as
-        { invalid_by_reason: Record<string, unknown> }[];
+      const proofs = (
+        (await c.query(`SELECT ${S}.get_supplier_proofs_json(NULL, NULL, NULL) j`)).rows[0].j as unknown as {
+          data: { invalid_by_reason: Record<string, unknown> }[];
+        }
+      ).data;
       assert.ok(proofs.some((p) => p.invalid_by_reason["bad proof"] === "1"));
     } finally {
       await c.query("ROLLBACK");
@@ -2155,13 +2181,21 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
-  it("the catalog functions raise on a range that overlaps a settlement gap", async () => {
+  it("the catalog functions answer a range that overlaps a settlement gap, and list the gap in its range", async () => {
     await c.query("BEGIN");
     try {
       await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (700000, 800000)`);
-      await assert.rejects(
-        c.query(`SELECT * FROM ${S}.get_income(ARRAY['x'], NULL, NULL)`),
-        /overlaps settlement heights 700000 to 800000/
+      const { rows } = await c.query(`SELECT * FROM ${S}.get_income(ARRAY['x'], NULL, NULL)`);
+      assert.deepEqual(rows, []);
+      // the blocks of the gap are not indexed here: it spans the written settlements around it
+      const j = (await c.query(`SELECT ${S}.get_income_json(ARRAY['x'], NULL, NULL) j`)).rows[0].j as unknown as {
+        range: { gaps: Array<{ from: string; to: string }> };
+        data: unknown[];
+      };
+      assert.deepEqual(j.data, []);
+      assert.deepEqual(
+        j.range.gaps.map((g) => [new Date(g.from).toISOString(), new Date(g.to).toISOString()]),
+        [["2026-09-01T12:00:00.000Z", "2026-09-01T12:00:00.000Z"]]
       );
     } finally {
       await c.query("ROLLBACK");

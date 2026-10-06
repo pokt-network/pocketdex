@@ -6,8 +6,8 @@
 // Coverage stays honest at every moment: before the first height the job records settlement_gaps [1, start]. A
 // height with money is written in one transaction that also lowers the gap's to_height below it; heights with none
 // lower it in batches (every flushEvery heights or flushMs), and only over a contiguous run of heights already read
-// and classified, so the gap may lag behind the walk but never runs ahead of it. The catalog functions raise for any
-// range that overlaps what is left; the row goes with height 1. The gap row is also the resume point.
+// and classified, so the gap may lag behind the walk but never runs ahead of it. The catalog functions answer only from
+// the first written settlement on, and list what is left as a gap of a range that overlaps it; the row goes with height 1. The gap row is also the resume point.
 //
 // A height counts as having no money only on positive proof: the response is for the height asked, its body parsed
 // whole, and finalize_block_events is there and not empty (every real block has at least the mint of its BeginBlock;

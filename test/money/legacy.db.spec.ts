@@ -21,7 +21,7 @@ import {
 } from "../../src/mappings/dbFunctions/rewardsByAddressesAndTime";
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "../../src/mappings/dbFunctions/rewardsByServicesAddressesAndTime";
 import { getRewardsByOperatorAddressesAndTimesGroupByServiceFn } from "../../src/mappings/dbFunctions/rewards";
-import { createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
+import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlement/schema";
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn, writeSettlementCalls } from "../../src/mappings/dbFunctions/settlement/writer";
@@ -102,7 +102,17 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       CREATE TABLE ${S}.delegations (id text);
       -- the name the compat functions had before: the start drops it
       CREATE FUNCTION ${S}.money_rewards_by_addresses_and_time(text[], timestamp, timestamp) RETURNS numeric
-        LANGUAGE sql AS 'SELECT 0';`);
+        LANGUAGE sql AS 'SELECT 0';
+      -- the return types before covered_from / covered_to and {range, data}, and the coverage check that raised: the
+      -- start replaces them
+      CREATE FUNCTION ${S}.get_income(addresses text[], range_start timestamptz, range_end timestamptz,
+        bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false,
+        by_service boolean DEFAULT false, by_address boolean DEFAULT true, fill_empty_buckets boolean DEFAULT false)
+        RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';
+      CREATE FUNCTION ${S}.legacy_rewards_by_addresses_and_time(addresses text[], start_date timestamp, end_date timestamp)
+        RETURNS numeric LANGUAGE sql AS 'SELECT 0';
+      CREATE FUNCTION ${S}._check_coverage(range_start timestamptz, range_end timestamptz) RETURNS void
+        LANGUAGE sql AS 'SELECT';`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
     for (const fn of [
@@ -195,8 +205,9 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     ["2026-09-01T11:30:00Z", "2026-09-02T08:20:00Z", "hour"],
     ["2026-09-02T00:00:00.001Z", "2026-09-02T08:20:00Z", "day"],
   ];
+  // a legacy_ function answers {range, data}: data is the live function's answer over the covered part of the range
   const both = async (live: string, legacy: string, args: unknown[]) => {
-    const r = (await c.query(`SELECT (${S}.${live})::text l, (${S}.${legacy})::text n`, args)).rows[0];
+    const r = (await c.query(`SELECT (${S}.${live})::text l, (${S}.${legacy})->>'data' n`, args)).rows[0];
     return [r.l, r.n];
   };
   // the live group_by_service functions aggregate without an order: compare their elements by service
@@ -274,9 +285,9 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         `SELECT ${S}.legacy_rewards_by_suppliers_and_time_group_by_service($1, '2026-09-01', '2026-09-03') j`,
         [[owner]]
       )
-    ).rows[0].j as unknown as Array<Record<string, string | number>>;
+    ).rows[0].j as unknown as { data: Array<Record<string, string | number>> };
     assert.deepEqual(
-      j.find((x) => x.service_id === "idle-service"),
+      j.data.find((x) => x.service_id === "idle-service"),
       {
         service_id: "idle-service",
         relays: 0,
@@ -425,7 +436,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       );
       assert.equal(burn[1], burn[0], `burn ${at}`);
       if (s === null || e === null || s > e) {
-        const mint = await c.query(`SELECT ${S}.legacy_mint_breakdown_between_dates($1, $2)::text m`, [s, e]);
+        const mint = await c.query(`SELECT ${S}.legacy_mint_breakdown_between_dates($1, $2)->>'data' m`, [s, e]);
         assert.equal(mint.rows[0].m, '{"reimbursement" : 0, "inflation" : 0, "mint_burn" : 0}');
       }
     }
@@ -438,7 +449,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     );
   });
 
-  it("every legacy_ function raises on a range the money tables do not cover, where the live one answers", async () => {
+  it("every legacy_ function answers {range, data}: what is covered, the range it used, and the gaps", async () => {
     // a settlement height before the first written one: the money tables do not cover what precedes it
     await c.query(`INSERT INTO ${S}.event_claim_settleds (id, block_id) VALUES ('1-0', 1)`);
     try {
@@ -461,21 +472,187 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         )
       ).rows[0].f as unknown as string[];
       assert.deepEqual(fns, calls.map((x) => x.split("(")[0]).sort());
-      for (const call of calls) {
-        await assert.rejects(
-          c.query(`SELECT ${S}.${call}, $1::text[]`, [[shareholder], "2026-08-31T00:00:00Z", "2026-09-01T13:00:00Z"]),
-          /before the first written settlement/,
-          call
-        );
-      }
+      type Range = { requested_from: string | null; requested_to: string | null; covered_from: string | null;
+        covered_to: string | null; gaps: Array<{ from: string; to: string }> };
+      const ms = (t: string | null) => (t === null ? null : Date.parse(t));
+      const call = async (fn: string, start: string | null, end: string | null) => {
+        const r = (await c.query(`SELECT (${S}.${fn})::jsonb j, $1::text[]`, [[shareholder], start, end])).rows[0]
+          .j as unknown as { range: Range; data: unknown };
+        assert.deepEqual(Object.keys(r).sort(), ["data", "range"], fn);
+        const g = r.range;
+        return { data: r.data, range: { ...g, requested_from: ms(g.requested_from), requested_to: ms(g.requested_to),
+          covered_from: ms(g.covered_from), covered_to: ms(g.covered_to),
+          gaps: g.gaps.map((x) => [ms(x.from), ms(x.to)]) } };
+      };
+      const first = Date.parse(WRITES[0][1]);
+      const head = Date.parse(WRITES[WRITES.length - 1][1]);
+      // a range that starts before the first written settlement: the data of the covered part, from that settlement on
       const live = await c.query(`SELECT ${S}.get_rewards_by_addresses_and_time($1, $2, $3)::text a`, [
-        [shareholder],
-        "2026-08-31T00:00:00Z",
-        "2026-09-01T13:00:00Z",
-      ]);
+        [shareholder], "2026-08-31T00:00:00Z", "2026-09-01T13:00:00Z"]);
       assert.notEqual(live.rows[0].a, "0");
+      for (const fn of calls) {
+        const r = await call(fn, "2026-08-31T00:00:00Z", "2026-09-01T13:00:00Z");
+        assert.deepEqual(r.range, { requested_from: Date.parse("2026-08-31T00:00:00Z"),
+          requested_to: Date.parse("2026-09-01T13:00:00Z"), covered_from: first,
+          covered_to: Date.parse("2026-09-01T13:00:00Z"), gaps: [] }, fn);
+        const covered = await call(fn, WRITES[0][1], "2026-09-01T13:00:00Z");
+        assert.deepEqual(r.data, covered.data, fn);
+      }
+      assert.equal(String((await call(calls[0], "2026-08-31T00:00:00Z", "2026-09-01T13:00:00Z")).data), live.rows[0].a);
+      // a range that ends before it: nothing to read, and the range says why (covered_from after requested_to)
+      const empty: Record<string, unknown> = {
+        legacy_rewards_by_addresses_and_time: null,
+        legacy_rewards_of_addresses_by_suppliers_and_time: null,
+        legacy_rewards_by_addresses_and_time_group_by_date: null,
+        legacy_rewards_by_addresses_and_time_group_by_address_and_date: null,
+        legacy_rewards_by_suppliers_and_time_group_by_address_and_date: null,
+        legacy_mint_breakdown_between_dates: { reimbursement: 0, inflation: 0, mint_burn: 0 },
+        legacy_burn_breakdown_between_dates: { burn_mint: 0 },
+      };
+      for (const fn of calls) {
+        const r = await call(fn, "2026-08-30T00:00:00Z", "2026-08-31T00:00:00Z");
+        const name = fn.split("(")[0];
+        assert.ok((r.range.covered_from as number) > (r.range.requested_to as number), fn);
+        assert.deepEqual([r.range.covered_from, r.range.covered_to], [first, Date.parse("2026-08-31T00:00:00Z")], fn);
+        if (name in empty) assert.deepEqual(r.data, empty[name], fn);
+        else {
+          // by service: the services listed with zeros, as for an empty range
+          const zeros = ((r.data ?? []) as Array<Record<string, unknown>>).every((x) =>
+            Object.entries(x).every(([k, v]) => k === "service_id" || v === 0));
+          assert.ok(zeros, fn);
+        }
+      }
+      // a range past the latest indexed block: covered_to is that block; a NULL end matches nothing, as before
+      const past = await call(calls[0], WRITES[0][1], "2026-09-05T00:00:00Z");
+      assert.deepEqual([past.range.covered_from, past.range.covered_to], [first, head]);
+      const open = await call(calls[0], WRITES[0][1], null);
+      assert.deepEqual([open.range.requested_to, open.data], [null, 0]);
+      // a settlement gap inside the range: listed (between the written settlements around it, whose blocks the
+      // fixture lacks), and its heights read nothing
+      await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (899740, 899745)`);
+      try {
+        for (const fn of calls) {
+          const r = await call(fn, "2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z");
+          assert.deepEqual(r.range.gaps, [[Date.parse(WRITES[1][1]), Date.parse(WRITES[2][1])]], fn);
+          assert.deepEqual(r.range.covered_to, head, fn);
+          // a range that ends before the gap does not list it
+          assert.deepEqual((await call(fn, "2026-09-01T00:00:00Z", "2026-09-01T13:00:00Z")).range.gaps, [], fn);
+        }
+      } finally {
+        await c.query(`DELETE FROM ${S}.settlement_gaps`);
+      }
     } finally {
       await c.query(`DELETE FROM ${S}.event_claim_settleds WHERE block_id = 1`);
+    }
+  });
+
+  it("every catalog function answers for what is covered: covered_from / covered_to on its rows, {range, data} in _json", async () => {
+    const one = async (sql: string) => (await c.query(sql)).rows[0];
+    const application = (await one(`SELECT min(application_id) a FROM ${S}.claim_settlements`)).a as string;
+    const supplier = (await one(`SELECT min(supplier_id) s FROM ${S}.claim_settlements`)).s as string;
+    // [function, arguments: $1 range_start, $2 range_end]
+    const CALLS: Array<[string, string]> = [
+      ["money_coverage", "$1, $2"],
+      ["get_application_spend", `ARRAY['${application}'], $1, $2`],
+      ["get_gateway_spend", "ARRAY['gw'], $1, $2, fill_empty_buckets => true"],
+      ["get_supplier_earnings", "NULL, $1, $2"],
+      ["get_supplier_distribution", `ARRAY['${supplier}'], $1, $2, by_reason => true`],
+      ["get_income", `ARRAY['${shareholder}'], $1, $2, by_reason => true`],
+      ["get_validator_rewards", "NULL, $1, $2"],
+      ["get_delegator_income", "NULL, $1, $2"],
+      ["get_supply_flows", "$1, $2, by_role => true"],
+      ["get_supplier_penalties", `ARRAY['${supplier}'], $1, $2, fill_empty_buckets => true`],
+      ["get_service_usage", "NULL, $1, $2, top_by_settled => 3"],
+      ["get_app_auto_unstakes", "NULL, $1, $2"],
+      ["get_supplier_proofs", "NULL, $1, $2"],
+      ["get_param_history", "NULL, NULL, $1, $2"],
+    ];
+    const ON_BLOCKS = ["get_app_auto_unstakes", "get_param_history"];
+    assert.deepEqual(CALLS.map(([f]) => f).sort(), [...CATALOG_FUNCTIONS].sort());
+    const ms = (v: unknown) => (v === null || v === undefined ? null : Date.parse(String(v)));
+    const strip = (r: Record<string, unknown>) =>
+      JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => k !== "covered_from" && k !== "covered_to")));
+    const run = async (fn: string, args: string, from: string | null, to: string | null) => {
+      const rows = (await c.query(`SELECT to_jsonb(r) j FROM ${S}.${fn}(${args}) r`, [from, to])).rows.map(
+        (r) => r.j as unknown as Record<string, unknown>
+      );
+      const j = (await c.query(`SELECT ${S}.${fn}_json(${args}) j`, [from, to])).rows[0].j as unknown as {
+        range: Record<string, unknown>;
+        data: unknown[];
+      };
+      const g = j.range;
+      const range = {
+        requested_from: ms(g.requested_from),
+        requested_to: ms(g.requested_to),
+        covered_from: ms(g.covered_from),
+        covered_to: ms(g.covered_to),
+        gaps: (g.gaps as Array<{ from: string; to: string }>).map((x) => [ms(x.from), ms(x.to)]),
+      };
+      // the _list columns: the same covered_from / covered_to on every row as in range
+      for (const r of rows) assert.deepEqual([ms(r.covered_from), ms(r.covered_to)], [range.covered_from, range.covered_to], fn);
+      assert.equal(j.data.length, rows.length, fn);
+      return { rows: rows.map(strip), range };
+    };
+    const first = Date.parse(WRITES[0][1]);
+    const head = Date.parse(WRITES[WRITES.length - 1][1]);
+    const T = (t: string) => Date.parse(t);
+    await c.query("BEGIN");
+    try {
+      await c.query(`
+        CREATE TABLE ${S}.msg_submit_proofs (supplier_id text, service_id text, block_id numeric);
+        CREATE TABLE ${S}.event_proof_validity_checkeds (supplier_id text, service_id text, block_id numeric,
+          proof_validation_status text, failure_reason text);
+        CREATE TABLE ${S}.event_application_unbonding_begins (application_id text, reason int, block_id numeric);
+        INSERT INTO ${S}.msg_submit_proofs SELECT supplier_id, service_id, height FROM ${S}.claim_settlements;
+        INSERT INTO ${S}.event_application_unbonding_begins SELECT application_id, 1, height FROM ${S}.claim_settlements;`);
+      // the whole history is written (the first written settlement is the chain's first): the answers as they were
+      const complete: Record<string, string[]> = {};
+      for (const [fn, args] of CALLS) {
+        const r = await run(fn, args, WRITES[0][1], "2026-09-03T00:00:00Z");
+        complete[fn] = r.rows;
+        assert.deepEqual([r.range.covered_from, r.range.covered_to, r.range.gaps], [first, head, []], fn);
+        if (fn !== "get_gateway_spend" && fn !== "get_param_history") assert.ok(r.rows.length > 0, fn);
+      }
+      // the chain settled before the first written settlement: the money tables cover from it on
+      await c.query(`INSERT INTO ${S}.event_claim_settleds (id, block_id) VALUES ('1-0', 1)`);
+      for (const [fn, args] of CALLS) {
+        // a covered range: the same rows
+        const covered = await run(fn, args, WRITES[0][1], "2026-09-03T00:00:00Z");
+        assert.deepEqual(covered.rows, complete[fn], fn);
+        assert.deepEqual(covered.range, { requested_from: first, requested_to: T("2026-09-03T00:00:00Z"),
+          covered_from: first, covered_to: head, gaps: [] }, fn);
+        // a range that starts before it: the rows of the covered part (bucket_start is where the data starts)
+        const partial = await run(fn, args, "2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z");
+        if (fn !== "money_coverage" && !ON_BLOCKS.includes(fn)) assert.deepEqual(partial.rows, covered.rows, fn);
+        assert.deepEqual([partial.range.requested_from, partial.range.covered_from], [T("2026-08-31T00:00:00Z"), first], fn);
+        // a range that ends before it: no rows, and covered_from after requested_to says why
+        const before = await run(fn, args, "2026-08-30T00:00:00Z", "2026-08-31T00:00:00Z");
+        if (fn !== "money_coverage") assert.deepEqual(before.rows, [], fn);
+        assert.deepEqual([before.range.covered_from, before.range.covered_to], [first, T("2026-08-31T00:00:00Z")], fn);
+        // NULL bounds: open-ended, from the first written settlement to the latest indexed block
+        const open = await run(fn, args, null, null);
+        assert.deepEqual(open.range, { requested_from: null, requested_to: null, covered_from: first, covered_to: head,
+          gaps: [] }, fn);
+      }
+      // a settlement gap inside the range (heights not written, between 1 Sep 23:30 and 2 Sep 00:00): listed, and the
+      // data is what is written around it
+      await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (899740, 899745)`);
+      for (const [fn, args] of CALLS) {
+        const r = await run(fn, args, WRITES[0][1], "2026-09-03T00:00:00Z");
+        // (money_coverage reports the gap in its own gaps column too)
+        if (fn !== "money_coverage") assert.deepEqual(r.rows, complete[fn], fn);
+        const gaps = ON_BLOCKS.includes(fn) ? [] : [[T(WRITES[1][1]), T(WRITES[2][1])]];
+        assert.deepEqual(r.range.gaps, gaps, fn);
+        assert.deepEqual((await run(fn, args, WRITES[0][1], "2026-09-01T13:00:00Z")).range.gaps, [], fn);
+      }
+      // the rollup version still raises: an operational fault, not coverage
+      await c.query(`UPDATE ${S}.settlement_blocks SET rollup_version = 0`);
+      await assert.rejects(
+        c.query(`SELECT * FROM ${S}.get_supply_flows('2026-08-31T00:00:00Z', '2026-09-03T00:00:00Z')`),
+        /run rebuild_rollups first/
+      );
+    } finally {
+      await c.query("ROLLBACK");
     }
   });
 
@@ -486,7 +663,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
        ORDER BY 1`,
       [S]
     );
-    assert.equal(rows.length, 11);
+    assert.equal(rows.length, 12);
     for (const r of rows) {
       if (String(r.proname).startsWith("_legacy_")) assert.equal(r.tag, "@omit");
       else

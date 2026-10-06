@@ -158,8 +158,8 @@ export async function writeSettlement(
 }
 
 // With POCKETDEX_MONEY_FROM_HEIGHT above the last written settlement, the settlement heights in between are
-// never written by this process: record them in settlement_gaps, so the catalog functions raise on a range
-// that overlaps them instead of returning totals without them. It runs before every write while the
+// never written by this process: record them in settlement_gaps, so the catalog functions list them in the range
+// of an answer that overlaps them instead of returning totals that silently lack them. It runs before every write while the
 // override is set, inside the block transaction, so a block that rolls back cannot lose it; it is one
 // index probe, and a no-op once a height past the override is written or when no settlement is written yet
 // (the catalog's coverage check already handles a missing start).

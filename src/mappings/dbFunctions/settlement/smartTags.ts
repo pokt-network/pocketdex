@@ -95,7 +95,9 @@ const OMITTED_FUNCTIONS = [
   "_block_heights",
   "_block_span",
   "_income",
-  "_check_coverage",
+  "_coverage",
+  "_range_json",
+  "_legacy_range",
   "_require_current_rollups",
   "_json_strings",
   "_legacy_claims_by_service",
@@ -122,7 +124,7 @@ const LEGACY_REPLACES: Record<string, string> = {
   legacy_burn_breakdown_between_dates: "get_burn_breakdown_between_dates (getBurnBreakdownBetweenDates)",
 };
 const LEGACY_SAME =
-  "Same arguments, the same ranges and date_trunc units accepted (any length; an empty, inverted or half-NULL range answers as the live function, which matches nothing), and the same JSON, read from the settlement money tables. Differs only where said here: a non-empty range the money tables do not cover (money_coverage: before the first written settlement, or over a settlement gap) raises an error where the live function answers.";
+  "Same arguments, the same ranges and date_trunc units accepted (any length; an empty, inverted or half-NULL range answers as the live function, which matches nothing), read from the settlement money tables. Returns {range, data}: data has the live function's JSON over the covered part of the range, and range = {requested_from, requested_to (end_date), covered_from, covered_to, gaps: [{from, to}]}. covered_from is the later of start_date and the first written settlement, covered_to the earlier of end_date and the latest indexed block; the data is read from covered_from on, and a settlement gap (heights not written) reads nothing. A range that ends before the first written settlement gives the empty answer (a total is null there, 0 over a covered range with no income). Differs only where said here.";
 // What else differs from the live function's JSON.
 const BY_SERVICE_ORDER = "Elements are ordered by service_id; the live function leaves their order to its plan.";
 const LEGACY_DIFFERS: Record<string, string> = {
@@ -165,8 +167,8 @@ const DESCRIPTIONS: Record<string, string> = {
 };
 
 const COMMON = `'Arguments: range_start, range_end = the range [start, end), timestamptz with an explicit zone (2026-10-01T00:00:00Z); NULL = the whole history. bucket = NULL (one total per row) or hour (up to 7 days), day (up to 92 days), week (up to 366 days), month or year, in UTC. by_* = split by that column (otherwise it says all); the by_<entity> of the ids asked about is true by default (false = one total for the list). fill_empty_buckets (default false) = only rows with data: an absent bucket, series or id is 0; true = every bucket of every series and every requested id, 0 where nothing happened, which adds considerable latency on large answers. NULL in a column = it does not apply to that row.'`;
-const ROWS_NOTE = `'Rows newest first (then by the text columns), paged by GraphQL (first / offset) up to the query limit (1000); for larger answers use the _json variant.'`;
-const JSON_NOTE = `'Every row of the function of the same name as one JSON array, in its row order, in one call with no row limit: for answers above 1000 rows. Keys are the snake_case column names; numbers (amounts, counts) are JSON strings, as in the list variant, so no client loses precision.'`;
+const ROWS_NOTE = `'Rows newest first (then by the text columns), paged by GraphQL (first / offset) up to the query limit (1000); for larger answers use the _json variant. Every row carries covered_from / covered_to, the part of the range the answer covers (as in the _json variant); the settlement gaps inside it are only in the _json variant.'`;
+const JSON_NOTE = `'Returns {range, data}. data = every row of the function of the same name as one JSON array (without covered_from / covered_to), in its row order, in one call with no row limit: for answers above 1000 rows. Keys are the snake_case column names; numbers (amounts, counts) are JSON strings, as in the list variant, so no client loses precision. range = {requested_from, requested_to, covered_from, covered_to, gaps: [{from, to}]}: covered_from is the later of range_start and the first written settlement (the first indexed block for the functions over indexer tables, and when the settlement history is complete), covered_to the earlier of range_end and the latest indexed block, gaps the settlement heights inside that are not written (they read as nothing). The data is read from covered_from on; a range that ends before it gives data [].'`;
 
 export function createSettlementSmartTagsFn(dbSchema: string): string {
   const s = dbSchema;
