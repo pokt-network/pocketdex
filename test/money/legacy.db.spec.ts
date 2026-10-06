@@ -521,7 +521,8 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       try {
         for (const fn of calls) {
           const r = await call(fn, "2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z");
-          assert.deepEqual(r.range.gaps, [[Date.parse(WRITES[1][1]), Date.parse(WRITES[2][1])]], fn);
+          // (from 1 µs after the written settlement before it to 1 µs before the one after it: JavaScript keeps ms)
+          assert.deepEqual(r.range.gaps, [[Date.parse(WRITES[1][1]), Date.parse(WRITES[2][1]) - 1]], fn);
           assert.deepEqual(r.range.covered_to, head, fn);
           // a range that ends before the gap does not list it
           assert.deepEqual((await call(fn, "2026-09-01T00:00:00Z", "2026-09-01T13:00:00Z")).range.gaps, [], fn);
@@ -649,7 +650,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         const r = await run(fn, args, WRITES[0][1], "2026-09-03T00:00:00Z");
         // (money_coverage reports the gap in its own gaps column too)
         if (fn !== "money_coverage") assert.deepEqual(r.rows, complete[fn], fn);
-        const gaps = ON_BLOCKS.includes(fn) ? [] : [[T(WRITES[1][1]), T(WRITES[2][1])]];
+        const gaps = ON_BLOCKS.includes(fn) ? [] : [[T(WRITES[1][1]), T(WRITES[2][1]) - 1]];
         assert.deepEqual(r.range.gaps, gaps, fn);
         assert.deepEqual((await run(fn, args, WRITES[0][1], "2026-09-01T13:00:00Z")).range.gaps, [], fn);
       }
@@ -688,16 +689,17 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       // keeping the gap [1, h - 1]: the raw tables alone would call the history complete
       await c.query(`DELETE FROM ${S}.event_claim_settleds WHERE block_id < 899733;
                      INSERT INTO ${S}.settlement_gaps VALUES (1, 899712)`);
-      // the fixture has no block 1 or h - 1: the gap starts at no known time and ends at the first written settlement
+      // the fixture has no block 1 or h - 1: the gap starts at no known time and ends 1 µs before the first written
+      // settlement
       const partial = await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z");
       assert.deepEqual(partial.covered, [first, head]);
-      assert.deepEqual(partial.gaps, [[null, first]]);
+      assert.deepEqual(partial.gaps, [[null, first - 1]]);
       assert.ok(partial.rows > 0);
       // a range inside the gap: nothing read, and the gap says why
       const before = await flows("2026-08-30T00:00:00Z", "2026-08-31T00:00:00Z");
       assert.deepEqual(
         [before.covered, before.gaps, before.rows, before.burn],
-        [[first, Date.parse("2026-08-31T00:00:00Z")], [[null, first]], 0, null]
+        [[first, Date.parse("2026-08-31T00:00:00Z")], [[null, first - 1]], 0, null]
       );
       // a block after the last written settlement: with the writer caught up (no settlement there) it is covered
       await c.query(`INSERT INTO ${S}.blocks VALUES (899800, '2026-09-02 10:00')`);
@@ -715,6 +717,86 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     }
   });
 
+  it("a range inside a gap reads nothing, a bucket over a gap is not zero-filled, and covered_to is half-open", async () => {
+    const one = async (sql: string, params: unknown[] = []) => (await c.query(sql, params)).rows[0];
+    const first = Date.parse(WRITES[0][1]);
+    await c.query("BEGIN");
+    try {
+      // heights not written between 1 Sep 12:00 and 23:30 (the fixture has no blocks there): from 12:00 + 1 µs to
+      // 23:30 - 1 µs, so a range made only of written heights does not list it
+      await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (899720, 899730)`);
+      const g = (await one(`SELECT ${S}.get_supply_flows_json('2026-09-01T00:00:00Z', '2026-09-03T00:00:00Z') j`))
+        .j as unknown as { range: { gaps: Array<{ from: string; to: string }> } };
+      assert.deepEqual(
+        await one(
+          `SELECT ($1::jsonb->0->>'from')::timestamptz = timestamptz '${WRITES[0][1]}' + interval '1 microsecond' a,
+                  ($1::jsonb->0->>'to')::timestamptz = timestamptz '${WRITES[1][1]}' - interval '1 microsecond' b`,
+          [JSON.stringify(g.range.gaps)]
+        ),
+        { a: true, b: true }
+      );
+      const at23 = (await one(`SELECT ${S}.get_supply_flows_json($1, '2026-09-03T00:00:00Z') j`, [WRITES[1][1]]))
+        .j as unknown as { range: { gaps: unknown[] } };
+      assert.deepEqual(at23.range.gaps, []);
+      // a range inside the gap: no rows, and data null in every legacy_ function (not a zero)
+      const flows = (await one(`SELECT ${S}.get_supply_flows_json('2026-09-01T13:00:00Z', '2026-09-01T14:00:00Z') j`))
+        .j as unknown as { data: unknown[] };
+      assert.deepEqual(flows.data, []);
+      const legacy = [
+        `legacy_rewards_by_addresses_and_time($1, $2, $3)`,
+        `legacy_rewards_of_addresses_by_suppliers_and_time($1, $1, $2, $3)`,
+        `legacy_rewards_by_addresses_and_time_group_by_date($1, $2, $3, 'hour')`,
+        `legacy_rewards_by_suppliers_and_time_group_by_service($1, $2, $3)`,
+        `legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)`,
+        `legacy_mint_breakdown_between_dates($2, $3)`,
+        `legacy_burn_breakdown_between_dates($2, $3)`,
+      ];
+      for (const fn of legacy) {
+        const r = await one(`SELECT (${S}.${fn})::jsonb->'data' d, $1::text[]`, [
+          [shareholder],
+          "2026-09-01T13:00:00Z",
+          "2026-09-01T14:00:00Z",
+        ]);
+        assert.equal(r.d, null, fn);
+      }
+      // by hour with fill_empty_buckets: the hours inside the gap get no zero row, only 12:00 and 23:00 (with data)
+      const hours = await c.query(
+        `SELECT DISTINCT bucket_start FROM ${S}.get_supply_flows('2026-09-01T12:00:00Z', '2026-09-02T00:00:00Z', 'hour',
+           fill_empty_buckets => true) ORDER BY 1`
+      );
+      assert.deepEqual(
+        hours.rows.map((r) => new Date(String(r.bucket_start)).toISOString()),
+        ["2026-09-01T12:00:00.000Z", "2026-09-01T23:00:00.000Z"]
+      );
+      await c.query(`DELETE FROM ${S}.settlement_gaps`);
+      const all = await c.query(
+        `SELECT DISTINCT bucket_start FROM ${S}.get_supply_flows('2026-09-01T12:00:00Z', '2026-09-02T00:00:00Z', 'hour',
+           fill_empty_buckets => true)`
+      );
+      assert.equal(all.rows.length, 12);
+      // covered_to is half-open like range_end in the catalog (the latest block + 1 µs), inclusive like end_date in legacy_
+      const head = `timestamptz '${WRITES[WRITES.length - 1][1]}'`;
+      assert.deepEqual(
+        await one(
+          `SELECT (${S}.get_supply_flows_json(NULL, NULL)->'range'->>'covered_to')::timestamptz
+                    = ${head} + interval '1 microsecond' a,
+                  (${S}.legacy_burn_breakdown_between_dates('2026-09-01', '2026-09-05')::jsonb->'range'->>'covered_to')::timestamptz
+                    = ${head} b`
+        ),
+        { a: true, b: true }
+      );
+      // the history reaches below the indexer's first block and its gap row is gone (the history job wrote down to
+      // height 1): coverage starts at the first written settlement, not at the first indexed block
+      await c.query(`DELETE FROM ${S}.event_claim_settleds WHERE block_id < 899733; DELETE FROM ${S}.blocks WHERE id < 899733`);
+      const r = (await one(`SELECT ${S}.get_supply_flows_json(NULL, NULL) j`)).j as unknown as {
+        range: { covered_from: string };
+      };
+      assert.equal(Date.parse(r.range.covered_from), first);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("GraphQL publishes every legacy_ function with what it replaces, and the start drops the money_* names", async () => {
     const { rows } = await c.query(
       `SELECT p.proname, obj_description(p.oid, 'pg_proc') tag FROM pg_proc p
@@ -722,7 +804,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
        ORDER BY 1`,
       [S]
     );
-    assert.equal(rows.length, 12);
+    assert.equal(rows.length, 13);
     for (const r of rows) {
       if (String(r.proname).startsWith("_legacy_")) assert.equal(r.tag, "@omit");
       else
