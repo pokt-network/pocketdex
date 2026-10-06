@@ -15,8 +15,11 @@ with the indexer's own parser and writer (`src/mappings/money/history`, CLI `scr
 4. Records a `settlement_gaps` row `[1, lowest written height − 1]`. From then on the catalog functions answer only
    for the part of a range that is covered, and report the heights not walked yet as a gap in their `range` (they
    never read as zero). If a gap already reaches that range, it must be this job's row (it starts at 1) and the job
-   resumes from it; any other gap there stops the job. The job never touches `money_progress` (how far the indexer's
-   money step went).
+   resumes from it. Another gap row (the heights a `POCKETDEX_MONEY_FROM_HEIGHT` override skipped) is not its
+   territory, wherever it lies. As it lowers its row the job lowers `money_progress.from_height`, where coverage starts,
+   to the lowest height it has walked, and to 1 when it finishes. A job running an older version does not: when it
+   finishes, `from_height` stays where it was, so the heights it walked read as not covered (never as zero) until a
+   job of this version runs or `from_height` is set by hand.
 5. Walks down one height at a time. For each it reads `/block_results`. **A height counts as read only on positive
    proof**: the response is for the height asked (`result.height`), the body arrived whole and parsed, and
    `finalize_block_events` is there and not empty. Every real block has at least the mint of its BeginBlock (66
@@ -142,8 +145,10 @@ creates the tables when it starts, so check again before the first deploy.
 A settlement block whose money cannot be written (the parser or one of its checks throws, or a chain read fails)
 fails the whole block, and SubQuery retries it: the indexer does not get past that height until the
 cause is fixed. To let it go on without that money, set `POCKETDEX_MONEY_FROM_HEIGHT` above the failing height and
-redeploy (`src/mappings/money/write.ts`). While the override skips, the money step's progress (`money_progress`) does
-not move, so the catalog functions report the skipped heights as not covered, whatever money event they hold, instead
+redeploy (`src/mappings/money/write.ts`). The money step records its progress (`money_progress`) on every block it
+processes, inside the block transaction, so the indexer must run with `--enable-cache=false` (production does: the
+writer already needs it); without it the money step throws and the indexer stops. While the override skips, the
+progress does not move, so the catalog functions report the skipped heights as not covered, whatever money event they hold, instead
 of reading them as zero. The first height the money step processes past the override records them as the
 `settlement_gaps` row `[progress + 1, O − 1]`.
 

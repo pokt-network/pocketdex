@@ -22,7 +22,7 @@ import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlem
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
 import { Chain } from "../../src/mappings/money/history/chain";
-import { HistoryOptions, PgClient, RAW_EVENT_TABLES, runHistory } from "../../src/mappings/money/history/job";
+import { HistoryOptions, PgClient, planGap, RAW_EVENT_TABLES, runHistory } from "../../src/mappings/money/history/job";
 import type { MapState } from "../../src/mappings/money/map";
 import type { RawEvent } from "../../src/mappings/money/payload";
 import { eraAtHeight } from "../../src/mappings/utils/params_history";
@@ -565,15 +565,14 @@ describe("settlement history job (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG n
     await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 899689)`);
   });
 
-  it("refuses gaps it does not own over the history range", async () => {
+  it("owns only its row: an override hole over the history range is not its territory", async () => {
+    const opts = { schema: S } as unknown as Parameters<typeof planGap>[1];
     await c.query(`DELETE FROM ${S}.settlement_gaps`);
     await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 300000), (299000, 899689)`);
-    await assert.rejects(
-      run(),
-      /more than one settlement gap reaches the history range: \[1, 300000\], \[299000, 899689\]/
-    );
+    assert.deepEqual(await planGap(c, opts), { top: 300000, create: false });
     await c.query(`DELETE FROM ${S}.settlement_gaps WHERE from_height = 1`);
-    await assert.rejects(run(), /the settlement gap \[299000, 899689\] does not start at height 1/);
+    // (no row of its own: it would start one below the lowest written height)
+    assert.deepEqual(await planGap(c, opts), { top: 899712, create: true });
     await c.query(`DELETE FROM ${S}.settlement_gaps`);
     await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 899689)`);
   });

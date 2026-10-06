@@ -354,26 +354,18 @@ async function tokenomicsParamsAt(
 }
 
 // The gap row this job owns (from_height = 1). Returns the highest height left to walk, and whether the row is still
-// to be created (runHistory does it after the LCD preflight). Any gap that reaches the history range (from 1 up to
-// the lowest written height) must be that one row: two, or one that starts elsewhere, mean the coverage was edited by
-// hand or by another tool, and the job stops instead of guessing.
+// to be created (runHistory does it after the LCD preflight). Only that row is the job's: another gap row (the heights a
+// POCKETDEX_MONEY_FROM_HEIGHT override skipped) is not its territory, wherever it lies.
 export async function planGap(client: PgClient, o: HistoryOptions): Promise<{ top: number; create: boolean }> {
   const s = o.schema;
   const low = await client.query(`SELECT min(height)::bigint AS h FROM ${s}.settlement_blocks`);
   const lowest = low.rows[0].h === null ? null : Number(low.rows[0].h);
   const gaps = await client.query(
-    `SELECT from_height::bigint AS f, to_height::bigint AS t FROM ${s}.settlement_gaps
-     WHERE to_height >= $1 AND ($2::bigint IS NULL OR from_height <= $2) ORDER BY from_height`,
-    [GAP_FROM, lowest]
+    `SELECT from_height::bigint AS f, to_height::bigint AS t FROM ${s}.settlement_gaps WHERE from_height = $1`,
+    [GAP_FROM]
   );
   const list = gaps.rows.map((r) => `[${r.f}, ${r.t}]`).join(", ");
-  if (gaps.rows.length > 1) {
-    throw new Error(`[history] more than one settlement gap reaches the history range: ${list}`);
-  }
   if (gaps.rows.length === 1) {
-    if (Number(gaps.rows[0].f) !== GAP_FROM) {
-      throw new Error(`[history] the settlement gap ${list} does not start at height ${GAP_FROM}`);
-    }
     if (o.start !== undefined) throw new Error(`[history] the gap ${list} exists: resume without --start`);
     return { top: Number(gaps.rows[0].t), create: false };
   }
@@ -387,8 +379,9 @@ export async function planGap(client: PgClient, o: HistoryOptions): Promise<{ to
   return { top: start, create: start >= GAP_FROM };
 }
 
-// Lowers the gap to below `height` (deleting it past height 1), inside the caller's transaction. The gap must still
-// hold `height`: if it does not, another run moved it.
+// Lowers the gap to below `height` (deleting it past height 1), inside the caller's transaction, and with it
+// money_progress.from_height (the start of coverage: functions.ts _coverage) to `height`, 1 when it finishes. The gap
+// must still hold `height`: if it does not, another run moved it.
 async function lowerGap(client: PgClient, schema: string, height: number): Promise<void> {
   const gap = await client.query(
     `SELECT to_height::bigint AS t FROM ${schema}.settlement_gaps WHERE from_height = $1 FOR UPDATE`,
@@ -405,6 +398,9 @@ async function lowerGap(client: PgClient, schema: string, height: number): Promi
       height - 1,
     ]);
   }
+  await client.query(`UPDATE ${schema}.money_progress SET from_height = least(from_height, $1::bigint)`, [
+    height - 1 < GAP_FROM ? GAP_FROM : height,
+  ]);
 }
 
 // One height, one transaction: the CALLs of write_settlement, then the gap lowered below the height (which also

@@ -107,6 +107,10 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
       `  cv := ${s}._coverage(range_start, range_end${blocks ? ", true" : ""});`,
       "  IF cv.empty THEN RETURN; END IF;",
       "  range_start := cv.data_from;",
+      // nothing past covered_to is read either: a rewind leaves rows above the progress until they are rewritten. Only
+      // then: with nothing written past covered_to the end stays as asked, so an open or later end keeps reading its
+      // edge day / month from the rollups
+      "  IF cv.last_settled >= cv.covered_to THEN range_end := least(range_end, cv.covered_to); END IF;",
       ...(span
         ? [
             // _span from the bounds _coverage already read: settlements, or blocks for the indexer's tables
@@ -163,12 +167,11 @@ END $$;
 -- The covered span ends at the earlier of range_end and the block at money_progress.height + 1 µs (half-open, like the
 -- range; the latest indexed block when the blocks table does not have that block yet, its writes may lag): an active
 -- POCKETDEX_MONEY_FROM_HEIGHT override freezes the progress, so the heights it skips are not covered, never zero.
--- It starts at the later of range_start and the block at money_progress.from_height (the lowest height the money step
--- processed), or, when the history reaches below that height (a written settlement under it, or the history job's row
--- lowered under it: the job walked there), at the earlier of the first indexed block and the lowest written
--- settlement, the job's gap row cutting what it has not walked. (A job that finished without writing anything below
--- that height leaves those heights not covered: conservative.) No progress yet: nothing covered. The functions over the indexer's own tables (p_blocks) cover the indexed
--- blocks.
+-- It starts at the later of range_start and the block at money_progress.from_height (the first indexed block at or after
+-- it when the blocks table lacks that block): the lowest height the money step processed, seeded once on a database
+-- written before the table existed (schema.ts), and lowered by the history job as it walks (job.ts lowerGap). Nothing
+-- else is inferred. No progress yet: nothing covered. The functions over the indexer's own tables (p_blocks) cover the
+-- indexed blocks.
 -- The gaps: each settlement_gaps row as the half-open time between the covered heights next to it, [the block before
 -- its first height + 1 µs, the block after its last height), falling back to the written settlement on that side when
 -- the blocks table lacks the block (NULL = unbounded); overlapping or contiguous gaps merge (range_agg).
@@ -195,8 +198,7 @@ CREATE OR REPLACE FUNCTION ${s}._coverage(range_start timestamptz, range_end tim
   OUT data_from timestamptz, OUT empty boolean, OUT covered tstzmultirange, OUT first_settled timestamptz,
   OUT last_settled timestamptz, OUT first_block timestamptz, OUT last_block timestamptz)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
-DECLARE v_start timestamptz; v_end timestamptz; v_gaps tstzmultirange := '{}'; v_first_h bigint; v_from_h bigint;
-  v_progress bigint;
+DECLARE v_start timestamptz; v_end timestamptz; v_gaps tstzmultirange := '{}'; v_from_h bigint; v_progress bigint;
 BEGIN
   requested_from := range_start; gaps := '[]'; covered := '{}'; data_from := range_start; empty := true;
   SELECT bl.timestamp AT TIME ZONE 'UTC' INTO last_block FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
@@ -205,17 +207,14 @@ BEGIN
     v_start := first_block;
     v_end := last_block + interval '1 microsecond';
   ELSE
-    SELECT sb.height, sb.block_time INTO v_first_h, first_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
+    SELECT sb.block_time INTO first_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
     SELECT sb.block_time INTO last_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1;
     SELECT mp.from_height, mp.height INTO v_from_h, v_progress FROM ${s}.money_progress mp;
     IF v_progress IS NOT NULL THEN
       v_end := coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = v_progress LIMIT 1),
                         last_block) + interval '1 microsecond';
-      v_start := CASE WHEN v_first_h < v_from_h
-                        OR (SELECT gp.to_height FROM ${s}.settlement_gaps gp WHERE gp.from_height = 1) < v_from_h - 1
-                      THEN least(first_block, first_settled)
-                      ELSE coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = v_from_h LIMIT 1),
-                                    first_block) END;
+      -- the block at from_height, or the first indexed one after it when the blocks table lacks it
+      v_start := (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id >= v_from_h ORDER BY bl.id LIMIT 1);
     END IF;
     SELECT coalesce(range_agg(tstzrange(g.f, g.t)), '{}') INTO v_gaps
     FROM (SELECT coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.from_height - 1 LIMIT 1),
@@ -1517,24 +1516,25 @@ DROP FUNCTION IF EXISTS ${s}._legacy_range_of(timestamp, timestamp, timestamptz,
 -- The range of a legacy_* call ([start_date, end_date], inclusive) as the catalog's twins report it, with end_date as
 -- requested_to and covered_to; start_from is the start_date to read with (moved up to covered_from, 'infinity' when
 -- nothing is covered, which every legacy_* function reads as an empty range); empty = a well-formed range that nothing
--- covered overlaps, whose data is null in every legacy_* function (not a zero: nothing was read). A range that matches
+-- covered overlaps, whose data is null in every legacy_* function (not a zero: nothing was read). end_to is the end_date to
+-- read with: no later than covered_to (inclusive) when settlements are written past it (a rewind), end_date otherwise. A range that matches
 -- nothing (NULL bound, start after end) reports no coverage (covered_from / covered_to NULL, gaps []).
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = '_legacy_range'
-             AND p.proargnames <> ARRAY['start_date', 'end_date', 'range', 'start_from', 'empty']) THEN
+             AND p.proargnames <> ARRAY['start_date', 'end_date', 'range', 'start_from', 'empty', 'end_to']) THEN
     DROP FUNCTION ${s}._legacy_range(timestamp, timestamp);
   END IF;
 END $$;
 CREATE OR REPLACE FUNCTION ${s}._legacy_range(start_date timestamp, end_date timestamp, OUT range json, OUT start_from timestamp,
-  OUT empty boolean)
+  OUT empty boolean, OUT end_to timestamp)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE cv record;
 BEGIN
   IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
     -- matches nothing, as in the live function: no coverage to report, and the live function's empty answer
     range := ${s}._range_of(start_date AT TIME ZONE 'UTC', end_date AT TIME ZONE 'UTC', NULL, NULL, '[]', true);
-    start_from := start_date; empty := false;
+    start_from := start_date; empty := false; end_to := end_date;
     RETURN;
   END IF;
   cv := ${s}._coverage(start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC');
@@ -1543,6 +1543,8 @@ BEGIN
                          cv.covered_to - interval '1 microsecond', cv.gaps, true);
   start_from := CASE WHEN cv.empty THEN 'infinity' ELSE cv.data_from AT TIME ZONE 'UTC' END;
   empty := cv.empty;
+  end_to := CASE WHEN NOT cv.empty AND cv.last_settled >= cv.covered_to
+                 THEN least(end_date, (cv.covered_to - interval '1 microsecond') AT TIME ZONE 'UTC') ELSE end_date END;
 END $$;
 
 -- The two scalar ones returned numeric before: dropped first, a return type CREATE OR REPLACE cannot change.
@@ -1562,7 +1564,7 @@ CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time(addresses t
   end_date timestamp)
 RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('range', l.range, 'data', CASE WHEN NOT l.empty THEN
-    (SELECT coalesce(sum(i.amount_upokt), 0)::text FROM ${s}._legacy_series(addresses, NULL, l.start_from, end_date, NULL) i) END)
+    (SELECT coalesce(sum(i.amount_upokt), 0)::text FROM ${s}._legacy_series(addresses, NULL, l.start_from, l.end_to, NULL) i) END)
   FROM ${s}._legacy_range(start_date, end_date) l
 $$;
 
@@ -1572,7 +1574,7 @@ RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('range', l.range, 'data', (
     SELECT json_agg(json_build_object('date_truncated', t, 'total_amount', a) ORDER BY t)
     FROM (SELECT i.date_truncated t, sum(i.amount_upokt)::numeric a
-          FROM ${s}._legacy_series(addresses, NULL, l.start_from, end_date, trunc_interval) i GROUP BY 1) s))
+          FROM ${s}._legacy_series(addresses, NULL, l.start_from, l.end_to, trunc_interval) i GROUP BY 1) s))
   FROM ${s}._legacy_range(start_date, end_date) l
 $$;
 
@@ -1582,7 +1584,7 @@ RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('range', l.range, 'data', (
     SELECT json_agg(json_build_object('address', i.address, 'date_truncated', i.date_truncated, 'total_amount', i.amount_upokt)
                     ORDER BY i.date_truncated)
-    FROM ${s}._legacy_series(addresses, NULL, l.start_from, end_date, trunc_interval) i))
+    FROM ${s}._legacy_series(addresses, NULL, l.start_from, l.end_to, trunc_interval) i))
   FROM ${s}._legacy_range(start_date, end_date) l
 $$;
 
@@ -1591,7 +1593,7 @@ CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_of_addresses_by_suppliers_and_tim
 RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('range', l.range, 'data', CASE WHEN NOT l.empty THEN
     (SELECT coalesce(sum(i.amount_upokt), 0)::text
-     FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), l.start_from, end_date, NULL) i) END)
+     FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), l.start_from, l.end_to, NULL) i) END)
   FROM ${s}._legacy_range(start_date, end_date) l
 $$;
 
@@ -1601,7 +1603,7 @@ RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('range', l.range, 'data', (
     SELECT json_agg(json_build_object('address', i.address, 'date_truncated', i.date_truncated, 'total_amount', i.amount_upokt)
                     ORDER BY i.date_truncated)
-    FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), l.start_from, end_date, trunc_interval) i))
+    FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), l.start_from, l.end_to, trunc_interval) i))
   FROM ${s}._legacy_range(start_date, end_date) l
 $$;
 
@@ -1617,14 +1619,14 @@ DECLARE l record;
 BEGIN
   l := ${s}._legacy_range(start_date, end_date);
   IF l.empty THEN RETURN json_build_object('range', l.range, 'data', NULL); END IF;
-  IF l.start_from IS NULL OR end_date IS NULL OR l.start_from > end_date THEN
+  IF l.start_from IS NULL OR l.end_to IS NULL OR l.start_from > l.end_to THEN
     RETURN json_build_object('range', l.range, 'data', json_build_object('reimbursement', 0, 'inflation', 0, 'mint_burn', 0));
   END IF;
   RETURN (SELECT json_build_object('range', l.range, 'data', json_build_object(
     'reimbursement', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'reimbursement'), 0),
     'inflation', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'global_mint'), 0),
     'mint_burn', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'mint_equals_burn'), 0)))
-  FROM ${s}._supply_flows(l.start_from AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC') f);
+  FROM ${s}._supply_flows(l.start_from AT TIME ZONE 'UTC', (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC') f);
 END $$;
 
 -- burn_mint: what the applications burned for the claims settled in the range (_supply_flows' burn).
@@ -1634,12 +1636,12 @@ DECLARE l record;
 BEGIN
   l := ${s}._legacy_range(start_date, end_date);
   IF l.empty THEN RETURN json_build_object('range', l.range, 'data', NULL); END IF;
-  IF l.start_from IS NULL OR end_date IS NULL OR l.start_from > end_date THEN
+  IF l.start_from IS NULL OR l.end_to IS NULL OR l.start_from > l.end_to THEN
     RETURN json_build_object('range', l.range, 'data', json_build_object('burn_mint', 0));
   END IF;
   RETURN (SELECT json_build_object('range', l.range, 'data',
                    json_build_object('burn_mint', coalesce(sum(f.amount_upokt) FILTER (WHERE f.flow = 'burn'), 0)))
-  FROM ${s}._supply_flows(l.start_from AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC') f);
+  FROM ${s}._supply_flows(l.start_from AT TIME ZONE 'UTC', (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC') f);
 END $$;
 
 -- The claims of these suppliers settled in [f, t), by service, from the daily rollup and the base at the edges, as
@@ -1675,10 +1677,10 @@ RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS
 DECLARE
   l record := ${s}._legacy_range(start_ts, end_ts);
   f timestamptz := l.start_from AT TIME ZONE 'UTC';
-  t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
+  t timestamptz := (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC';
 BEGIN
   IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
-  IF l.start_from IS NULL OR end_ts IS NULL OR l.start_from > end_ts THEN
+  IF l.start_from IS NULL OR l.end_to IS NULL OR l.start_from > l.end_to THEN
     RETURN jsonb_build_object('range', l.range, 'data', (SELECT jsonb_agg(jsonb_build_object('service_id', sv.service_id, 'relays', 0, 'estimated_relays', 0,
                      'computed_units', 0, 'estimated_computed_units', 0, 'gross_rewards', 0) ORDER BY sv.service_id)
             FROM (SELECT DISTINCT ssc.service_id FROM ${s}.supplier_service_configs ssc
@@ -1710,7 +1712,7 @@ RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS
 DECLARE
   l record := ${s}._legacy_range(start_ts, end_ts);
   f timestamptz := l.start_from AT TIME ZONE 'UTC';
-  t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
+  t timestamptz := (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC';
   lo bigint; hi bigint; svcs text[];
 BEGIN
   IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
@@ -1725,7 +1727,7 @@ BEGIN
           WHERE elem->>'address' = ANY(addresses) AND upper_inf(ssc2._block_range)
             AND su.stake_status = 'Staked' AND upper_inf(su._block_range)) m ON m.supplier_id = ssc.supplier_id
     WHERE upper_inf(ssc._block_range));
-  IF l.start_from IS NULL OR end_ts IS NULL OR l.start_from > end_ts THEN
+  IF l.start_from IS NULL OR l.end_to IS NULL OR l.start_from > l.end_to THEN
     RETURN jsonb_build_object('range', l.range, 'data', (
       SELECT jsonb_agg(jsonb_build_object('service_id', sv, 'relays', 0, 'estimated_relays', 0, 'computed_units', 0,
                        'estimated_computed_units', 0, 'gross_rewards', 0, 'net_rewards', 0) ORDER BY sv)

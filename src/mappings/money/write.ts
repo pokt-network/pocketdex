@@ -1,6 +1,6 @@
 import { fromHex } from "@cosmjs/encoding";
 import { CosmosBlock, CosmosEvent, CosmosEventKind } from "@subql/types-cosmos";
-import { recordMoneyProgressCall, recordSettlementGapCall, writeSettlementCalls } from "../dbFunctions/settlement/writer";
+import { recordMoneyProgressCalls, recordSettlementGapCall, writeSettlementCalls } from "../dbFunctions/settlement/writer";
 import type { ValidatorSnapshot } from "../pocket/validator";
 import { Param } from "../../types";
 import { getDbSchema, getSequelize } from "../utils/db";
@@ -161,12 +161,14 @@ export async function writeSettlement(
 // heights the override skipped become a settlement_gaps row ([progress + 1, override - 1]: the first height past the
 // override records it, written or not), and the progress moves to the height (money_progress), so the catalog
 // functions cover what was processed and report the skipped heights as not covered instead of reading them as zero.
-// Inside the block transaction, so a block that rolls back cannot lose either; two single-row statements
-// (dbFunctions/settlement/writer.ts).
+// Inside the block transaction, so a block that rolls back cannot lose either; a few single-row statements
+// (dbFunctions/settlement/writer.ts). This runs on EVERY block the money step processes, not only on settlement blocks,
+// so the money step now needs the block transaction (--enable-cache=false) on every block: without it it throws, and
+// the indexer stops instead of moving the progress outside the block's transaction.
 async function recordMoneyProgress(height: number): Promise<void> {
   const s = getDbSchema();
   const override = moneyFromHeightOverride(process.env);
-  const calls = [...(override > 0 ? [recordSettlementGapCall(s, override)] : []), recordMoneyProgressCall(s, height)];
+  const calls = [...(override > 0 ? [recordSettlementGapCall(s, override)] : []), ...recordMoneyProgressCalls(s, height)];
   for (const { bind, sql } of calls) {
     await getSequelize("Block").query(sql, { bind, transaction: blockTransaction(), useMaster: true, raw: true });
   }

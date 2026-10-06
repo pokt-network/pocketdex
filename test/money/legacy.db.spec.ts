@@ -30,7 +30,7 @@ import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlem
 import { createSettlementSmartTagsFn, OMITTED_TABLES } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import {
   createSettlementWriterFn,
-  recordMoneyProgressCall,
+  recordMoneyProgressCalls,
   recordSettlementGapCall,
   writeSettlementCalls,
 } from "../../src/mappings/dbFunctions/settlement/writer";
@@ -213,7 +213,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
   const step = async (height: number, override = 0) => {
     for (const { sql, bind } of [
       ...(override > 0 ? [recordSettlementGapCall(S, override)] : []),
-      recordMoneyProgressCall(S, height),
+      ...recordMoneyProgressCalls(S, height),
     ])
       await c.query(sql, bind);
   };
@@ -726,7 +726,9 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       );
       // the job has classified the heights below h down to h0 = 899701 (11:00) as settling nothing, and lowered its gap
       // to [1, h0 - 1]: coverage starts at h0, and a range there is covered with nothing in it (a zero, not null)
-      await c.query(`UPDATE ${S}.settlement_gaps SET to_height = 899700; INSERT INTO ${S}.blocks VALUES (899701, '2026-09-01 11:00')`);
+      // (the job lowers money_progress.from_height with its row: job.ts lowerGap)
+      await c.query(`UPDATE ${S}.settlement_gaps SET to_height = 899700; INSERT INTO ${S}.blocks VALUES (899701, '2026-09-01 11:00');
+                     UPDATE ${S}.money_progress SET from_height = 899701`);
       const h0 = Date.parse("2026-09-01T11:00:00Z");
       const quiet = await flows("2026-09-01T11:00:00Z", "2026-09-01T11:30:00Z");
       assert.deepEqual([quiet.covered, quiet.rows, quiet.burn], [[h0, Date.parse("2026-09-01T11:30:00Z")], 0, { burn_mint: 0 }]);
@@ -838,14 +840,15 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         ),
         { a: true, b: true }
       );
-      // the history reaches below the indexer's first block and its gap row is gone (the history job wrote down to
-      // height 1): coverage starts at the first written settlement, not at the first indexed block
+      // from_height below the indexer's first block (the history job walked there): coverage starts at the first
+      // indexed block at or after it, the only times the blocks table has
       await c.query(`DELETE FROM ${S}.event_claim_settleds WHERE block_id < 899733; DELETE FROM ${S}.blocks WHERE id < 899733;
-                     UPDATE ${S}.money_progress SET from_height = 899733`);
+                     UPDATE ${S}.money_progress SET from_height = 899713`);
       const r = (await one(`SELECT ${S}.get_supply_flows_json(NULL, NULL) j`)).j as unknown as {
         range: { covered_from: string };
       };
-      assert.equal(Date.parse(r.range.covered_from), first);
+      assert.equal(Date.parse(r.range.covered_from), Date.parse(WRITES[1][1]));
+      assert.ok(first < Date.parse(WRITES[1][1]));
     } finally {
       await c.query("ROLLBACK");
     }
@@ -1051,7 +1054,8 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       // it walks below the indexer's start, writing 899733 and lowering its row: covered from what it walked
       await c.query(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version)
                      VALUES (899733, '${WRITES[1][1]}', 'batched_vrd', '2026-09-01', 99);
-                     UPDATE ${S}.settlement_gaps SET to_height = 899732`);
+                     UPDATE ${S}.settlement_gaps SET to_height = 899732;
+                     UPDATE ${S}.money_progress SET from_height = least(from_height, 899733)`);
       assert.deepEqual((await range("2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [T(WRITES[1][1]), head]);
       assert.deepEqual(await plan(), { top: 899732, create: false });
       // a restart of the indexer touches neither the job's row nor its progress
@@ -1060,7 +1064,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       // the job finishes (writes 899713, deletes its row): covered from the first indexed block
       await c.query(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version)
                      VALUES (899713, '${WRITES[0][1]}', 'batched_vrd', '2026-09-01', 99);
-                     DELETE FROM ${S}.settlement_gaps`);
+                     DELETE FROM ${S}.settlement_gaps; UPDATE ${S}.money_progress SET from_height = 1`);
       assert.deepEqual((await range("2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [first, head]);
       assert.deepEqual(await plan(), { top: 899712, create: true });
       await c.query("ROLLBACK TO SAVEPOINT s");
@@ -1072,6 +1076,65 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         [shareholder],
       ])).d;
       assert.equal(total, "0");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("money_progress: seeded once from an existing database, override holes trimmed, nothing read past covered_to", async () => {
+    const one = async (sql: string, params: unknown[] = []) => (await c.query(sql, params)).rows[0];
+    const seed = async () => {
+      await c.query(`DELETE FROM ${S}.money_progress`);
+      await c.query(createSettlementTablesFn(S));
+      return (await c.query(`SELECT from_height::int f, height::int h FROM ${S}.money_progress`)).rows;
+    };
+    await c.query("BEGIN");
+    try {
+      // seeded once: one above the history job's row
+      await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 899650); INSERT INTO ${S}.blocks VALUES (899600, '2026-09-01 08:00')`);
+      assert.deepEqual(await seed(), [{ f: 899651, h: 899773 }]);
+      // a second start keeps the row it has
+      await c.query(`UPDATE ${S}.money_progress SET height = 899800`);
+      await c.query(createSettlementTablesFn(S));
+      assert.deepEqual((await c.query(`SELECT height::int h FROM ${S}.money_progress`)).rows, [{ h: 899800 }]);
+      // complete history (the lowest written settlement is the chain's first): the first indexed block
+      await c.query(`DELETE FROM ${S}.settlement_gaps`);
+      assert.deepEqual(await seed(), [{ f: 899600, h: 899773 }]);
+      // the chain settled before the lowest written settlement, no job row: the lowest written settlement
+      await c.query(`INSERT INTO ${S}.event_claim_settleds (id, block_id) VALUES ('1-0', 1)`);
+      assert.deepEqual(await seed(), [{ f: 899713, h: 899773 }]);
+      await c.query(`DELETE FROM ${S}.event_claim_settleds WHERE block_id = 1; DELETE FROM ${S}.blocks WHERE id = 899600;
+                     UPDATE ${S}.money_progress SET from_height = 899713`);
+      // an override hole the money step processes again (a rewind, or the override lowered): trimmed below the height,
+      // deleted when it starts there; the history job's row is never touched
+      await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 899700), (899774, 899899)`);
+      await step(899800);
+      assert.deepEqual(
+        (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps ORDER BY 1`)).rows,
+        [{ f: 1, t: 899700 }, { f: 899774, t: 899799 }]
+      );
+      await step(899774);
+      assert.deepEqual(
+        (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps ORDER BY 1`)).rows,
+        [{ f: 1, t: 899700 }]
+      );
+      await c.query(`DELETE FROM ${S}.settlement_gaps`);
+      // a rewind: the progress went back to 899753 and the rows of 899773 are still there until it is rewritten; they
+      // are past covered_to, so nothing reads them, catalog or legacy_
+      await c.query(`UPDATE ${S}.money_progress SET height = 899753`);
+      const upTo = (end: string) =>
+        one(`SELECT ${S}.get_income_json($1, '2026-09-01T00:00:00Z', $2)->'data' d,
+                    ${S}.legacy_rewards_by_addresses_and_time($1, '2026-09-01', $3)::jsonb->'data' l`, [
+          [shareholder],
+          end,
+          end.replace("T", " ").replace("Z", ""),
+        ]);
+      const all = await upTo("2026-09-03T00:00:00Z");
+      const covered = await upTo("2026-09-02T00:00:00.000001Z");
+      assert.deepEqual(all.d, covered.d);
+      assert.equal(all.l, covered.l);
+      const live = (await one(`SELECT ${S}.get_rewards_by_addresses_and_time($1, '2026-09-01', '2026-09-03')::text a`, [[shareholder]])).a;
+      assert.notEqual(all.l, live);
     } finally {
       await c.query("ROLLBACK");
     }
