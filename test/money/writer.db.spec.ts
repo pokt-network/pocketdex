@@ -1219,7 +1219,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         if (sparseCells.has(cell(r))) assert.equal(JSON.stringify(j), sparseCells.get(cell(r)), call);
         else
           for (const [k, v] of Object.entries(j).filter(
-            ([k]) => !["bucket_start", "bucket_end", "covered_from", "covered_to", ...keys.split(", ")].includes(k)
+            ([k]) =>
+              !["bucket_start", "bucket_end", "covered_from", "covered_to", "covered_gaps", ...keys.split(", ")].includes(k)
           ))
             assert.ok(v === 0 || v === null, `${call}: ${k} = ${JSON.stringify(v)} in a filled cell`);
       }
@@ -1450,13 +1451,16 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // the twin gives every number as a string (amounts past 2^53): compare against the rows with numbers as strings
       const str = (v: unknown): unknown =>
         typeof v === "number" ? String(v) : Array.isArray(v) ? v.map(str) : v;
-      // data has the columns of the rows but covered_from / covered_to, which every row repeats and range carries
+      // data has the columns of the rows but covered_from / covered_to / covered_gaps, which every row repeats and range
+      // carries
       const all = (await c.query(`SELECT to_jsonb(r) j FROM ${S}.${fn}(${args}) r`, values)).rows.map(
         (r) => r.j as unknown as Record<string, unknown>
       );
       const rows = all.map((r) =>
         Object.fromEntries(
-          Object.entries(r).filter(([k]) => k !== "covered_from" && k !== "covered_to").map(([k, v]) => [k, str(v)])
+          Object.entries(r)
+            .filter(([k]) => !["covered_from", "covered_to", "covered_gaps"].includes(k))
+            .map(([k, v]) => [k, str(v)])
         )
       );
       const json = (await c.query(`SELECT ${S}.${fn}_json(${args}) j`, values)).rows[0].j as unknown as {
@@ -1477,6 +1481,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         [ms(all[0].covered_from), ms(all[0].covered_to)],
         fn
       );
+      assert.deepEqual(json.range.gaps, all[0].covered_gaps, fn);
     }
   });
 

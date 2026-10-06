@@ -500,28 +500,16 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       }
       assert.equal(String((await call(calls[0], "2026-08-31T00:00:00Z", "2026-09-01T13:00:00Z")).data), live.rows[0].a);
       // a range that ends before it: nothing to read, and the range says why (covered_from after requested_to)
-      const empty: Record<string, unknown> = {
-        legacy_rewards_by_addresses_and_time: null,
-        legacy_rewards_of_addresses_by_suppliers_and_time: null,
-        legacy_rewards_by_addresses_and_time_group_by_date: null,
-        legacy_rewards_by_addresses_and_time_group_by_address_and_date: null,
-        legacy_rewards_by_suppliers_and_time_group_by_address_and_date: null,
-        legacy_mint_breakdown_between_dates: { reimbursement: 0, inflation: 0, mint_burn: 0 },
-        legacy_burn_breakdown_between_dates: { burn_mint: 0 },
-      };
+      // (data null in every one: nothing was read, so no total, series, breakdown or service list reads as zero)
       for (const fn of calls) {
         const r = await call(fn, "2026-08-30T00:00:00Z", "2026-08-31T00:00:00Z");
-        const name = fn.split("(")[0];
         assert.ok((r.range.covered_from as number) > (r.range.requested_to as number), fn);
         assert.deepEqual([r.range.covered_from, r.range.covered_to], [first, Date.parse("2026-08-31T00:00:00Z")], fn);
-        if (name in empty) assert.deepEqual(r.data, empty[name], fn);
-        else {
-          // by service: the services listed with zeros, as for an empty range
-          const zeros = ((r.data ?? []) as Array<Record<string, unknown>>).every((x) =>
-            Object.entries(x).every(([k, v]) => k === "service_id" || v === 0));
-          assert.ok(zeros, fn);
-        }
+        assert.equal(r.data, null, fn);
       }
+      // an inverted range still answers as the live function (the zero object)
+      const inverted = await call("legacy_mint_breakdown_between_dates($2, $3)", "2026-09-03T00:00:00Z", "2026-09-01T00:00:00Z");
+      assert.deepEqual(inverted.data, { reimbursement: 0, inflation: 0, mint_burn: 0 });
       // a range past the latest indexed block: covered_to is that block; a NULL end matches nothing, as before
       const past = await call(calls[0], WRITES[0][1], "2026-09-05T00:00:00Z");
       assert.deepEqual([past.range.covered_from, past.range.covered_to], [first, head]);
@@ -569,9 +557,21 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     ];
     const ON_BLOCKS = ["get_app_auto_unstakes", "get_param_history"];
     assert.deepEqual(CALLS.map(([f]) => f).sort(), [...CATALOG_FUNCTIONS].sort());
+    // and each starts from _coverage (functions.ts covered()): a new one cannot skip it
+    const bodies = await c.query(
+      `SELECT p.proname, p.prosrc FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = ANY($2::text[])`,
+      [S, [...CATALOG_FUNCTIONS]]
+    );
+    assert.equal(bodies.rows.length, CATALOG_FUNCTIONS.length);
+    for (const r of bodies.rows) assert.match(String(r.prosrc), /\._coverage\(range_start, range_end/, String(r.proname));
     const ms = (v: unknown) => (v === null || v === undefined ? null : Date.parse(String(v)));
+    // the rows without what the range repeats; bucket_start apart: without a bucket it echoes the requested range_start
     const strip = (r: Record<string, unknown>) =>
-      JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => k !== "covered_from" && k !== "covered_to")));
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(r).filter(([k]) => !["covered_from", "covered_to", "covered_gaps", "bucket_start"].includes(k))
+        )
+      );
     const run = async (fn: string, args: string, from: string | null, to: string | null) => {
       const rows = (await c.query(`SELECT to_jsonb(r) j FROM ${S}.${fn}(${args}) r`, [from, to])).rows.map(
         (r) => r.j as unknown as Record<string, unknown>
@@ -588,10 +588,14 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         covered_to: ms(g.covered_to),
         gaps: (g.gaps as Array<{ from: string; to: string }>).map((x) => [ms(x.from), ms(x.to)]),
       };
-      // the _list columns: the same covered_from / covered_to on every row as in range
-      for (const r of rows) assert.deepEqual([ms(r.covered_from), ms(r.covered_to)], [range.covered_from, range.covered_to], fn);
+      // the _list columns: the same covered_from / covered_to / covered_gaps on every row as in range
+      for (const r of rows) {
+        assert.deepEqual([ms(r.covered_from), ms(r.covered_to)], [range.covered_from, range.covered_to], fn);
+        assert.deepEqual(r.covered_gaps, g.gaps, fn);
+      }
       assert.equal(j.data.length, rows.length, fn);
-      return { rows: rows.map(strip), range };
+      const starts = [...new Set(rows.map((r) => ms(r.bucket_start ?? null)))];
+      return { rows: rows.map(strip), range, starts };
     };
     const first = Date.parse(WRITES[0][1]);
     const head = Date.parse(WRITES[WRITES.length - 1][1]);
@@ -621,9 +625,13 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         assert.deepEqual(covered.rows, complete[fn], fn);
         assert.deepEqual(covered.range, { requested_from: first, requested_to: T("2026-09-03T00:00:00Z"),
           covered_from: first, covered_to: head, gaps: [] }, fn);
-        // a range that starts before it: the rows of the covered part (bucket_start is where the data starts)
+        // a range that starts before it: the rows of the covered part; without a bucket, bucket_start is the requested
+        // range_start (covered_from says where the data starts)
         const partial = await run(fn, args, "2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z");
-        if (fn !== "money_coverage" && !ON_BLOCKS.includes(fn)) assert.deepEqual(partial.rows, covered.rows, fn);
+        if (fn !== "money_coverage" && !ON_BLOCKS.includes(fn)) {
+          assert.deepEqual(partial.rows, covered.rows, fn);
+          assert.deepEqual(partial.starts, [T("2026-08-31T00:00:00Z")], fn);
+        }
         assert.deepEqual([partial.range.requested_from, partial.range.covered_from], [T("2026-08-31T00:00:00Z"), first], fn);
         // a range that ends before it: no rows, and covered_from after requested_to says why
         const before = await run(fn, args, "2026-08-30T00:00:00Z", "2026-08-31T00:00:00Z");
@@ -651,6 +659,57 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         c.query(`SELECT * FROM ${S}.get_supply_flows('2026-08-31T00:00:00Z', '2026-09-03T00:00:00Z')`),
         /run rebuild_rollups first/
       );
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("coverage starts after a leading gap, and stops at the last written settlement while later ones are not written", async () => {
+    const ms = (v: unknown) => (v === null ? null : Date.parse(String(v)));
+    const flows = async (from: string, to: string) => {
+      const j = (await c.query(`SELECT ${S}.get_supply_flows_json($1, $2) j`, [from, to])).rows[0].j as unknown as {
+        range: { covered_from: string; covered_to: string; gaps: Array<{ from: string | null; to: string }> };
+        data: unknown[];
+      };
+      const burn = (await c.query(`SELECT ${S}.legacy_burn_breakdown_between_dates($1, $2)::jsonb j`, [from, to])).rows[0]
+        .j as unknown as { data: unknown };
+      return {
+        covered: [ms(j.range.covered_from), ms(j.range.covered_to)],
+        gaps: j.range.gaps.map((g) => [ms(g.from), ms(g.to)]),
+        rows: j.data.length,
+        burn: burn.data,
+      };
+    };
+    const first = Date.parse(WRITES[0][1]);
+    const head = Date.parse(WRITES[WRITES.length - 1][1]);
+    await c.query("BEGIN");
+    try {
+      // the indexer started at S = 899733 (its raw tables begin there) and the history job wrote down to h = 899713,
+      // keeping the gap [1, h - 1]: the raw tables alone would call the history complete
+      await c.query(`DELETE FROM ${S}.event_claim_settleds WHERE block_id < 899733;
+                     INSERT INTO ${S}.settlement_gaps VALUES (1, 899712)`);
+      // the fixture has no block 1 or h - 1: the gap starts at no known time and ends at the first written settlement
+      const partial = await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z");
+      assert.deepEqual(partial.covered, [first, head]);
+      assert.deepEqual(partial.gaps, [[null, first]]);
+      assert.ok(partial.rows > 0);
+      // a range inside the gap: nothing read, and the gap says why
+      const before = await flows("2026-08-30T00:00:00Z", "2026-08-31T00:00:00Z");
+      assert.deepEqual(
+        [before.covered, before.gaps, before.rows, before.burn],
+        [[first, Date.parse("2026-08-31T00:00:00Z")], [[null, first]], 0, null]
+      );
+      // a block after the last written settlement: with the writer caught up (no settlement there) it is covered
+      await c.query(`INSERT INTO ${S}.blocks VALUES (899800, '2026-09-02 10:00')`);
+      assert.deepEqual((await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [
+        first,
+        Date.parse("2026-09-02T10:00:00Z"),
+      ]);
+      // the chain settled there and it is not written (a writer behind): covered up to the last written settlement
+      await c.query(`INSERT INTO ${S}.event_claim_settleds (id, block_id) VALUES ('899800-0', 899800)`);
+      assert.deepEqual((await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [first, head]);
+      const after = await flows("2026-09-02T09:00:00Z", "2026-09-03T00:00:00Z");
+      assert.deepEqual([after.covered, after.rows, after.burn], [[Date.parse("2026-09-02T09:00:00Z"), head], 0, null]);
     } finally {
       await c.query("ROLLBACK");
     }
