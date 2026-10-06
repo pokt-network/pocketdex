@@ -48,6 +48,7 @@ import {
   configOptionsFromJSON,
   rPCTypeFromJSON,
 } from "../../types/proto-interfaces/pocket/shared/service";
+import type { ServiceConfigUpdateSDKType } from "../../types/proto-interfaces/pocket/shared/supplier";
 import { MsgStakeSupplier as MsgStakeSupplierType } from "../../types/proto-interfaces/pocket/supplier/tx";
 import {
   EnforceAccountExistenceParams,
@@ -459,6 +460,28 @@ async function _handleGenesisServices(genesis: Genesis, block: CosmosBlock): Pro
   return { transactions, messages: msgs };
 }
 
+// activatedAt of a genesis SupplierServiceConfig row. The row holds the config the supplier declared
+// (supplier.services): the history entry for this service with no deactivation scheduled. It is active since
+// genesis (activatedAt = genesis height) when that entry activates at or before the genesis height, and pending
+// otherwise, until its own activation event. A service whose only entries are scheduled to end counts as active
+// if one of them is active at genesis. A proto3 zero is omitted from the JSON, so a missing height means 0.
+// Without history the config is left pending, as before. activatedEventId stays unset: genesis has no activation
+// event to point to.
+export function genesisConfigActivatedAt(
+  history: Array<ServiceConfigUpdateSDKType> | undefined,
+  serviceId: string,
+  genesisHeight: bigint
+): bigint | undefined {
+  const toHeight = (value: unknown) => BigInt(String(value ?? 0));
+  const entries = (history ?? []).filter(({ service }) => service?.service_id === serviceId);
+  const declared = entries.find(({ deactivation_height }) => toHeight(deactivation_height) === BigInt(0));
+  const active = declared !== undefined
+    ? toHeight(declared.activation_height) <= genesisHeight
+    : entries.some(({ activation_height, deactivation_height }) =>
+      toHeight(activation_height) <= genesisHeight && toHeight(deactivation_height) > genesisHeight);
+  return active ? genesisHeight : undefined;
+}
+
 async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Promise<{ transactions: Array<TransactionProps>, messages: Array<MessageProps> }> {
   const suppliers: Array<SupplierProps> = [];
   const supplierMsgStakes: Array<MsgStakeSupplierProps> = [];
@@ -567,19 +590,11 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         revShare,
       });
 
-      // A config active at genesis carries its activation height in the supplier's history: the entry for this
-      // service that is not deactivated by the genesis height. A proto3 zero is omitted from the JSON; an
-      // activation at or before genesis (0 included) means active since genesis: activatedAt = genesis height.
-      // Without that history the config is left pending, as before. activatedEventId stays unset: genesis has
-      // no activation event to point to.
-      const genesisHeight = BigInt(block.block.header.height);
-      const activation = supplier.service_config_history?.find(({ activation_height, deactivation_height, service: s }) => {
-        const deactivation = BigInt((deactivation_height ?? 0).toString());
-        return s?.service_id === service.service_id
-          && BigInt((activation_height ?? 0).toString()) <= genesisHeight
-          && (deactivation === BigInt(0) || deactivation > genesisHeight);
-      });
-      const activatedAtId = activation === undefined ? undefined : genesisHeight;
+      const activatedAtId = genesisConfigActivatedAt(
+        supplier.service_config_history,
+        service.service_id,
+        BigInt(block.block.header.height)
+      );
 
       supplierServices.push({
         id: getStakeServiceId(supplier.operator_address, service.service_id),
