@@ -137,16 +137,16 @@ const activations = (h: number, operator: string, services: Array<string>): Arra
 
 // Before v0.1.27: one event per supplier, carrying the supplier (with its service_config_history) and no
 // service_id, as in block_results of mainnet 247741.
-const legacyActivation = (h: number, operator: string, history: Array<[string, number]>): CosmosEvent =>
+const legacyActivation = (h: number, operator: string, history: Array<[string, number, number?]>): CosmosEvent =>
   activation(h, 100, [
     {
       key: "supplier",
       value: JSON.stringify({
         operator_address: operator,
-        service_config_history: history.map(([service_id, activation_height]) => ({
+        service_config_history: history.map(([service_id, activation_height, deactivation_height = 0]) => ({
           service: { service_id },
           activation_height: `${activation_height}`,
-          deactivation_height: "0",
+          deactivation_height: `${deactivation_height}`,
         })),
       }),
     },
@@ -425,6 +425,24 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(open(S1), ["akash@-", "eth@140"]);
   });
 
+  it("a pre-v0.1.27 activation does not activate a config a restake cancelled at that height", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+
+    // eth's entry was cancelled before it activated: deactivation_height == activation_height
+    await index(
+      140,
+      [],
+      [
+        legacyActivation(140, S1, [
+          ["akash", 140],
+          ["eth", 140, 140],
+        ]),
+      ]
+    );
+    assert.deepEqual(open(S1), ["akash@140", "eth@-"]);
+  });
+
   it("a Morse claim that stakes nothing leaves an operator already staked on Shannon as it was", async () => {
     reset();
     await index(100, [stake(100, S1, ["akash"])], []);
@@ -434,6 +452,11 @@ describe("indexSupplier service configs", () => {
     await index(150, [claim], [claimUnbondingEnd(claim, S1)]);
     assert.deepEqual(open(S1), ["akash@120"]);
     assert.equal(supplierStatus(S1), "Staked");
+    // the supplier is neither closed nor saved again as an identical row
+    assert.deepEqual(
+      tables.Supplier.filter((row) => row.id === S1).map((row) => [row.lo, row.hi]),
+      [[100, null]]
+    );
   });
 
   // pins current behaviour, not intended behaviour: the chain stores no supplier for this operator (as on origin/main)

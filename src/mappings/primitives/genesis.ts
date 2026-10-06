@@ -570,7 +570,8 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
       // A config active at genesis carries its activation height in the supplier's history: the entry for this
       // service that is not deactivated by the genesis height. A proto3 zero is omitted from the JSON; an
       // activation at or before genesis (0 included) means active since genesis: activatedAt = genesis height.
-      // Without that history the config is left pending, as before.
+      // Without that history the config is left pending, as before. activatedEventId stays unset: genesis has
+      // no activation event to point to.
       const genesisHeight = BigInt(block.block.header.height);
       const activation = supplier.service_config_history?.find(({ activation_height, deactivation_height, service: s }) => {
         const deactivation = BigInt((deactivation_height ?? 0).toString());
