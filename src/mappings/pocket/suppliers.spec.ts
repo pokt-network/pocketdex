@@ -131,9 +131,22 @@ const activations = (h: number, operator: string, services: Array<string>): Arra
     ])
   );
 
-// Before v0.1.27: one event per supplier, carrying the supplier and no service_id.
-const legacyActivation = (h: number, operator: string): CosmosEvent =>
-  activation(h, 100, [{ key: "supplier", value: JSON.stringify({ operator_address: operator }) }]);
+// Before v0.1.27: one event per supplier, carrying the supplier (with its service_config_history) and no
+// service_id, as in block_results of mainnet 247741.
+const legacyActivation = (h: number, operator: string, history: Array<[string, number]>): CosmosEvent =>
+  activation(h, 100, [
+    {
+      key: "supplier",
+      value: JSON.stringify({
+        operator_address: operator,
+        service_config_history: history.map(([service_id, activation_height]) => ({
+          service: { service_id },
+          activation_height: `${activation_height}`,
+          deactivation_height: "0",
+        })),
+      }),
+    },
+  ]);
 
 const unbondingEnd = (h: number, operator: string): CosmosEvent =>
   ({
@@ -265,14 +278,23 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(open(S1), ["akash@140", "base@140"]);
   });
 
-  it("an activation carrying service_id activates that service only; one without it activates them all", async () => {
+  it("an activation carrying service_id activates that service only; one without it, the services its history activates", async () => {
     reset();
     await index(100, [stake(100, S1, ["akash", "eth"])], []);
 
     await index(120, [], activations(120, S1, ["akash"]));
     assert.deepEqual(open(S1), ["akash@120", "eth@-"]);
 
-    await index(140, [], [legacyActivation(140, S1)]);
+    await index(
+      140,
+      [],
+      [
+        legacyActivation(140, S1, [
+          ["akash", 120],
+          ["eth", 140],
+        ]),
+      ]
+    );
     assert.deepEqual(open(S1), ["akash@120", "eth@140"]);
   });
 
@@ -313,15 +335,64 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(open(S1), ["akash@120", "eth@120"]);
   });
 
-  it("a finalize_block event without a mode fails the block", async () => {
+  it("a finalize_block event with an unknown mode fails the block", async () => {
     reset();
     await index(100, [stake(100, S1, ["akash"])], []);
     const [event] = activations(120, S1, ["akash"]);
-    const withoutMode = {
+    const withMode = (mode: string) =>
+      ({
+        ...event,
+        event: {
+          ...event.event,
+          attributes: event.event.attributes.map((attribute) =>
+            attribute.key === "mode" ? { ...attribute, value: mode } : attribute
+          ),
+        },
+      } as CosmosEvent);
+
+    await assert.rejects(
+      index(120, [], [withMode("Middle")]),
+      /has mode=Middle, expected BeginBlock, EndBlock or none/
+    );
+  });
+
+  it("a finalize_block event without a mode (PreBlock) runs before the block's txs", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    const [event] = activations(120, S1, ["akash"]);
+    const preBlock = {
       ...event,
       event: { ...event.event, attributes: event.event.attributes.filter(({ key }) => key !== "mode") },
     } as CosmosEvent;
 
-    await assert.rejects(index(120, [], [withoutMode]), /has mode=undefined, expected BeginBlock or EndBlock/);
+    // processed after the stake, it would stamp the new config as activated at 120
+    await index(120, [stake(120, S1, ["akash"])], [preBlock]);
+    assert.deepEqual(open(S1), ["akash@-"]);
+  });
+
+  it("a stake without services keeps the supplier's configs", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+    await index(120, [], activations(120, S1, ["akash", "eth"]));
+
+    await index(130, [stake(130, S1, [])], []);
+    assert.deepEqual(open(S1), ["akash@120", "eth@120"]);
+  });
+
+  it("a pre-v0.1.27 activation leaves configs that activate at another height alone (e.g. from genesis)", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+
+    await index(
+      140,
+      [],
+      [
+        legacyActivation(140, S1, [
+          ["akash", 1],
+          ["eth", 140],
+        ]),
+      ]
+    );
+    assert.deepEqual(open(S1), ["akash@-", "eth@140"]);
   });
 });

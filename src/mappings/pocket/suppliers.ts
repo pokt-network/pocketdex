@@ -226,6 +226,7 @@ function _handleEventSupplierServiceConfigActivated(
   serviceConfigEvent: EventSupplierServiceConfigActivatedProps,
 } {
   let activationHeight: bigint | null = null, operatorAddress: string | undefined, serviceId: string | undefined;
+  let legacySupplier: SupplierSDKType | undefined;
 
   for (const {key, value} of event.event.attributes) {
     if (key === "activation_height") {
@@ -233,7 +234,8 @@ function _handleEventSupplierServiceConfigActivated(
     }
 
     if (key === "supplier") {
-      operatorAddress = (JSON.parse(value as unknown as string) as SupplierSDKType).operator_address;
+      legacySupplier = JSON.parse(value as unknown as string) as SupplierSDKType;
+      operatorAddress = legacySupplier.operator_address;
     }
 
     if (key === "operator_address") {
@@ -265,10 +267,24 @@ function _handleEventSupplierServiceConfigActivated(
         service
       ]
     } else {
-      logger.warn(`[handleEventSupplierServiceConfigActivated] no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
+      // grep-able: the chain activated a config this index does not hold
+      logger.warn(`[SupplierServiceConfigActivationMiss] no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
     }
   } else {
-    services = Object.values(record[operatorAddress]?.services || {});
+    // The pre-v0.1.27 event carries the supplier's service_config_history: activate only the services
+    // whose config activates at this height, not configs that were active already (e.g. from genesis).
+    const operator = operatorAddress;
+    const history = legacySupplier?.service_config_history;
+    const activatedIds = history
+      ? new Set(
+        history
+          .filter((update) => BigInt(update.activation_height.toString()) === activationHeight)
+          .map((update) => getStakeServiceId(operator, update.service?.service_id ?? ""))
+      )
+      : null;
+
+    services = Object.values(record[operatorAddress]?.services || {})
+      .filter((service) => !activatedIds || activatedIds.has(service.id));
   }
 
   const eventId = getEventId(event);
@@ -451,6 +467,12 @@ function getServices(
   operatorAddress: string,
   existingServicesId: Array<string>
 ) {
+  // A stake without services (e.g. a --stake-only top-up) keeps the supplier's configs as they are,
+  // as the chain does (poktroll msg_server_stake_supplier.go: `if len(msg.Services) == 0 { return nil }`).
+  if (rawServices.length === 0) {
+    return { servicesToRemove: [], services: [] };
+  }
+
   // to compare with the current services and know which one to remove
   const servicesId: Array<string> = [];
   // services to save
@@ -839,19 +861,12 @@ function collectSupplierIds(
         "pocket.supplier.EventSupplierUnbondingBegin",
         "pocket.supplier.EventSupplierUnbondingEnd",
       ].includes(eventOrMsg.event.type)) {
-        if (typeof ids === "string") {
-          suppliers.push(ids);
-        } else if (ids) {
-          suppliers.push(...ids);
-        }
-      }
+        const eventSuppliers: Array<string> = typeof ids === "string" ? [ids] : ids || [];
+        suppliers.push(...eventSuppliers);
 
-      // the end of the unbonding closes the supplier's configs, so they must be loaded
-      if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
-        if (typeof ids === "string") {
-          suppliersToFetchServices.push(ids);
-        } else if (ids) {
-          suppliersToFetchServices.push(...ids);
+        // the end of the unbonding closes the supplier's configs, so they must be loaded
+        if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
+          suppliersToFetchServices.push(...eventSuppliers);
         }
       }
 
@@ -1180,8 +1195,9 @@ async function performSupplierDatabaseOperations(data: {
   const deletePromises: Array<Promise<unknown>> = [];
 
   if (data.suppliersToSave.length > 0) deletePromises.push(removeRecords("Supplier"));
-  // Only the configs inserted again below: a config this block leaves alone keeps the row an earlier
-  // pass of this same block created.
+  // Only the configs inserted again below: a config this block leaves alone keeps the row created at this
+  // height by someone else, e.g. the genesis configs that handleGenesis inserts at the genesis height
+  // before indexSupplier runs on the same block, or an earlier pass of this same block.
   if (data.servicesToSave.length > 0) {
     deletePromises.push(
       removeRecords(
@@ -1337,23 +1353,25 @@ function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<C
   }
 
   // Finalize-block events carry mode=BeginBlock|EndBlock, unquoted, in every era (block_results of
-  // mainnet 247741 and 947061). The BeginBlock ones (the service config activations of the supplier
+  // mainnet 247741 and 947061); PreBlock events (e.g. an upgrade) carry no mode. The chain runs PreBlock,
+  // BeginBlock, the txs, then EndBlock. The BeginBlock ones (the service config activations of the supplier
   // BeginBlocker) ran before the block's txs: a stake in the same block replaces configs they already
   // activated, and must not be stamped as activated by them.
-  const isBeginBlockEvent = (event: CosmosEvent) => {
+  const runsBeforeTxs = (event: CosmosEvent) => {
     const mode = event.event.attributes.find(({ key }) => key === "mode")?.value;
 
-    if (mode !== "BeginBlock" && mode !== "EndBlock") {
-      throw new Error(`[sortEventsAndMsgs] finalize_block event ${event.event.type} at block ${event.block.block.header.height} has mode=${mode}, expected BeginBlock or EndBlock`);
+    if (mode !== undefined && mode !== "BeginBlock" && mode !== "EndBlock") {
+      throw new Error(`[sortEventsAndMsgs] finalize_block event ${event.event.type} at block ${event.block.block.header.height} has mode=${mode}, expected BeginBlock, EndBlock or none (PreBlock)`);
     }
 
-    return mode === "BeginBlock";
+    return mode !== "EndBlock";
   };
+  const isPreBlockEvent = (event: CosmosEvent) => !event.event.attributes.some(({ key }) => key === "mode");
 
-  const [beginBlockEvents, endBlockEvents] = partition(finalizedEvents, isBeginBlockEvent);
+  const [beforeTxsEvents, endBlockEvents] = partition(finalizedEvents, runsBeforeTxs);
 
   return [
-    ...orderBy(beginBlockEvents, ['idx'], ['asc']),
+    ...orderBy(beforeTxsEvents, [(event) => !isPreBlockEvent(event), 'idx'], ['asc', 'asc']),
     ...orderBy(nonFinalizedData, ['tx.idx', 'rank', 'idx'], ['asc', 'asc', 'asc']),
     ...orderBy(endBlockEvents, ['idx'], ['asc'])
   ];
