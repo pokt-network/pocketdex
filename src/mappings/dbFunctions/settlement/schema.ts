@@ -30,9 +30,42 @@ CREATE TABLE IF NOT EXISTS ${s}.settlement_blocks (
 CREATE INDEX IF NOT EXISTS settlement_blocks_block_time_idx ON ${s}.settlement_blocks (block_time);
 CREATE INDEX IF NOT EXISTS settlement_blocks_day_idx ON ${s}.settlement_blocks (day);
 
--- Settlement heights left unwritten in the middle of the history: the indexer restarted with
--- POCKETDEX_MONEY_FROM_HEIGHT above the last written settlement (src/mappings/money/write.ts). The catalog
--- functions raise on a range that overlaps one. A history job that writes the gap's heights deletes its row.
+-- Settlement heights left unwritten: the heights a POCKETDEX_MONEY_FROM_HEIGHT override skipped (recorded by the first
+-- height the money step processes past it, src/mappings/money/write.ts), and the history job's [1, h-1].
+-- Authoritative: the catalog functions cover what the money step processed minus these rows (functions.ts
+-- _coverage). A history job that writes the gap's heights deletes its row.
+-- How far the money is written: one row. height is the last height the indexer's money step processed, set in the block
+-- transaction for every height it processes (written or legitimately without money), never while a
+-- POCKETDEX_MONEY_FROM_HEIGHT override skips; it follows the indexer, rewinds included. from_height is the lowest height
+-- covered: the first the money step processed, lowered by the history job as it walks (to 1 when it finishes).
+-- Coverage (functions.ts _coverage) runs from the block at from_height to the block at height, and infers nothing else.
+CREATE TABLE IF NOT EXISTS ${s}.money_progress (
+  id          BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  from_height BIGINT NOT NULL,
+  height      BIGINT NOT NULL
+);
+-- The one inference, once: a database written before this table existed gets its row from what is there. from_height:
+-- one above the history job's row [1, g]; else the first indexed block when the written history is complete (the
+-- lowest written settlement is the chain's first one, the min block_id of event_claim_settleds); else the lowest
+-- written settlement. height: the highest written settlement (the money step moves it on its next block). A fresh
+-- database gets its row from the money step's first block.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM ${s}.money_progress) AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks) THEN
+    INSERT INTO ${s}.money_progress (id, from_height, height)
+    SELECT true,
+           CASE WHEN x.gap_top IS NOT NULL THEN x.gap_top + 1
+                WHEN x.lowest <= coalesce(x.chain_first, x.lowest) THEN coalesce(x.first_block, x.lowest)
+                ELSE x.lowest END,
+           x.highest
+    FROM (SELECT (SELECT gp.to_height FROM ${s}.settlement_gaps gp WHERE gp.from_height = 1) gap_top,
+                 (SELECT sb.height FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1) lowest,
+                 (SELECT sb.height FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1) highest,
+                 (SELECT e.block_id::bigint FROM ${s}.event_claim_settleds e ORDER BY e.block_id LIMIT 1) chain_first,
+                 (SELECT bl.id::bigint FROM ${s}.blocks bl ORDER BY bl.id LIMIT 1) first_block) x;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS ${s}.settlement_gaps (
   from_height BIGINT PRIMARY KEY,
   to_height   BIGINT NOT NULL CHECK (to_height >= from_height)

@@ -97,6 +97,9 @@ export interface MapClaim {
   claimed: bigint;
   // reward_distribution: recipient → amount, non-zero entries
   map: ReadonlyMap<string, bigint>;
+  // the expected_burn of the EventApplicationOverserviced with effective_burn 0 right before the claim: its
+  // application could pay nothing, so the claim settled 0 upokt (readMapHeight)
+  unpaidExpectedBurn?: bigint;
 }
 
 // One claim's staker share and what the bank paid each staker for it, per family: the replay's input (replay.ts).
@@ -152,6 +155,17 @@ export function decodeMapClaims(
   const gi = parseRat(state.globalInflation, "global_inflation_per_claim");
   const ratio = parseRat(state.mintRatio, "mint_ratio");
   const oneToOne = ratio.num === ZERO || ratio.num === ratio.den;
+  // an unpaid claim's overserviced event expects the claim plus its global mint (ensureClaimAmountLimits)
+  for (const c of claims) {
+    if (c.unpaidExpectedBurn === undefined) continue;
+    const expectedBurn = c.claimed + ceilMul(c.claimed, gi);
+    if (c.unpaidExpectedBurn !== expectedBurn) {
+      throw new Error(
+        `[money] height ${height} event ${c.event_idx}: map claim EventApplicationOverserviced expected_burn ` +
+          `${c.unpaidExpectedBurn}, expected ${expectedBurn}`
+      );
+    }
+  }
 
   const detailed: DetailedRow[] = [];
   const stakers = new Map<string, BatchRow & { claims: Set<number> }>();

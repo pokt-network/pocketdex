@@ -3,7 +3,7 @@ import {
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
-import { get, orderBy } from "lodash";
+import { get, orderBy, partition } from "lodash";
 import { Coin } from "../../client/cosmos/base/v1beta1/coin";
 import { parseCoins } from "../../cosmjs/utils";
 import {
@@ -54,12 +54,16 @@ import {
   filterEventsByTxStatus,
   filterMsgByTxStatus,
   getDenomAndAmount,
-  isEventOfFinalizedBlockKind
+  getTxEventMsgIndex,
+  heightOrZero,
+  isEventOfFinalizedBlockKind,
+  isTxEventOfMessage,
 } from "../utils/primitives";
 import {
   Ed25519,
   pubKeyToAddress,
 } from "../utils/pub_key";
+import { endpointDomains } from "../utils/service_config_history";
 import { getAttributes, getClaimProofStatusFromSDK } from "./relays";
 
 function getMorseSupplierClaimSignerType(item: typeof MorseSupplierClaimSignerTypeSDKType | string | number): MorseSupplierClaimSignerType {
@@ -122,7 +126,8 @@ function _handleClaimSupplier(
 } {
   let stakeCoin: Coin | null = null, balanceCoin: Coin | null = null, claimSignerType: string | null = null;
 
-  for (const event of msg.tx.tx.events) {
+  // A tx can carry many claims: read only the events of this message (block_results of mainnet 158648).
+  for (const event of msg.tx.tx.events.filter((txEvent) => isTxEventOfMessage(txEvent.attributes, msg))) {
     if (event.type === 'pocket.migration.EventMorseSupplierClaimed') {
       for (const attribute of event.attributes) {
         if (attribute.key === 'claim_signer_type') {
@@ -215,6 +220,54 @@ function _handleClaimSupplier(
   }
 }
 
+// grep-able: the chain activated a config this index does not hold. A warning, not a throw: until the data patch
+// that follows this fix runs, production still holds inconsistent rows (duplicated configs, configs of unbonded
+// suppliers left open), and failing the block here would halt the indexer. Two normal chain behaviours also miss: a
+// config a restake dropped before its activation, and any config of a supplier that unstaked before it (the chain
+// keeps the activation, with deactivation_height = activation_height). The second is logged at debug, so a warn
+// is drift or a dropped config; the count still does not size the patch.
+function _activationMiss(record: Record<string, SupplierRecord>, operator: string, message: string): void {
+  if (record[operator]?.supplier?.stakeStatus === StakeStatus.Unstaking) {
+    logger.debug(`[SupplierServiceConfigActivationMiss] ${message} (supplier unstaking)`);
+  } else {
+    logger.warn(`[SupplierServiceConfigActivationMiss] ${message}`);
+  }
+}
+
+// The pre-v0.1.27 event carries the supplier's service_config_history (snake_case JSON, activation heights as
+// strings: block_results of mainnet 247741): activate only the services whose config activates at this height,
+// not configs that were active already (e.g. from genesis). A config a restake cancelled before it activated
+// still activates, with deactivation_height equal to its activation_height: it activates nothing and is not a
+// miss. Without the history (absent or empty), every config of the supplier activates, as before.
+function _legacyActivatedServices(
+  operator: string,
+  legacySupplier: SupplierSDKType | undefined,
+  activationHeight: bigint,
+  record: Record<string, SupplierRecord>
+): Array<SupplierServiceConfigProps> {
+  const history = legacySupplier?.service_config_history?.length ? legacySupplier.service_config_history : undefined;
+  const activatedIds = new Set<string>(), cancelledIds = new Set<string>();
+
+  for (const { activation_height, deactivation_height, service } of history || []) {
+    if (!service?.service_id || heightOrZero(activation_height) !== activationHeight) continue;
+    const id = getStakeServiceId(operator, service.service_id);
+    (heightOrZero(deactivation_height) === activationHeight ? cancelledIds : activatedIds).add(id);
+  }
+
+  if (history && activatedIds.size === 0 && cancelledIds.size === 0) {
+    _activationMiss(record, operator, `no history entry of supplier ${operator} activates at height ${activationHeight}`);
+  }
+
+  for (const id of activatedIds) {
+    if (!record[operator]?.services?.[id]) {
+      _activationMiss(record, operator, `no open config ${id} at activation height ${activationHeight}`);
+    }
+  }
+
+  return Object.values(record[operator]?.services || {})
+    .filter((service) => !history || activatedIds.has(service.id));
+}
+
 function _handleEventSupplierServiceConfigActivated(
   event: CosmosEvent,
   record: Record<string, {
@@ -226,6 +279,7 @@ function _handleEventSupplierServiceConfigActivated(
   serviceConfigEvent: EventSupplierServiceConfigActivatedProps,
 } {
   let activationHeight: bigint | null = null, operatorAddress: string | undefined, serviceId: string | undefined;
+  let legacySupplier: SupplierSDKType | undefined;
 
   for (const {key, value} of event.event.attributes) {
     if (key === "activation_height") {
@@ -233,15 +287,20 @@ function _handleEventSupplierServiceConfigActivated(
     }
 
     if (key === "supplier") {
-      operatorAddress = (JSON.parse(value as unknown as string) as SupplierSDKType).operator_address;
+      legacySupplier = JSON.parse(value as unknown as string) as SupplierSDKType;
+      operatorAddress = legacySupplier.operator_address;
     }
 
     if (key === "operator_address") {
       operatorAddress = (value as string).replaceAll('"', '');
     }
+
+    if (key === "service_id") {
+      serviceId = (value as string).replaceAll('"', '');
+    }
   }
 
-  if (!activationHeight) {
+  if (activationHeight === null) {
     throw new Error(`[handleEventSupplierServiceConfigActivated] activation_height not found in event`);
   }
 
@@ -251,25 +310,27 @@ function _handleEventSupplierServiceConfigActivated(
 
   let services: Array<SupplierServiceConfigProps> = []
 
-  if (serviceId) {
+  // Since v0.1.27 the chain emits one event per activated service, with service_id. Before that it
+  // emitted one event per supplier (with the whole supplier and no service_id), activating all of them.
+  if (serviceId !== undefined) {
     const service = record[operatorAddress]?.services?.[getStakeServiceId(operatorAddress, serviceId)];
 
     if (service) {
       services = [
         service
       ]
+    } else {
+      _activationMiss(record, operatorAddress, `no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
     }
-  }
-
-  if (services.length === 0) {
-    services = Object.values(record[operatorAddress]?.services || {});
+  } else {
+    services = _legacyActivatedServices(operatorAddress, legacySupplier, activationHeight, record);
   }
 
   const eventId = getEventId(event);
 
   return {
     services: services
-      .filter((service) => !service.activatedAtId)
+      .filter((service) => service.activatedAtId === undefined || service.activatedAtId === null)
       .map((service) => {
         service.activatedAtId = activationHeight;
         service.activatedEventId = eventId;
@@ -436,18 +497,34 @@ function _handleSupplierUnbondingEndEvent(
   }
 }
 
+// SupplierServiceConfig keeps one row per supplier and service: the latest config the supplier declared,
+// with activatedAt unset until the chain activates it. The chain keeps the previous config active until the
+// next session start (poktroll x/supplier/keeper/msg_server_stake_supplier.go), which this entity does not
+// represent: a restake replaces the row at the stake height, pending until its own activation.
+// So when a BeginBlock activation of C1 and a stake replacing C1 with C2 land in one block, C1's row closes
+// with activatedAt unset and no config row references that activation event; accepted under this model.
+// Likewise an unstake and a restake with the same services inside one session: the unstake closes the row, the
+// restake opens a pending one, activated at the next session start, while the chain keeps the service active
+// throughout. That is a gap of the ACTIVE reading, consistent with this STAKE one.
 function getServices(
   rawServices: MsgStakeSupplier['services'],
   operatorAddress: string,
   existingServicesId: Array<string>
 ) {
+  // A stake without services (e.g. a --stake-only top-up) keeps the supplier's configs as they are,
+  // as the chain does (poktroll msg_server_stake_supplier.go: `if len(msg.Services) == 0 { return nil }`).
+  if (rawServices.length === 0) {
+    return { servicesToRemove: [], services: [] };
+  }
+
   // to compare with the current services and know which one to remove
   const servicesId: Array<string> = [];
   // services to save
   const services: Array<SupplierServiceConfigProps> = [];
 
   for (const { endpoints, revShare, serviceId } of rawServices) {
-    servicesId.push(serviceId);
+    const id = getStakeServiceId(operatorAddress, serviceId);
+    servicesId.push(id);
 
     const endpointsArr: Array<SupplierEndpoint> = endpoints.map((endpoint) => ({
       url: endpoint.url,
@@ -455,22 +532,7 @@ function getServices(
       configs: endpoint.configs,
     }));
 
-    // Extract unique root domains (last two hostname segments) from endpoint URLs.
-    const domains: string[] = [...new Set(
-      endpoints
-        .map((ep) => {
-          try {
-            const parts = new URL(ep.url).hostname.split('.');
-            return parts.length >= 2 ? parts.slice(-2).join('.') : parts[0];
-          } catch {
-            const match = ep.url.match(/https?:\/\/([^/:]+)/);
-            if (!match) return null;
-            const parts = match[1].split('.');
-            return parts.length >= 2 ? parts.slice(-2).join('.') : match[1];
-          }
-        })
-        .filter((d): d is string => d !== null)
-    )];
+    const domains = endpointDomains(endpoints.map((ep) => ep.url));
 
     const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,
@@ -478,7 +540,7 @@ function getServices(
     }));
 
     services.push({
-      id: getStakeServiceId(operatorAddress, serviceId),
+      id,
       serviceId,
       supplierId: operatorAddress,
       endpoints: endpointsArr,
@@ -822,25 +884,26 @@ function collectSupplierIds(
     if ('event' in eventOrMsg) {
       const getEntityId = recordId[eventOrMsg.event.type] as GetIdFromEventAttribute;
       const ids = getEntityId(eventOrMsg.event.attributes);
+      const eventSuppliers: Array<string> = typeof ids === "string" ? [ids] : ids || [];
 
       if ([
         "pocket.tokenomics.EventSupplierSlashed",
         "pocket.supplier.EventSupplierUnbondingBegin",
         "pocket.supplier.EventSupplierUnbondingEnd",
       ].includes(eventOrMsg.event.type)) {
-        if (typeof ids === "string") {
-          suppliers.push(ids);
-        } else if (ids) {
-          suppliers.push(...ids);
+        suppliers.push(...eventSuppliers);
+
+        // the end of the unbonding closes the configs still open (a BELOW_MIN_STAKE or MIGRATION unbonding keeps
+        // them until then, as do rows indexed before the unstake closed them), so they must be loaded
+        if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
+          suppliersToFetchServices.push(...eventSuppliers);
         }
       }
 
       if (eventOrMsg.event.type === "pocket.supplier.EventSupplierServiceConfigActivated") {
-        if (typeof ids === "string") {
-          suppliersToFetchServices.push(ids);
-        } else if (ids) {
-          suppliersToFetchServices.push(...ids);
-        }
+        suppliersToFetchServices.push(...eventSuppliers);
+        // its status tells an unstake's expected activation miss from drift (the supplier is not saved for it)
+        suppliers.push(...eventSuppliers);
       }
     } else {
       const entityIdPath = recordId[eventOrMsg.msg.typeUrl] as string;
@@ -852,10 +915,8 @@ function collectSupplierIds(
       ].includes(eventOrMsg.msg.typeUrl)) {
         const id = get(eventOrMsg.msg.decodedMsg, entityIdPath);
         suppliers.push(id);
-
-        if (eventOrMsg.msg.typeUrl !== "/pocket.supplier.MsgUnstakeSupplier") {
-          suppliersToFetchServices.push(id);
-        }
+        // the unstake closes the supplier's configs, so they are loaded for it too
+        suppliersToFetchServices.push(id);
       }
     }
   }
@@ -907,6 +968,82 @@ async function fetchSupplierData(
   return record;
 }
 
+// The operator an EventSupplierUnbondingEnd names, read by the same getter collectSupplierIds uses.
+function _unbondingEndOperator(attributes: CosmosEvent["event"]["attributes"], recordId: RecordGetId): string | undefined {
+  const getId = recordId["pocket.supplier.EventSupplierUnbondingEnd"] as GetIdFromEventAttribute;
+  const operator = getId(attributes);
+  return typeof operator === "string" ? operator : undefined;
+}
+
+// A claim whose Morse unbonding already ended (or below the minimum stake) returns before staking anything
+// and emits EventSupplierUnbondingEnd for its operator in its own tx (poktroll msg_server_claim_morse_supplier.go,
+// short circuits #1 and #2). An operator already staked on Shannon keeps its supplier and configs. Keyed by tx
+// and operator, so two claims in one tx do not cross-apply.
+function _claimStakedNothingKey(
+  msg: CosmosMessage,
+  record: Record<string, SupplierRecord>,
+  recordId: RecordGetId
+): string | undefined {
+  if (msg.msg.typeUrl !== "/pocket.migration.MsgClaimMorseSupplier") return undefined;
+
+  const operator = (msg.msg.decodedMsg as MsgClaimMorseSupplier).shannonOperatorAddress;
+  const unbondingEnd = msg.tx.tx.events.find(({ attributes, type }) =>
+    type === "pocket.supplier.EventSupplierUnbondingEnd" && isTxEventOfMessage(attributes, msg)
+    && _unbondingEndOperator(attributes, recordId) === operator);
+
+  return unbondingEnd !== undefined && record[operator]?.supplier !== undefined
+    ? _claimKey(msg.tx.hash, unbondingEnd.attributes, operator)
+    : undefined;
+}
+
+function _claimKey(txHash: string | undefined, attributes: CosmosEvent["event"]["attributes"], operator: string): string {
+  return `${txHash}:${getTxEventMsgIndex(attributes) ?? operator}`;
+}
+
+// The end of an unbonding unstakes the supplier and closes its configs, except the one of such a claim. The
+// chain did emit that event, so it is recorded, even though it names a supplier that stays Staked; it is
+// computed on a copy of that operator's record, and no supplier is reported as changed.
+function _applyUnbondingEnd(
+  event: CosmosEvent,
+  record: Record<string, SupplierRecord>,
+  recordId: RecordGetId,
+  servicesToClose: Set<string>,
+  claimsThatStakedNothing: Set<string>
+): { unbondingEndEvent: EventSupplierUnbondingEndProps, changedSupplierId?: string } {
+  const operator = _unbondingEndOperator(event.event.attributes, recordId);
+
+  if (operator !== undefined && claimsThatStakedNothing.has(_claimKey(event.tx?.hash, event.event.attributes, operator))) {
+    const supplier = record[operator]?.supplier;
+    const copy: Record<string, SupplierRecord> = { [operator]: { supplier: supplier && { ...supplier }, services: {} } };
+    return { unbondingEndEvent: _handleSupplierUnbondingEndEvent(event, copy).unbondingEndEvent };
+  }
+
+  const { servicesToRemove, supplier, unbondingEndEvent } = _handleSupplierUnbondingEndEvent(event, record);
+
+  for (const serviceId of servicesToRemove) {
+    delete record[supplier.id].services?.[serviceId];
+    servicesToClose.add(serviceId);
+  }
+
+  record[supplier.id].supplier = supplier;
+  return { unbondingEndEvent, changedSupplierId: supplier.id };
+}
+
+// SupplierServiceConfig holds what the supplier declared. An unstake withdraws all of it: the chain schedules every
+// config to deactivate at the next session start (poktroll msg_server_unstake_supplier.go), so the rows close at
+// the unstake height. An unbonding for falling below the minimum stake does not withdraw it: settlement sets the
+// deactivation on an in-memory supplier it stores dehydrated, and the chain keeps reporting deactivation_height 0.
+// A restake during the unbonding declares services again through the stake path; a stake-only one declares none,
+// as the chain keeps the deactivated history. A restake cancels the unbonding, so no end follows it. After an
+// unstake the end of the unbonding finds nothing open; after a BELOW_MIN_STAKE or MIGRATION unbonding, and for rows
+// indexed before this fix, it closes the configs then.
+function _closeDeclaredServices(supplierRecord: SupplierRecord, servicesToClose: Set<string>): void {
+  for (const serviceId of Object.keys(supplierRecord.services || {})) {
+    delete supplierRecord.services?.[serviceId];
+    servicesToClose.add(serviceId);
+  }
+}
+
 // Helper: Process all events and messages
 function processSupplierEventsAndMessages(
   eventsAndMessages: Array<CosmosEvent | CosmosMessage>,
@@ -914,7 +1051,8 @@ function processSupplierEventsAndMessages(
   recordId: RecordGetId
 ): {
   suppliersToClose: Array<string>;
-  servicesToClose: Array<string>;
+  suppliersChanged: Set<string>;
+  servicesToClose: Set<string>;
   stakeMsgs: Array<MsgStakeSupplierProps>;
   claimMsgs: Array<MsgClaimMorseSupplierProps>;
   unstakeMsgs: Array<MsgUnstakeSupplierProps>;
@@ -923,8 +1061,12 @@ function processSupplierEventsAndMessages(
   unbondingBeginEvents: Array<EventSupplierUnbondingBeginProps>;
   unbondingEndEvents: Array<EventSupplierUnbondingEndProps>;
 } {
-  const suppliersToClose: Array<string> = Object.keys(record).filter(id => record[id].supplier);
-  const servicesToClose: Array<string> = [];
+  const loadedSuppliers: Array<string> = Object.keys(record).filter(id => record[id].supplier);
+  // A loaded supplier no handler changed (the operator of a Morse claim that staked nothing) is neither
+  // closed nor saved again: it would get an identical new row.
+  const suppliersChanged = new Set<string>();
+  const servicesToClose = new Set<string>();
+  const claimsThatStakedNothing = new Set<string>();
   const stakeMsgs: Array<MsgStakeSupplierProps> = [];
   const claimMsgs: Array<MsgClaimMorseSupplierProps> = [];
   const unstakeMsgs: Array<MsgUnstakeSupplierProps> = [];
@@ -942,7 +1084,7 @@ function processSupplierEventsAndMessages(
 
         for (const service of services) {
           record[operator].services![service.id] = service;
-          servicesToClose.push(service.id);
+          servicesToClose.add(service.id);
         }
 
         serviceConfigActivatedEvents.push(serviceConfigEvent);
@@ -952,24 +1094,22 @@ function processSupplierEventsAndMessages(
         const { slashingEvent, supplier } = _handleEventSupplierSlashed(eventOrMsg, record);
         slashingEvents.push(slashingEvent);
         record[supplier.id].supplier = supplier;
+        suppliersChanged.add(supplier.id);
       }
 
       if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingBegin") {
         const { supplier, unbondingBeginEvent } = _handleSupplierUnbondingBeginEvent(eventOrMsg, record);
         record[supplier.id].supplier = supplier;
+        suppliersChanged.add(supplier.id);
         unbondingBeginEvents.push(unbondingBeginEvent);
       }
 
       if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
-        const { servicesToRemove, supplier, unbondingEndEvent } = _handleSupplierUnbondingEndEvent(eventOrMsg, record);
-
-        for (const serviceId of servicesToRemove) {
-          delete record[supplier.id].services![serviceId];
-          servicesToClose.push(serviceId);
-        }
-
-        record[supplier.id].supplier = supplier;
+        const { changedSupplierId, unbondingEndEvent } = _applyUnbondingEnd(
+          eventOrMsg, record, recordId, servicesToClose, claimsThatStakedNothing
+        );
         unbondingEndEvents.push(unbondingEndEvent);
+        if (changedSupplierId !== undefined) suppliersChanged.add(changedSupplierId);
       }
     } else {
       if (eventOrMsg.msg.typeUrl === "/pocket.supplier.MsgStakeSupplier") {
@@ -985,19 +1125,25 @@ function processSupplierEventsAndMessages(
         }
 
         record[supplier.id].supplier = supplier;
+        suppliersChanged.add(supplier.id);
 
         for (const serviceId of servicesToRemove) {
           delete record[supplier.id].services![serviceId];
-          servicesToClose.push(serviceId);
+          servicesToClose.add(serviceId);
         }
 
         for (const service of services) {
           record[supplier.id].services![service.id] = service;
-          servicesToClose.push(service.id);
+          servicesToClose.add(service.id);
         }
       }
 
-      if (eventOrMsg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier") {
+      const stakedNothingKey = _claimStakedNothingKey(eventOrMsg, record, recordId);
+
+      if (stakedNothingKey !== undefined) {
+        claimMsgs.push(_handleClaimSupplier(eventOrMsg, record).msgClaimSupplier);
+        claimsThatStakedNothing.add(stakedNothingKey);
+      } else if (eventOrMsg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier") {
         const { msgClaimSupplier, services, servicesToRemove, supplier } = _handleClaimSupplier(eventOrMsg, record);
 
         claimMsgs.push(msgClaimSupplier);
@@ -1007,28 +1153,32 @@ function processSupplierEventsAndMessages(
         }
 
         record[supplier.id].supplier = supplier;
+        suppliersChanged.add(supplier.id);
 
         for (const serviceId of servicesToRemove) {
           delete record[supplier.id].services![serviceId];
-          servicesToClose.push(serviceId);
+          servicesToClose.add(serviceId);
         }
 
         for (const service of services) {
           record[supplier.id].services![service.id] = service;
-          servicesToClose.push(service.id);
+          servicesToClose.add(service.id);
         }
       }
 
       if (eventOrMsg.msg.typeUrl === "/pocket.supplier.MsgUnstakeSupplier") {
         const { supplier, unstakedMsg } = _handleUnstakeSupplierMsg(eventOrMsg, record);
         record[supplier.id].supplier = supplier;
+        suppliersChanged.add(supplier.id);
+        _closeDeclaredServices(record[supplier.id], servicesToClose);
         unstakeMsgs.push(unstakedMsg);
       }
     }
   }
 
   return {
-    suppliersToClose,
+    suppliersToClose: loadedSuppliers.filter((id) => suppliersChanged.has(id)),
+    suppliersChanged,
     servicesToClose,
     stakeMsgs,
     claimMsgs,
@@ -1041,20 +1191,27 @@ function processSupplierEventsAndMessages(
 }
 
 // Helper: Build lists of items to save
-function buildSupplierSaveLists(record: Record<string, SupplierRecord>): {
+function buildSupplierSaveLists(
+  record: Record<string, SupplierRecord>,
+  suppliersChanged: Set<string>,
+  servicesToClose: Set<string>
+): {
   suppliersToSave: Array<SupplierProps>;
   servicesToSave: Array<SupplierServiceConfigProps>;
 } {
   const suppliersToSave: Array<SupplierProps> = [];
   const servicesToSave: Array<SupplierServiceConfigProps> = [];
+  // Only the configs this block closed get a new row. A config fetched for an event that then
+  // left it alone (an activation event for configs that are already activated) is still open,
+  // and inserting it again would leave two open rows for the same id.
 
   for (const { services, supplier } of Object.values(record)) {
-    if (supplier) {
+    if (supplier && suppliersChanged.has(supplier.id)) {
       suppliersToSave.push(supplier);
     }
 
     if (services) {
-      servicesToSave.push(...Object.values(services));
+      servicesToSave.push(...Object.values(services).filter((service) => servicesToClose.has(service.id)));
     }
   }
 
@@ -1092,13 +1249,14 @@ export async function indexSupplier(msgByType: MessageByType, eventByType: Event
     servicesToClose,
     slashingEvents,
     stakeMsgs,
+    suppliersChanged,
     suppliersToClose,
     unbondingBeginEvents,
     unbondingEndEvents,
     unstakeMsgs
   } = processSupplierEventsAndMessages(eventsAndMessages, record, recordId);
 
-  const { servicesToSave, suppliersToSave } = buildSupplierSaveLists(record);
+  const { servicesToSave, suppliersToSave } = buildSupplierSaveLists(record, suppliersChanged, servicesToClose);
 
   await performSupplierDatabaseOperations({
     suppliersToSave,
@@ -1121,7 +1279,7 @@ async function performSupplierDatabaseOperations(data: {
   suppliersToSave: Array<SupplierProps>;
   servicesToSave: Array<SupplierServiceConfigProps>;
   suppliersToClose: Array<string>;
-  servicesToClose: Array<string>;
+  servicesToClose: Set<string>;
   stakeMsgs: Array<MsgStakeSupplierProps>;
   claimMsgs: Array<MsgClaimMorseSupplierProps>;
   unstakeMsgs: Array<MsgUnstakeSupplierProps>;
@@ -1132,13 +1290,16 @@ async function performSupplierDatabaseOperations(data: {
 }): Promise<void> {
   const block = store.context.getHistoricalUnit();
 
-  const removeRecords = (model: string) => {
+  const removeRecords = (model: string, ids?: Array<string>) => {
     const sequelize = getSequelize(model);
+    const createdAtBlock = sequelize.where(
+      sequelize.fn("lower", sequelize.col("_block_range")),
+      block
+    );
     return getStoreModel(model).model.destroy({
-      where: sequelize.where(
-        sequelize.fn("lower", sequelize.col("_block_range")),
-        block
-      ),
+      where: ids
+        ? { [Symbol.for("and")]: [createdAtBlock, { id: { [Symbol.for("in")]: ids } }] }
+        : createdAtBlock,
       transaction: store.context.transaction,
     });
   };
@@ -1149,9 +1310,19 @@ async function performSupplierDatabaseOperations(data: {
   // Delete records created at this block
   const deletePromises: Array<Promise<unknown>> = [];
 
-  if (data.suppliersToSave.length > 0) deletePromises.push(removeRecords("Supplier"));
-  if (data.servicesToSave.length > 0) deletePromises.push(removeRecords("SupplierServiceConfig"));
-  if (data.stakeMsgs.length > 0) deletePromises.push(removeRecords("MsgStakeSupplier"));
+  if (data.suppliersToSave.length > 0) {
+    deletePromises.push(removeRecords("Supplier", data.suppliersToSave.map((supplier) => supplier.id)));
+  }
+  // Every config this block closes (re-inserted or not): a row created at this height and closed at it
+  // would otherwise be left with an empty range. Rows of other configs created at this height by someone
+  // else (e.g. handleGenesis at the genesis height, before indexSupplier runs) are left alone.
+  if (data.servicesToClose.size > 0) {
+    deletePromises.push(removeRecords("SupplierServiceConfig", [...data.servicesToClose]));
+  }
+  if (data.stakeMsgs.length > 0) {
+    // genesis writes its MsgStakeSupplier rows at the genesis height too
+    deletePromises.push(removeRecords("MsgStakeSupplier", data.stakeMsgs.map((msg) => msg.id)));
+  }
   if (data.claimMsgs.length > 0) deletePromises.push(removeRecords("MsgClaimMorseSupplier"));
   if (data.unstakeMsgs.length > 0) deletePromises.push(removeRecords("MsgUnstakeSupplier"));
   if (data.serviceConfigActivatedEvents.length > 0) deletePromises.push(removeRecords("EventSupplierServiceConfigActivated"));
@@ -1190,7 +1361,7 @@ async function performSupplierDatabaseOperations(data: {
     );
   }
 
-  if (data.servicesToClose.length > 0) {
+  if (data.servicesToClose.size > 0) {
     const servicesSequelize = getSequelize("SupplierServiceConfig");
     closePromises.push(
       SupplierServiceConfigModel.model.update(
@@ -1204,7 +1375,7 @@ async function performSupplierDatabaseOperations(data: {
         },
         {
           where: {
-            id: { [Symbol.for("in")]: data.servicesToClose },
+            id: { [Symbol.for("in")]: [...data.servicesToClose] },
             __block_range: { [Symbol.for("contains")]: BigInt(block) },
           },
           hooks: false,
@@ -1297,8 +1468,30 @@ function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<C
     }
   }
 
+  // Finalize-block events carry mode=BeginBlock|EndBlock, unquoted, in every era (block_results of
+  // mainnet 247741 and 947061); PreBlock events (e.g. an upgrade) carry no mode. The chain runs PreBlock,
+  // BeginBlock, the txs, then EndBlock. The BeginBlock ones (the service config activations of the supplier
+  // BeginBlocker) ran before the block's txs: a stake in the same block replaces configs they already
+  // activated, and must not be stamped as activated by them.
+  // An unknown mode is warned (grep-able) and kept after the txs, as before this ordering existed, rather
+  // than halting the indexer on an encoding difference.
+  const phases = finalizedEvents.map((event) => {
+    const mode = event.event.attributes.find(({ key }) => key === "mode")?.value?.toString().replaceAll('"', '');
+
+    if (mode !== undefined && mode !== "BeginBlock" && mode !== "EndBlock") {
+      logger.warn(`[SupplierEventUnknownMode] finalize_block event ${event.event.type} at block ${event.block.block.header.height} has mode=${mode}; ordered after the txs`);
+    }
+
+    return { event, beforeTxs: mode === undefined || mode === "BeginBlock" };
+  });
+  // finalize_block_events lists PreBlock, BeginBlock then EndBlock events, so idx keeps PreBlock first
+  const [beforeTxs, afterTxs] = partition(phases, ({ beforeTxs }) => beforeTxs);
+  const beforeTxsEvents = beforeTxs.map(({ event }) => event);
+  const endBlockEvents = afterTxs.map(({ event }) => event);
+
   return [
+    ...orderBy(beforeTxsEvents, ['idx'], ['asc']),
     ...orderBy(nonFinalizedData, ['tx.idx', 'rank', 'idx'], ['asc', 'asc', 'asc']),
-    ...orderBy(finalizedEvents, ['idx'], ['asc'])
+    ...orderBy(endBlockEvents, ['idx'], ['asc'])
   ];
 }

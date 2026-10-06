@@ -1,6 +1,6 @@
 import { fromHex } from "@cosmjs/encoding";
 import { CosmosBlock, CosmosEvent, CosmosEventKind } from "@subql/types-cosmos";
-import { writeSettlementCalls } from "../dbFunctions/settlement/writer";
+import { recordMoneyProgressCall, recordMoneySkipCall, writeSettlementCalls } from "../dbFunctions/settlement/writer";
 import type { ValidatorSnapshot } from "../pocket/validator";
 import { Param } from "../../types";
 import { getDbSchema, getSequelize } from "../utils/db";
@@ -157,20 +157,20 @@ export async function writeSettlement(
   return { calls: calls.length, bytes };
 }
 
-// With POCKETDEX_MONEY_FROM_HEIGHT above the last written settlement, the settlement heights in between are
-// never written by this process: record them in settlement_gaps, so the catalog functions raise on a range
-// that overlaps them instead of returning totals without them. It runs before every write while the
-// override is set, inside the block transaction, so a block that rolls back cannot lose it; it is one
-// index probe, and a no-op once a height past the override is written or when no settlement is written yet
-// (the catalog's coverage check already handles a missing start).
-async function recordSettlementGap(override: number): Promise<void> {
+// The money step's bookkeeping for every height it processes, before its money: with POCKETDEX_MONEY_FROM_HEIGHT, the
+// heights the override skipped become a settlement_gaps row ([progress + 1, override - 1]: the first height past the
+// override records it, written or not), and the progress moves to the height (money_progress), so the catalog
+// functions cover what was processed and report the skipped heights as not covered instead of reading them as zero.
+// The first height an override skips in a process pulls the progress back below it (a restart after a rewind). Inside
+// the block transaction, so a block that rolls back cannot lose either; one statement (dbFunctions/settlement/writer.ts). This runs on EVERY block the money step processes, not only on settlement blocks,
+// so the money step now needs the block transaction (--enable-cache=false) on every block: without it it throws, and
+// the indexer stops instead of moving the progress outside the block's transaction.
+async function recordMoneyProgress(height: number, skipped = false): Promise<void> {
   const s = getDbSchema();
-  await getSequelize("Block").query(
-    `INSERT INTO ${s}.settlement_gaps (from_height, to_height)
-     SELECT max(height) + 1, $1::bigint - 1 FROM ${s}.settlement_blocks HAVING max(height) + 1 <= $1::bigint - 1
-     ON CONFLICT (from_height) DO NOTHING`,
-    { bind: [override], transaction: blockTransaction(), useMaster: true, raw: true }
-  );
+  const { bind, sql } = skipped
+    ? recordMoneySkipCall(s, height)
+    : recordMoneyProgressCall(s, height, moneyFromHeightOverride(process.env));
+  await getSequelize("Block").query(sql, { bind, transaction: blockTransaction(), useMaster: true, raw: true });
 }
 
 let loggedBelowThreshold = false;
@@ -185,12 +185,19 @@ export async function indexMoney(block: CosmosBlock, validators?: ValidatorSnaps
   const height = block.header.height;
   const from = moneyFromHeight(block.header.chainId);
   if (height < from) {
+    // a skipped height pulls the progress back below it (a restart after a rewind). Every skipped block issues it, in
+    // its own block transaction, so a rolled-back block cannot lose it; the UPDATE is conditional (height > h - 1),
+    // so after the first it changes nothing (one row, a primary key probe)
+    if (moneyFromHeightOverride(process.env) > 0) {
+      await recordMoneyProgress(height, true);
+    }
     if (!loggedBelowThreshold) {
       logger.info(`[indexMoney] settlement money is written from height ${from}; height ${height} is below it`);
       loggedBelowThreshold = true;
     }
     return;
   }
+  await recordMoneyProgress(height);
   const t0 = performance.now();
   const era = settlementEraAt(block.header.chainId, height);
   const map = isMapEra(era);
@@ -229,8 +236,6 @@ export async function indexMoney(block: CosmosBlock, validators?: ValidatorSnaps
     });
   }
   const t2 = performance.now();
-  const override = moneyFromHeightOverride(process.env);
-  if (override > 0) await recordSettlementGap(override);
   const written = await writeSettlement(height, payload);
   const t3 = performance.now();
   // One line per settlement height: the payload's size and where indexMoney's time went, so the settlement

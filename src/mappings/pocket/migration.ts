@@ -18,7 +18,10 @@ import type { MsgClaimMorseAccount } from "../../types/proto-interfaces/pocket/m
 import type { EncodedMsg } from "../types";
 import { getStoreModel } from "../utils/db";
 import { messageId } from "../utils/ids";
-import { getDenomAndAmount } from "../utils/primitives";
+import {
+  getDenomAndAmount,
+  isTxEventOfMessage,
+} from "../utils/primitives";
 import { Ed25519, pubKeyToAddress } from "../utils/pub_key";
 
 function _handleMsgClaimMorseAccount(
@@ -29,7 +32,8 @@ function _handleMsgClaimMorseAccount(
 
   let balanceCoin: Coin | null = null;
 
-  for (const event of msg.tx.tx.events) {
+  // a tx can carry many claims: read only the events of this message
+  for (const event of msg.tx.tx.events.filter((txEvent) => isTxEventOfMessage(txEvent.attributes, msg))) {
     if (event.type === 'pocket.migration.EventMorseAccountClaimed') {
       for (const attribute of event.attributes) {
         if (attribute.key === 'claimed_balance') {

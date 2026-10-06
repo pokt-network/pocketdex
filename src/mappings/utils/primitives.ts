@@ -156,3 +156,18 @@ export function getDenomAndAmount(coinAndDenom: string): CoinSDKType {
     }
   }
 }
+
+// msg_index of a tx event, when the chain tagged it (cosmos-sdk tags the events a message emits)
+export function getTxEventMsgIndex(attributes: CosmosEvent["event"]["attributes"]): string | undefined {
+  const value = attributes.find(({ key }) => key === "msg_index")?.value;
+  return value === undefined ? undefined : value.toString().replaceAll('"', '');
+}
+
+// Whether a tx event belongs to this message: a tx can carry many messages of one type (e.g. Morse claims), and
+// each must read only its own events. An untagged event is attributed to every message.
+export function isTxEventOfMessage(attributes: CosmosEvent["event"]["attributes"], msg: CosmosMessage): boolean {
+  const index = getTxEventMsgIndex(attributes);
+  return index === undefined || index === String(msg.idx);
+}
+
+export { heightOrZero } from "./service_config_history";

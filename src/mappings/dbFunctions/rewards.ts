@@ -131,13 +131,7 @@ RETURNS jsonb
 LANGUAGE sql
 STABLE
 AS $$
-WITH services as (
-	SELECT distinct ssc.service_id
-	FROM ${dbSchema}.supplier_service_configs ssc
-	WHERE ssc.supplier_id = ANY(operator_addresses)
-	  AND upper_inf(ssc._block_range)
-  ),
-  rewards as (
+WITH rewards as (
 	SELECT
 		e.service_id,
 		SUM(e.claimed_amount) gross_rewards,
@@ -150,6 +144,16 @@ WITH services as (
 	WHERE e.supplier_id = ANY(operator_addresses)
 	  AND b.timestamp BETWEEN start_ts AND end_ts
 	GROUP BY e.service_id
+  ),
+  -- the services the suppliers declare now, and those they were paid for in the range: an operator that unstaked
+  -- (its configs closed) still lists the services of the claims it settled
+  services as (
+	SELECT ssc.service_id
+	FROM ${dbSchema}.supplier_service_configs ssc
+	WHERE ssc.supplier_id = ANY(operator_addresses)
+	  AND upper_inf(ssc._block_range)
+	UNION
+	SELECT r.service_id FROM rewards r
   )
 
   SELECT jsonb_agg(
@@ -160,10 +164,10 @@ WITH services as (
       'computed_units', COALESCE(computed_units, 0),
       'estimated_computed_units', COALESCE(estimated_computed_units, 0),
       'gross_rewards', COALESCE(gross_rewards, 0)
-    )
+    ) ORDER BY service_id
   ) FROM (
 	SELECT 
-		COALESCE(s.service_id, r.service_id, '') as service_id,
+		s.service_id,
 		r.relays as relays,
 		r.estimated_relays as estimated_relays,
 		r.computed_units as computed_units,

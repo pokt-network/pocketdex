@@ -22,7 +22,7 @@ import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlem
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
 import { Chain } from "../../src/mappings/money/history/chain";
-import { HistoryOptions, PgClient, RAW_EVENT_TABLES, runHistory } from "../../src/mappings/money/history/job";
+import { HistoryOptions, PgClient, planGap, RAW_EVENT_TABLES, runHistory } from "../../src/mappings/money/history/job";
 import type { MapState } from "../../src/mappings/money/map";
 import type { RawEvent } from "../../src/mappings/money/payload";
 import { eraAtHeight } from "../../src/mappings/utils/params_history";
@@ -318,8 +318,13 @@ describe("settlement history job (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG n
   // null: no cache
   const chain = async (cache: string | null = cacheDir) =>
     new Chain({ rpc: base, lcd: base, cacheDir: cache ?? undefined, retries: 1 }).open();
-  const run = async (o: Partial<HistoryOptions> = {}, client: PgClient = c) =>
-    runHistory(client, {
+  // the indexer's money step started one above the job's start (money_progress), as it does before a job runs
+  const run = async (o: Partial<HistoryOptions> = {}, client: PgClient = c) => {
+    if (o.start !== undefined)
+      await c.query(`INSERT INTO ${o.schema ?? S}.money_progress VALUES (true, $1, $1) ON CONFLICT (id) DO NOTHING`, [
+        o.start + 1,
+      ]);
+    return runHistory(client, {
       schema: S,
       chain: await chain(),
       reader,
@@ -327,6 +332,7 @@ describe("settlement history job (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG n
       env: {},
       ...o,
     });
+  };
   const gaps = async (schema = S) =>
     (await c.query(`SELECT from_height::int f, to_height::int t FROM ${schema}.settlement_gaps ORDER BY 1`)).rows;
   const written = async (schema = S) =>
@@ -445,8 +451,8 @@ describe("settlement history job (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG n
     fs.rmSync(cacheDir, { recursive: true, force: true });
   });
 
-  it("refuses to start with no written height and no --start", async () => {
-    await assert.rejects(run(), /no settlement height is written yet/);
+  it("refuses to start without a money_progress row (the indexer creates it)", async () => {
+    await assert.rejects(run(), /money_progress has no row/);
     assert.deepEqual(await gaps(), []);
   });
 
@@ -559,21 +565,21 @@ describe("settlement history job (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG n
       unattributed: {},
     });
     assert.equal(await md5NoGaps(), before);
-    // with heights written, the start is always one below the lowest: anything else would leave heights uncovered
+    // the start is always one below money_progress.from_height (lowered by the walk to 899690): anything else would
+    // leave heights uncovered
     await c.query(`DELETE FROM ${S}.settlement_gaps`);
-    await assert.rejects(run({ start: 5 }), /--start must be 899712/);
+    await assert.rejects(run({ start: 5 }), /--start must be 899689/);
     await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 899689)`);
   });
 
-  it("refuses gaps it does not own over the history range", async () => {
+  it("owns only its row: an override hole over the history range is not its territory", async () => {
+    const opts = { schema: S } as unknown as Parameters<typeof planGap>[1];
     await c.query(`DELETE FROM ${S}.settlement_gaps`);
     await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 300000), (299000, 899689)`);
-    await assert.rejects(
-      run(),
-      /more than one settlement gap reaches the history range: \[1, 300000\], \[299000, 899689\]/
-    );
+    assert.deepEqual(await planGap(c, opts), { top: 300000, create: false });
     await c.query(`DELETE FROM ${S}.settlement_gaps WHERE from_height = 1`);
-    await assert.rejects(run(), /the settlement gap \[299000, 899689\] does not start at height 1/);
+    // (no row of its own: it would start one below money_progress.from_height)
+    assert.deepEqual(await planGap(c, opts), { top: 899689, create: true });
     await c.query(`DELETE FROM ${S}.settlement_gaps`);
     await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (1, 899689)`);
   });

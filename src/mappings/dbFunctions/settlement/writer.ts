@@ -37,6 +37,49 @@ export const writeSettlementProcName = "write_settlement";
 // from jsonb's size cap (~256 MB) and from V8's string length limit.
 export const MAX_ROWS_PER_CALL = 50000;
 
+// The money step's bookkeeping, in the block transaction before a height's money (src/mappings/money/write.ts), one
+// statement:
+// - with a POCKETDEX_MONEY_FROM_HEIGHT override, the heights it skipped, [progress + 1, override - 1], as a
+//   settlement_gaps row (a no-op once the progress is past them, or before the money step processed any height:
+//   then they are below what it covers anyway). It starts no lower than from_height: a skip can pull the progress
+//   below it, and the heights under from_height are the history job's, which no override row may claim;
+// - an override hole (a gap row not starting at 1) the height falls in: trimmed to end below it, deleted when it starts
+//   there (the money step processes it now: a rewind, or an override lowered). The history job's row is never touched;
+// - the progress, set to the height (money_progress).
+// Every part reads the state from before the statement (one snapshot), so the gap starts above the old progress.
+export function recordMoneyProgressCall(s: string, height: number, override: number): WriterCall {
+  return {
+    sql: `WITH gap AS (
+       INSERT INTO ${s}.settlement_gaps (from_height, to_height)
+       SELECT greatest(mp.height + 1, mp.from_height), $2::bigint - 1 FROM ${s}.money_progress mp
+       WHERE $2::bigint > 0 AND greatest(mp.height + 1, mp.from_height) <= $2::bigint - 1
+       -- two overrides past a rewind below from_height start at the same height: the later one extends the row (never
+       -- the history job's, which starts at 1)
+       ON CONFLICT (from_height) DO UPDATE SET to_height = greatest(settlement_gaps.to_height, EXCLUDED.to_height)
+       WHERE settlement_gaps.from_height <> 1
+       RETURNING 1
+     ), dropped AS (
+       DELETE FROM ${s}.settlement_gaps WHERE from_height <> 1 AND from_height = $1::bigint RETURNING 1
+     ), trimmed AS (
+       UPDATE ${s}.settlement_gaps SET to_height = $1::bigint - 1
+       WHERE from_height <> 1 AND from_height < $1::bigint AND to_height >= $1::bigint RETURNING 1
+     )
+     INSERT INTO ${s}.money_progress AS mp (id, from_height, height) VALUES (true, $1, $1)
+     ON CONFLICT (id) DO UPDATE SET height = EXCLUDED.height, from_height = least(mp.from_height, EXCLUDED.height)`,
+    bind: [height, override],
+  };
+}
+
+// A height the money step skips under a POCKETDEX_MONEY_FROM_HEIGHT override: the progress goes back below it if it was
+// above (a rewind into the skipped heights), so the gap recorded past the override starts right after what is really
+// processed.
+export function recordMoneySkipCall(s: string, height: number): WriterCall {
+  return {
+    sql: `UPDATE ${s}.money_progress SET height = $1::bigint - 1 WHERE height > $1::bigint - 1`,
+    bind: [height],
+  };
+}
+
 const PAYLOAD_ARRAYS = [
   "claims",
   "detailed",
