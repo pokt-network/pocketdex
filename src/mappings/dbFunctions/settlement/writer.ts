@@ -37,6 +37,27 @@ export const writeSettlementProcName = "write_settlement";
 // from jsonb's size cap (~256 MB) and from V8's string length limit.
 export const MAX_ROWS_PER_CALL = 50000;
 
+// The money step's bookkeeping, in the block transaction before a height's money (src/mappings/money/write.ts):
+// - with a POCKETDEX_MONEY_FROM_HEIGHT override, the heights it skipped, [progress + 1, override - 1], as a
+//   settlement_gaps row (a no-op once the progress is past them, or before the money step processed any height:
+//   then they are below what it covers anyway);
+// - the progress, set to the height (money_progress).
+export function recordSettlementGapCall(s: string, override: number): WriterCall {
+  return {
+    sql: `INSERT INTO ${s}.settlement_gaps (from_height, to_height)
+     SELECT mp.height + 1, $1::bigint - 1 FROM ${s}.money_progress mp WHERE mp.height + 1 <= $1::bigint - 1
+     ON CONFLICT (from_height) DO NOTHING`,
+    bind: [override],
+  };
+}
+export function recordMoneyProgressCall(s: string, height: number): WriterCall {
+  return {
+    sql: `INSERT INTO ${s}.money_progress AS mp (id, from_height, height) VALUES (true, $1, $1)
+     ON CONFLICT (id) DO UPDATE SET height = EXCLUDED.height, from_height = least(mp.from_height, EXCLUDED.height)`,
+    bind: [height],
+  };
+}
+
 const PAYLOAD_ARRAYS = [
   "claims",
   "detailed",

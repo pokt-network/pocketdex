@@ -1,6 +1,6 @@
 import { fromHex } from "@cosmjs/encoding";
 import { CosmosBlock, CosmosEvent, CosmosEventKind } from "@subql/types-cosmos";
-import { writeSettlementCalls } from "../dbFunctions/settlement/writer";
+import { recordMoneyProgressCall, recordSettlementGapCall, writeSettlementCalls } from "../dbFunctions/settlement/writer";
 import type { ValidatorSnapshot } from "../pocket/validator";
 import { Param } from "../../types";
 import { getDbSchema, getSequelize } from "../utils/db";
@@ -55,9 +55,8 @@ export function moneyFromHeight(chainId: string, env: NodeJS.ProcessEnv = proces
   return env.POCKETDEX_SETTLEMENT_ERA ? 1 : firstEraFrom(chainId);
 }
 
-// POCKETDEX_MONEY_FROM_HEIGHT, or 0 when it is not set. The start-up records the heights it skips as a settlement gap
-// (dbFunctions/settlement/schema.ts createSettlementOverrideGapFn).
-export function moneyFromHeightOverride(env: NodeJS.ProcessEnv): number {
+// POCKETDEX_MONEY_FROM_HEIGHT, or 0 when it is not set.
+function moneyFromHeightOverride(env: NodeJS.ProcessEnv): number {
   return positiveIntFromEnv("POCKETDEX_MONEY_FROM_HEIGHT", env.POCKETDEX_MONEY_FROM_HEIGHT, 0);
 }
 
@@ -158,6 +157,21 @@ export async function writeSettlement(
   return { calls: calls.length, bytes };
 }
 
+// The money step's bookkeeping for every height it processes, before its money: with POCKETDEX_MONEY_FROM_HEIGHT, the
+// heights the override skipped become a settlement_gaps row ([progress + 1, override - 1]: the first height past the
+// override records it, written or not), and the progress moves to the height (money_progress), so the catalog
+// functions cover what was processed and report the skipped heights as not covered instead of reading them as zero.
+// Inside the block transaction, so a block that rolls back cannot lose either; two single-row statements
+// (dbFunctions/settlement/writer.ts).
+async function recordMoneyProgress(height: number): Promise<void> {
+  const s = getDbSchema();
+  const override = moneyFromHeightOverride(process.env);
+  const calls = [...(override > 0 ? [recordSettlementGapCall(s, override)] : []), recordMoneyProgressCall(s, height)];
+  for (const { bind, sql } of calls) {
+    await getSequelize("Block").query(sql, { bind, transaction: blockTransaction(), useMaster: true, raw: true });
+  }
+}
+
 let loggedBelowThreshold = false;
 
 // The bonded validators of the snapshot, in the shape the delegator × validator split takes.
@@ -176,6 +190,7 @@ export async function indexMoney(block: CosmosBlock, validators?: ValidatorSnaps
     }
     return;
   }
+  await recordMoneyProgress(height);
   const t0 = performance.now();
   const era = settlementEraAt(block.header.chainId, height);
   const map = isMapEra(era);

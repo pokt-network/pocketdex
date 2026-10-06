@@ -183,7 +183,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       INSERT INTO ${S}.event_claim_settleds VALUES (694993), (710013), (899713);
       -- indexed from 1 Jan 2026 to the fixtures' settlement block (1 Sep 12:00): the catalog's coverage
       -- (functions.ts _coverage) is what is indexed, and its fills run to the latest indexed block
-      INSERT INTO ${S}.blocks VALUES (1, '2026-01-01'), (999999999, '2026-09-01 12:00');`);
+      INSERT INTO ${S}.blocks VALUES (1, '2026-01-01'), (999999999, '2026-09-01 12:00');
+      -- the indexer's money step processed every block (money/write.ts)
+      INSERT INTO ${S}.money_progress VALUES (true, 1, 999999999);`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
   });

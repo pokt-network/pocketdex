@@ -30,10 +30,20 @@ CREATE TABLE IF NOT EXISTS ${s}.settlement_blocks (
 CREATE INDEX IF NOT EXISTS settlement_blocks_block_time_idx ON ${s}.settlement_blocks (block_time);
 CREATE INDEX IF NOT EXISTS settlement_blocks_day_idx ON ${s}.settlement_blocks (day);
 
--- Settlement heights left unwritten: the indexer started with POCKETDEX_MONEY_FROM_HEIGHT above the last written
--- settlement (createSettlementOverrideGapFn, at start-up), and the history job's [1, h-1]. Authoritative: the catalog
--- functions cover what is indexed minus these rows (functions.ts _coverage). A history job that writes the gap's
--- heights deletes its row.
+-- Settlement heights left unwritten: the heights a POCKETDEX_MONEY_FROM_HEIGHT override skipped (recorded by the first
+-- height the money step processes past it, src/mappings/money/write.ts), and the history job's [1, h-1].
+-- Authoritative: the catalog functions cover what the money step processed minus these rows (functions.ts
+-- _coverage). A history job that writes the gap's heights deletes its row.
+-- How far the indexer's money step went: one row, set in the block transaction for every height it processes (written
+-- or legitimately without money), never while a POCKETDEX_MONEY_FROM_HEIGHT override skips; it follows the indexer,
+-- rewinds included. from_height is the lowest height it processed. The history job never touches it. Coverage
+-- (functions.ts _coverage) runs to the block at height, and starts at from_height unless the history reaches below.
+CREATE TABLE IF NOT EXISTS ${s}.money_progress (
+  id          BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  from_height BIGINT NOT NULL,
+  height      BIGINT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ${s}.settlement_gaps (
   from_height BIGINT PRIMARY KEY,
   to_height   BIGINT NOT NULL CHECK (to_height >= from_height)
@@ -322,26 +332,4 @@ ALTER TABLE ${s}.hourly_income_by_address_supplier SET (fillfactor = 90, autovac
 ALTER TABLE ${s}.daily_validator_rewards SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.daily_delegator_rewards_by_validator SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 `;
-}
-
-// POCKETDEX_MONEY_FROM_HEIGHT (money/write.ts moneyFromHeight) leaves the heights the indexer skips unwritten, whatever
-// money event they hold (claims, expirations, discards, slashes, reimbursements, distributions): recorded at start-up,
-// before the indexer's next block, as the settlement_gaps row [next block, override - 1]. The next block comes from the
-// indexer's own progress (the highest indexed block + 1, or the block being indexed on an empty database), never from
-// settlement_blocks, which the history job writes too. A row an earlier start recorded from the same height is
-// widened, never narrowed. The history job's row (from height 1, or below the indexer's first indexed block) is never
-// inserted over, widened or touched: a next block inside it records nothing.
-export function createSettlementOverrideGapFn(override: number, nextHeight: number): (dbSchema: string) => string {
-  return (s) =>
-    override > 0
-      ? `WITH n AS (SELECT coalesce((SELECT max(bl.id) FROM ${s}.blocks bl) + 1, ${nextHeight}) h,
-                  coalesce((SELECT min(bl.id) FROM ${s}.blocks bl), ${nextHeight}) first_indexed)
-INSERT INTO ${s}.settlement_gaps AS gp (from_height, to_height)
-SELECT n.h, ${override}::bigint - 1 FROM n
-WHERE n.h <= ${override}::bigint - 1
-  AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_gaps g, n n2
-                  WHERE (g.from_height = 1 OR g.from_height < n2.first_indexed) AND g.from_height <= n2.h AND g.to_height >= n2.h)
-ON CONFLICT (from_height) DO UPDATE SET to_height = greatest(gp.to_height, EXCLUDED.to_height)
-  WHERE gp.from_height <> 1 AND gp.from_height >= (SELECT coalesce(min(bl.id), ${nextHeight}) FROM ${s}.blocks bl);`
-      : "";
 }

@@ -357,7 +357,7 @@ async function tokenomicsParamsAt(
 // to be created (runHistory does it after the LCD preflight). Any gap that reaches the history range (from 1 up to
 // the lowest written height) must be that one row: two, or one that starts elsewhere, mean the coverage was edited by
 // hand or by another tool, and the job stops instead of guessing.
-async function planGap(client: PgClient, o: HistoryOptions): Promise<{ top: number; create: boolean }> {
+export async function planGap(client: PgClient, o: HistoryOptions): Promise<{ top: number; create: boolean }> {
   const s = o.schema;
   const low = await client.query(`SELECT min(height)::bigint AS h FROM ${s}.settlement_blocks`);
   const lowest = low.rows[0].h === null ? null : Number(low.rows[0].h);

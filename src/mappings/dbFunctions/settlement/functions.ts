@@ -158,13 +158,17 @@ BEGIN
 END $$;
 
 -- What the money tables cover of [range_start, range_end): ONE covered set per call, which every catalog and legacy_*
--- function reads, for its rows, its fills and its range. settlement_gaps is authoritative: the history job keeps its
--- [1, h-1] row, the start-up records the POCKETDEX_MONEY_FROM_HEIGHT window (schema.ts), so no money event table is
--- probed here.
--- The covered span runs from the later of range_start and the start of what is indexed (the earlier of the first
--- indexed block and the first written settlement: the history job writes below the indexer's first block; the first
--- indexed block for the functions over the indexer's own tables, p_blocks) to the earlier of range_end and the latest
--- indexed block + 1 µs (half-open, like the range). Nothing indexed, or no settlement written yet: nothing covered.
+-- function reads, for its rows, its fills and its range. No money event table is probed: money_progress says how far
+-- the indexer's money step went, and settlement_gaps what it or the history job left unwritten (schema.ts).
+-- The covered span ends at the earlier of range_end and the block at money_progress.height + 1 µs (half-open, like the
+-- range; the latest indexed block when the blocks table does not have that block yet, its writes may lag): an active
+-- POCKETDEX_MONEY_FROM_HEIGHT override freezes the progress, so the heights it skips are not covered, never zero.
+-- It starts at the later of range_start and the block at money_progress.from_height (the lowest height the money step
+-- processed), or, when the history reaches below that height (a written settlement under it, or the history job's row
+-- lowered under it: the job walked there), at the earlier of the first indexed block and the lowest written
+-- settlement, the job's gap row cutting what it has not walked. (A job that finished without writing anything below
+-- that height leaves those heights not covered: conservative.) No progress yet: nothing covered. The functions over the indexer's own tables (p_blocks) cover the indexed
+-- blocks.
 -- The gaps: each settlement_gaps row as the half-open time between the covered heights next to it, [the block before
 -- its first height + 1 µs, the block after its last height), falling back to the written settlement on that side when
 -- the blocks table lacks the block (NULL = unbounded); overlapping or contiguous gaps merge (range_agg).
@@ -191,17 +195,28 @@ CREATE OR REPLACE FUNCTION ${s}._coverage(range_start timestamptz, range_end tim
   OUT data_from timestamptz, OUT empty boolean, OUT covered tstzmultirange, OUT first_settled timestamptz,
   OUT last_settled timestamptz, OUT first_block timestamptz, OUT last_block timestamptz)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
-DECLARE v_start timestamptz; v_end timestamptz; v_gaps tstzmultirange := '{}';
+DECLARE v_start timestamptz; v_end timestamptz; v_gaps tstzmultirange := '{}'; v_first_h bigint; v_from_h bigint;
+  v_progress bigint;
 BEGIN
   requested_from := range_start; gaps := '[]'; covered := '{}'; data_from := range_start; empty := true;
   SELECT bl.timestamp AT TIME ZONE 'UTC' INTO last_block FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
   SELECT bl.timestamp AT TIME ZONE 'UTC' INTO first_block FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1;
   IF p_blocks THEN
     v_start := first_block;
+    v_end := last_block + interval '1 microsecond';
   ELSE
-    SELECT sb.block_time INTO first_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
+    SELECT sb.height, sb.block_time INTO v_first_h, first_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
     SELECT sb.block_time INTO last_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1;
-    v_start := CASE WHEN first_settled IS NOT NULL THEN least(first_block, first_settled) END;
+    SELECT mp.from_height, mp.height INTO v_from_h, v_progress FROM ${s}.money_progress mp;
+    IF v_progress IS NOT NULL THEN
+      v_end := coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = v_progress LIMIT 1),
+                        last_block) + interval '1 microsecond';
+      v_start := CASE WHEN v_first_h < v_from_h
+                        OR (SELECT gp.to_height FROM ${s}.settlement_gaps gp WHERE gp.from_height = 1) < v_from_h - 1
+                      THEN least(first_block, first_settled)
+                      ELSE coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = v_from_h LIMIT 1),
+                                    first_block) END;
+    END IF;
     SELECT coalesce(range_agg(tstzrange(g.f, g.t)), '{}') INTO v_gaps
     FROM (SELECT coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.from_height - 1 LIMIT 1),
                           (SELECT sb.block_time FROM ${s}.settlement_blocks sb WHERE sb.height < gp.from_height
@@ -214,8 +229,7 @@ BEGIN
     SELECT coalesce(jsonb_agg(jsonb_build_object('from', lower(r), 'to', upper(r)) ORDER BY lower(r) NULLS FIRST), '[]') INTO gaps
     FROM unnest(v_gaps) r WHERE r && tstzrange(range_start, range_end);
   END IF;
-  v_end := last_block + interval '1 microsecond';
-  IF v_start IS NULL OR v_end IS NULL THEN RETURN; END IF;  -- nothing indexed, or nothing written: nothing covered
+  IF v_start IS NULL OR v_end IS NULL THEN RETURN; END IF;  -- nothing indexed, or no progress: nothing covered
   v_start := greatest(range_start, v_start);
   v_end := least(range_end, v_end);
   IF v_start < v_end THEN covered := tstzmultirange(tstzrange(v_start, v_end)) - v_gaps; END IF;

@@ -14,6 +14,7 @@
 export const OMITTED_TABLES = [
   "settlement_blocks",
   "settlement_gaps",
+  "money_progress",
   "settlement_history_findings",
   "settlement_replay_snapshots",
   "claim_settlements",

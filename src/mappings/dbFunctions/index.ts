@@ -1,4 +1,3 @@
-import { moneyFromHeightOverride } from "../money/write";
 import { getDbSchema, getSequelize } from "../utils/db";
 import { getLatestBlocksByDayFn } from "./blocks";
 import {
@@ -49,7 +48,7 @@ import {
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByServicesAddressesAndTime";
 import { getAmountOfBlocksAndSuppliersByTimesFn, servicesPerformanceBetweenTimesFn } from "./servicePerformance";
 import { createSettlementFunctionsFn } from "./settlement/functions";
-import { createSettlementOverrideGapFn, createSettlementTablesFn } from "./settlement/schema";
+import { createSettlementTablesFn } from "./settlement/schema";
 import { createSettlementSmartTagsFn } from "./settlement/smartTags";
 import { createSettlementWriterFn } from "./settlement/writer";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
@@ -91,8 +90,7 @@ async function createIndexesConcurrently(sqls: string[]): Promise<void> {
   }
 }
 
-// nextHeight: the block being indexed (the start-up's override gap starts there on an empty database).
-export async function createDbFunctions(nextHeight: number): Promise<void> {
+export async function createDbFunctions(): Promise<void> {
   const wereFunctionsCreated = await cache.get(functionsCreatedCacheKey)
 
   if (wereFunctionsCreated) return
@@ -148,8 +146,6 @@ export async function createDbFunctions(nextHeight: number): Promise<void> {
   await createFunctions(
     schema,
     createSettlementTablesFn,
-    // the POCKETDEX_MONEY_FROM_HEIGHT window as a settlement gap, before any block is indexed
-    createSettlementOverrideGapFn(moneyFromHeightOverride(process.env), nextHeight),
     createSettlementWriterFn,
     createSettlementFunctionsFn,
     // after the objects it tags; hides tables and helpers from the GraphQL API
