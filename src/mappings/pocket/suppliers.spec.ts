@@ -8,6 +8,7 @@
 // shapes needs this fake changed too:
 //   destroy  lower(_block_range) = height, optionally AND id IN (...)  -> drop the rows created at height
 //   update   id IN (...) AND __block_range @> height                  -> close those open rows at height
+//            (any other update, e.g. MorseClaimableAccount, is ignored)
 //   bulkCreate                                                        -> insert at [height, null)
 //   getByFields [field, "in", values]                                 -> the rows open at height
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await, @typescript-eslint/no-var-requires */
@@ -42,7 +43,8 @@ const model = (name: string) => {
         (row) => row.lo !== height || (ids !== null && !ids.includes(row.id as string))
       );
     },
-    update: async (_: unknown, { where }: { where: IdIn }) => {
+    update: async (_: unknown, { where }: { where: IdIn & { __block_range?: unknown } }) => {
+      if (!where.__block_range) return;
       const ids = where.id[Symbol.for("in")];
       for (const row of tables[name]) {
         if (ids.includes(row.id as string) && openAt(row, height)) row.hi = height;
@@ -132,6 +134,57 @@ const activations = (h: number, operator: string, services: Array<string>): Arra
 // Before v0.1.27: one event per supplier, carrying the supplier and no service_id.
 const legacyActivation = (h: number, operator: string): CosmosEvent =>
   activation(h, 100, [{ key: "supplier", value: JSON.stringify({ operator_address: operator }) }]);
+
+const unbondingEnd = (h: number, operator: string): CosmosEvent =>
+  ({
+    idx: 900,
+    kind: "finalize_block",
+    block: block(h),
+    event: {
+      type: "pocket.supplier.EventSupplierUnbondingEnd",
+      attributes: [
+        { key: "operator_address", value: `"${operator}"` },
+        { key: "unbonding_end_height", value: `"${h}"` },
+        { key: "session_end_height", value: `"${h}"` },
+        { key: "mode", value: "EndBlock" },
+      ],
+    },
+  } as unknown as CosmosEvent);
+
+const claimMorse = (h: number, operator: string, services: Array<string>): CosmosMessage =>
+  ({
+    idx: 0,
+    block: block(h),
+    tx: {
+      hash: `CLAIM${h}${operator}`,
+      idx: 0,
+      tx: {
+        code: 0,
+        events: [
+          {
+            type: "pocket.migration.EventMorseSupplierClaimed",
+            attributes: [
+              { key: "claimed_balance", value: '"1000upokt"' },
+              { key: "claimed_supplier_stake", value: '"60000000000upokt"' },
+            ],
+          },
+        ],
+      },
+    },
+    msg: {
+      typeUrl: "/pocket.migration.MsgClaimMorseSupplier",
+      decodedMsg: {
+        shannonOperatorAddress: operator,
+        shannonOwnerAddress: operator,
+        shannonSigningAddress: operator,
+        morsePublicKey: new Uint8Array(32).fill(7),
+        morseSignature: new Uint8Array(64),
+        morseNodeAddress: "",
+        signerIsOutputAddress: false,
+        services: services.map((serviceId) => ({ serviceId, endpoints: [], revShare: [] })),
+      },
+    },
+  } as unknown as CosmosMessage);
 
 const index = async (h: number, msgs: Array<CosmosMessage>, events: Array<CosmosEvent>) => {
   height = h;
@@ -236,5 +289,39 @@ describe("indexSupplier service configs", () => {
     assert.equal(JSON.stringify([open(S1), open(S2), configs(S1).length, configs(S2).length]), once);
     assert.deepEqual(open(S1), ["akash@200", "eth@200"]);
     assert.deepEqual(open(S2), ["akash@-"]);
+  });
+  it("the end of the unbonding closes the supplier's configs", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash", "eth"])], []);
+    await index(120, [], activations(120, S1, ["akash", "eth"]));
+    await index(150, [unstake(150, S1)], []);
+
+    await index(200, [], [unbondingEnd(200, S1)]);
+    assert.deepEqual(open(S1), []);
+    assert.deepEqual(history(S1, "akash"), [
+      [100, 120, null],
+      [120, 200, 120],
+    ]);
+  });
+
+  it("a Morse claim declares configs that its activation activates", async () => {
+    reset();
+    await index(100, [claimMorse(100, S1, ["akash", "eth"])], []);
+    assert.deepEqual(open(S1), ["akash@-", "eth@-"]);
+
+    await index(120, [], activations(120, S1, ["akash", "eth"]));
+    assert.deepEqual(open(S1), ["akash@120", "eth@120"]);
+  });
+
+  it("a finalize_block event without a mode fails the block", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    const [event] = activations(120, S1, ["akash"]);
+    const withoutMode = {
+      ...event,
+      event: { ...event.event, attributes: event.event.attributes.filter(({ key }) => key !== "mode") },
+    } as CosmosEvent;
+
+    await assert.rejects(index(120, [], [withoutMode]), /has mode=undefined, expected BeginBlock or EndBlock/);
   });
 });

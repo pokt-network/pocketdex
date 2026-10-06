@@ -3,7 +3,7 @@ import {
   CosmosEvent,
   CosmosMessage,
 } from "@subql/types-cosmos";
-import { get, orderBy } from "lodash";
+import { get, orderBy, partition } from "lodash";
 import { Coin } from "../../client/cosmos/base/v1beta1/coin";
 import { parseCoins } from "../../cosmjs/utils";
 import {
@@ -264,6 +264,8 @@ function _handleEventSupplierServiceConfigActivated(
       services = [
         service
       ]
+    } else {
+      logger.warn(`[handleEventSupplierServiceConfigActivated] no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
     }
   } else {
     services = Object.values(record[operatorAddress]?.services || {});
@@ -451,7 +453,8 @@ function getServices(
   const services: Array<SupplierServiceConfigProps> = [];
 
   for (const { endpoints, revShare, serviceId } of rawServices) {
-    servicesId.push(serviceId);
+    const id = getStakeServiceId(operatorAddress, serviceId);
+    servicesId.push(id);
 
     const endpointsArr: Array<SupplierEndpoint> = endpoints.map((endpoint) => ({
       url: endpoint.url,
@@ -482,7 +485,7 @@ function getServices(
     }));
 
     services.push({
-      id: getStakeServiceId(operatorAddress, serviceId),
+      id,
       serviceId,
       supplierId: operatorAddress,
       endpoints: endpointsArr,
@@ -836,6 +839,15 @@ function collectSupplierIds(
           suppliers.push(ids);
         } else if (ids) {
           suppliers.push(...ids);
+        }
+      }
+
+      // the end of the unbonding closes the supplier's configs, so they must be loaded
+      if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
+        if (typeof ids === "string") {
+          suppliersToFetchServices.push(ids);
+        } else if (ids) {
+          suppliersToFetchServices.push(...ids);
         }
       }
 
@@ -1320,19 +1332,25 @@ function sortEventsAndMsgs(allData: Array<CosmosEvent | CosmosMessage>): Array<C
     }
   }
 
-  // Finalize-block events carry mode=BeginBlock|EndBlock. The BeginBlock ones (the service config
-  // activations of the supplier BeginBlocker) ran before the block's txs: a stake in the same block
-  // replaces configs they already activated, and must not be stamped as activated by them.
-  const isBeginBlockEvent = (event: CosmosEvent) =>
-    event.event.attributes.some(({ key, value }) => key === "mode" && value === "BeginBlock");
+  // Finalize-block events carry mode=BeginBlock|EndBlock, unquoted, in every era (block_results of
+  // mainnet 247741 and 947061). The BeginBlock ones (the service config activations of the supplier
+  // BeginBlocker) ran before the block's txs: a stake in the same block replaces configs they already
+  // activated, and must not be stamped as activated by them.
+  const isBeginBlockEvent = (event: CosmosEvent) => {
+    const mode = event.event.attributes.find(({ key }) => key === "mode")?.value;
+
+    if (mode !== "BeginBlock" && mode !== "EndBlock") {
+      throw new Error(`[sortEventsAndMsgs] finalize_block event ${event.event.type} at block ${event.block.block.header.height} has mode=${mode}, expected BeginBlock or EndBlock`);
+    }
+
+    return mode === "BeginBlock";
+  };
+
+  const [beginBlockEvents, endBlockEvents] = partition(finalizedEvents, isBeginBlockEvent);
 
   return [
-    ...orderBy(finalizedEvents.filter(isBeginBlockEvent), ['idx'], ['asc']),
+    ...orderBy(beginBlockEvents, ['idx'], ['asc']),
     ...orderBy(nonFinalizedData, ['tx.idx', 'rank', 'idx'], ['asc', 'asc', 'asc']),
-    ...orderBy(
-      finalizedEvents.filter((event) => !isBeginBlockEvent(event)),
-      ['idx'],
-      ['asc']
-    )
+    ...orderBy(endBlockEvents, ['idx'], ['asc'])
   ];
 }
