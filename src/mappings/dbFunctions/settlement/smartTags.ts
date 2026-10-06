@@ -93,7 +93,6 @@ const OMITTED_FUNCTIONS = [
   "_buckets",
   "_span",
   "_block_heights",
-  "_block_span",
   "_income",
   "_coverage",
   "_range_json",

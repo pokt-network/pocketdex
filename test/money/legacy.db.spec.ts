@@ -643,6 +643,8 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         const open = await run(fn, args, null, null);
         assert.deepEqual(open.range, { requested_from: null, requested_to: null, covered_from: first, covered_to: head,
           gaps: ON_BLOCKS.includes(fn) ? [] : [[null, first]], end_inclusive: false }, fn);
+        // an open start: a row without a bucket reports covered_from as its bucket_start
+        if (fn !== "money_coverage") assert.ok(open.starts.every((x) => x === first), `${fn}: ${JSON.stringify(open.starts)}`);
       }
       // a settlement gap inside the range (heights not written, between 1 Sep 23:30 and 2 Sep 00:00): listed, and the
       // data is what is written around it
@@ -718,8 +720,10 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       // the indexer restarts with POCKETDEX_MONEY_FROM_HEIGHT = 899900: the start-up records the heights it skips,
       // [899774, 899899], as a gap, whatever they hold: a slash-only height at 09:30 is in it, though no claim is
       assert.equal(createSettlementOverrideGapFn(0)(S), "");
+      // (an earlier start with a lower override recorded less: the higher one widens the row, a repeat keeps it)
+      await c.query(createSettlementOverrideGapFn(899800)(S));
       await c.query(createSettlementOverrideGapFn(899900)(S));
-      await c.query(createSettlementOverrideGapFn(899900)(S)); // a second start keeps the row
+      await c.query(createSettlementOverrideGapFn(899850)(S));
       await c.query(`INSERT INTO ${S}.blocks VALUES (899850, '2026-09-02 09:30')`);
       const rows = (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps ORDER BY 1`)).rows;
       assert.deepEqual(rows, [{ f: 1, t: 899700 }, { f: 899774, t: 899899 }]);
@@ -728,6 +732,12 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       const slash = await flows("2026-09-02T09:15:00Z", "2026-09-02T09:45:00Z");
       assert.deepEqual([slash.covered, slash.rows, slash.burn], [[null, null], 0, null]);
       assert.deepEqual(slash.gaps, [[head, null]]);
+      // nothing written yet: the override raised twice before any write leaves one gap from 1 up to the higher one
+      await c.query(`DELETE FROM ${S}.settlement_gaps; DELETE FROM ${S}.settlement_blocks`);
+      await c.query(createSettlementOverrideGapFn(899800)(S));
+      await c.query(createSettlementOverrideGapFn(899900)(S));
+      const fresh = (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps`)).rows;
+      assert.deepEqual(fresh, [{ f: 1, t: 899899 }]);
     } finally {
       await c.query("ROLLBACK");
     }
@@ -914,6 +924,38 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
     assert.deepEqual(await oids(), before);
+  });
+
+  it("a covered range after the last settlement returns the zero rows of idle ids, up to what is covered", async () => {
+    await c.query("BEGIN");
+    try {
+      // the latest indexed block at 10:00 on 2 Sep, the last settlement at 08:20: the last 30 minutes are covered and
+      // settled nothing, so each requested id has its zero row
+      await c.query(`INSERT INTO ${S}.blocks VALUES (899800, '2026-09-02 10:00')`);
+      for (const [fn, bucket, n] of [
+        ["get_application_spend", "'hour'", 1],
+        ["get_application_spend", "NULL", 1],
+        ["get_income", "'hour'", 1],
+        ["get_income", "NULL", 1],
+      ] as const) {
+        const { rows } = await c.query(
+          `SELECT bucket_start, to_jsonb(r) j FROM ${S}.${fn}(ARRAY['pokt1idle'], '2026-09-02T09:30:00Z', '2026-09-02T10:00:00Z',
+             bucket => ${bucket}, fill_empty_buckets => true) r`
+        );
+        assert.equal(rows.length, n, `${fn} ${bucket}`);
+        const start = new Date(String(rows[0].bucket_start)).toISOString();
+        assert.equal(start, bucket === "NULL" ? "2026-09-02T09:30:00.000Z" : "2026-09-02T09:00:00.000Z", `${fn} ${bucket}`);
+        assert.ok(Object.values(rows[0].j as unknown as Record<string, unknown>).includes("pokt1idle"), `${fn} ${bucket}`);
+      }
+      // past the latest indexed block nothing is covered: no rows
+      const after = await c.query(
+        `SELECT count(*)::int n FROM ${S}.get_application_spend(ARRAY['pokt1idle'], '2026-09-02T10:30:00Z',
+           '2026-09-02T11:00:00Z', 'hour', fill_empty_buckets => true)`
+      );
+      assert.equal(after.rows[0].n, 0);
+    } finally {
+      await c.query("ROLLBACK");
+    }
   });
 
   it("GraphQL publishes every legacy_ function with what it replaces, and the start drops the money_* names", async () => {

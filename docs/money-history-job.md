@@ -12,9 +12,11 @@ with the indexer's own parser and writer (`src/mappings/money/history`, CLI `scr
 3. Checks that the LCD serves state at the lowest height of the run that needs it (map_proposer_operator through
    batched_vrd) and reports that height back. Nothing is recorded if it does not. The check goes by
    era: a run inside one of those eras needs `--lcd` even if its heights turn out not to read it.
-4. Records a `settlement_gaps` row `[1, lowest written height − 1]`. From then on the catalog functions raise for any
-   range that reaches heights not walked yet. If a gap already reaches that range, it must be this job's row (it
-   starts at 1) and the job resumes from it; any other gap there stops the job.
+4. Records a `settlement_gaps` row `[1, lowest written height − 1]`. From then on the catalog functions answer only
+   for the part of a range that is covered, and report the heights not walked yet as a gap in their `range` (they
+   never read as zero). If a gap already reaches that range, it must be this job's row (it starts at 1, like the one
+   the indexer records at start-up with `POCKETDEX_MONEY_FROM_HEIGHT` and nothing written) and the job resumes from it;
+   any other gap there stops the job.
 5. Walks down one height at a time. For each it reads `/block_results`. **A height counts as read only on positive
    proof**: the response is for the height asked (`result.height`), the body arrived whole and parsed, and
    `finalize_block_events` is there and not empty. Every real block has at least the mint of its BeginBlock (66
@@ -61,7 +63,7 @@ TS_NODE_FILES=true node --max-old-space-size=12000 -r ts-node/register scripts/m
 
 | Option | Meaning |
 |---|---|
-| `--start H` | Only when nothing is written yet. With written heights the start is always the lowest one − 1. |
+| `--start H` | Only when nothing is written yet and no gap row exists. With written heights the start is always the lowest one − 1; with the start-up's `[1, O − 1]` row (below) the job resumes from it, without `--start`. |
 | `--to H` | Lowest height to walk in this run (default 1). The gap keeps what is below. |
 | `--workers N` | Heights downloaded and parsed ahead while one is written (default 1): up to N + 1 heights in memory. |
 | `--flush-every N`, `--flush-ms T` | Empty heights between two lowerings of the gap (default 2000), and the longest wait (default 30,000 ms). A crash re-reads at most that many. |
@@ -140,13 +142,17 @@ creates the tables when it starts, so check again before the first deploy.
 A settlement block whose money cannot be written (the parser or one of its checks throws, or a chain read fails)
 fails the whole block, and SubQuery retries it: the indexer does not get past that height until the
 cause is fixed. To let it go on without that money, set `POCKETDEX_MONEY_FROM_HEIGHT` above the failing height and
-redeploy (`src/mappings/money/write.ts`). The indexer then records the settlement heights it skips in
-`settlement_gaps`, and the catalog functions raise on any range that overlaps them.
+redeploy (`src/mappings/money/write.ts`). At start-up, before any block, the indexer records the settlement heights
+it skips as the `settlement_gaps` row `[last written + 1, O − 1]` (from 1 when nothing is written;
+`createSettlementOverrideGapFn` in `src/mappings/dbFunctions/settlement/schema.ts`; an override raised again widens
+it). The catalog functions report those heights as not covered (a gap in their `range`), whatever money event they
+hold, instead of reading them as zero.
 
-Filling those heights depends on where they are. If no settlement was written yet when the override was set, no gap
-row is recorded: the skipped heights are below the lowest written one, and this job walks them. A gap
-**above** written heights is not filled by this job today: it only owns the gap that starts at height 1
-(`planGap` in `job.ts`), so that range stays unreadable until a tool to rewrite a middle range exists.
+Filling those heights depends on where they are. If no settlement was written yet when the override was set, the gap
+row is `[1, O − 1]`: the skipped heights are below the lowest written one, and this job resumes from that row (without
+`--start`) and walks them. A gap **above** written heights is not filled by this job today: it only owns the gap that
+starts at height 1 (`planGap` in `job.ts`), so that range stays not covered until a tool to rewrite a middle range
+exists.
 
 ## Known limits
 

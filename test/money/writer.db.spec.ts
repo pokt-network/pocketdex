@@ -181,8 +181,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       CREATE TABLE ${S}.params (id text, namespace text, key text, value text, active_at numeric, _block_range int8range);
       CREATE TABLE ${S}.delegations (id text);
       INSERT INTO ${S}.event_claim_settleds VALUES (694993), (710013), (899713);
-      -- indexed from 1 Jan to 31 Dec 2026: the catalog's coverage (functions.ts _coverage) is what is indexed
-      INSERT INTO ${S}.blocks VALUES (1, '2026-01-01'), (999999999, '2026-12-31');`);
+      -- indexed from 1 Jan 2026 to the fixtures' settlement block (1 Sep 12:00): the catalog's coverage
+      -- (functions.ts _coverage) is what is indexed, and its fills run to the latest indexed block
+      INSERT INTO ${S}.blocks VALUES (1, '2026-01-01'), (999999999, '2026-09-01 12:00');`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
   });
@@ -1230,7 +1231,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
   });
 
   it("a range after the last written settlement returns no rows with a bucket, not a zero row per id", async () => {
-    // both fixtures settle at 2026-09-01 12:00 UTC; those buckets are not indexed yet
+    // both fixtures settle at 2026-09-01 12:00 UTC; nothing settled in these buckets, and by default (sparse) an id
+    // with nothing gets no row
     const address = (await c.query(`SELECT address FROM ${S}.v_income_base ORDER BY 1 LIMIT 1`)).rows[0].address as string;
     const supplier = (await c.query(`SELECT supplier_id FROM ${S}.claim_settlements ORDER BY 1 LIMIT 1`)).rows[0]
       .supplier_id as string;

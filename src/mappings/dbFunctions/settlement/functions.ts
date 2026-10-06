@@ -71,11 +71,11 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
   // The start of every catalog function over the money tables, in one place so that none can skip it: the part of
   // the range the money tables cover (_coverage), no rows when nothing covered overlaps it, the data read from
-  // covered_from on, and the span its rows report (sp, _span's / _block_span's bounds from cv; none for get_income,
-  // which passes cv to _income; blocks for the functions over the indexer's own tables). Without a bucket a row's
-  // bucket_start is the requested range_start: covered_from says where the data starts. The rows then carry
+  // covered_from on, and the span its rows report (sp, _span over cv's bounds; none for get_income and
+  // get_supply_flows, which pass cv to _income / _supply_flows; blocks for the functions over the indexer's own
+  // tables). Without a bucket a row's bucket_start is the requested range_start (covered_from with an open start). The rows then carry
   // cv.covered_from, cv.covered_to and cv.gaps, and every fill keeps to cv.covered.
-  const covered = (span: string | null, blocks = false) =>
+  const covered = (span: "settled" | "blocks" | null, blocks = false) =>
     [
       "  -- what is not written is not read: the covered part of the range only (_coverage)",
       `  cv := ${s}._coverage(range_start, range_end${blocks ? ", true" : ""});`,
@@ -83,12 +83,10 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
       "  range_start := cv.data_from;",
       ...(span
         ? [
-            // _span / _block_span from the bounds _coverage already read
-            span === "_span"
-              ? "  SELECT coalesce(range_start, cv.first_settled) f, coalesce(range_end, cv.last_settled) t,\n" +
-                "         least(range_end - interval '1 microsecond', cv.last_settled) t_last INTO sp;"
-              : "  SELECT coalesce(range_start, cv.first_block) f, coalesce(range_end, cv.last_block) t,\n" +
-                "         least(range_end - interval '1 microsecond', cv.last_block) t_last INTO sp;",
+            // _span from the bounds _coverage already read: settlements, or blocks for the indexer's tables
+            span === "settled"
+              ? `  sp := ${s}._span(range_start, range_end, cv.first_settled, cv.last_settled, cv.covered_to);`
+              : `  sp := ${s}._span(range_start, range_end, cv.first_block, cv.last_block, cv.covered_to);`,
             "  IF bucket IS NULL AND cv.requested_from IS NOT NULL THEN sp.f := cv.requested_from; END IF;",
           ]
         : []),
@@ -132,9 +130,9 @@ END $$;
 -- the blocks table lacks the block (NULL = unbounded); overlapping or contiguous gaps merge (range_agg).
 -- covered = the span minus the gaps (a tstzmultirange); covered_from / covered_to are its bounds, both NULL when it is
 -- empty (nothing covered: empty = true, nothing to read); gaps = the merged gaps that overlap the requested range, as
--- {from, to}, half-open. data_from is the range_start to read with: moved up to covered_from, so the data never sums
--- heights that were not written (a NULL range_start stays NULL: it already starts there). first_settled /
--- last_settled / first_block / last_block are the bounds _span / _block_span would read again (covered()).
+-- {from, to}, half-open. data_from is the range_start to read with: covered_from, so the data never sums heights that
+-- were not written, and a row without a bucket reports covered_from as its bucket_start for an open range_start. first_settled /
+-- last_settled / first_block / last_block are the span bounds (_span, covered()), read once here.
 -- Index probes only, and few gap rows (0.8 ms on the mainnet replica, 2026-10-06). jit = off: a settlement_gaps never
 -- analyzed is planned at ~200 rows, past jit_above_cost, and JIT compiling took ~30 ms per call (measured locally).
 DROP FUNCTION IF EXISTS ${s}._check_coverage(timestamptz, timestamptz);
@@ -183,7 +181,7 @@ BEGIN
   empty := isempty(covered);
   IF NOT empty THEN
     covered_from := lower(covered); covered_to := upper(covered);
-    data_from := CASE WHEN range_start IS NOT NULL THEN greatest(range_start, covered_from) END;
+    data_from := covered_from;
   END IF;
 END $$;
 
@@ -254,27 +252,18 @@ BEGIN
   IF d1 <= d2 THEN PERFORM ${s}._require_current_rollups(d1, d2); END IF;
 END $$;
 
--- The span a call answers for: the requested [range_start, range_end), or, for an open end, the first / last written
--- settlement. Every row carries it as bucket_start / bucket_end when there is no bucket, so a caller sees what
--- was summed. An open range_end gives the last settlement's block_time, which the span includes. t_last is the
--- last instant a series lists buckets for: range_end (exclusive) or the last written settlement, whichever comes
--- first, so a bucket that is not indexed yet is absent, not a zero.
-CREATE OR REPLACE FUNCTION ${s}._span(range_start timestamptz, range_end timestamptz, OUT f timestamptz, OUT t timestamptz,
-  OUT t_last timestamptz)
-LANGUAGE sql STABLE AS $$
-  SELECT coalesce(range_start, (SELECT min(block_time) FROM ${s}.settlement_blocks)),
-         coalesce(range_end, (SELECT max(block_time) FROM ${s}.settlement_blocks)),
-         least(range_end - interval '1 microsecond', (SELECT max(block_time) FROM ${s}.settlement_blocks))
-$$;
-
--- The same span over indexed blocks, for the functions that count chain events outside settlements (auto-unstakes,
--- proofs): their series run to the last indexed block, not to the last settlement, so a series sums to its total.
-CREATE OR REPLACE FUNCTION ${s}._block_span(range_start timestamptz, range_end timestamptz, OUT f timestamptz,
-  OUT t timestamptz, OUT t_last timestamptz)
-LANGUAGE sql STABLE AS $$
-  SELECT coalesce(range_start, b.first_ts), coalesce(range_end, b.last_ts), least(range_end - interval '1 microsecond', b.last_ts)
-  FROM (SELECT (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1) first_ts,
-               (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1) last_ts) b
+-- The span a call answers for, from bounds _coverage already read (no probe of its own): f = range_start, or p_first
+-- for an open start; t = range_end, or p_last for an open end (the first / last written settlement, or indexed block for
+-- the functions over the indexer's tables). Every row carries it as bucket_start / bucket_end when there is no bucket,
+-- so a caller sees what was summed. t_last is the last instant a series lists buckets for: the end of what is covered
+-- (p_covered_to, exclusive), so a covered bucket with nothing in it is a zero and one that is not covered is absent.
+-- Without bounds (the legacy_ callers, which pass both ends and fill nothing) it is range_end.
+DROP FUNCTION IF EXISTS ${s}._span(timestamptz, timestamptz);
+DROP FUNCTION IF EXISTS ${s}._block_span(timestamptz, timestamptz);
+CREATE OR REPLACE FUNCTION ${s}._span(range_start timestamptz, range_end timestamptz, p_first timestamptz,
+  p_last timestamptz, p_covered_to timestamptz, OUT f timestamptz, OUT t timestamptz, OUT t_last timestamptz)
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT coalesce(range_start, p_first), coalesce(range_end, p_last), least(range_end, p_covered_to) - interval '1 microsecond'
 $$;
 
 -- Every bucket of a span, in UTC: with a bucket and fill_empty_buckets, the catalog functions return each series once per bucket, with
@@ -391,7 +380,7 @@ LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_c
 DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   PERFORM ${s}._validate(applications, 'applications', range_start, range_end, bucket);
-${covered("_span")}
+${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -460,7 +449,7 @@ LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_c
 DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   PERFORM ${s}._validate(gateways, 'gateways', range_start, range_end, bucket);
-${covered("_span")}
+${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -550,7 +539,7 @@ BEGIN
     PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
   all_suppliers := suppliers IS NULL;
-${covered("_span")}
+${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -628,7 +617,7 @@ BEGIN
   ELSE
     PERFORM ${s}._validate(suppliers, 'suppliers', range_start, range_end, bucket);
   END IF;
-${covered("_span")}
+${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -679,15 +668,17 @@ END $$;
 -- Supplier AND service at once: whole months from monthly_income_by_address_supplier_service, everything else from the base.
 -- suppliers (with by_supplier) keeps only the income those suppliers generated, read by index
 -- instead of filtering the result (the legacy_* functions). capped = false lifts _validate's per-bucket range caps, for
--- the legacy_* functions: the live functions they replace take any range. p_covered / p_span_from: get_income's covered
--- set, outside which no bucket is zero-filled, and its requested range_start (covered()). Unordered: get_income orders.
+-- the legacy_* functions: the live functions they replace take any range. p_covered / p_span_from / p_first / p_last /
+-- p_covered_to: get_income's coverage (covered(): the covered set, outside which no bucket is zero-filled, the requested
+-- range_start, the span bounds). Unordered: get_income orders.
 DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[]);
 DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[], boolean);
 CREATE OR REPLACE FUNCTION ${s}._income(addresses text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false,
   by_service boolean DEFAULT false, by_address boolean DEFAULT true,
   fill_empty_buckets boolean DEFAULT false, suppliers text[] DEFAULT NULL, capped boolean DEFAULT true,
-  p_covered tstzmultirange DEFAULT NULL, p_span_from timestamptz DEFAULT NULL)
+  p_covered tstzmultirange DEFAULT NULL, p_span_from timestamptz DEFAULT NULL,
+  p_first timestamptz DEFAULT NULL, p_last timestamptz DEFAULT NULL, p_covered_to timestamptz DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, address text, role text, family text, supplier_id text, service_id text,
   amount_upokt numeric, transfer_count bigint)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
@@ -695,7 +686,7 @@ DECLARE rg record; sp record; m1 date; m2 date; use_month boolean; use_month_svc
   mw1 timestamptz; mw2 timestamptz; use_month_triple boolean; hm1 bigint; hm2 bigint;
 BEGIN
   PERFORM ${s}._validate(addresses, '', range_start, range_end, CASE WHEN capped THEN bucket END);
-  sp := ${s}._span(range_start, range_end);
+  sp := ${s}._span(range_start, range_end, p_first, p_last, p_covered_to);
   IF bucket IS NULL AND p_span_from IS NOT NULL THEN sp.f := p_span_from; END IF;
   rg := ${s}._ranges(range_start, range_end, bucket, by_supplier AND by_service);
   -- whole months inside the rollup days [d1, d2], only when the series needs no days
@@ -822,7 +813,8 @@ BEGIN
 ${covered(null)}
   RETURN QUERY SELECT i.*, cv.covered_from, cv.covered_to, cv.gaps
     FROM ${s}._income(addresses, range_start, range_end, bucket, by_reason, by_supplier, by_service, by_address,
-                      fill_empty_buckets, p_covered => cv.covered, p_span_from => cv.requested_from) i ORDER BY 1 DESC, 3, 4, 5, 6, 7;
+                      fill_empty_buckets, p_covered => cv.covered, p_span_from => cv.requested_from,
+                      p_first => cv.first_settled, p_last => cv.last_settled, p_covered_to => cv.covered_to) i ORDER BY 1 DESC, 3, 4, 5, 6, 7;
 END $$;
 
 -- Validator: commission, self-delegation and what it passed to its delegators, both families, from
@@ -844,7 +836,7 @@ DECLARE sp record; lo bigint; hi bigint; all_validators boolean := validators IS
 BEGIN
   -- NULL validators: every validator
   PERFORM ${s}._validate(validators, CASE WHEN validators IS NULL THEN '' ELSE 'validators' END, range_start, range_end, bucket);
-${covered("_span")}
+${covered("settled")}
   SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb
   WHERE (range_start IS NULL OR sb.block_time >= range_start) AND (range_end IS NULL OR sb.block_time < range_end);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
@@ -912,7 +904,7 @@ BEGIN
   -- NULL delegators: every delegator; validators keeps the income from those validators (their delegators)
   PERFORM ${s}._validate(delegators, CASE WHEN delegators IS NULL THEN '' ELSE 'delegators' END, range_start, range_end, bucket);
   IF validators IS NOT NULL THEN PERFORM ${s}._validate(validators, 'validators', NULL, NULL, NULL); END IF;
-${covered("_span")}
+${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -971,12 +963,13 @@ END $$;
 -- Unordered: get_supply_flows orders.
 CREATE OR REPLACE FUNCTION ${s}._supply_flows(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL,
   by_role boolean DEFAULT false, fill_empty_buckets boolean DEFAULT false, p_covered tstzmultirange DEFAULT NULL,
-  p_span_from timestamptz DEFAULT NULL)
+  p_span_from timestamptz DEFAULT NULL,
+  p_first timestamptz DEFAULT NULL, p_last timestamptz DEFAULT NULL, p_covered_to timestamptz DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, flow text, role text, amount_upokt numeric)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; fb timestamptz;
 BEGIN
-  sp := ${s}._span(range_start, range_end);
+  sp := ${s}._span(range_start, range_end, p_first, p_last, p_covered_to);
   IF bucket IS NULL AND p_span_from IS NOT NULL THEN sp.f := p_span_from; END IF;
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, p_covered) END;
@@ -1046,7 +1039,8 @@ BEGIN
   PERFORM ${s}._validate(NULL, '', range_start, range_end, bucket);
 ${covered(null)}
   RETURN QUERY SELECT f.*, cv.covered_from, cv.covered_to, cv.gaps
-    FROM ${s}._supply_flows(range_start, range_end, bucket, by_role, fill_empty_buckets, cv.covered, cv.requested_from) f
+    FROM ${s}._supply_flows(range_start, range_end, bucket, by_role, fill_empty_buckets, cv.covered, cv.requested_from,
+                           cv.first_settled, cv.last_settled, cv.covered_to) f
     ORDER BY 1 DESC, 3, 4;
 END $$;
 
@@ -1073,7 +1067,7 @@ BEGIN
     PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
   all_suppliers := suppliers IS NULL;
-${covered("_span")}
+${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket, true);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -1145,7 +1139,7 @@ BEGIN
     RAISE EXCEPTION 'top_by_settled must be between 1 and 200 (is %)', top_by_settled;
   END IF;
   PERFORM ${s}._validate(services, CASE WHEN services IS NULL THEN '' ELSE 'services' END, range_start, range_end, bucket);
-${covered("_span")}
+${covered("settled")}
   IF top_by_settled IS NOT NULL THEN
     rg := ${s}._ranges(range_start, range_end, NULL);
     services := ARRAY(
@@ -1213,7 +1207,7 @@ DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   PERFORM ${s}._validate(applications, CASE WHEN applications IS NULL THEN '' ELSE 'applications' END,
                          range_start, range_end, bucket);
-${covered("_block_span", true)}
+${covered("blocks", true)}
   rg := ${s}._block_heights(range_start, range_end);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -1274,7 +1268,7 @@ BEGIN
     PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
   all_suppliers := suppliers IS NULL;
-${covered("_block_span")}
+${covered("blocks")}
   rg := ${s}._block_heights(range_start, range_end);
   rc := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
@@ -1455,7 +1449,7 @@ END $$;
 -- true); gaps stay half-open.
 CREATE OR REPLACE FUNCTION ${s}._legacy_range_of(start_date timestamp, end_date timestamp, covered_from timestamptz,
   covered_to timestamptz, gaps jsonb)
-RETURNS json LANGUAGE sql IMMUTABLE AS $$
+RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('requested_from', start_date AT TIME ZONE 'UTC', 'requested_to', end_date AT TIME ZONE 'UTC',
     'covered_from', covered_from, 'covered_to', covered_to - interval '1 microsecond', 'gaps', gaps, 'end_inclusive', true)
 $$;

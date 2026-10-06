@@ -328,13 +328,14 @@ ALTER TABLE ${s}.daily_delegator_rewards_by_validator SET (fillfactor = 90, auto
 // between unwritten, whatever money event they hold (claims, expirations, discards, slashes, reimbursements,
 // distributions): recorded at start-up, before any block is indexed, as the settlement_gaps row
 // [last written + 1, override - 1], from 1 when nothing is written yet, so coverage never counts them. A no-op without
-// the override, or once a height at or past it is written; ON CONFLICT keeps a row an earlier start recorded.
+// the override, or once a height at or past it is written. A row an earlier start recorded from the same height is
+// widened, never narrowed: an override raised twice before any write leaves one gap up to the higher one.
 export function createSettlementOverrideGapFn(override: number): (dbSchema: string) => string {
   return (s) =>
     override > 0
-      ? `INSERT INTO ${s}.settlement_gaps (from_height, to_height)
+      ? `INSERT INTO ${s}.settlement_gaps AS gp (from_height, to_height)
 SELECT coalesce(max(height) + 1, 1), ${override}::bigint - 1 FROM ${s}.settlement_blocks
 HAVING coalesce(max(height) + 1, 1) <= ${override}::bigint - 1
-ON CONFLICT (from_height) DO NOTHING;`
+ON CONFLICT (from_height) DO UPDATE SET to_height = greatest(gp.to_height, EXCLUDED.to_height);`
       : "";
 }
