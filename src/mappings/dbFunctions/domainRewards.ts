@@ -101,23 +101,26 @@ BEGIN
       OFFSET 0
     ) e
     CROSS JOIN LATERAL (
+      -- each lookup returns its version as {"d": domains}, never NULL when it finds one: the version found decides,
+      -- even with no domains (NULL or []), and the next lookup runs only when none was found
       SELECT coalesce(
-        (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
+        (SELECT jsonb_build_object('d', c.domains) FROM ${dbSchema}.supplier_service_configs c
           WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id
             AND c._block_range @> e.declared_at
           ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
-        (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
+        (SELECT jsonb_build_object('d', c.domains) FROM ${dbSchema}.supplier_service_configs c
           WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id
             AND lower(c._block_range) <= e.declared_at
           ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
-        (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
+        -- runs only when no version started at or before declared_at: the session precedes the first one (genesis)
+        (SELECT jsonb_build_object('d', c.domains) FROM ${dbSchema}.supplier_service_configs c
           WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND NOT isempty(c._block_range)
-          ORDER BY lower(c._block_range), c._id LIMIT 1)) AS domains
+          ORDER BY lower(c._block_range), c._id LIMIT 1))->'d' AS domains
       -- evaluated once per claim (inlined, a filter on it would run the lookups a second time)
       OFFSET 0
     ) d
-    -- no row for a claim without domains (jsonb_array_elements_text of NULL is empty)
-    CROSS JOIN jsonb_array_elements_text(d.domains) AS domain
+    -- no row for a claim whose version has no domain (NULL, JSON null or []): the has-domain rule of the staked part
+    CROSS JOIN jsonb_array_elements_text(CASE WHEN jsonb_typeof(d.domains) = 'array' THEN d.domains END) AS domain
     GROUP BY domain, e.service_id
   ),
   staked AS (
@@ -131,7 +134,7 @@ BEGIN
       AND s.stake_status = 'Staked'
     CROSS JOIN jsonb_array_elements_text(ssc.domains) AS domain
     WHERE ssc._block_range && v_block_range
-      AND ssc.domains IS NOT NULL
+      AND jsonb_array_length(ssc.domains) > 0
     GROUP BY domain, ssc.service_id
   )
   INSERT INTO ${dbSchema}.domain_service_daily_rewards

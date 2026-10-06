@@ -65,7 +65,9 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         ('genesis', 'Staked', int8range(141, NULL)), ('late', 'Staked', int8range(100, NULL)),
         ('pre-block', 'Staked', int8range(100, NULL)), ('param-change', 'Staked', int8range(100, NULL)),
         ('empty', 'Staked', int8range(100, NULL)),
-        ('restart', 'Staked', int8range(100, NULL));
+        ('restart', 'Staked', int8range(100, NULL)),
+        ('then-domain', 'Staked', int8range(100, NULL)), ('long-gap', 'Staked', int8range(100, NULL)),
+        ('null-domains', 'Staked', int8range(100, NULL));
       INSERT INTO ${S}.supplier_service_configs (supplier_id, service_id, domains, _block_range) VALUES
         -- unstaked at 150, inside the session: the claim settles at 175 with no config open
         ('unstaked', 'akash', '["a.com"]', int8range(100, 150)),
@@ -101,7 +103,16 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         -- a gap before the session, then a version from its first block (which activates at the next session): the
         -- one that ended before the session serves it
         ('restart', 'akash', '["r.com"]', int8range(100, 130)),
-        ('restart', 'akash', '["s.com"]', int8range(141, NULL));
+        ('restart', 'akash', '["s.com"]', int8range(141, NULL)),
+        -- no parseable endpoint, then a restake with a domain after the session: the session's version has none
+        ('then-domain', 'akash', '[]', int8range(100, 150)),
+        ('then-domain', 'akash', '["t.com"]', int8range(150, NULL)),
+        -- an old domain, a long gap, then a version with none before the session: none, not the old one
+        ('long-gap', 'akash', '["w.com"]', int8range(100, 101)),
+        ('long-gap', 'akash', '[]', int8range(135, NULL)),
+        -- a version whose domains were never written (NULL), with an older one that had some: none
+        ('null-domains', 'akash', '["x.com"]', int8range(100, 120)),
+        ('null-domains', 'akash', NULL, int8range(120, NULL));
       INSERT INTO ${S}.event_claim_settleds VALUES
         ('unstaked', 'akash', 175, 0, 160, 1, 1, 10, 10, 1000),
         ('restaked', 'akash', 175, 0, 160, 2, 2, 20, 20, 2000),
@@ -114,7 +125,10 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         ('pre-block', 'akash', 175, 0, 160, 256, 256, 2560, 2560, 256000),
         ('param-change', 'akash', 175, 0, 160, 512, 512, 5120, 5120, 512000),
         ('empty', 'akash', 175, 0, 160, 1024, 1024, 10240, 10240, 1024000),
-        ('restart', 'akash', 175, 0, 160, 2048, 2048, 20480, 20480, 2048000);`
+        ('restart', 'akash', 175, 0, 160, 2048, 2048, 20480, 20480, 2048000),
+        ('then-domain', 'akash', 175, 0, 160, 4096, 4096, 40960, 40960, 4096000),
+        ('long-gap', 'akash', 175, 0, 160, 8192, 8192, 81920, 81920, 8192000),
+        ('null-domains', 'akash', 175, 0, 160, 16384, 16384, 163840, 163840, 16384000);`
     );
     await c.query(`SELECT ${S}.refresh_domain_service_daily_rewards(175)`);
   });
@@ -145,15 +159,16 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
     ]);
   });
 
-  it("without the session length, a claim is attributed at its settlement block, never dropped", async () => {
+  it("without the session length, a claim is attributed at its settlement block", async () => {
     await c.query("BEGIN");
     try {
       await c.query(`TRUNCATE ${S}.params; SELECT ${S}.refresh_domain_service_daily_rewards(175)`);
       const r = (
         await c.query(`SELECT sum(relays)::text relays FROM ${S}.domain_service_daily_rewards WHERE day = '2026-10-01'`)
       ).rows[0];
-      // every claim whose version has a domain is still there: all but the 1024 one, whose version has none
-      assert.equal(r.relays, "3071");
+      // every claim whose version at the settlement block has a domain: all but 1024 ([]), 8192 ([]) and
+      // 16384 (NULL); 4096 is now under its restake's t.com
+      assert.equal(r.relays, "7167");
     } finally {
       await c.query("ROLLBACK");
     }

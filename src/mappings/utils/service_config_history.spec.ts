@@ -36,18 +36,43 @@ describe("genesisConfigActivatedAt", () => {
   });
 });
 
-describe("endpointDomains", () => {
-  const { endpointDomains } = require("./service_config_history") as typeof import("./service_config_history");
+describe("endpointDomain", () => {
+  const { endpointDomain, endpointDomains } =
+    require("./service_config_history") as typeof import("./service_config_history");
 
-  it("keeps each endpoint's root domain once, as a stake and genesis write SupplierServiceConfig.domains", () => {
+  it("an IPv4 host is the whole address, with or without a port (41 such urls on mainnet, 2 on beta)", () => {
+    assert.equal(endpointDomain("http://10.0.3.4"), "10.0.3.4");
+    assert.equal(endpointDomain("http://144.202.31.211:8050"), "144.202.31.211");
+    assert.equal(endpointDomain("http://999.1.1.1"), null);
+  });
+
+  it("an IPv6 host is its compressed lowercase form, IPv4-mapped in dotted form", () => {
+    assert.equal(endpointDomain("http://[2001:db8::1]:8545"), "2001:db8::1");
+    assert.equal(endpointDomain("http://[2001:0DB8:0000:0000:0000:0000:0000:0001]"), "2001:db8::1");
+    assert.equal(endpointDomain("http://[::ffff:10.0.3.4]:80"), "::ffff:10.0.3.4");
+    assert.equal(endpointDomain("http://2001:db8::1"), "2001:db8::1");
+  });
+
+  it("a hostname keeps its last two labels, whatever the scheme, case, port, userinfo, path or trailing dot", () => {
+    assert.equal(endpointDomain("https://eth.node.Example.COM.:443/v1?x=1"), "example.com");
+    assert.equal(endpointDomain("wss://user:pw@rpc.d.io/ws"), "d.io");
+    assert.equal(endpointDomain("ws://relay.e.io:8546"), "e.io");
+    assert.equal(endpointDomain(" https://a.b.c/ "), "b.c");
+    assert.equal(endpointDomain("https://localhost"), "localhost");
+    // a placeholder a supplier staked on mainnet, as it is
+    assert.equal(endpointDomain("http://YOUR_NODE_IP_OR_HOST.com:8545"), "your_node_ip_or_host.com");
+  });
+
+  it("never throws: a string that names no host gives no domain", () => {
+    for (const value of ["", "   ", "garbage", "http://", "://x", null, undefined, 42]) {
+      assert.equal(endpointDomain(value), null, String(value));
+    }
+  });
+
+  it("the domains of a config are unique, in endpoint order", () => {
     assert.deepEqual(
-      endpointDomains([
-        "https://eth.node.d.com:443/v1",
-        "https://base.node.d.com",
-        "http://relay.e.io",
-        "https://localhost",
-      ]),
-      ["d.com", "e.io", "localhost"]
+      endpointDomains(["https://eth.node.d.com:443/v1", "https://base.node.d.com", "http://10.0.3.4:8545", "garbage"]),
+      ["d.com", "10.0.3.4"]
     );
   });
 });
