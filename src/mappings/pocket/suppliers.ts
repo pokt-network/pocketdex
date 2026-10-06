@@ -219,6 +219,20 @@ function _handleClaimSupplier(
   }
 }
 
+// grep-able: the chain activated a config this index does not hold. A warning, not a throw: until the data patch
+// that follows this fix runs, production still holds inconsistent rows (duplicated configs, configs of unbonded
+// suppliers left open), and failing the block here would halt the indexer. Two normal chain behaviours also miss: a
+// config a restake dropped before its activation, and any config of a supplier that unstaked before it (the chain
+// keeps the activation, with deactivation_height = activation_height). The second is logged at debug, so a warn
+// is drift or a dropped config; the count still does not size the patch.
+function _activationMiss(record: Record<string, SupplierRecord>, operator: string, message: string): void {
+  if (record[operator]?.supplier?.stakeStatus === StakeStatus.Unstaking) {
+    logger.debug(`[SupplierServiceConfigActivationMiss] ${message} (supplier unstaking)`);
+  } else {
+    logger.warn(`[SupplierServiceConfigActivationMiss] ${message}`);
+  }
+}
+
 // The pre-v0.1.27 event carries the supplier's service_config_history (snake_case JSON, activation heights as
 // strings: block_results of mainnet 247741): activate only the services whose config activates at this height,
 // not configs that were active already (e.g. from genesis). A config a restake cancelled before it activated
@@ -240,12 +254,12 @@ function _legacyActivatedServices(
   }
 
   if (history && activatedIds.size === 0 && cancelledIds.size === 0) {
-    logger.warn(`[SupplierServiceConfigActivationMiss] no history entry of supplier ${operator} activates at height ${activationHeight}`);
+    _activationMiss(record, operator, `no history entry of supplier ${operator} activates at height ${activationHeight}`);
   }
 
   for (const id of activatedIds) {
     if (!record[operator]?.services?.[id]) {
-      logger.warn(`[SupplierServiceConfigActivationMiss] no open config ${id} at activation height ${activationHeight}`);
+      _activationMiss(record, operator, `no open config ${id} at activation height ${activationHeight}`);
     }
   }
 
@@ -305,12 +319,7 @@ function _handleEventSupplierServiceConfigActivated(
         service
       ]
     } else {
-      // grep-able: the chain activated a config this index does not hold. A warning, not a throw: until the
-      // data patch that follows this fix runs, production still holds inconsistent rows (duplicated configs,
-      // configs of unbonded suppliers left open), and failing the block here would halt the indexer. It also
-      // fires on normal chain behaviour (a config dropped by a restake or an unstake before its activation keeps
-      // its activation, with deactivation_height = activation_height), so it is not a count of index drift.
-      logger.warn(`[SupplierServiceConfigActivationMiss] no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
+      _activationMiss(record, operatorAddress, `no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
     }
   } else {
     services = _legacyActivatedServices(operatorAddress, legacySupplier, activationHeight, record);
@@ -493,6 +502,9 @@ function _handleSupplierUnbondingEndEvent(
 // represent: a restake replaces the row at the stake height, pending until its own activation.
 // So when a BeginBlock activation of C1 and a stake replacing C1 with C2 land in one block, C1's row closes
 // with activatedAt unset and no config row references that activation event; accepted under this model.
+// Likewise an unstake and a restake with the same services inside one session: the unstake closes the row, the
+// restake opens a pending one, activated at the next session start, while the chain keeps the service active
+// throughout. That is a gap of the ACTIVE reading, consistent with this STAKE one.
 function getServices(
   rawServices: MsgStakeSupplier['services'],
   operatorAddress: string,
@@ -904,6 +916,8 @@ function collectSupplierIds(
 
       if (eventOrMsg.event.type === "pocket.supplier.EventSupplierServiceConfigActivated") {
         suppliersToFetchServices.push(...eventSuppliers);
+        // its status tells an unstake's expected activation miss from drift (the supplier is not saved for it)
+        suppliers.push(...eventSuppliers);
       }
     } else {
       const entityIdPath = recordId[eventOrMsg.msg.typeUrl] as string;
@@ -1034,8 +1048,9 @@ function _applyUnbondingEnd(
 // the unstake height. An unbonding for falling below the minimum stake does not withdraw it: settlement sets the
 // deactivation on an in-memory supplier it stores dehydrated, and the chain keeps reporting deactivation_height 0.
 // A restake during the unbonding declares services again through the stake path; a stake-only one declares none,
-// as the chain keeps the deactivated history. After an unstake the end of the unbonding finds nothing open; after
-// a BELOW_MIN_STAKE or MIGRATION unbonding it closes the configs then.
+// as the chain keeps the deactivated history. A restake cancels the unbonding, so no end follows it. After an
+// unstake the end of the unbonding finds nothing open; after a BELOW_MIN_STAKE or MIGRATION unbonding, and for rows
+// indexed before this fix, it closes the configs then.
 function _closeDeclaredServices(supplierRecord: SupplierRecord, servicesToClose: Set<string>): void {
   for (const serviceId of Object.keys(supplierRecord.services || {})) {
     delete supplierRecord.services?.[serviceId];

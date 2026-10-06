@@ -64,7 +64,13 @@ const model = (name: string) => {
 };
 
 const globals = globalThis as Record<string, unknown>;
-globals.logger = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
+const warnings: Array<string> = [];
+globals.logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: (message: string) => warnings.push(message),
+  error: () => undefined,
+};
 globals.store = {
   context: { getHistoricalUnit: () => height, transaction: undefined },
   modelProvider: { getModel: (name: string) => ({ model: model(name) }) },
@@ -422,6 +428,40 @@ describe("indexSupplier service configs", () => {
       assert.deepEqual(open(S1), ["akash@120"]);
     });
   }
+
+  it("an activation of a config the supplier unstaked before it is expected, not a warning", async () => {
+    reset();
+    await index(100, [stake(100, S1, ["akash"])], []);
+    await index(110, [unstake(110, S1)], []);
+
+    // the chain still activates it at the session start, with deactivation_height = activation_height
+    warnings.length = 0;
+    await index(120, [], activations(120, S1, ["akash"]));
+    assert.deepEqual(open(S1), []);
+    assert.deepEqual(warnings, []);
+
+    // a supplier still staked with no open config for the service is drift: warned
+    await index(130, [stake(130, S2, ["eth"])], []);
+    await index(140, [], activations(140, S2, ["akash"]));
+    assert.equal(warnings.length, 1);
+  });
+
+  it("a Morse claim of a node still unbonding on Morse declares its services until the unbonding ends", async () => {
+    reset();
+    // poktroll msg_server_claim_morse_supplier.go:317: the claim stakes the services, then emits a MIGRATION
+    // EventSupplierUnbondingBegin in the same tx; the unbonding ends at the estimated height
+    const claim = claimMorse(150, S1, ["akash"]);
+    const begin = { ...unbondingBegin(150, S1, "MIGRATION"), tx: claim.tx, idx: 1 } as CosmosEvent;
+    await index(150, [claim], [begin]);
+    assert.deepEqual(open(S1), ["akash@-"]);
+
+    await index(160, [], activations(160, S1, ["akash"]));
+    assert.deepEqual(open(S1), ["akash@160"]);
+
+    await index(250, [], [unbondingEnd(250, S1)]);
+    assert.deepEqual(open(S1), []);
+    assert.equal(supplierStatus(S1), "Unstaked");
+  });
 
   it("a stake-only restake during the unbonding declares nothing", async () => {
     reset();
