@@ -51,8 +51,8 @@ BEGIN
   --   the config that served the session: a stake in the session's first block activates at the next session, and
   --   an activation at that block carries the config already declared before it. In order of priority, among the
   --   supplier's versions of that config with at least one domain: the one live at that block; else the latest that
-  --   started at or before the session start (genesis writes its configs at the first session's start); else the
-  --   earliest one, so a claim is never dropped. Within each, the latest version (then _id) wins, so an id the index
+  --   started at or before it (one that ended before it); else the earliest one (genesis writes its configs at the
+  --   first session's start), so a claim is never dropped. Within each, the latest version (then _id) wins, so an id the index
   --   still holds twice gives one row: a claim counts once. COALESCE evaluates the three in that order and stops at
   --   the first.
   --   The session start is the event's, or, when the event omits it (zero), session end - num_blocks_per_session
@@ -78,8 +78,7 @@ BEGIN
       SELECT e.supplier_id, e.service_id, e.num_relays, e.num_estimated_relays, e.num_claimed_computed_units,
              e.num_estimated_computed_units, e.claimed_amount,
              -- without session heights (or a derived start that is not a height), the settlement block, as before
-             coalesce(s.start - 1, e.block_id::bigint) AS declared_at,
-             coalesce(s.start, e.block_id::bigint) AS bound
+             coalesce(s.start - 1, e.block_id::bigint) AS declared_at
       FROM ${dbSchema}.event_claim_settleds e
       INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
       -- the version in force for the session: the latest active at or before its end. A join, not a subquery in the
@@ -107,7 +106,7 @@ BEGIN
           ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
         (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
           WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND jsonb_array_length(c.domains) > 0
-            AND lower(c._block_range) <= e.bound
+            AND lower(c._block_range) <= e.declared_at
           ORDER BY lower(c._block_range) DESC, c._id LIMIT 1),
         (SELECT c.domains FROM ${dbSchema}.supplier_service_configs c
           WHERE c.supplier_id = e.supplier_id AND c.service_id = e.service_id AND jsonb_array_length(c.domains) > 0
