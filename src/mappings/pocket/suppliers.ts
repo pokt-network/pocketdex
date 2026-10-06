@@ -302,6 +302,10 @@ function _handleEventSupplierServiceConfigActivated(
         : []
     ));
 
+    if (activatedIds !== null && activatedIds.size === 0) {
+      logger.warn(`[SupplierServiceConfigActivationMiss] no history entry of supplier ${operator} activates at height ${activationHeight}`);
+    }
+
     for (const id of activatedIds || []) {
       if (!record[operator]?.services?.[id] && !cancelled.has(id)) {
         logger.warn(`[SupplierServiceConfigActivationMiss] no open config ${id} at activation height ${activationHeight}`);
@@ -962,13 +966,11 @@ async function fetchSupplierData(
   return record;
 }
 
-// The operator an EventSupplierUnbondingEnd names: operator_address, or the supplier JSON in older eras.
+// The operator an EventSupplierUnbondingEnd names, read by the same getter collectSupplierIds uses.
 function _unbondingEndOperator(attributes: CosmosEvent["event"]["attributes"]): string | undefined {
-  for (const { key, value } of attributes) {
-    if (key === "operator_address") return (value as string).replaceAll('"', '');
-    if (key === "supplier") return (JSON.parse(value as string) as SupplierSDKType).operator_address;
-  }
-  return undefined;
+  const getId = getSupplierRecordIdGetters()["pocket.supplier.EventSupplierUnbondingEnd"] as GetIdFromEventAttribute;
+  const operator = getId(attributes);
+  return typeof operator === "string" ? operator : undefined;
 }
 
 // A claim whose Morse unbonding already ended (or below the minimum stake) returns before staking anything
@@ -1265,11 +1267,9 @@ async function performSupplierDatabaseOperations(data: {
   if (data.suppliersToSave.length > 0) {
     deletePromises.push(removeRecords("Supplier", data.suppliersToSave.map((supplier) => supplier.id)));
   }
-  // Only the configs inserted again below: a config this block leaves alone keeps the row created at this
-  // height by someone else, e.g. the genesis configs that handleGenesis inserts at the genesis height
-  // before indexSupplier runs on the same block, or an earlier pass of this same block.
-  // Every config this block closes or re-inserts: a row created at this height and closed at it would
-  // otherwise be left with an empty range.
+  // Every config this block closes (re-inserted or not): a row created at this height and closed at it
+  // would otherwise be left with an empty range. Rows of other configs created at this height by someone
+  // else (e.g. handleGenesis at the genesis height, before indexSupplier runs) are left alone.
   if (data.servicesToClose.size > 0) {
     deletePromises.push(removeRecords("SupplierServiceConfig", [...data.servicesToClose]));
   }

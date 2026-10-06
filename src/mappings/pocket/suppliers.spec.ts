@@ -436,6 +436,7 @@ describe("indexSupplier service configs", () => {
     assert.equal(supplierStatus(S1), "Staked");
   });
 
+  // pins current behaviour, not intended behaviour: the chain stores no supplier for this operator (as on origin/main)
   it("a Morse claim that stakes nothing for a new operator leaves it unstaked without configs", async () => {
     reset();
     const claim = claimMorse(150, S2, ["eth"], true);
