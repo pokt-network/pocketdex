@@ -21,7 +21,11 @@ import {
 } from "../../src/mappings/dbFunctions/rewardsByAddressesAndTime";
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "../../src/mappings/dbFunctions/rewardsByServicesAddressesAndTime";
 import { getRewardsByOperatorAddressesAndTimesGroupByServiceFn } from "../../src/mappings/dbFunctions/rewards";
-import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
+import {
+  CATALOG_FUNCTIONS,
+  createSettlementFunctionsFn,
+  HELPER_SIGNATURES,
+} from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementOverrideGapFn, createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlement/schema";
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn, writeSettlementCalls } from "../../src/mappings/dbFunctions/settlement/writer";
@@ -513,7 +517,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       const past = await call(calls[0], WRITES[0][1], "2026-09-05T00:00:00Z");
       assert.deepEqual([past.range.covered_from, past.range.covered_to], [first, head]);
       const open = await call(calls[0], WRITES[0][1], null);
-      assert.deepEqual([open.range.requested_to, open.data], [null, 0]);
+      assert.deepEqual([open.range.requested_to, open.data], [null, "0"]);
       // a settlement gap inside the range: listed (between the written settlements around it, whose blocks the
       // fixture lacks), and its heights read nothing
       await c.query(`INSERT INTO ${S}.settlement_gaps VALUES (899740, 899745)`);
@@ -717,27 +721,53 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         h0,
         Date.parse("2026-09-02T10:00:00Z"),
       ]);
-      // the indexer restarts with POCKETDEX_MONEY_FROM_HEIGHT = 899900: the start-up records the heights it skips,
-      // [899774, 899899], as a gap, whatever they hold: a slash-only height at 09:30 is in it, though no claim is
-      assert.equal(createSettlementOverrideGapFn(0)(S), "");
-      // (an earlier start with a lower override recorded less: the higher one widens the row, a repeat keeps it)
-      await c.query(createSettlementOverrideGapFn(899800)(S));
-      await c.query(createSettlementOverrideGapFn(899900)(S));
-      await c.query(createSettlementOverrideGapFn(899850)(S));
-      await c.query(`INSERT INTO ${S}.blocks VALUES (899850, '2026-09-02 09:30')`);
+      // the indexer, indexed up to 899800 (10:00), restarts with POCKETDEX_MONEY_FROM_HEIGHT = 899900: the start-up
+      // records the heights it will skip, [899801, 899899], from its own progress, whatever they hold: a slash-only
+      // height it then indexes at 10:30 reads nothing, though no claim is there
+      assert.equal(createSettlementOverrideGapFn(0, 899801)(S), "");
+      // (an earlier start with a lower override recorded less: the higher one widens the row, a lower one keeps it)
+      await c.query(createSettlementOverrideGapFn(899850, 899801)(S));
+      await c.query(createSettlementOverrideGapFn(899900, 899801)(S));
+      await c.query(createSettlementOverrideGapFn(899870, 899801)(S));
+      await c.query(`INSERT INTO ${S}.blocks VALUES (899850, '2026-09-02 10:30'), (899900, '2026-09-02 11:00')`);
       const rows = (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps ORDER BY 1`)).rows;
-      assert.deepEqual(rows, [{ f: 1, t: 899700 }, { f: 899774, t: 899899 }]);
-      // covered up to the last written settlement, and the slash-only height reads nothing
-      assert.deepEqual((await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [h0, head]);
-      const slash = await flows("2026-09-02T09:15:00Z", "2026-09-02T09:45:00Z");
-      assert.deepEqual([slash.covered, slash.rows, slash.burn], [[null, null], 0, null]);
-      assert.deepEqual(slash.gaps, [[head, null]]);
-      // nothing written yet: the override raised twice before any write leaves one gap from 1 up to the higher one
-      await c.query(`DELETE FROM ${S}.settlement_gaps; DELETE FROM ${S}.settlement_blocks`);
-      await c.query(createSettlementOverrideGapFn(899800)(S));
-      await c.query(createSettlementOverrideGapFn(899900)(S));
-      const fresh = (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps`)).rows;
-      assert.deepEqual(fresh, [{ f: 1, t: 899899 }]);
+      // the history job's row [1, 899700] is untouched
+      assert.deepEqual(rows, [{ f: 1, t: 899700 }, { f: 899801, t: 899899 }]);
+      const ten = Date.parse("2026-09-02T10:00:00Z");
+      const eleven = Date.parse("2026-09-02T11:00:00Z");
+      const all = await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z");
+      assert.deepEqual([all.covered, all.gaps], [[h0, eleven], [[null, h0], [ten, eleven]]]);
+      const slash = await flows("2026-09-02T10:15:00Z", "2026-09-02T10:45:00Z");
+      assert.deepEqual([slash.covered, slash.rows, slash.burn, slash.gaps], [[null, null], 0, null, [[ten, eleven]]]);
+      // the history job's progress survives restarts: after it lowered its row and wrote a settlement below the old
+      // bottom, and after it walked only empty heights (its row lowered, nothing written), a restart records only
+      // the indexer's own window
+      await c.query(`DELETE FROM ${S}.settlement_gaps WHERE from_height = 899801;
+                     UPDATE ${S}.settlement_gaps SET to_height = 899690`);
+      await c.query(createSettlementOverrideGapFn(899950, 899901)(S));
+      await c.query(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version)
+                     VALUES (899695, '2026-09-01 10:00', 'batched_vrd', '2026-09-01', 99)`);
+      await c.query(`UPDATE ${S}.settlement_gaps SET to_height = 899680 WHERE from_height = 1`);
+      await c.query(createSettlementOverrideGapFn(899990, 899901)(S));
+      assert.deepEqual(
+        (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps ORDER BY 1`)).rows,
+        [{ f: 1, t: 899680 }, { f: 899901, t: 899989 }]
+      );
+      // an empty database (the indexer's first block is 1): its next block lies inside the job's row, so the start-up
+      // records nothing and leaves the row to the job
+      await c.query(`DELETE FROM ${S}.blocks`);
+      await c.query(createSettlementOverrideGapFn(899999, 1)(S));
+      assert.deepEqual(
+        (await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps ORDER BY 1`)).rows,
+        [{ f: 1, t: 899680 }, { f: 899901, t: 899989 }]
+      );
+      // an empty database without a job row: the gap starts at the block being indexed
+      await c.query(`DELETE FROM ${S}.settlement_gaps`);
+      await c.query(createSettlementOverrideGapFn(899800, 5)(S));
+      await c.query(createSettlementOverrideGapFn(899900, 5)(S));
+      assert.deepEqual((await c.query(`SELECT from_height::int f, to_height::int t FROM ${S}.settlement_gaps`)).rows, [
+        { f: 5, t: 899899 },
+      ]);
     } finally {
       await c.query("ROLLBACK");
     }
@@ -893,11 +923,11 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       assert.deepEqual(merged.gaps, [[T(WRITES[0][1]), T("2026-09-01T16:00:00Z")]]);
       // a range the live function matches nothing for (a NULL end): no coverage to report, no gaps, the live answer (0)
       const half = await range(`${S}.legacy_rewards_by_addresses_and_time($3, $1, $2)`, ["2026-09-01", null, [shareholder]]);
-      assert.deepEqual([half.covered, half.gaps, half.data], [[null, null], [], 0]);
+      assert.deepEqual([half.covered, half.gaps, half.data], [[null, null], [], "0"]);
       // the override window after the last written settlement (POCKETDEX_MONEY_FROM_HEIGHT = 899900), the latest block
       // on 3 Sep 10:00. By day, an idle supplier's zero rows stop at the last written settlement's day (2 Sep), although
       // the proofs' span runs to the latest block (3 Sep)
-      await c.query(createSettlementOverrideGapFn(899900)(S));
+      await c.query(createSettlementOverrideGapFn(899900, 899774)(S));
       await c.query(`INSERT INTO ${S}.blocks VALUES (899800, '2026-09-03 10:00')`);
       assert.deepEqual(
         await buckets(`${S}.get_supplier_proofs(ARRAY['sup-idle'], '2026-09-01T00:00:00Z', '2026-09-05T00:00:00Z', 'day',
@@ -921,9 +951,30 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       ).rows;
     const before = await oids();
     assert.ok(before.some((r) => String(r.f).startsWith("_coverage(")) && before.some((r) => String(r.f).startsWith("_legacy_range(")));
+    // every reshaped helper has exactly its current signature (HELPER_SIGNATURES)
+    const helpers = await c.query(
+      `SELECT p.proname, oidvectortypes(p.proargtypes) args FROM pg_proc p
+       WHERE p.pronamespace = $1::regnamespace AND p.proname = ANY($2::text[]) ORDER BY 1`,
+      [S, Object.keys(HELPER_SIGNATURES)]
+    );
+    assert.deepEqual(
+      helpers.rows.map((r) => [r.proname, r.args]),
+      Object.entries(HELPER_SIGNATURES).sort(([a], [b]) => (a < b ? -1 : 1))
+    );
+    // an earlier build's overloads (installed here by hand) are dropped by the next start, and the calls stay unambiguous
+    await c.query(`
+      CREATE FUNCTION ${S}._income(addresses text[], range_start timestamptz, range_end timestamptz, bucket text,
+        by_reason boolean, by_supplier boolean, by_service boolean, by_address boolean, fill_empty_buckets boolean,
+        suppliers text[], capped boolean, p_covered tstzmultirange, p_span_from timestamptz)
+        RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';
+      CREATE FUNCTION ${S}._covered_buckets(bucket text, span_first timestamptz, span_last timestamptz, gaps jsonb)
+        RETURNS SETOF timestamptz LANGUAGE sql AS 'SELECT now()';`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
     assert.deepEqual(await oids(), before);
+    await c.query(`SELECT * FROM ${S}.get_income($1, '2026-09-01T00:00:00Z', '2026-09-03T00:00:00Z', 'hour', fill_empty_buckets => true)`, [
+      [shareholder],
+    ]);
   });
 
   it("a covered range after the last settlement returns the zero rows of idle ids, up to what is covered", async () => {
@@ -965,7 +1016,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
        ORDER BY 1`,
       [S]
     );
-    assert.equal(rows.length, 13);
+    assert.equal(rows.length, 12);
     for (const r of rows) {
       if (String(r.proname).startsWith("_legacy_")) assert.equal(r.tag, "@omit");
       else

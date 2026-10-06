@@ -324,18 +324,24 @@ ALTER TABLE ${s}.daily_delegator_rewards_by_validator SET (fillfactor = 90, auto
 `;
 }
 
-// POCKETDEX_MONEY_FROM_HEIGHT (money/write.ts moneyFromHeight) above the last written settlement leaves the heights in
-// between unwritten, whatever money event they hold (claims, expirations, discards, slashes, reimbursements,
-// distributions): recorded at start-up, before any block is indexed, as the settlement_gaps row
-// [last written + 1, override - 1], from 1 when nothing is written yet, so coverage never counts them. A no-op without
-// the override, or once a height at or past it is written. A row an earlier start recorded from the same height is
-// widened, never narrowed: an override raised twice before any write leaves one gap up to the higher one.
-export function createSettlementOverrideGapFn(override: number): (dbSchema: string) => string {
+// POCKETDEX_MONEY_FROM_HEIGHT (money/write.ts moneyFromHeight) leaves the heights the indexer skips unwritten, whatever
+// money event they hold (claims, expirations, discards, slashes, reimbursements, distributions): recorded at start-up,
+// before the indexer's next block, as the settlement_gaps row [next block, override - 1]. The next block comes from the
+// indexer's own progress (the highest indexed block + 1, or the block being indexed on an empty database), never from
+// settlement_blocks, which the history job writes too. A row an earlier start recorded from the same height is
+// widened, never narrowed. The history job's row (from height 1, or below the indexer's first indexed block) is never
+// inserted over, widened or touched: a next block inside it records nothing.
+export function createSettlementOverrideGapFn(override: number, nextHeight: number): (dbSchema: string) => string {
   return (s) =>
     override > 0
-      ? `INSERT INTO ${s}.settlement_gaps AS gp (from_height, to_height)
-SELECT coalesce(max(height) + 1, 1), ${override}::bigint - 1 FROM ${s}.settlement_blocks
-HAVING coalesce(max(height) + 1, 1) <= ${override}::bigint - 1
-ON CONFLICT (from_height) DO UPDATE SET to_height = greatest(gp.to_height, EXCLUDED.to_height);`
+      ? `WITH n AS (SELECT coalesce((SELECT max(bl.id) FROM ${s}.blocks bl) + 1, ${nextHeight}) h,
+                  coalesce((SELECT min(bl.id) FROM ${s}.blocks bl), ${nextHeight}) first_indexed)
+INSERT INTO ${s}.settlement_gaps AS gp (from_height, to_height)
+SELECT n.h, ${override}::bigint - 1 FROM n
+WHERE n.h <= ${override}::bigint - 1
+  AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_gaps g, n n2
+                  WHERE (g.from_height = 1 OR g.from_height < n2.first_indexed) AND g.from_height <= n2.h AND g.to_height >= n2.h)
+ON CONFLICT (from_height) DO UPDATE SET to_height = greatest(gp.to_height, EXCLUDED.to_height)
+  WHERE gp.from_height <> 1 AND gp.from_height >= (SELECT coalesce(min(bl.id), ${nextHeight}) FROM ${s}.blocks bl);`
       : "";
 }

@@ -49,6 +49,28 @@ import { ROLLUP_VERSION } from "./writer";
 // {range, data}: data is the live function's JSON (the two totals' number) over the part of the range the money tables
 // cover (_legacy_range), so a consumer that switches also reads .data.
 // The catalog functions that return rows: GraphQL lists (smartTags.ts) with a <name>_json twin (end of this file).
+// The internal helpers whose stale overloads the DDL drops (createSettlementFunctionsFn), with their current input types.
+export const HELPER_SIGNATURES: Record<string, string> = {
+  _income:
+    "text[], timestamp with time zone, timestamp with time zone, text, boolean, boolean, boolean, boolean, boolean, text[], boolean, tstzmultirange, timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone",
+  _supply_flows:
+    "timestamp with time zone, timestamp with time zone, text, boolean, boolean, tstzmultirange, timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone",
+  _covered_buckets:
+    "text, timestamp with time zone, timestamp with time zone, tstzmultirange",
+  _first_bucket:
+    "text, timestamp with time zone, timestamp with time zone, tstzmultirange",
+  _coverage:
+    "timestamp with time zone, timestamp with time zone, boolean",
+  _legacy_range:
+    "timestamp without time zone, timestamp without time zone",
+  _range_json:
+    "timestamp with time zone, timestamp with time zone, boolean",
+  _range_of:
+    "timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone, jsonb, boolean",
+  _span:
+    "timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone, timestamp with time zone",
+};
+
 export const CATALOG_FUNCTIONS = [
   "money_coverage",
   "get_application_spend",
@@ -69,6 +91,10 @@ const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
+  // the reshaped helpers as SQL VALUES (name, input types): the DDL drops their other overloads
+  const helperValues = Object.entries(HELPER_SIGNATURES)
+    .map(([name, args]) => `('${name}', '${args}')`)
+    .join(", ");
   // The start of every catalog function over the money tables, in one place so that none can skip it: the part of
   // the range the money tables cover (_coverage), no rows when nothing covered overlaps it, the data read from
   // covered_from on, and the span its rows report (sp, _span over cv's bounds; none for get_income and
@@ -87,7 +113,7 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
             span === "settled"
               ? `  sp := ${s}._span(range_start, range_end, cv.first_settled, cv.last_settled, cv.covered_to);`
               : `  sp := ${s}._span(range_start, range_end, cv.first_block, cv.last_block, cv.covered_to);`,
-            "  IF bucket IS NULL AND cv.requested_from IS NOT NULL THEN sp.f := cv.requested_from; END IF;",
+            "  IF bucket IS NULL THEN sp.f := coalesce(cv.requested_from, cv.covered_from); END IF;",
           ]
         : []),
     ].join("\n");
@@ -117,6 +143,20 @@ BEGIN
   END IF;
 END $$;
 
+-- The internal helpers this version reshaped: every overload but the current signature goes first (an earlier build
+-- left another one; two would make the calls ambiguous). They are created only by this DDL. HELPER_SIGNATURES in
+-- functions.ts lists the current input types; a test fails when one drifts.
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           JOIN (VALUES
+    ${helperValues}) h(name, args) ON h.name = p.proname
+           WHERE p.pronamespace = '${s}'::regnamespace AND oidvectortypes(p.proargtypes) <> h.args LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
 -- What the money tables cover of [range_start, range_end): ONE covered set per call, which every catalog and legacy_*
 -- function reads, for its rows, its fills and its range. settlement_gaps is authoritative: the history job keeps its
 -- [1, h-1] row, the start-up records the POCKETDEX_MONEY_FROM_HEIGHT window (schema.ts), so no money event table is
@@ -131,7 +171,8 @@ END $$;
 -- covered = the span minus the gaps (a tstzmultirange); covered_from / covered_to are its bounds, both NULL when it is
 -- empty (nothing covered: empty = true, nothing to read); gaps = the merged gaps that overlap the requested range, as
 -- {from, to}, half-open. data_from is the range_start to read with: covered_from, so the data never sums heights that
--- were not written, and a row without a bucket reports covered_from as its bucket_start for an open range_start. first_settled /
+-- were not written (NULL for an open range_start when no gap cuts the start: the same data, and the first day from the
+-- rollups). A row without a bucket reports covered_from as its bucket_start for an open range_start. first_settled /
 -- last_settled / first_block / last_block are the span bounds (_span, covered()), read once here.
 -- Index probes only, and few gap rows (0.8 ms on the mainnet replica, 2026-10-06). jit = off: a settlement_gaps never
 -- analyzed is planned at ~200 rows, past jit_above_cost, and JIT compiling took ~30 ms per call (measured locally).
@@ -155,11 +196,11 @@ BEGIN
   requested_from := range_start; gaps := '[]'; covered := '{}'; data_from := range_start; empty := true;
   SELECT bl.timestamp AT TIME ZONE 'UTC' INTO last_block FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
   SELECT bl.timestamp AT TIME ZONE 'UTC' INTO first_block FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1;
-  SELECT sb.block_time INTO first_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
-  SELECT sb.block_time INTO last_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1;
   IF p_blocks THEN
     v_start := first_block;
   ELSE
+    SELECT sb.block_time INTO first_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height LIMIT 1;
+    SELECT sb.block_time INTO last_settled FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1;
     v_start := CASE WHEN first_settled IS NOT NULL THEN least(first_block, first_settled) END;
     SELECT coalesce(range_agg(tstzrange(g.f, g.t)), '{}') INTO v_gaps
     FROM (SELECT coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.from_height - 1 LIMIT 1),
@@ -181,16 +222,26 @@ BEGIN
   empty := isempty(covered);
   IF NOT empty THEN
     covered_from := lower(covered); covered_to := upper(covered);
-    data_from := covered_from;
+    -- an open start that nothing cuts (no gap before it) stays open, so a lifetime call reads its first day from the
+    -- rollups as before
+    data_from := CASE WHEN range_start IS NULL AND covered_from = v_start THEN NULL ELSE covered_from END;
   END IF;
 END $$;
 
--- The range object of the _json twins: what was asked, and what the answer covers (_coverage); requested_to and
--- covered_to are exclusive (end_inclusive false), gaps half-open.
+-- THE range object, for every _json twin and legacy_* function: what was asked, what the answer covers, the gaps
+-- (half-open) and whether requested_to / covered_to are inclusive (legacy_*, end_date's sense) or exclusive (the
+-- catalog, range_end's sense).
+CREATE OR REPLACE FUNCTION ${s}._range_of(requested_from timestamptz, requested_to timestamptz, covered_from timestamptz,
+  covered_to timestamptz, gaps jsonb, end_inclusive boolean)
+RETURNS json LANGUAGE sql IMMUTABLE AS $$
+  SELECT json_build_object('requested_from', requested_from, 'requested_to', requested_to, 'covered_from', covered_from,
+    'covered_to', covered_to, 'gaps', gaps, 'end_inclusive', end_inclusive)
+$$;
+
+-- The catalog's range of an empty answer (a twin reads it from the rows otherwise).
 CREATE OR REPLACE FUNCTION ${s}._range_json(range_start timestamptz, range_end timestamptz, p_blocks boolean DEFAULT false)
 RETURNS jsonb LANGUAGE sql STABLE AS $$
-  SELECT jsonb_build_object('requested_from', range_start, 'requested_to', range_end, 'covered_from', c.covered_from,
-                            'covered_to', c.covered_to, 'gaps', c.gaps, 'end_inclusive', false)
+  SELECT ${s}._range_of(range_start, range_end, c.covered_from, c.covered_to, c.gaps, false)::jsonb
   FROM ${s}._coverage(range_start, range_end, p_blocks) c
 $$;
 
@@ -253,9 +304,9 @@ BEGIN
 END $$;
 
 -- The span a call answers for, from bounds _coverage already read (no probe of its own): f = range_start, or p_first
--- for an open start; t = range_end, or p_last for an open end (the first / last written settlement, or indexed block for
--- the functions over the indexer's tables). Every row carries it as bucket_start / bucket_end when there is no bucket,
--- so a caller sees what was summed. t_last is the last instant a series lists buckets for: the end of what is covered
+-- for an open start (the callers set it to the requested start, or covered_from); t = the end of what is covered
+-- (p_covered_to), or range_end / p_last without one (the legacy_ callers). Every row carries them as bucket_start /
+-- bucket_end when there is no bucket, so a caller sees what was summed, and bucket_end equals covered_to. t_last is the last instant a series lists buckets for: the end of what is covered
 -- (p_covered_to, exclusive), so a covered bucket with nothing in it is a zero and one that is not covered is absent.
 -- Without bounds (the legacy_ callers, which pass both ends and fill nothing) it is range_end.
 DROP FUNCTION IF EXISTS ${s}._span(timestamptz, timestamptz);
@@ -263,7 +314,8 @@ DROP FUNCTION IF EXISTS ${s}._block_span(timestamptz, timestamptz);
 CREATE OR REPLACE FUNCTION ${s}._span(range_start timestamptz, range_end timestamptz, p_first timestamptz,
   p_last timestamptz, p_covered_to timestamptz, OUT f timestamptz, OUT t timestamptz, OUT t_last timestamptz)
 LANGUAGE sql IMMUTABLE AS $$
-  SELECT coalesce(range_start, p_first), coalesce(range_end, p_last), least(range_end, p_covered_to) - interval '1 microsecond'
+  SELECT coalesce(range_start, p_first), coalesce(p_covered_to, range_end, p_last),
+         least(range_end, p_covered_to) - interval '1 microsecond'
 $$;
 
 -- Every bucket of a span, in UTC: with a bucket and fill_empty_buckets, the catalog functions return each series once per bucket, with
@@ -813,7 +865,7 @@ BEGIN
 ${covered(null)}
   RETURN QUERY SELECT i.*, cv.covered_from, cv.covered_to, cv.gaps
     FROM ${s}._income(addresses, range_start, range_end, bucket, by_reason, by_supplier, by_service, by_address,
-                      fill_empty_buckets, p_covered => cv.covered, p_span_from => cv.requested_from,
+                      fill_empty_buckets, p_covered => cv.covered, p_span_from => coalesce(cv.requested_from, cv.covered_from),
                       p_first => cv.first_settled, p_last => cv.last_settled, p_covered_to => cv.covered_to) i ORDER BY 1 DESC, 3, 4, 5, 6, 7;
 END $$;
 
@@ -1039,7 +1091,8 @@ BEGIN
   PERFORM ${s}._validate(NULL, '', range_start, range_end, bucket);
 ${covered(null)}
   RETURN QUERY SELECT f.*, cv.covered_from, cv.covered_to, cv.gaps
-    FROM ${s}._supply_flows(range_start, range_end, bucket, by_role, fill_empty_buckets, cv.covered, cv.requested_from,
+    FROM ${s}._supply_flows(range_start, range_end, bucket, by_role, fill_empty_buckets, cv.covered,
+                           coalesce(cv.requested_from, cv.covered_from),
                            cv.first_settled, cv.last_settled, cv.covered_to) f
     ORDER BY 1 DESC, 3, 4;
 END $$;
@@ -1445,14 +1498,7 @@ BEGIN
   END IF;
 END $$;
 
--- A legacy_* range from _coverage's bounds: requested_to and covered_to inclusive, end_date's sense (end_inclusive
--- true); gaps stay half-open.
-CREATE OR REPLACE FUNCTION ${s}._legacy_range_of(start_date timestamp, end_date timestamp, covered_from timestamptz,
-  covered_to timestamptz, gaps jsonb)
-RETURNS json LANGUAGE sql STABLE AS $$
-  SELECT json_build_object('requested_from', start_date AT TIME ZONE 'UTC', 'requested_to', end_date AT TIME ZONE 'UTC',
-    'covered_from', covered_from, 'covered_to', covered_to - interval '1 microsecond', 'gaps', gaps, 'end_inclusive', true)
-$$;
+DROP FUNCTION IF EXISTS ${s}._legacy_range_of(timestamp, timestamp, timestamptz, timestamptz, jsonb);
 
 -- The range of a legacy_* call ([start_date, end_date], inclusive) as the catalog's twins report it, with end_date as
 -- requested_to and covered_to; start_from is the start_date to read with (moved up to covered_from, 'infinity' when
@@ -1473,12 +1519,14 @@ DECLARE cv record;
 BEGIN
   IF start_date IS NULL OR end_date IS NULL OR start_date > end_date THEN
     -- matches nothing, as in the live function: no coverage to report, and the live function's empty answer
-    range := ${s}._legacy_range_of(start_date, end_date, NULL, NULL, '[]');
+    range := ${s}._range_of(start_date AT TIME ZONE 'UTC', end_date AT TIME ZONE 'UTC', NULL, NULL, '[]', true);
     start_from := start_date; empty := false;
     RETURN;
   END IF;
   cv := ${s}._coverage(start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC');
-  range := ${s}._legacy_range_of(start_date, end_date, cv.covered_from, cv.covered_to, cv.gaps);
+  -- covered_to back to end_date's inclusive sense
+  range := ${s}._range_of(start_date AT TIME ZONE 'UTC', end_date AT TIME ZONE 'UTC', cv.covered_from,
+                         cv.covered_to - interval '1 microsecond', cv.gaps, true);
   start_from := CASE WHEN cv.empty THEN 'infinity' ELSE cv.data_from AT TIME ZONE 'UTC' END;
   empty := cv.empty;
 END $$;
@@ -1494,12 +1542,13 @@ BEGIN
   END LOOP;
 END $$;
 
--- data NULL: nothing written overlaps the range (a covered range with no income is 0)
+-- data: the total as a JSON string ("201156529", as GraphQL gave the live numeric: a BigFloat string, no double
+-- rounding); NULL when nothing covered overlaps the range (a covered range with no income is "0")
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time(addresses text[], start_date timestamp,
   end_date timestamp)
 RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('range', l.range, 'data', CASE WHEN NOT l.empty THEN
-    (SELECT coalesce(sum(i.amount_upokt), 0)::numeric FROM ${s}._legacy_series(addresses, NULL, l.start_from, end_date, NULL) i) END)
+    (SELECT coalesce(sum(i.amount_upokt), 0)::text FROM ${s}._legacy_series(addresses, NULL, l.start_from, end_date, NULL) i) END)
   FROM ${s}._legacy_range(start_date, end_date) l
 $$;
 
@@ -1527,7 +1576,7 @@ CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_of_addresses_by_suppliers_and_tim
   supplier_addresses text[], start_date timestamp, end_date timestamp)
 RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object('range', l.range, 'data', CASE WHEN NOT l.empty THEN
-    (SELECT coalesce(sum(i.amount_upokt), 0)::numeric
+    (SELECT coalesce(sum(i.amount_upokt), 0)::text
      FROM ${s}._legacy_series(addresses, coalesce(supplier_addresses, '{}'), l.start_from, end_date, NULL) i) END)
   FROM ${s}._legacy_range(start_date, end_date) l
 $$;
@@ -1743,9 +1792,7 @@ BEGIN
       WITH r AS (SELECT * FROM ${s}.%I(%s) WITH ORDINALITY r)
       SELECT jsonb_build_object(
         ''range'', coalesce(
-          (SELECT jsonb_build_object(''requested_from'', range_start, ''requested_to'', range_end,
-                    ''covered_from'', r.covered_from, ''covered_to'', r.covered_to, ''gaps'', r.covered_gaps,
-                    ''end_inclusive'', false)
+          (SELECT ${s}._range_of(range_start, range_end, r.covered_from, r.covered_to, r.covered_gaps, false)::jsonb
            FROM r ORDER BY r.ordinality LIMIT 1),
           ${s}._range_json(range_start, range_end, %L)),
         ''data'', (SELECT coalesce(jsonb_agg((SELECT jsonb_object_agg(e.k, CASE jsonb_typeof(e.v)

@@ -91,7 +91,8 @@ async function createIndexesConcurrently(sqls: string[]): Promise<void> {
   }
 }
 
-export async function createDbFunctions(): Promise<void> {
+// nextHeight: the block being indexed (the start-up's override gap starts there on an empty database).
+export async function createDbFunctions(nextHeight: number): Promise<void> {
   const wereFunctionsCreated = await cache.get(functionsCreatedCacheKey)
 
   if (wereFunctionsCreated) return
@@ -148,7 +149,7 @@ export async function createDbFunctions(): Promise<void> {
     schema,
     createSettlementTablesFn,
     // the POCKETDEX_MONEY_FROM_HEIGHT window as a settlement gap, before any block is indexed
-    createSettlementOverrideGapFn(moneyFromHeightOverride(process.env)),
+    createSettlementOverrideGapFn(moneyFromHeightOverride(process.env), nextHeight),
     createSettlementWriterFn,
     createSettlementFunctionsFn,
     // after the objects it tags; hides tables and helpers from the GraphQL API

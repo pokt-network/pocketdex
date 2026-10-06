@@ -755,7 +755,7 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
 }
 
 export async function indexingHandler(block: CosmosBlock): Promise<void> {
-  await createDbFunctions()
+  await createDbFunctions(block.header.height)
   await profilerWrap(_indexingHandler, "all", "index.manager")(block);
 }
 
