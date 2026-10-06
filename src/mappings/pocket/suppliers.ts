@@ -895,9 +895,8 @@ function collectSupplierIds(
       ].includes(eventOrMsg.event.type)) {
         suppliers.push(...eventSuppliers);
 
-        // the end of the unbonding, and a begin below the minimum stake, close the supplier's configs, so they
-        // must be loaded (the reason is not read here: loading them for another begin writes nothing)
-        if (eventOrMsg.event.type !== "pocket.tokenomics.EventSupplierSlashed") {
+        // the end of the unbonding closes the supplier's configs, so they must be loaded
+        if (eventOrMsg.event.type === "pocket.supplier.EventSupplierUnbondingEnd") {
           suppliersToFetchServices.push(...eventSuppliers);
         }
       }
@@ -1031,7 +1030,8 @@ function _applyUnbondingEnd(
 
 // SupplierServiceConfig holds what the supplier declared. An unstake withdraws all of it: the chain schedules every
 // config to deactivate at the next session start (poktroll msg_server_unstake_supplier.go), so the rows close at
-// the unstake height. An unbonding for falling below the minimum stake does the same (settle_pending_claims.go). A restake during the unbonding declares services again through the stake path; a stake-only
+// the unstake height. An unbonding for falling below the minimum stake does not withdraw it: settlement sets the
+// deactivation on an in-memory supplier it stores dehydrated, and the chain keeps reporting deactivation_height 0. A restake during the unbonding declares services again through the stake path; a stake-only
 // one declares none, as the chain keeps the deactivated history. The end of the unbonding then finds nothing open.
 function _closeDeclaredServices(supplierRecord: SupplierRecord, servicesToClose: Set<string>): void {
   for (const serviceId of Object.keys(supplierRecord.services || {})) {
@@ -1097,11 +1097,6 @@ function processSupplierEventsAndMessages(
         const { supplier, unbondingBeginEvent } = _handleSupplierUnbondingBeginEvent(eventOrMsg, record);
         record[supplier.id].supplier = supplier;
         suppliersChanged.add(supplier.id);
-        // falling below the minimum stake withdraws the declaration as an unstake does (poktroll
-        // settle_pending_claims.go); a MIGRATION begin (a claim of an unbonding Morse supplier) deactivates nothing
-        if (unbondingBeginEvent.reason === SupplierUnbondingReason.BELOW_MIN_STAKE) {
-          _closeDeclaredServices(record[supplier.id], servicesToClose);
-        }
         unbondingBeginEvents.push(unbondingBeginEvent);
       }
 

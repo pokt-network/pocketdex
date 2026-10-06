@@ -408,29 +408,20 @@ describe("indexSupplier service configs", () => {
     assert.deepEqual(open(S1), ["akash@180"]);
   });
 
-  it("an unbonding for falling below the minimum stake closes the supplier's configs, as an unstake does", async () => {
-    reset();
-    await index(100, [stake(100, S1, ["akash", "eth"])], []);
-    await index(120, [], activations(120, S1, ["akash", "eth"]));
+  for (const reason of ["BELOW_MIN_STAKE", "MIGRATION"] as const) {
+    it(`an unbonding begun by ${reason} leaves the supplier's configs declared`, async () => {
+      reset();
+      await index(100, [stake(100, S1, ["akash"])], []);
+      await index(120, [], activations(120, S1, ["akash"]));
 
-    // poktroll settle_pending_claims.go schedules every config to deactivate, as MsgUnstakeSupplier does
-    await index(150, [], [unbondingBegin(150, S1, "BELOW_MIN_STAKE")]);
-    assert.deepEqual(open(S1), []);
-    assert.deepEqual(history(S1, "akash"), [
-      [100, 120, null],
-      [120, 150, 120],
-    ]);
-  });
-
-  it("an unbonding begun by a Morse migration leaves the supplier's configs declared", async () => {
-    reset();
-    await index(100, [stake(100, S1, ["akash"])], []);
-    await index(120, [], activations(120, S1, ["akash"]));
-
-    // the claim of an unbonding Morse supplier schedules no deactivation
-    await index(150, [], [unbondingBegin(150, S1, "MIGRATION")]);
-    assert.deepEqual(open(S1), ["akash@120"]);
-  });
+      // Neither withdraws the declaration on chain. MIGRATION schedules no deactivation. BELOW_MIN_STAKE sets one
+      // on the in-memory supplier only (poktroll settle_pending_claims.go saves it with SetDehydratedSupplier,
+      // which drops the history): the chain still reports deactivation_height 0 after the begin (beta supplier
+      // pokt184feal... at 482554 and 490000, mainnet pokt1wua234... at 461854 and 470000).
+      await index(150, [], [unbondingBegin(150, S1, reason)]);
+      assert.deepEqual(open(S1), ["akash@120"]);
+    });
+  }
 
   it("a stake-only restake during the unbonding declares nothing", async () => {
     reset();
