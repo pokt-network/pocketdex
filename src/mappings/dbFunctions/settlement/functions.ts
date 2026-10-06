@@ -122,7 +122,16 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
             // _span from the bounds _coverage already read: settlements, or blocks for the indexer's tables
             span === "settled"
               ? `  sp := ${s}._span(range_start, range_end, cv.first_settled, cv.last_settled, cv.covered_to);`
-              : `  sp := ${s}._span(range_start, range_end, cv.first_block, cv.last_block, cv.covered_to);`,
+              : // _coverage reads the block bounds only for p_blocks: a blocks span over the money tables reads them here
+                [
+                  ...(blocks
+                    ? []
+                    : [
+                        `  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO cv.first_block FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1;`,
+                        `  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO cv.last_block FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;`,
+                      ]),
+                  `  sp := ${s}._span(range_start, range_end, cv.first_block, cv.last_block, cv.covered_to);`,
+                ].join("\n"),
             "  IF bucket IS NULL THEN sp.f := coalesce(cv.requested_from, cv.covered_from); END IF;",
           ]
         : []),
@@ -185,7 +194,9 @@ END $$;
 -- {from, to}, half-open. data_from is the range_start to read with: covered_from, so the data never sums heights that
 -- were not written (the callers clip the end to covered_to too). A row without a bucket reports covered_from as its
 -- bucket_start for an open range_start. first_settled /
--- last_settled / first_block / last_block are the span bounds (_span, covered()), read once here.
+-- last_settled are the span bounds of the money tables (_span, covered()), read once here; first_block / last_block
+-- only for p_blocks, where they are the covered span (a blocks span over the money tables reads them itself, and the
+-- end falls back to the latest block only when the progress block is missing).
 -- Index probes only, and few gap rows (0.8 ms on the mainnet replica, 2026-10-06). jit = off: a settlement_gaps never
 -- analyzed is planned at ~200 rows, past jit_above_cost, and JIT compiling took ~30 ms per call (measured locally).
 CREATE OR REPLACE FUNCTION ${s}._coverage(range_start timestamptz, range_end timestamptz, p_blocks boolean DEFAULT false,
@@ -196,9 +207,9 @@ LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS
 DECLARE v_start timestamptz; v_end timestamptz; v_gaps tstzmultirange := '{}'; v_from_h bigint; v_progress bigint;
 BEGIN
   requested_from := range_start; gaps := '[]'; covered := '{}'; data_from := range_start; empty := true;
-  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO last_block FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
-  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO first_block FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1;
   IF p_blocks THEN
+    SELECT bl.timestamp AT TIME ZONE 'UTC' INTO last_block FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
+    SELECT bl.timestamp AT TIME ZONE 'UTC' INTO first_block FROM ${s}.blocks bl ORDER BY bl.timestamp, bl.id LIMIT 1;
     v_start := first_block;
     v_end := last_block + interval '1 microsecond';
   ELSE
@@ -207,7 +218,8 @@ BEGIN
     SELECT mp.from_height, mp.height INTO v_from_h, v_progress FROM ${s}.money_progress mp;
     IF v_progress IS NOT NULL THEN
       v_end := coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = v_progress LIMIT 1),
-                        last_block) + interval '1 microsecond';
+                        (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl
+                         ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1)) + interval '1 microsecond';
       -- the block at from_height, or the first indexed one after it when the blocks table lacks it
       v_start := (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id >= v_from_h ORDER BY bl.id LIMIT 1);
     END IF;

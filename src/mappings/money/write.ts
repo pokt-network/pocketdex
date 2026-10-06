@@ -174,7 +174,6 @@ async function recordMoneyProgress(height: number, skipped = false): Promise<voi
 }
 
 let loggedBelowThreshold = false;
-let skipRecorded = false;
 
 // The bonded validators of the snapshot, in the shape the delegator × validator split takes.
 export function de2Validators(snapshot: ValidatorSnapshot | undefined): De2Validator[] | null {
@@ -186,11 +185,11 @@ export async function indexMoney(block: CosmosBlock, validators?: ValidatorSnaps
   const height = block.header.height;
   const from = moneyFromHeight(block.header.chainId);
   if (height < from) {
-    // the first skipped height of the process pulls the progress back below it (a restart after a rewind); the rest
-    // leave it as it is
-    if (!skipRecorded && moneyFromHeightOverride(process.env) > 0) {
+    // a skipped height pulls the progress back below it (a restart after a rewind). Every skipped block issues it, in
+    // its own block transaction, so a rolled-back block cannot lose it; the UPDATE is conditional (height > h - 1),
+    // so after the first it changes nothing (one row, a primary key probe)
+    if (moneyFromHeightOverride(process.env) > 0) {
       await recordMoneyProgress(height, true);
-      skipRecorded = true;
     }
     if (!loggedBelowThreshold) {
       logger.info(`[indexMoney] settlement money is written from height ${from}; height ${height} is below it`);

@@ -409,13 +409,13 @@ async function lowerGap(client: PgClient, schema: string, height: number): Promi
   ]);
 }
 
-// One height, one transaction: the CALLs of write_settlement, then the gap lowered below the height (which also
-// covers the heights with no money above it, already classified).
 // The lock order of the indexer's money step: money_progress first, then the settlement writer.
 async function lockProgress(client: PgClient, schema: string): Promise<void> {
   await client.query(`SELECT 1 FROM ${schema}.money_progress FOR UPDATE`);
 }
 
+// One height, one transaction: the CALLs of write_settlement, then the gap lowered below the height (which also
+// covers the heights with no money above it, already classified).
 async function writeHeight(client: PgClient, o: HistoryOptions, p: Prepared): Promise<void> {
   await client.query("BEGIN");
   try {
