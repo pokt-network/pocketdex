@@ -41,7 +41,8 @@ export const MAX_ROWS_PER_CALL = 50000;
 // statement:
 // - with a POCKETDEX_MONEY_FROM_HEIGHT override, the heights it skipped, [progress + 1, override - 1], as a
 //   settlement_gaps row (a no-op once the progress is past them, or before the money step processed any height:
-//   then they are below what it covers anyway);
+//   then they are below what it covers anyway). It starts no lower than from_height: a skip can pull the progress
+//   below it, and the heights under from_height are the history job's, which no override row may claim;
 // - an override hole (a gap row not starting at 1) the height falls in: trimmed to end below it, deleted when it starts
 //   there (the money step processes it now: a rewind, or an override lowered). The history job's row is never touched;
 // - the progress, set to the height (money_progress).
@@ -50,8 +51,8 @@ export function recordMoneyProgressCall(s: string, height: number, override: num
   return {
     sql: `WITH gap AS (
        INSERT INTO ${s}.settlement_gaps (from_height, to_height)
-       SELECT mp.height + 1, $2::bigint - 1 FROM ${s}.money_progress mp
-       WHERE $2::bigint > 0 AND mp.height + 1 <= $2::bigint - 1
+       SELECT greatest(mp.height + 1, mp.from_height), $2::bigint - 1 FROM ${s}.money_progress mp
+       WHERE $2::bigint > 0 AND greatest(mp.height + 1, mp.from_height) <= $2::bigint - 1
        ON CONFLICT (from_height) DO NOTHING RETURNING 1
      ), dropped AS (
        DELETE FROM ${s}.settlement_gaps WHERE from_height <> 1 AND from_height = $1::bigint RETURNING 1

@@ -63,7 +63,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         ('started', 'Staked', int8range(100, NULL)),
         ('first-block', 'Staked', int8range(100, NULL)),
         ('genesis', 'Staked', int8range(141, NULL)), ('late', 'Staked', int8range(100, NULL)),
-        ('pre-block', 'Staked', int8range(100, NULL)), ('param-change', 'Staked', int8range(100, NULL));
+        ('pre-block', 'Staked', int8range(100, NULL)), ('param-change', 'Staked', int8range(100, NULL)),
+        ('empty', 'Staked', int8range(100, NULL));
       INSERT INTO ${S}.supplier_service_configs (supplier_id, service_id, domains, _block_range) VALUES
         -- unstaked at 150, inside the session: the claim settles at 175 with no config open
         ('unstaked', 'akash', '["a.com"]', int8range(100, 150)),
@@ -91,7 +92,10 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         ('pre-block', 'akash', '["n.com"]', int8range(140, NULL)),
         -- the 20-block session starts at 141; with the change's 10 it would start at 151, under p.com
         ('param-change', 'akash', '["o.com"]', int8range(100, 150)),
-        ('param-change', 'akash', '["p.com"]', int8range(150, NULL));
+        ('param-change', 'akash', '["p.com"]', int8range(150, NULL)),
+        -- the version live before the session has no domain (no endpoint URL parsed): the latest one with a domain
+        ('empty', 'akash', '["q.com"]', int8range(100, 130)),
+        ('empty', 'akash', '[]', int8range(130, NULL));
       INSERT INTO ${S}.event_claim_settleds VALUES
         ('unstaked', 'akash', 175, 0, 160, 1, 1, 10, 10, 1000),
         ('restaked', 'akash', 175, 0, 160, 2, 2, 20, 20, 2000),
@@ -102,7 +106,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         ('genesis', 'akash', 175, 0, 160, 4, 4, 40, 40, 4000),
         ('late', 'akash', 175, 0, 160, 128, 128, 1280, 1280, 128000),
         ('pre-block', 'akash', 175, 0, 160, 256, 256, 2560, 2560, 256000),
-        ('param-change', 'akash', 175, 0, 160, 512, 512, 5120, 5120, 512000);`
+        ('param-change', 'akash', 175, 0, 160, 512, 512, 5120, 5120, 512000),
+        ('empty', 'akash', 175, 0, 160, 1024, 1024, 10240, 10240, 1024000);`
     );
     await c.query(`SELECT ${S}.refresh_domain_service_daily_rewards(175)`);
   });
@@ -129,6 +134,7 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       { domain: "l.com", service_id: "akash", relays: "128", gross_rewards: "128000" },
       { domain: "n.com", service_id: "akash", relays: "256", gross_rewards: "256000" },
       { domain: "o.com", service_id: "akash", relays: "512", gross_rewards: "512000" },
+      { domain: "q.com", service_id: "akash", relays: "1024", gross_rewards: "1024000" },
     ]);
   });
 
@@ -139,8 +145,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       const r = (
         await c.query(`SELECT sum(relays)::text relays FROM ${S}.domain_service_daily_rewards WHERE day = '2026-10-01'`)
       ).rows[0];
-      // every claim is still there: 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 512
-      assert.equal(r.relays, "1023");
+      // every claim is still there: 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 512 + 1024
+      assert.equal(r.relays, "2047");
     } finally {
       await c.query("ROLLBACK");
     }
