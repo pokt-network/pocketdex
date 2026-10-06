@@ -39,14 +39,16 @@ import { ROLLUP_VERSION } from "./writer";
 // earlier of range_end and the latest indexed block, or the last written settlement while later ones are not written)
 // and covered_gaps (the settlement_gaps that overlap the range, whose heights read as nothing); the _json twins return
 // {range, data} with the same. A range that nothing written overlaps returns no rows, so only the _json twin tells
-// "not covered" ([] with its range) from "nothing happened". money_coverage(range_start, range_end) lists the settlement heights in a range that are
-// missing, and the recorded gaps.
+// "not covered" ([] with its range) from "nothing happened". money_coverage(range_start, range_end) lists the
+// settlement heights in a range that are missing, and the recorded gaps.
 //
 // The legacy_* functions answer the live get_rewards_* / get_mint_breakdown_between_dates /
-// get_burn_breakdown_between_dates with their signatures and JSON, from the money tables, for a consumer to switch to.
+// get_burn_breakdown_between_dates with their arguments and, under data, their JSON, from the money tables, for a
+// consumer to switch to.
 // Their names swap "get_" for "legacy_" (a prefix would push two of them past PostgreSQL's 63-character limit). Like
 // the live functions, they take any number of addresses; the catalog functions take at most 200 ids. They return
-// {range, data}: data is the live function's JSON over the part of the range the money tables cover (_legacy_range).
+// {range, data}: data is the live function's JSON (the two totals' number) over the part of the range the money tables
+// cover (_legacy_range), so a consumer that switches also reads .data.
 // The catalog functions that return rows: GraphQL lists (smartTags.ts) with a <name>_json twin (end of this file).
 export const CATALOG_FUNCTIONS = [
   "money_coverage",
@@ -71,7 +73,7 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   // The start of every catalog function over the money tables, in one place so that none can skip it: the part of
   // the range the money tables cover (_coverage), no rows when nothing written overlaps it, the data read from the
   // first written settlement on, and the span its rows report (sp, from _span / _block_span; none for get_income,
-  // which _income spans). Without a bucket a row's bucket_start is the requested range_start: covered_from says where
+  // which passes cv to _income). Without a bucket a row's bucket_start is the requested range_start: covered_from says where
   // the data starts. The rows then carry cv.covered_from, cv.covered_to and cv.gaps.
   const covered = (span: string | null) =>
     [
@@ -127,10 +129,11 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 -- What the money tables cover of [range_start, range_end), for the range every catalog function reports:
--- covered_from = the later of range_start and the start of what is written: the first written settlement when the
--- history before it is missing (the chain settled earlier, the min block_id of event_claim_settleds, or a
--- settlement_gaps row lies below it, such as the history job's [1, h-1]); otherwise the first indexed block, as for
--- the functions over the indexer's own tables (p_blocks).
+-- covered_from = the later of range_start and the start of what is written: the block right after a leading
+-- settlement_gaps row (the history job's [1, h-1]: the heights between it and the first written settlement are
+-- classified, and settled nothing); the first written settlement when the history before it is missing otherwise (the
+-- chain settled earlier, the min block_id of event_claim_settleds); otherwise the first indexed block, as for the
+-- functions over the indexer's own tables (p_blocks).
 -- (When the history reaches below the indexer's first block, as the history job writes it, the earlier of the two.)
 -- covered_to = the earlier of range_end and covered_until + 1 µs, so that [covered_from, covered_to) is half-open like
 -- the range: covered_until is the latest indexed block, or the last written settlement when the chain has settlement
@@ -138,9 +141,10 @@ $$;
 -- settlement legitimately settled nothing.
 -- gaps = the settlement_gaps rows that overlap the requested range, each as its first and last unwritten instant
 -- (inclusive): the block times of its first and last height, or, for a height the blocks table lacks, 1 µs after / before
--- the written settlement next to the gap (from NULL when there is none before it, to NULL when there is none after).
--- data_from is the range_start to read with: moved up to the first written settlement, so the data never sums heights
--- that were not written; empty = nothing written overlaps the range (it ends before covered_from, starts after
+-- the block next to it, else the written settlement next to the gap (from NULL when there is none before it, to NULL
+-- when there is none after).
+-- data_from is the range_start to read with: moved up to covered_from, so the data never sums heights that were not
+-- written; empty = nothing written overlaps the range (it ends before covered_from, starts after
 -- covered_until, lies inside one gap, or nothing is written yet), so there is nothing to read. Index probes only.
 DROP FUNCTION IF EXISTS ${s}._check_coverage(timestamptz, timestamptz);
 -- its OUT columns changed (head became covered_until, requested_from was added): a database written before has it dropped
@@ -156,7 +160,7 @@ CREATE OR REPLACE FUNCTION ${s}._coverage(range_start timestamptz, range_end tim
   OUT data_from timestamptz, OUT empty boolean, OUT covered_until timestamptz)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE v_start timestamptz; v_first bigint; v_first_ts timestamptz; v_last bigint; v_last_ts timestamptz;
-  v_chain_first numeric; v_chain_last numeric;
+  v_chain_first numeric; v_chain_last numeric; v_gap_top bigint;
 BEGIN
   requested_from := range_start; gaps := '[]'; data_from := range_start; empty := false;
   SELECT bl.timestamp AT TIME ZONE 'UTC' INTO covered_until FROM ${s}.blocks bl ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
@@ -165,9 +169,13 @@ BEGIN
     SELECT coalesce(jsonb_agg(jsonb_build_object('from', g.f, 'to', g.t) ORDER BY g.from_height), '[]') INTO gaps
     FROM (SELECT gp.from_height,
                  coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.from_height LIMIT 1),
+                          (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.from_height - 1 LIMIT 1)
+                            + interval '1 microsecond',
                           (SELECT sb.block_time FROM ${s}.settlement_blocks sb WHERE sb.height < gp.from_height
                            ORDER BY sb.height DESC LIMIT 1) + interval '1 microsecond') f,
                  coalesce((SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.to_height LIMIT 1),
+                          (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = gp.to_height + 1 LIMIT 1)
+                            - interval '1 microsecond',
                           (SELECT sb.block_time FROM ${s}.settlement_blocks sb WHERE sb.height > gp.to_height
                            ORDER BY sb.height LIMIT 1) - interval '1 microsecond') t
           FROM ${s}.settlement_gaps gp) g
@@ -179,11 +187,20 @@ BEGIN
       empty := true;
       RETURN;
     END IF;
-    IF v_first > v_chain_first OR EXISTS (SELECT 1 FROM ${s}.settlement_gaps gp WHERE gp.from_height < v_first) THEN
+    SELECT max(gp.to_height) INTO v_gap_top FROM ${s}.settlement_gaps gp WHERE gp.from_height < v_first;
+    IF v_gap_top IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM ${s}.event_claim_settleds e WHERE e.block_id > v_gap_top AND e.block_id < v_first) THEN
+      -- a leading gap (the history job's [1, h-1]): the heights above it are classified, those without money settled
+      -- nothing, so coverage starts at the block after it
+      v_start := least(v_first_ts, (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = v_gap_top + 1 LIMIT 1));
+    ELSIF v_gap_top IS NOT NULL OR v_first > v_chain_first THEN
       v_start := v_first_ts;
-      IF range_start < v_first_ts THEN data_from := v_first_ts; END IF;
-    ELSE
+    ELSIF v_start IS NOT NULL THEN
+      -- complete: from the first indexed block, or the first written settlement when the history reaches below it
       v_start := least(v_start, v_first_ts);
+    END IF;
+    IF v_gap_top IS NOT NULL OR v_first > v_chain_first THEN
+      IF range_start < v_start THEN data_from := v_start; END IF;
     END IF;
     SELECT e.block_id INTO v_chain_last FROM ${s}.event_claim_settleds e ORDER BY e.block_id DESC LIMIT 1;
     SELECT sb.height, sb.block_time INTO v_last, v_last_ts FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1;
@@ -316,6 +333,21 @@ RETURNS timestamptz LANGUAGE sql STABLE AS $$
               ELSE (date_trunc(bucket, p_ts AT TIME ZONE 'UTC') + ('1 ' || bucket)::interval) AT TIME ZONE 'UTC' END
 $$;
 
+-- The buckets a zero fill may use (fill_empty_buckets): every bucket of the span but those that overlap a coverage gap,
+-- whose unwritten heights must not read as zero. _first_bucket is where the zero row of a requested id with no activity
+-- goes: the first of them (the span's start without a bucket). Every fill goes through these two, once per call.
+CREATE OR REPLACE FUNCTION ${s}._covered_buckets(bucket text, span_first timestamptz, span_last timestamptz, gaps jsonb,
+  OUT bucket_start timestamptz, OUT bucket_end timestamptz)
+RETURNS SETOF record LANGUAGE sql STABLE AS $$
+  SELECT b.bucket_start, b.bucket_end FROM ${s}._buckets(bucket, span_first, span_last) b
+  WHERE NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, gaps)
+$$;
+CREATE OR REPLACE FUNCTION ${s}._first_bucket(bucket text, span_first timestamptz, span_last timestamptz, gaps jsonb)
+RETURNS timestamptz LANGUAGE sql STABLE AS $$
+  SELECT CASE WHEN bucket IS NULL THEN span_first
+              ELSE (SELECT min(b.bucket_start) FROM ${s}._covered_buckets(bucket, span_first, span_last, gaps) b) END
+$$;
+
 -- Block heights of [range_start, range_end), for the functions that read SubQuery entity tables (blocks.timestamp is
 -- UTC without time zone; idx_blocks_timestamp_id serves both lookups). lo is NULL when no block is that late.
 CREATE OR REPLACE FUNCTION ${s}._block_heights(range_start timestamptz, range_end timestamptz, OUT lo numeric, OUT hi numeric)
@@ -378,11 +410,12 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, application_id t
   relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, claims bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record;
+DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   PERFORM ${s}._validate(applications, 'applications', range_start, range_end, bucket);
 ${covered("_span")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, application_id, service_id, supplier_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims) AS (
   WITH r AS (
@@ -417,21 +450,21 @@ ${covered("_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
   FROM (SELECT DISTINCT unnest(applications) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_application AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_application AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.application_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_application AND sp.f IS NOT NULL AND cardinality(applications) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  WHERE fill_empty_buckets AND NOT by_application AND fb IS NOT NULL AND cardinality(applications) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.application_id, k.service_id, k.supplier_id, CASE WHEN k.burned_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overserviced_unpaid_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.reimbursed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.application_id, r.service_id, r.supplier_id, bool_and(r.burned_upokt IS NULL) burned_upokt_na, bool_and(r.overserviced_unpaid_upokt IS NULL) overserviced_unpaid_upokt_na, bool_and(r.reimbursed_upokt IS NULL) reimbursed_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.claims IS NULL) claims_na FROM res r GROUP BY r.application_id, r.service_id, r.supplier_id) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.application_id, chr(1)) = coalesce(k.application_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)) AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4, 5;
 END $$;
@@ -446,11 +479,12 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, gateway_id text,
   relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, claims bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record;
+DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   PERFORM ${s}._validate(gateways, 'gateways', range_start, range_end, bucket);
 ${covered("_span")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, gateway_id, application_id, service_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims) AS (
   WITH days AS (
@@ -495,21 +529,21 @@ ${covered("_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
   FROM (SELECT DISTINCT unnest(gateways) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_gateway AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_gateway AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.gateway_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_gateway AND sp.f IS NOT NULL AND cardinality(gateways) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  WHERE fill_empty_buckets AND NOT by_gateway AND fb IS NOT NULL AND cardinality(gateways) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.gateway_id, k.application_id, k.service_id, CASE WHEN k.burned_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overserviced_unpaid_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.reimbursed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.gateway_id, r.application_id, r.service_id, bool_and(r.burned_upokt IS NULL) burned_upokt_na, bool_and(r.overserviced_unpaid_upokt IS NULL) overserviced_unpaid_upokt_na, bool_and(r.reimbursed_upokt IS NULL) reimbursed_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.claims IS NULL) claims_na FROM res r GROUP BY r.gateway_id, r.application_id, r.service_id) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.gateway_id, chr(1)) = coalesce(k.gateway_id, chr(1)) AND coalesce(r.application_id, chr(1)) = coalesce(k.application_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4, 5;
 END $$;
@@ -524,7 +558,7 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
   settled_claims_with_proof bigint, settled_claims_without_proof bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; all_suppliers boolean; cv record;
+DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
   IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
     RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
@@ -540,6 +574,7 @@ BEGIN
   all_suppliers := suppliers IS NULL;
 ${covered("_span")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof) AS (
   WITH r AS (
@@ -573,21 +608,21 @@ ${covered("_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint
   FROM (SELECT DISTINCT unnest(suppliers) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.supplier_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint
+  WHERE fill_empty_buckets AND NOT by_supplier AND fb IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.service_id, k.application_id, CASE WHEN k.claimed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.settled_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overservicing_loss_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_with_proof_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_without_proof_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.supplier_id, r.service_id, r.application_id, bool_and(r.claimed_upokt IS NULL) claimed_upokt_na, bool_and(r.settled_upokt IS NULL) settled_upokt_na, bool_and(r.overservicing_loss_upokt IS NULL) overservicing_loss_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.settled_claims IS NULL) settled_claims_na, bool_and(r.settled_claims_with_proof IS NULL) settled_claims_with_proof_na, bool_and(r.settled_claims_without_proof IS NULL) settled_claims_without_proof_na FROM res r GROUP BY r.supplier_id, r.service_id, r.application_id) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)) AND coalesce(r.application_id, chr(1)) = coalesce(k.application_id, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4, 5;
 END $$;
@@ -603,7 +638,7 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
   amount_upokt numeric, transfer_count bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record;
+DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   IF (suppliers IS NULL) = (owners IS NULL) THEN
     RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now)';
@@ -617,6 +652,7 @@ BEGIN
   END IF;
 ${covered("_span")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, recipient_id, role, family, amount_upokt, transfer_count) AS (
   WITH x AS (
@@ -641,21 +677,21 @@ ${covered("_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 'all', 'all', 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 'all', 0::numeric, 0::bigint
   FROM (SELECT DISTINCT unnest(suppliers) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.supplier_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND cardinality(suppliers) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
+  WHERE fill_empty_buckets AND NOT by_supplier AND fb IS NOT NULL AND cardinality(suppliers) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.recipient_id, k.role, k.family, CASE WHEN k.amount_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.transfer_count_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.supplier_id, r.recipient_id, r.role, r.family, bool_and(r.amount_upokt IS NULL) amount_upokt_na, bool_and(r.transfer_count IS NULL) transfer_count_na FROM res r GROUP BY r.supplier_id, r.recipient_id, r.role, r.family) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.recipient_id, chr(1)) = coalesce(k.recipient_id, chr(1)) AND coalesce(r.role, chr(1)) = coalesce(k.role, chr(1)) AND coalesce(r.family, chr(1)) = coalesce(k.family, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4, 5, 6;
 END $$;
@@ -665,23 +701,25 @@ END $$;
 -- Supplier AND service at once: whole months from monthly_income_by_address_supplier_service, everything else from the base.
 -- suppliers (with by_supplier) keeps only the income those suppliers generated, read by index
 -- instead of filtering the result (the legacy_* functions). capped = false lifts _validate's per-bucket range caps, for
--- the legacy_* functions: the live functions they replace take any range. p_gaps: get_income's coverage gaps, whose
--- buckets get no zero row. Unordered: get_income orders.
+-- the legacy_* functions: the live functions they replace take any range. p_gaps / p_span_from: get_income's coverage
+-- gaps, whose buckets get no zero row, and its requested range_start (covered()). Unordered: get_income orders.
 DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[]);
 DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[], boolean);
+DROP FUNCTION IF EXISTS ${s}._income(text[], timestamptz, timestamptz, text, boolean, boolean, boolean, boolean, boolean, text[], boolean, jsonb);
 CREATE OR REPLACE FUNCTION ${s}._income(addresses text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT false,
   by_service boolean DEFAULT false, by_address boolean DEFAULT true,
   fill_empty_buckets boolean DEFAULT false, suppliers text[] DEFAULT NULL, capped boolean DEFAULT true,
-  p_gaps jsonb DEFAULT '[]')
+  p_gaps jsonb DEFAULT '[]', p_span_from timestamptz DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, address text, role text, family text, supplier_id text, service_id text,
   amount_upokt numeric, transfer_count bigint)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; m1 date; m2 date; use_month boolean; use_month_svc boolean;
+DECLARE rg record; sp record; m1 date; m2 date; use_month boolean; use_month_svc boolean; fb timestamptz;
   mw1 timestamptz; mw2 timestamptz; use_month_triple boolean; hm1 bigint; hm2 bigint;
 BEGIN
   PERFORM ${s}._validate(addresses, '', range_start, range_end, CASE WHEN capped THEN bucket END);
   sp := ${s}._span(range_start, range_end);
+  IF bucket IS NULL AND p_span_from IS NOT NULL THEN sp.f := p_span_from; END IF;
   rg := ${s}._ranges(range_start, range_end, bucket, by_supplier AND by_service);
   -- whole months inside the rollup days [d1, d2], only when the series needs no days
   m1 := CASE WHEN rg.d1 = date_trunc('month', rg.d1)::date THEN rg.d1 ELSE (date_trunc('month', rg.d1) + interval '1 month')::date END;
@@ -705,6 +743,7 @@ BEGIN
     PERFORM ${s}._require_current_rollups(greatest((mw1 AT TIME ZONE 'UTC')::date, (SELECT min(day) FROM ${s}.settlement_blocks)),
                                           least((mw2 AT TIME ZONE 'UTC')::date - 1, (SELECT max(day) FROM ${s}.settlement_blocks)));
   END IF;
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, p_gaps);
   RETURN QUERY
   WITH res0(bucket_start, bucket_end, address, role, family, supplier_id, service_id, amount_upokt, transfer_count) AS (
   WITH x AS (
@@ -772,21 +811,21 @@ BEGIN
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
   FROM (SELECT DISTINCT unnest(addresses) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_address AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_address AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.address = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_address AND sp.f IS NOT NULL AND cardinality(addresses) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
+  WHERE fill_empty_buckets AND NOT by_address AND fb IS NOT NULL AND cardinality(addresses) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.address, k.role, k.family, k.supplier_id, k.service_id, CASE WHEN k.amount_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.transfer_count_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, p_gaps) b
   CROSS JOIN (SELECT r.address, r.role, r.family, r.supplier_id, r.service_id, bool_and(r.amount_upokt IS NULL) amount_upokt_na, bool_and(r.transfer_count IS NULL) transfer_count_na FROM res r GROUP BY r.address, r.role, r.family, r.supplier_id, r.service_id) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, p_gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.address, chr(1)) = coalesce(k.address, chr(1)) AND coalesce(r.role, chr(1)) = coalesce(k.role, chr(1)) AND coalesce(r.family, chr(1)) = coalesce(k.family, chr(1)) AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)));
 END $$;
 
@@ -804,10 +843,9 @@ DECLARE cv record;
 BEGIN
   PERFORM ${s}._validate(addresses, 'addresses', range_start, range_end, bucket);
 ${covered(null)}
-  RETURN QUERY SELECT CASE WHEN bucket IS NULL AND cv.requested_from IS NOT NULL THEN cv.requested_from ELSE i.bucket_start END,
-    i.bucket_end, i.address, i.role, i.family, i.supplier_id, i.service_id, i.amount_upokt, i.transfer_count,
-    cv.covered_from, cv.covered_to, cv.gaps FROM ${s}._income(addresses, range_start, range_end, bucket, by_reason, by_supplier, by_service,
-                                           by_address, fill_empty_buckets, p_gaps => cv.gaps) i ORDER BY 1 DESC, 3, 4, 5, 6, 7;
+  RETURN QUERY SELECT i.*, cv.covered_from, cv.covered_to, cv.gaps
+    FROM ${s}._income(addresses, range_start, range_end, bucket, by_reason, by_supplier, by_service, by_address,
+                      fill_empty_buckets, p_gaps => cv.gaps, p_span_from => cv.requested_from) i ORDER BY 1 DESC, 3, 4, 5, 6, 7;
 END $$;
 
 -- Validator: commission, self-delegation and what it passed to its delegators, both families, from
@@ -825,13 +863,14 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, validator_operat
   delegated_stake_max_upokt numeric, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE sp record; lo bigint; hi bigint; all_validators boolean := validators IS NULL; cv record;
+DECLARE sp record; lo bigint; hi bigint; all_validators boolean := validators IS NULL; cv record; fb timestamptz;
 BEGIN
   -- NULL validators: every validator
   PERFORM ${s}._validate(validators, CASE WHEN validators IS NULL THEN '' ELSE 'validators' END, range_start, range_end, bucket);
 ${covered("_span")}
   SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb
   WHERE (range_start IS NULL OR sb.block_time >= range_start) AND (range_end IS NULL OR sb.block_time < range_end);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res(bucket_start, bucket_end, validator_operator, commission_upokt, commission_unknown_count, self_delegation_upokt,
            delegators_upokt, total_upokt, distributions, replayed_count, delegated_stake_avg_upokt, delegated_stake_min_upokt,
@@ -850,16 +889,16 @@ ${covered("_span")}
     GROUP BY 1, 2, 3
     UNION ALL
     -- every requested id gets its row or series, 0 where it had no distribution (not in the sparse output)
-    SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 0::numeric, 0::bigint, 0::numeric,
+    SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 0::numeric, 0::bigint, 0::numeric,
            0::numeric, 0::numeric, 0::bigint, 0::bigint, NULL::numeric, NULL::numeric, NULL::numeric
     FROM (SELECT DISTINCT unnest(validators) id) u
-    WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_validator AND sp.f IS NOT NULL
+    WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_validator AND fb IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM ${s}.validator_distributions v WHERE v.validator_operator = u.id AND v.height BETWEEN lo AND hi)
     UNION ALL
     -- the group total of a list with no distribution at all: one zero row
-    SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 0::numeric, 0::bigint, 0::numeric,
+    SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 0::numeric, 0::bigint, 0::numeric,
            0::numeric, 0::numeric, 0::bigint, 0::bigint, NULL::numeric, NULL::numeric, NULL::numeric
-    WHERE fill_empty_buckets AND NOT by_validator AND sp.f IS NOT NULL AND (all_validators OR cardinality(validators) > 0)
+    WHERE fill_empty_buckets AND NOT by_validator AND fb IS NOT NULL AND (all_validators OR cardinality(validators) > 0)
       AND NOT EXISTS (SELECT 1 FROM ${s}.validator_distributions v
                       WHERE (all_validators OR v.validator_operator = ANY(validators)) AND v.height BETWEEN lo AND hi)
   )
@@ -868,9 +907,9 @@ ${covered("_span")}
   -- an empty cell: nothing was distributed, so 0, and no stake was seen (NULL)
   SELECT b.bucket_start, b.bucket_end, k.validator_operator, 0::numeric, 0::bigint, 0::numeric, 0::numeric, 0::numeric,
          0::bigint, 0::bigint, NULL::numeric, NULL::numeric, NULL::numeric
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT DISTINCT r.validator_operator FROM res r) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND r.validator_operator = k.validator_operator)
   ) q ORDER BY 1 DESC, 3;
 END $$;
@@ -891,13 +930,14 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, delegator text, 
   replayed_count bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; all_delegators boolean := delegators IS NULL; cv record;
+DECLARE rg record; sp record; all_delegators boolean := delegators IS NULL; cv record; fb timestamptz;
 BEGIN
   -- NULL delegators: every delegator; validators keeps the income from those validators (their delegators)
   PERFORM ${s}._validate(delegators, CASE WHEN delegators IS NULL THEN '' ELSE 'delegators' END, range_start, range_end, bucket);
   IF validators IS NOT NULL THEN PERFORM ${s}._validate(validators, 'validators', NULL, NULL, NULL); END IF;
 ${covered("_span")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, delegator, validator_operator, amount_upokt, replayed_count) AS (
     WITH x AS (
@@ -920,21 +960,21 @@ ${covered("_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 0::numeric, 0::bigint
   FROM (SELECT DISTINCT unnest(delegators) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_delegator AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_delegator AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.delegator = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 0::numeric, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_delegator AND sp.f IS NOT NULL AND (all_delegators OR cardinality(delegators) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 0::numeric, 0::bigint
+  WHERE fill_empty_buckets AND NOT by_delegator AND fb IS NOT NULL AND (all_delegators OR cardinality(delegators) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.delegator, k.validator_operator, CASE WHEN k.amount_upokt_na THEN NULL ELSE 0 END, 0::bigint
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.delegator, r.validator_operator, bool_and(r.amount_upokt IS NULL) amount_upokt_na FROM res r GROUP BY r.delegator, r.validator_operator) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.delegator, chr(1)) = coalesce(k.delegator, chr(1)) AND coalesce(r.validator_operator, chr(1)) = coalesce(k.validator_operator, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4;
 END $$;
@@ -956,11 +996,12 @@ CREATE OR REPLACE FUNCTION ${s}.get_supply_flows(range_start timestamptz, range_
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, flow text, role text, amount_upokt numeric, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record;
+DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   PERFORM ${s}._validate(NULL, '', range_start, range_end, bucket);
 ${covered("_span")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res(bucket_start, bucket_end, flow, role, amount_upokt) AS (
   WITH c AS (
@@ -1008,9 +1049,9 @@ ${covered("_span")}
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.flow, k.role, CASE WHEN k.amount_upokt_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.flow, r.role, bool_and(r.amount_upokt IS NULL) amount_upokt_na FROM res r GROUP BY r.flow, r.role) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.flow, chr(1)) = coalesce(k.flow, chr(1)) AND coalesce(r.role, chr(1)) = coalesce(k.role, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4;
 END $$;
@@ -1024,7 +1065,7 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
   slashed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; all_suppliers boolean; cv record;
+DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
   IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
     RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
@@ -1040,6 +1081,7 @@ BEGIN
   all_suppliers := suppliers IS NULL;
 ${covered("_span")}
   rg := ${s}._ranges(range_start, range_end, bucket, true);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, kind, reason, events, claimed_upokt, slashed_upokt, relays, estimated_relays, compute_units, estimated_compute_units) AS (
   WITH x AS (
@@ -1069,21 +1111,21 @@ ${covered("_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 'all', 'all', 0::bigint, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 'all', 0::bigint, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric
   FROM (SELECT DISTINCT unnest(suppliers) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.supplier_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 'all', 'all', 0::bigint, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric
-  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 'all', 0::bigint, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric
+  WHERE fill_empty_buckets AND NOT by_supplier AND fb IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.service_id, k.kind, k.reason, CASE WHEN k.events_na THEN NULL ELSE 0 END, CASE WHEN k.claimed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.slashed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.supplier_id, r.service_id, r.kind, r.reason, bool_and(r.events IS NULL) events_na, bool_and(r.claimed_upokt IS NULL) claimed_upokt_na, bool_and(r.slashed_upokt IS NULL) slashed_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na FROM res r GROUP BY r.supplier_id, r.service_id, r.kind, r.reason) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)) AND coalesce(r.kind, chr(1)) = coalesce(k.kind, chr(1)) AND coalesce(r.reason, chr(1)) = coalesce(k.reason, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4, 5, 6;
 END $$;
@@ -1100,7 +1142,7 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, service_id text,
   estimated_compute_units numeric, claims bigint, rank_by_settled int, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record;
+DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   IF services IS NULL AND top_by_settled IS NULL THEN
     RAISE EXCEPTION 'pass services, top_by_settled, or both (the top among those services)';
@@ -1123,6 +1165,7 @@ ${covered("_span")}
       GROUP BY t.service_id ORDER BY sum(t.settled_upokt) DESC, t.service_id COLLATE "C" LIMIT top_by_settled);
   END IF;
   rg := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, service_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims) AS (
   WITH r AS (
@@ -1143,22 +1186,22 @@ ${covered("_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
   FROM (SELECT DISTINCT unnest(services) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_service AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_service AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.service_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_service AND sp.f IS NOT NULL AND cardinality(services) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  WHERE fill_empty_buckets AND NOT by_service AND fb IS NOT NULL AND cardinality(services) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.*, CASE WHEN top_by_settled IS NOT NULL THEN array_position(services, r.service_id) END FROM res r
   WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.service_id, CASE WHEN k.claimed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.settled_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overservicing_loss_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END, CASE WHEN top_by_settled IS NOT NULL THEN array_position(services, k.service_id) END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.service_id, bool_and(r.claimed_upokt IS NULL) claimed_upokt_na, bool_and(r.settled_upokt IS NULL) settled_upokt_na, bool_and(r.overservicing_loss_upokt IS NULL) overservicing_loss_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.claims IS NULL) claims_na FROM res r GROUP BY r.service_id) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)))
   ) q ORDER BY 12, 1 DESC, 3;
 END $$;
@@ -1172,7 +1215,7 @@ CREATE OR REPLACE FUNCTION ${s}.get_app_auto_unstakes(applications text[], range
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, application_id text, unstakes bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record;
+DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   PERFORM ${s}._validate(applications, CASE WHEN applications IS NULL THEN '' ELSE 'applications' END,
                          range_start, range_end, bucket);
@@ -1180,6 +1223,7 @@ BEGIN
   cv := ${s}._coverage(range_start, range_end, true);
   sp := ${s}._block_span(range_start, range_end);
   rg := ${s}._block_heights(range_start, range_end);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, application_id, unstakes) AS (
   SELECT ${s}._bucket(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.f), ${s}._bucket_end(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.t), CASE WHEN by_application THEN e.application_id ELSE 'all' END, count(*)::bigint
@@ -1191,21 +1235,21 @@ BEGIN
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 0::bigint
   FROM (SELECT DISTINCT unnest(applications) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_application AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_application AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.application_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 0::bigint
-  WHERE fill_empty_buckets AND NOT by_application AND sp.f IS NOT NULL AND cardinality(applications) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 0::bigint
+  WHERE fill_empty_buckets AND NOT by_application AND fb IS NOT NULL AND cardinality(applications) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.application_id, CASE WHEN k.unstakes_na THEN NULL ELSE 0 END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.application_id, bool_and(r.unstakes IS NULL) unstakes_na FROM res r GROUP BY r.application_id) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.application_id, chr(1)) = coalesce(k.application_id, chr(1)))
   ) q ORDER BY 1 DESC, 3;
 END $$;
@@ -1224,7 +1268,7 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
   proofs_submitted bigint, proofs_validated bigint, proofs_invalid bigint, invalid_by_reason jsonb, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; rc record; sp record; all_suppliers boolean; cv record;
+DECLARE rg record; rc record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
   IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
     RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
@@ -1241,6 +1285,7 @@ BEGIN
 ${covered("_block_span")}
   rg := ${s}._block_heights(range_start, range_end);
   rc := ${s}._ranges(range_start, range_end, bucket);
+  fb := ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.gaps);
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, claims_settled_with_proof, claims_settled_without_proof, proofs_submitted, proofs_validated, proofs_invalid, invalid_by_reason) AS (
   WITH x AS (
@@ -1277,21 +1322,21 @@ ${covered("_block_span")}
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), u.id, 'all', 0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint, '{}'::jsonb
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint, '{}'::jsonb
   FROM (SELECT DISTINCT unnest(suppliers) id) u
-  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND sp.f IS NOT NULL
+  WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.supplier_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, sp.f, sp.f), ${s}._bucket_end(bucket, sp.f, sp.t), 'all', 'all', 0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint, '{}'::jsonb
-  WHERE fill_empty_buckets AND NOT by_supplier AND sp.f IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 0::bigint, 0::bigint, 0::bigint, 0::bigint, 0::bigint, '{}'::jsonb
+  WHERE fill_empty_buckets AND NOT by_supplier AND fb IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
   SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.service_id, CASE WHEN k.claims_settled_with_proof_na THEN NULL ELSE 0 END, CASE WHEN k.claims_settled_without_proof_na THEN NULL ELSE 0 END, CASE WHEN k.proofs_submitted_na THEN NULL ELSE 0 END, CASE WHEN k.proofs_validated_na THEN NULL ELSE 0 END, CASE WHEN k.proofs_invalid_na THEN NULL ELSE 0 END, CASE WHEN k.invalid_by_reason_na THEN NULL ELSE '{}'::jsonb END
-  FROM ${s}._buckets(bucket, sp.f, sp.t_last) b
+  FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.gaps) b
   CROSS JOIN (SELECT r.supplier_id, r.service_id, bool_and(r.claims_settled_with_proof IS NULL) claims_settled_with_proof_na, bool_and(r.claims_settled_without_proof IS NULL) claims_settled_without_proof_na, bool_and(r.proofs_submitted IS NULL) proofs_submitted_na, bool_and(r.proofs_validated IS NULL) proofs_validated_na, bool_and(r.proofs_invalid IS NULL) proofs_invalid_na, bool_and(r.invalid_by_reason IS NULL) invalid_by_reason_na FROM res r GROUP BY r.supplier_id, r.service_id) k
-  WHERE bucket IS NOT NULL AND fill_empty_buckets AND NOT ${s}._in_gaps(b.bucket_start, b.bucket_end, cv.gaps)
+  WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)))
   ) q ORDER BY 1 DESC, 3, 4;
 END $$;
@@ -1415,8 +1460,8 @@ BEGIN
   END IF;
 END $$;
 
--- The same range from a catalog function's row columns (legacy mint / burn read get_supply_flows, which already ran
--- _coverage): covered_to back to end_date's inclusive sense.
+-- A legacy_* range from a catalog coverage (_coverage's, or get_supply_flows' row columns for legacy mint / burn, which
+-- already ran it): covered_to back to end_date's inclusive sense.
 CREATE OR REPLACE FUNCTION ${s}._legacy_range_of(start_date timestamp, end_date timestamp, covered_from timestamptz,
   covered_to timestamptz, gaps jsonb)
 RETURNS json LANGUAGE sql IMMUTABLE AS $$
@@ -1434,10 +1479,7 @@ LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE cv record;
 BEGIN
   cv := ${s}._coverage(start_date AT TIME ZONE 'UTC', (end_date + interval '1 microsecond') AT TIME ZONE 'UTC');
-  range := json_build_object('requested_from', start_date AT TIME ZONE 'UTC', 'requested_to', end_date AT TIME ZONE 'UTC',
-    'covered_from', cv.covered_from,
-    'covered_to', CASE WHEN cv.covered_to IS NOT NULL THEN least(end_date AT TIME ZONE 'UTC', cv.covered_until) END,
-    'gaps', cv.gaps);
+  range := ${s}._legacy_range_of(start_date, end_date, cv.covered_from, cv.covered_to, cv.gaps);
   start_from := CASE WHEN cv.empty THEN 'infinity' ELSE cv.data_from AT TIME ZONE 'UTC' END;
   empty := coalesce(cv.empty AND start_date <= end_date, false);
 END $$;
@@ -1614,6 +1656,7 @@ DECLARE
   t timestamptz := (end_ts + interval '1 microsecond') AT TIME ZONE 'UTC';
   lo bigint; hi bigint; svcs text[];
 BEGIN
+  IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
   -- as a join on the distinct matched suppliers: written as IN (...) it plans 10x slower (3.4 s against 0.3 s on mainnet)
   svcs := ARRAY(
     SELECT DISTINCT ssc.service_id
@@ -1625,7 +1668,6 @@ BEGIN
           WHERE elem->>'address' = ANY(addresses) AND upper_inf(ssc2._block_range)
             AND su.stake_status = 'Staked' AND upper_inf(su._block_range)) m ON m.supplier_id = ssc.supplier_id
     WHERE upper_inf(ssc._block_range));
-  IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
   IF l.start_from IS NULL OR end_ts IS NULL OR l.start_from > end_ts THEN
     RETURN jsonb_build_object('range', l.range, 'data', (
       SELECT jsonb_agg(jsonb_build_object('service_id', sv, 'relays', 0, 'estimated_relays', 0, 'computed_units', 0,

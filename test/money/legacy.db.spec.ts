@@ -701,15 +701,22 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         [before.covered, before.gaps, before.rows, before.burn],
         [[first, Date.parse("2026-08-31T00:00:00Z")], [[null, first - 1]], 0, null]
       );
+      // the job has classified the heights below h down to h0 = 899701 (11:00) as settling nothing, and lowered its gap
+      // to [1, h0 - 1]: coverage starts at h0, and a range there is covered with nothing in it (a zero, not null)
+      await c.query(`UPDATE ${S}.settlement_gaps SET to_height = 899700; INSERT INTO ${S}.blocks VALUES (899701, '2026-09-01 11:00')`);
+      const h0 = Date.parse("2026-09-01T11:00:00Z");
+      const quiet = await flows("2026-09-01T11:00:00Z", "2026-09-01T11:30:00Z");
+      assert.deepEqual([quiet.covered, quiet.rows, quiet.burn], [[h0, Date.parse("2026-09-01T11:30:00Z")], 0, { burn_mint: 0 }]);
+      assert.deepEqual((await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [h0, head]);
       // a block after the last written settlement: with the writer caught up (no settlement there) it is covered
       await c.query(`INSERT INTO ${S}.blocks VALUES (899800, '2026-09-02 10:00')`);
       assert.deepEqual((await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [
-        first,
+        h0,
         Date.parse("2026-09-02T10:00:00Z"),
       ]);
       // the chain settled there and it is not written (a writer behind): covered up to the last written settlement
       await c.query(`INSERT INTO ${S}.event_claim_settleds (id, block_id) VALUES ('899800-0', 899800)`);
-      assert.deepEqual((await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [first, head]);
+      assert.deepEqual((await flows("2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z")).covered, [h0, head]);
       const after = await flows("2026-09-02T09:00:00Z", "2026-09-03T00:00:00Z");
       assert.deepEqual([after.covered, after.rows, after.burn], [[Date.parse("2026-09-02T09:00:00Z"), head], 0, null]);
     } finally {
@@ -768,6 +775,20 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         hours.rows.map((r) => new Date(String(r.bucket_start)).toISOString()),
         ["2026-09-01T12:00:00.000Z", "2026-09-01T23:00:00.000Z"]
       );
+      // nor does a requested id with no activity: its zero rows start at the first bucket clear of the gap (2 Sep 00:00)
+      const idle = await c.query(
+        `SELECT DISTINCT bucket_start FROM ${S}.get_application_spend(ARRAY['app-idle'], '2026-09-01T12:00:00Z',
+           '2026-09-02T02:00:00Z', 'hour', fill_empty_buckets => true) WHERE application_id = 'app-idle' ORDER BY 1`
+      );
+      assert.deepEqual(
+        idle.rows.map((r) => new Date(String(r.bucket_start)).toISOString()),
+        ["2026-09-02T00:00:00.000Z", "2026-09-02T01:00:00.000Z"]
+      );
+      const inside = await c.query(
+        `SELECT count(*)::int n FROM ${S}.get_application_spend(ARRAY['app-idle'], '2026-09-01T13:00:00Z',
+           '2026-09-01T20:00:00Z', 'hour', fill_empty_buckets => true)`
+      );
+      assert.equal(inside.rows[0].n, 0);
       await c.query(`DELETE FROM ${S}.settlement_gaps`);
       const all = await c.query(
         `SELECT DISTINCT bucket_start FROM ${S}.get_supply_flows('2026-09-01T12:00:00Z', '2026-09-02T00:00:00Z', 'hour',
