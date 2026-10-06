@@ -878,6 +878,65 @@ describe("map era (poktroll v0.1.27–v0.1.32) events", () => {
     }
   });
 
+  it("reads a claim its application could pay nothing of: settled 0, no request and no bank legs", () => {
+    // poktroll v0.1.31 caps the settlement at what the application can pay (ensureClaimAmountLimits). At 0 it emits
+    // EventApplicationOverserviced with effective_burn 0, skips the token logic modules, and EventClaimSettled follows
+    // with the amount claimed and an empty reward_distribution (token_logic_modules.go:176-181): 36 claims of
+    // application pokt1qn3fs… at 689,253, 2 of them in this subset with 4 paid claims
+    const p = build("689253")!;
+    assert.equal(p.era, "map_all_bonded_deflation");
+    assert.equal(p.claims.length, 6);
+    const unpaid = p.claims.filter((c) => c.settled === "0");
+    assert.deepEqual(
+      unpaid.map((c) => [c.event_idx, c.claimed, c.minted, c.overservicing_loss, c.deflation_loss, c.session_id]),
+      [
+        [1, "10878", "0", "10878", "0", ""],
+        [3, "20398", "0", "20398", "0", ""],
+      ]
+    );
+    assert.ok(!p.detailed.some((d) => unpaid.some((c) => c.event_idx === d.event_idx)));
+    const paid = p.claims.filter((c) => c.settled !== "0");
+    assert.equal(paid.length, 4);
+    assert.ok(paid.every((c) => c.session_id !== "" && c.supplier_owner_id !== "" && c.overservicing_loss === "0"));
+
+    // only that shape: the overserviced event right before its own claim, effective_burn 0, expected_burn the claim
+    // plus its global mint, and nothing paid
+    const cases: Array<[string, (events: RawEvent[]) => void, RegExp]> = [
+      ["without the overserviced event", (e) => e.splice(0, 1), /event 0: 0 reimbursement requests for the claim/],
+      [
+        "effective_burn 1",
+        (e) => (attr(e[0], "effective_burn").value = q("1upokt")),
+        /event 1: 0 reimbursement requests for the claim/,
+      ],
+      [
+        "another application's event",
+        (e) => (attr(e[0], "application_addr").value = q("pokt1other")),
+        /event 1 .*: the EventApplicationOverserviced with effective_burn 0 before it \(event 0\) is not its own/,
+      ],
+      [
+        "an event in between",
+        (e) => e.splice(1, 0, { type: "message", attributes: [] }),
+        /event 0 \(pocket.tokenomics.EventApplicationOverserviced\): effective_burn 0 is not followed by its claim/,
+      ],
+      [
+        "no claim after it",
+        (e) => e.splice(1, 1),
+        /event 0 \(pocket.tokenomics.EventApplicationOverserviced\): effective_burn 0 is not followed by its claim/,
+      ],
+      [
+        "expected_burn off by one",
+        (e) => (attr(e[0], "expected_burn").value = q("10878upokt")),
+        /event 1: map claim EventApplicationOverserviced expected_burn 10878, expected 10879/,
+      ],
+      [
+        "a reward_distribution",
+        (e) => (attr(e[1], "reward_distribution").value = JSON.stringify({ pokt1other: "5upokt" })),
+        /event 1: map claim reward_distribution sums to 5, expected M \+ 2G/,
+      ],
+    ];
+    for (const [what, f, re] of cases) assert.throws(() => build("689253", f), re, what);
+  });
+
   it("stops a height whose bank legs, mints, map or state disagree with the formula", () => {
     const firstOf = (events: RawEvent[], type: string) => events.find((e) => e.type === type)!;
     const cases: Array<[string, (events: RawEvent[], state: MapState) => void, RegExp]> = [

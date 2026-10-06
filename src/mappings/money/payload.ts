@@ -182,7 +182,8 @@ export const MONEY_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 // The events whose attributes the parser reads: the money events, and EventApplicationOverserviced, which in the
-// settlement_result era is the only record of how much an overserviced claim's application could pay. The readers of
+// settlement_result era is the only record of how much an overserviced claim's application could pay, and in the map
+// eras marks a claim its application could pay nothing of (effective_burn 0, readMapHeight). The readers of
 // a block (write.ts finalizeBlockEvents, history/chain.ts) keep these whole and only the type of the others.
 export const ATTRIBUTE_EVENT_TYPES: ReadonlySet<string> = new Set([
   ...MONEY_EVENT_TYPES,
@@ -192,6 +193,33 @@ export const ATTRIBUTE_EVENT_TYPES: ReadonlySet<string> = new Set([
 // The EventApplicationOverserviced of a settlement_result height not yet matched to a claim, by
 // (application, supplier operator), in block order. Each one precedes its claim's EventClaimSettled.
 type Overserviced = Map<string, Array<{ idx: number; expected: bigint; effective: bigint }>>;
+
+// A map-era EventApplicationOverserviced with effective_burn 0, which the next event must be its claim's (readMapHeight).
+interface ZeroBurn {
+  idx: number;
+  application: string;
+  supplier: string;
+  expected: bigint;
+}
+
+// zeroBurns finds each EventApplicationOverserviced with effective_burn 0 of a map-era height, by the index of the
+// EventClaimSettled right after it, which must be there.
+function zeroBurns(height: number, events: ReadonlyArray<RawEvent>): Map<number, ZeroBurn> {
+  const out = new Map<number, ZeroBurn>();
+  events.forEach((event, idx) => {
+    if (event.type !== EVENT_APPLICATION_OVERSERVICED) return;
+    const r = new EventReader(height, event, idx);
+    if (BigInt(r.coin("effective_burn")) !== BigInt(0)) return;
+    if (events[idx + 1]?.type !== EVENT_CLAIM_SETTLED) throw r.error("effective_burn 0 is not followed by its claim");
+    out.set(idx + 1, {
+      idx,
+      application: r.str("application_addr"),
+      supplier: r.str("supplier_operator_addr"),
+      expected: BigInt(r.coin("expected_burn")),
+    });
+  });
+  return out;
+}
 
 const COIN = /^(\d+)upokt$/;
 const UINT = /^\d+$/;
@@ -665,8 +693,14 @@ const SUPPORTED_ERAS: ReadonlySet<string> = new Set([
 
 // readClaimMap reads a map-era EventClaimSettled (poktroll v0.1.27–v0.1.32): the claim's ids, counts and
 // reward_distribution. Its session, supplier owner and amounts come later, from the reimbursement request and the
-// bank events (readMapHeight).
-function readClaimMap(r: EventReader, idx: number, p: SettlementPayload, maps: MapClaim[]): void {
+// bank events (readMapHeight). `unpaid` is the EventApplicationOverserviced with effective_burn 0 right before it.
+function readClaimMap(
+  r: EventReader,
+  idx: number,
+  p: SettlementPayload,
+  maps: MapClaim[],
+  unpaid: ZeroBurn | undefined
+): void {
   let rd = r.json("reward_distribution");
   if (typeof rd === "string") rd = JSON.parse(rd) as unknown;
   if (rd === null || typeof rd !== "object" || Array.isArray(rd)) throw r.error("reward_distribution is not an object");
@@ -683,10 +717,22 @@ function readClaimMap(r: EventReader, idx: number, p: SettlementPayload, maps: M
   const claimedCu = r.uint("num_claimed_compute_units");
   const estimatedCu = r.uint("num_estimated_compute_units");
   const application = r.str("application_address");
-  maps.push({ event_idx: idx, application_id: application, claimed: BigInt(claimed), map });
+  const supplier = r.str("supplier_operator_address");
+  if (unpaid && (unpaid.application !== application || unpaid.supplier !== supplier)) {
+    throw r.error(
+      `the EventApplicationOverserviced with effective_burn 0 before it (event ${unpaid.idx}) is not its own`
+    );
+  }
+  maps.push({
+    event_idx: idx,
+    application_id: application,
+    claimed: BigInt(claimed),
+    map,
+    unpaidExpectedBurn: unpaid?.expected,
+  });
   p.claims.push({
     event_idx: idx,
-    supplier_id: r.str("supplier_operator_address"),
+    supplier_id: supplier,
     supplier_owner_id: "",
     application_id: application,
     service_id: r.str("service_id"),
@@ -712,6 +758,10 @@ function readClaimMap(r: EventReader, idx: number, p: SettlementPayload, maps: M
 // session end), so they stop the height; none of the samples has one. A claim of 0 upokt has no request and no bank
 // events: the chain skips the token logic modules when the settlement amount is zero (poktroll v0.1.29–v0.1.30
 // ProcessTokenLogicModules), and still emits EventClaimSettled (9 claims at beta 3,333). Its session id is unknown.
+// The settlement amount is also zero when the application can pay nothing of a claim: ensureClaimAmountLimits caps it
+// at 0 and emits EventApplicationOverserviced with effective_burn 0, then the TLMs are skipped and EventClaimSettled
+// follows at once with an empty reward_distribution (token_logic_modules.go:176-181, identical v0.1.27–v0.1.32;
+// mainnet 689,253: 36 claims of one application). That claim settles 0 and loses all it claimed to overservicing.
 function readMapHeight(
   height: number,
   p: SettlementPayload,
@@ -739,7 +789,7 @@ function readMapHeight(
       );
     }
   }
-  const zero = p.claims.map((c) => BigInt(c.claimed) === BigInt(0));
+  const zero = p.claims.map((c, k) => BigInt(c.claimed) === BigInt(0) || maps[k].unpaidExpectedBurn !== undefined);
   const reimbs = p.claims.map((c, k) => {
     const found = byKey.get(key(c.supplier_id, c.application_id, c.service_id)) ?? [];
     const expected = zero[k] ? 0 : 1;
@@ -850,6 +900,7 @@ export function buildSettlementPayload(
   const map = isMapEra(era);
   const mapClaims: MapClaim[] = [];
   const overserviced: Overserviced = new Map();
+  const unpaid = map ? zeroBurns(height, finalizeEvents) : new Map<number, ZeroBurn>();
 
   finalizeEvents.forEach((event, idx) => {
     if (era === "settlement_result" && event.type === EVENT_APPLICATION_OVERSERVICED) {
@@ -874,7 +925,7 @@ export function buildSettlementPayload(
       throw r.error("event type is not emitted in the map era");
     }
     if (map && event.type === EVENT_CLAIM_SETTLED) {
-      readClaimMap(r, idx, p, mapClaims);
+      readClaimMap(r, idx, p, mapClaims, unpaid.get(idx));
       return;
     }
 
