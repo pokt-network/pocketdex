@@ -267,7 +267,9 @@ function _handleEventSupplierServiceConfigActivated(
         service
       ]
     } else {
-      // grep-able: the chain activated a config this index does not hold
+      // grep-able: the chain activated a config this index does not hold. A warning, not a throw: until the
+      // data patch that follows this fix runs, production still holds inconsistent rows (duplicated configs,
+      // configs of unbonded suppliers left open), and failing the block here would halt the indexer.
       logger.warn(`[SupplierServiceConfigActivationMiss] no open config for service ${serviceId} of supplier ${operatorAddress} at activation height ${activationHeight}`);
     }
   } else {
@@ -462,6 +464,8 @@ function _handleSupplierUnbondingEndEvent(
 // with activatedAt unset until the chain activates it. The chain keeps the previous config active until the
 // next session start (poktroll x/supplier/keeper/msg_server_stake_supplier.go), which this entity does not
 // represent: a restake replaces the row at the stake height, pending until its own activation.
+// So when a BeginBlock activation of C1 and a stake replacing C1 with C2 land in one block, C1's row closes
+// with activatedAt unset and no config row references that activation event; accepted under this model.
 function getServices(
   rawServices: MsgStakeSupplier['services'],
   operatorAddress: string,
@@ -949,7 +953,7 @@ function processSupplierEventsAndMessages(
   recordId: RecordGetId
 ): {
   suppliersToClose: Array<string>;
-  servicesToClose: Array<string>;
+  servicesToClose: Set<string>;
   stakeMsgs: Array<MsgStakeSupplierProps>;
   claimMsgs: Array<MsgClaimMorseSupplierProps>;
   unstakeMsgs: Array<MsgUnstakeSupplierProps>;
@@ -959,7 +963,7 @@ function processSupplierEventsAndMessages(
   unbondingEndEvents: Array<EventSupplierUnbondingEndProps>;
 } {
   const suppliersToClose: Array<string> = Object.keys(record).filter(id => record[id].supplier);
-  const servicesToClose: Array<string> = [];
+  const servicesToClose = new Set<string>();
   const stakeMsgs: Array<MsgStakeSupplierProps> = [];
   const claimMsgs: Array<MsgClaimMorseSupplierProps> = [];
   const unstakeMsgs: Array<MsgUnstakeSupplierProps> = [];
@@ -977,7 +981,7 @@ function processSupplierEventsAndMessages(
 
         for (const service of services) {
           record[operator].services![service.id] = service;
-          servicesToClose.push(service.id);
+          servicesToClose.add(service.id);
         }
 
         serviceConfigActivatedEvents.push(serviceConfigEvent);
@@ -1000,7 +1004,7 @@ function processSupplierEventsAndMessages(
 
         for (const serviceId of servicesToRemove) {
           delete record[supplier.id].services![serviceId];
-          servicesToClose.push(serviceId);
+          servicesToClose.add(serviceId);
         }
 
         record[supplier.id].supplier = supplier;
@@ -1023,12 +1027,12 @@ function processSupplierEventsAndMessages(
 
         for (const serviceId of servicesToRemove) {
           delete record[supplier.id].services![serviceId];
-          servicesToClose.push(serviceId);
+          servicesToClose.add(serviceId);
         }
 
         for (const service of services) {
           record[supplier.id].services![service.id] = service;
-          servicesToClose.push(service.id);
+          servicesToClose.add(service.id);
         }
       }
 
@@ -1045,12 +1049,12 @@ function processSupplierEventsAndMessages(
 
         for (const serviceId of servicesToRemove) {
           delete record[supplier.id].services![serviceId];
-          servicesToClose.push(serviceId);
+          servicesToClose.add(serviceId);
         }
 
         for (const service of services) {
           record[supplier.id].services![service.id] = service;
-          servicesToClose.push(service.id);
+          servicesToClose.add(service.id);
         }
       }
 
@@ -1078,7 +1082,7 @@ function processSupplierEventsAndMessages(
 // Helper: Build lists of items to save
 function buildSupplierSaveLists(
   record: Record<string, SupplierRecord>,
-  servicesToClose: Array<string>
+  servicesToClose: Set<string>
 ): {
   suppliersToSave: Array<SupplierProps>;
   servicesToSave: Array<SupplierServiceConfigProps>;
@@ -1088,7 +1092,6 @@ function buildSupplierSaveLists(
   // Only the configs this block closed get a new row. A config fetched for an event that then
   // left it alone (an activation event for configs that are already activated) is still open,
   // and inserting it again would leave two open rows for the same id.
-  const closedServices = new Set(servicesToClose);
 
   for (const { services, supplier } of Object.values(record)) {
     if (supplier) {
@@ -1096,7 +1099,7 @@ function buildSupplierSaveLists(
     }
 
     if (services) {
-      servicesToSave.push(...Object.values(services).filter((service) => closedServices.has(service.id)));
+      servicesToSave.push(...Object.values(services).filter((service) => servicesToClose.has(service.id)));
     }
   }
 
@@ -1163,7 +1166,7 @@ async function performSupplierDatabaseOperations(data: {
   suppliersToSave: Array<SupplierProps>;
   servicesToSave: Array<SupplierServiceConfigProps>;
   suppliersToClose: Array<string>;
-  servicesToClose: Array<string>;
+  servicesToClose: Set<string>;
   stakeMsgs: Array<MsgStakeSupplierProps>;
   claimMsgs: Array<MsgClaimMorseSupplierProps>;
   unstakeMsgs: Array<MsgUnstakeSupplierProps>;
@@ -1245,7 +1248,7 @@ async function performSupplierDatabaseOperations(data: {
     );
   }
 
-  if (data.servicesToClose.length > 0) {
+  if (data.servicesToClose.size > 0) {
     const servicesSequelize = getSequelize("SupplierServiceConfig");
     closePromises.push(
       SupplierServiceConfigModel.model.update(
@@ -1259,7 +1262,7 @@ async function performSupplierDatabaseOperations(data: {
         },
         {
           where: {
-            id: { [Symbol.for("in")]: data.servicesToClose },
+            id: { [Symbol.for("in")]: [...data.servicesToClose] },
             __block_range: { [Symbol.for("contains")]: BigInt(block) },
           },
           hooks: false,
