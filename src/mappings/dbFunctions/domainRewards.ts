@@ -46,9 +46,13 @@ BEGIN
   WHERE day = v_day;
 
   -- Recompute and insert the full day's data.
-  -- claims: relay/reward aggregates from event_claim_settleds.
-  --   joins ssc on supplier_id, service_id, and _block_range @> e.block_id to match exactly
-  --   the one ssc record active at claim time — avoids overcounting from historical restakes.
+  -- claims: relay/reward aggregates from event_claim_settleds, each attributed to the config its supplier had
+  --   declared for the service at the claim's session start: the version live then, or else the latest one that
+  --   started before it (a config the supplier withdrew by unstaking during the session; the claim settles after).
+  --   The session start is the event's, or, when the event omits it (zero), session end - num_blocks_per_session
+  --   + 1 with the param in force then (equal to the event's start on every claim checked that carries one).
+  --   Settlement comes sessions after the claim, so the config live at the settlement block can be another one,
+  --   or none after an unstake.
   -- staked: distinct suppliers staked at any point during the day per (domain, service_id),
   --   uses _block_range && v_block_range; COUNT(DISTINCT) deduplicates across restakes.
   WITH claims AS (
@@ -60,15 +64,33 @@ BEGIN
       SUM(e.num_claimed_computed_units)  AS computed_units,
       SUM(e.num_estimated_computed_units) AS estimated_computed_units,
       SUM(e.claimed_amount)              AS gross_rewards
-    FROM ${dbSchema}.event_claim_settleds e
-    INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
-    INNER JOIN ${dbSchema}.supplier_service_configs ssc
+    FROM (
+      SELECT e.supplier_id, e.service_id, e.num_relays, e.num_estimated_relays, e.num_claimed_computed_units,
+             e.num_estimated_computed_units, e.claimed_amount,
+             CASE WHEN e.session_start_height > 0 THEN e.session_start_height::bigint
+                  ELSE e.session_end_height::bigint - p.value::bigint + 1 END AS session_start
+      FROM ${dbSchema}.event_claim_settleds e
+      INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
+      LEFT JOIN ${dbSchema}.params p
+        ON p.namespace = 'shared' AND p.key = 'num_blocks_per_session'
+        AND p._block_range @> e.session_end_height::bigint
+      WHERE b.timestamp::date = v_day
+      -- a fence: the config lookup below then probes the index with session_start as one column
+      OFFSET 0
+    ) e
+    LEFT JOIN ${dbSchema}.supplier_service_configs ssc
       ON ssc.supplier_id = e.supplier_id
       AND ssc.service_id = e.service_id
-      AND ssc._block_range @> e.block_id::bigint
-    CROSS JOIN jsonb_array_elements_text(ssc.domains) AS domain
-    WHERE b.timestamp::date = v_day
-      AND ssc.domains IS NOT NULL
+      AND ssc._block_range @> e.session_start
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN ssc._id IS NOT NULL THEN ssc.domains ELSE (
+        SELECT o.domains FROM ${dbSchema}.supplier_service_configs o
+        WHERE o.supplier_id = e.supplier_id AND o.service_id = e.service_id
+          AND lower(o._block_range) <= e.session_start
+        ORDER BY lower(o._block_range) DESC LIMIT 1) END AS domains
+    ) d
+    CROSS JOIN jsonb_array_elements_text(d.domains) AS domain
+    WHERE d.domains IS NOT NULL
     GROUP BY domain, e.service_id
   ),
   staked AS (

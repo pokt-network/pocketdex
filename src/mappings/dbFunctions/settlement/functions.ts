@@ -1672,8 +1672,8 @@ BEGIN
   ) r GROUP BY 1;
 END $$;
 
--- One element per service the suppliers are configured for now (as the live function), with the claims they settled
--- in the range on it (zeros for an empty range, as the live function); services ordered by id.
+-- One element per service the suppliers are configured for now or settled claims on in the range (as the live
+-- function), with those claims (zeros for an empty range, as the live function); services ordered by id.
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_suppliers_and_time_group_by_service(operator_addresses text[],
   start_ts timestamp, end_ts timestamp)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1690,6 +1690,7 @@ BEGIN
                   WHERE ssc.supplier_id = ANY(operator_addresses) AND upper_inf(ssc._block_range)) sv));
   END IF;
   RETURN jsonb_build_object('range', l.range, 'data', (
+    WITH c AS (SELECT * FROM ${s}._legacy_claims_by_service(operator_addresses, f, t))
     SELECT jsonb_agg(jsonb_build_object(
              'service_id', sv.service_id,
              'relays', coalesce(c.relays, 0),
@@ -1697,9 +1698,11 @@ BEGIN
              'computed_units', coalesce(c.compute_units, 0),
              'estimated_computed_units', coalesce(c.estimated_compute_units, 0),
              'gross_rewards', coalesce(c.settled_upokt, 0)) ORDER BY sv.service_id)
-    FROM (SELECT DISTINCT ssc.service_id FROM ${s}.supplier_service_configs ssc
-          WHERE ssc.supplier_id = ANY(operator_addresses) AND upper_inf(ssc._block_range)) sv
-    LEFT JOIN ${s}._legacy_claims_by_service(operator_addresses, f, t) c ON c.service_id = sv.service_id));
+    FROM (SELECT ssc.service_id FROM ${s}.supplier_service_configs ssc
+          WHERE ssc.supplier_id = ANY(operator_addresses) AND upper_inf(ssc._block_range)
+          UNION
+          SELECT c.service_id FROM c) sv
+    LEFT JOIN c ON c.service_id = sv.service_id));
 END $$;
 
 -- One element per service of the staked suppliers whose current configuration shares revenue with the addresses (as the

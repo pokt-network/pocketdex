@@ -317,6 +317,38 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     );
   });
 
+  it("an operator with no open config (unstaked) still lists the services it settled claims on, in both", async () => {
+    const op = suppliers[0];
+    const settled = (
+      await c.query(
+        `SELECT array_agg(DISTINCT service_id ORDER BY service_id) s FROM ${S}.claim_settlements WHERE supplier_id = $1`,
+        [op]
+      )
+    ).rows[0].s as unknown as string[];
+    assert.ok(settled.length > 0);
+    await c.query("BEGIN");
+    try {
+      // the unstake closed every config of the operator before the window
+      await c.query(`UPDATE ${S}.supplier_service_configs SET _block_range = int8range(1, 2) WHERE supplier_id = $1`, [
+        op,
+      ]);
+      const [live, legacy] = await both(
+        "get_rewards_by_suppliers_and_time_group_by_service($1, $2, $3)",
+        "legacy_rewards_by_suppliers_and_time_group_by_service($1, $2, $3)",
+        [[op], "2026-09-01T00:00:00Z", "2026-09-03T00:00:00Z"]
+      );
+      assert.deepEqual(sorted(legacy), sorted(live));
+      const services = (sorted(live) ?? []) as Array<{ service_id: string; gross_rewards: number }>;
+      assert.deepEqual(
+        services.map((x) => x.service_id),
+        settled
+      );
+      assert.ok(services.every((x) => Number(x.gross_rewards) > 0));
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("legacy_rewards_by_addresses_and_time_group_by_service: the live services and net, each claim once", async () => {
     for (const [s, e] of WINDOWS) {
       for (const addrs of [[shareholder], pair]) {
