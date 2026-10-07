@@ -409,8 +409,12 @@ async function lowerGap(client: PgClient, schema: string, height: number): Promi
   ]);
 }
 
-// The lock order of the indexer's money step: money_progress first, then the settlement writer.
+// The lock order of the indexer's money step: money_progress first, then the settlement writer. The indexer holds
+// that row for its whole block transaction (the daily domain refresh alone takes ~15 s on mainnet), longer than the
+// server's lock_timeout of 10 s, which stopped the job at 688173: the wait gets its own bound, for the rest of the
+// caller's transaction (SET LOCAL), whatever the session's.
 async function lockProgress(client: PgClient, schema: string): Promise<void> {
+  await client.query("SET LOCAL lock_timeout = '120s'");
   await client.query(`SELECT 1 FROM ${schema}.money_progress FOR UPDATE`);
 }
 
