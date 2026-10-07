@@ -44,7 +44,7 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       CREATE TABLE ${S}.suppliers (id text, stake_status text, _block_range int8range);
       CREATE TABLE ${S}.params (namespace text, key text, value text, active_at numeric, _block_range int8range);`);
     // the genesis config's domains, as genesis derives them from its endpoints
-    const genesisDomains = JSON.stringify(endpointDomains(["https://akash.node.d.com:443"]));
+    const genesisDomains = JSON.stringify(endpointDomains([{ url: "https://akash.node.d.com:443", rpcType: 3 }]));
     await c.query(createDomainServiceDailyRewardsTableFn(S));
     await c.query(refreshDomainServiceDailyRewardsFn(S));
     // blocks 100..200 on 2026-10-01; sessions of 20 blocks (141..160 is one), the event omitting its start (0)

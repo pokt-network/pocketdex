@@ -532,7 +532,7 @@ function getServices(
       configs: endpoint.configs,
     }));
 
-    const domains = endpointDomains(endpoints.map((ep) => ep.url));
+    const domains = endpointDomains(endpointsArr);
 
     const revShareArr: Array<SupplierRevShare> = revShare.map((revShare) => ({
       address: revShare.address,

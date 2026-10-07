@@ -81,8 +81,14 @@ function ipv6(address: string): string | null {
   return `::ffff:${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
 }
 
-// The unique domains of a service config's endpoint URLs, in endpoint order: what SupplierServiceConfig.domains
-// holds, for a stake (getServices) and for genesis alike.
-export function endpointDomains(urls: Array<unknown>): Array<string> {
-  return [...new Set(urls.map(endpointDomain).filter((domain): domain is string => domain !== null))];
+// The unique domains of a service config's endpoints, in endpoint order: what SupplierServiceConfig.domains holds,
+// for a stake (getServices) and for genesis alike. Only the first endpoint of each rpcType counts: poktroll accepts
+// two endpoints with the same rpcType (x/shared/types/service_configs.go rejects a repeated service id or rev-share
+// address, not a repeated rpcType), and counting both credited each claim of the config to two domains (mainnet
+// pokt1vmy9q5ljvs39n78ygwa85t9rsffncf90xqp2lp since 852319, rpcType 3 on two IPs). Endpoints of different rpcTypes on
+// different domains all count.
+export function endpointDomains(endpoints: Array<{ url: unknown; rpcType: unknown }>): Array<string> {
+  const first = endpoints.filter(({ rpcType }, i) => endpoints.findIndex((other) => other.rpcType === rpcType) === i);
+  const domains = first.map(({ url }) => endpointDomain(url));
+  return [...new Set(domains.filter((domain): domain is string => domain !== null))];
 }

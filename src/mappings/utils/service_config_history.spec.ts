@@ -71,8 +71,34 @@ describe("endpointDomain", () => {
 
   it("the domains of a config are unique, in endpoint order", () => {
     assert.deepEqual(
-      endpointDomains(["https://eth.node.d.com:443/v1", "https://base.node.d.com", "http://10.0.3.4:8545", "garbage"]),
+      endpointDomains([
+        { url: "https://eth.node.d.com:443/v1", rpcType: 3 },
+        { url: "wss://base.node.d.com", rpcType: 2 },
+        { url: "http://10.0.3.4:8545", rpcType: 1 },
+        { url: "garbage", rpcType: 4 },
+      ]),
       ["d.com", "10.0.3.4"]
+    );
+  });
+
+  it("only the first endpoint of each rpcType counts (mainnet pokt1vmy9q5..., rpcType 3 on two IPs since 852319)", () => {
+    assert.deepEqual(
+      endpointDomains([
+        { url: "http://88.198.50.175:28546", rpcType: 3 },
+        { url: "http://193.201.82.205:28546", rpcType: 3 },
+      ]),
+      ["88.198.50.175"]
+    );
+    // the first of a type decides even when the type's later endpoints sit on other domains; other types still count
+    assert.deepEqual(
+      endpointDomains([
+        { url: "wss://ws.a.io", rpcType: 2 },
+        { url: "https://rpc.b.io", rpcType: 3 },
+        { url: "https://rpc.c.io", rpcType: 3 },
+        { url: "wss://ws.d.io", rpcType: 2 },
+        { url: "https://rest.c.io", rpcType: 4 },
+      ]),
+      ["a.io", "b.io", "c.io"]
     );
   });
 });
