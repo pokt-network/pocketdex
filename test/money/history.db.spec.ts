@@ -864,6 +864,39 @@ describe("settlement history job (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG n
     await c.query(`UPDATE ${S}.settlement_gaps SET to_height = 899688`);
   });
 
+  it("waits for the indexer's money_progress lock past a session lock_timeout shorter than the indexer's block", async () => {
+    // the server's lock_timeout (10 s on pnf) against an indexer block that holds the row longer, scaled down
+    const pid = (await c.query("SELECT pg_backend_pid() AS p")).rows[0].p;
+    const indexer = new Client({ connectionString: URL });
+    await indexer.connect();
+    await c.query("SET lock_timeout = '50ms'");
+    try {
+      await c.query(`UPDATE ${S}.settlement_gaps SET to_height = 899720`);
+      await indexer.query("BEGIN");
+      await indexer.query(`SELECT 1 FROM ${S}.money_progress FOR UPDATE`);
+      // the session's bound alone gives up
+      await assert.rejects(c.query(`SELECT 1 FROM ${S}.money_progress FOR UPDATE`), /lock timeout/);
+      const job = run({ to: 899705 });
+      // released well past the session's bound, once the job is seen waiting on the row
+      let waited = false;
+      for (let i = 0; i < 200 && !waited; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+        const w = await reader.query("SELECT wait_event_type AS w FROM pg_stat_activity WHERE pid = $1", [pid]);
+        waited = w.rows[0]?.w === "Lock";
+      }
+      assert.ok(waited, "the job never waited on money_progress");
+      await new Promise((r) => setTimeout(r, 300));
+      await indexer.query("COMMIT");
+      const r = await job;
+      assert.equal(r.failed, undefined);
+      assert.deepEqual(r.written, [899713]);
+    } finally {
+      await c.query("RESET lock_timeout");
+      await indexer.end();
+      await c.query(`UPDATE ${S}.settlement_gaps SET to_height = 899688`);
+    }
+  });
+
   it("hides the two job tables from the GraphQL API", async () => {
     for (const t of ["settlement_history_findings", "settlement_replay_snapshots"]) {
       const r = await c.query(`SELECT obj_description($1::regclass, 'pg_class') d`, [`${S}.${t}`]);

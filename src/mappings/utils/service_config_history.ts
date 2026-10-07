@@ -81,8 +81,24 @@ function ipv6(address: string): string | null {
   return `::ffff:${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
 }
 
-// The unique domains of a service config's endpoint URLs, in endpoint order: what SupplierServiceConfig.domains
-// holds, for a stake (getServices) and for genesis alike.
-export function endpointDomains(urls: Array<unknown>): Array<string> {
-  return [...new Set(urls.map(endpointDomain).filter((domain): domain is string => domain !== null))];
+// The unique domains of a service config's endpoints, in endpoint order: what SupplierServiceConfig.domains holds,
+// for a stake (getServices) and for genesis alike. poktroll accepts two endpoints with the same rpcType
+// (x/shared/types/service_configs.go rejects a repeated service id or rev-share address, not a repeated rpcType), and
+// counting both credited each claim of the config to two domains (mainnet pokt1vmy9q5ljvs39n78ygwa85t9rsffncf90xqp2lp
+// since 852319, rpcType 3 on two IPs). The convention Jorge chose for that case, not verified against relay routing:
+// per rpcType only the first endpoint with a domain counts. rpcType 0 (UNKNOWN_RPC), unset or UNRECOGNIZED names no
+// type, so each such endpoint counts on its own; endpoints of different rpcTypes all count.
+export function endpointDomains(endpoints: Array<{ url: unknown; rpcType: unknown }>): Array<string> {
+  const types = new Set<number>();
+  const domains: Array<string> = [];
+  for (const { rpcType, url } of endpoints) {
+    const domain = endpointDomain(url);
+    if (domain === null) continue;
+    if (typeof rpcType === "number" && rpcType > 0) {
+      if (types.has(rpcType)) continue;
+      types.add(rpcType);
+    }
+    domains.push(domain);
+  }
+  return [...new Set(domains)];
 }

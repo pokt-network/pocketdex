@@ -580,7 +580,7 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
         serviceId: service.service_id,
         endpoints,
         revShare,
-        domains: endpointDomains(service.endpoints.map((endpoint) => endpoint.url)),
+        domains: endpointDomains(endpoints),
         ...(activatedAtId !== undefined && { activatedAtId }),
       });
     }
