@@ -101,4 +101,29 @@ describe("endpointDomain", () => {
       ["a.io", "b.io", "c.io"]
     );
   });
+
+  it("the first endpoint of a type with a domain decides: one with none does not take the type's place", () => {
+    assert.deepEqual(
+      endpointDomains([
+        { url: "garbage", rpcType: 3 },
+        { url: "https://rpc.b.io", rpcType: 3 },
+        { url: "https://rpc.c.io", rpcType: 3 },
+      ]),
+      ["b.io"]
+    );
+  });
+
+  it("rpcType 0, unset or UNRECOGNIZED is no type: each such endpoint counts on its own", () => {
+    assert.deepEqual(
+      endpointDomains([
+        { url: "https://a.io", rpcType: 0 },
+        { url: "https://b.io", rpcType: 0 },
+        { url: "https://c.io", rpcType: undefined },
+        { url: "https://d.io", rpcType: undefined },
+        { url: "https://e.io", rpcType: -1 },
+        { url: "https://f.io", rpcType: -1 },
+      ]),
+      ["a.io", "b.io", "c.io", "d.io", "e.io", "f.io"]
+    );
+  });
 });
