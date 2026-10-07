@@ -884,10 +884,10 @@ describe("settlement history job (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG n
         const w = await reader.query("SELECT wait_event_type AS w FROM pg_stat_activity WHERE pid = $1", [pid]);
         waited = w.rows[0]?.w === "Lock";
       }
+      assert.ok(waited, "the job never waited on money_progress");
       await new Promise((r) => setTimeout(r, 300));
       await indexer.query("COMMIT");
       const r = await job;
-      assert.ok(waited, "the job never waited on money_progress");
       assert.equal(r.failed, undefined);
       assert.deepEqual(r.written, [899713]);
     } finally {
