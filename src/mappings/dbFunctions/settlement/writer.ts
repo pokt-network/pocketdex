@@ -193,19 +193,19 @@ FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0 OR c.global
 
 -- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
 CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
-DECLARE d date; hr timestamptz; v_claims_paid boolean;
+DECLARE d date; hr timestamptz; v_held boolean;
 BEGIN
-  SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup INTO d, hr, v_claims_paid
+  SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup INTO d, hr, v_held
   FROM ${s}.settlement_blocks WHERE height = h;
   IF d IS NULL THEN RETURN; END IF;
 
-  -- the claims that paid each address at h, per service; subtracted only from a height that added them
-  -- (settlement_blocks.claims_paid_rollup: the heights written before the rollup existed did not)
+  -- the claims that paid each address at h, per service: added and subtracted only for a held height
+  -- (settlement_blocks.claims_paid_rollup; write_settlement and rebuild_rollups decide it before calling here)
   CREATE TEMP TABLE IF NOT EXISTS _paid (address text, service_id text, claim_count bigint, settled_upokt bigint,
                                          relays bigint, estimated_relays bigint, claimed_compute_units bigint,
                                          estimated_compute_units bigint) ON COMMIT DROP;
   TRUNCATE _paid;
-  IF sg > 0 OR v_claims_paid THEN
+  IF v_held THEN
     INSERT INTO _paid
     SELECT p.address, c.service_id, count(*), sum(c.settled_upokt), sum(c.relays), sum(c.estimated_relays),
            sum(c.claimed_compute_units), sum(c.estimated_compute_units)
@@ -449,11 +449,13 @@ BEGIN
                          OR (t.commission_na_count = t.contribution_count AND coalesce(t.commission_upokt, 0) <> 0)
                          OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0)))
        OR EXISTS (SELECT 1 FROM _paid i CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.relays, t.claimed_compute_units
+                    SELECT t.claim_count, t.settled_upokt, t.relays, t.estimated_relays, t.claimed_compute_units,
+                           t.estimated_compute_units
                     FROM ${s}.daily_claims_paid_by_address_service t
                     WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id LIMIT 1) t
                   WHERE t.claim_count < 0 OR t.settled_upokt < 0
-                    OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.claimed_compute_units <> 0))) THEN
+                    OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
+                                               OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))) THEN
       RAISE EXCEPTION 'rollup drift at height %: subtracting it left a rollup row negative, or at contribution_count = 0 with a non-zero amount', h;
     END IF;
     DELETE FROM ${s}.daily_income_by_address WHERE day = d AND contribution_count = 0;
@@ -471,7 +473,9 @@ BEGIN
     DELETE FROM ${s}.hourly_income_by_address_supplier WHERE hour = hr AND contribution_count = 0;
     DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day = d AND contribution_count = 0;
     DELETE FROM ${s}.daily_validator_rewards WHERE day = d AND contribution_count = 0;
-    DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day = d AND claim_count = 0;
+    -- by the height's keys: a mainnet day is ~90k rows
+    DELETE FROM ${s}.daily_claims_paid_by_address_service t USING _paid i
+    WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id AND t.claim_count = 0;
   END IF;
   -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it
   UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL
@@ -538,6 +542,7 @@ DECLARE
   v_era text := p->>'era';
   v_row_source text := p->>'row_source';
   v_old_version int;
+  v_held boolean;
   v_bad text;
   v_lock_timeout text := current_setting('lock_timeout');
 BEGIN
@@ -566,7 +571,11 @@ BEGIN
   END IF;
 
   -- rewrite: subtract the old contribution from the rollups before deleting the base rows
-  SELECT rollup_version INTO v_old_version FROM ${s}.settlement_blocks WHERE height = h;
+  SELECT rollup_version, claims_paid_rollup INTO v_old_version, v_held FROM ${s}.settlement_blocks WHERE height = h;
+  -- daily_claims_paid_by_address_service takes the height only when it is new or was held: an existing height that is
+  -- not held (written before the rollup, or rewritten by an image without it, which may have left its old contribution
+  -- there) stays not held, and its day reads the claims until fill_claims_paid_day recomputes the day
+  v_held := v_old_version IS NULL OR v_held;
   IF v_old_version IS NOT NULL THEN
     IF v_old_version <> ${ROLLUP_VERSION} THEN
       RAISE EXCEPTION 'height % was written with rollup version %, this code is version ${ROLLUP_VERSION}: run rebuild_rollups first',
@@ -608,10 +617,10 @@ BEGIN
     END IF;
   END IF;
 
-  -- claims_paid_rollup: _rollup_apply below adds the height to daily_claims_paid_by_address_service
+  -- claims_paid_rollup: when held, _rollup_apply below adds the height to daily_claims_paid_by_address_service
   INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio, claims_paid_rollup)
   VALUES (h, v_ts, v_era, (SELECT min(recipient_id) FROM _stg_detailed WHERE role = 'dao'),
-          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims), true);
+          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims), v_held);
 
   INSERT INTO ${s}.claim_settlements
   SELECT h, c.event_idx, v_ts, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id, c.service_id,
@@ -795,10 +804,12 @@ BEGIN
   DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day >= m;
   DELETE FROM ${s}.daily_validator_rewards WHERE day >= m;
   DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day >= m;
+  -- held before the loop: _rollup_apply adds only a held height to daily_claims_paid_by_address_service
+  UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true WHERE day >= m AND NOT claims_paid_rollup;
   FOR h IN SELECT height FROM ${s}.settlement_blocks WHERE day >= m ORDER BY height LOOP
     CALL ${s}._rollup_apply(h, 1);
   END LOOP;
-  UPDATE ${s}.settlement_blocks SET rollup_version = ${ROLLUP_VERSION}, claims_paid_rollup = true WHERE day >= m;
+  UPDATE ${s}.settlement_blocks SET rollup_version = ${ROLLUP_VERSION} WHERE day >= m;
 END $$;
 
 -- Writes daily_claims_paid_by_address_service for one UTC day from the base tables, and marks every height of the day as

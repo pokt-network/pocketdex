@@ -693,27 +693,80 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     const heights = (await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE day = $1`, [day])).rows[0].n;
     assert.ok(Number(heights) >= 2, `precondition: the tests above wrote several heights on ${day}`);
     const fill = async () => Number((await c.query(`SELECT ${S}.fill_claims_paid_day($1) n`, [day])).rows[0].n);
+    const rollupDay = async () =>
+      (
+        await c.query(
+          `SELECT count(*)::int n, coalesce(md5(string_agg(x::text, '|' ORDER BY x::text)), '') h
+           FROM ${S}.daily_claims_paid_by_address_service x WHERE day = $1`,
+          [day]
+        )
+      ).rows[0];
+    const held = async () =>
+      (await c.query(`SELECT height::int h FROM ${S}.settlement_blocks WHERE day = $1 AND claims_paid_rollup ORDER BY 1`, [day]))
+        .rows;
     // as the rollup arrives on a database written before it: no row, and no height held
     await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE day = $1`, [day]);
     await c.query(`DELETE FROM ${S}.daily_claims_paid_by_address_service WHERE day = $1`, [day]);
-    // rewriting one of them subtracts nothing from the rollup (it would go negative: drift) and adds the height
+    // rewriting one of them subtracts nothing (it would go negative: drift) and adds nothing: it stays not held
     const { height, payload } = payloadOf("899713", true);
     await write(height, payload);
-    const held = await c.query(
-      `SELECT height::int h FROM ${S}.settlement_blocks WHERE day = $1 AND claims_paid_rollup ORDER BY 1`,
-      [day]
-    );
-    assert.deepEqual(held.rows, [{ h: height }]);
-    assert.equal(await fill(), Number(heights) - 1);
+    assert.deepEqual(await held(), []);
+    assert.equal((await rollupDay()).n, 0);
+    assert.equal(await fill(), Number(heights));
     assert.equal(await md5All(), before);
     // a day already held is left as it is
     assert.equal(await fill(), 0);
-    // an image without the rollup rewrote a held height: its old contribution stays in the rollup and the height is
-    // unmarked (that write_settlement does not name the column); the fill recomputes the whole day
+    // held -> an image without the rollup rewrites the height: it subtracts and adds the other rollups, leaves this one
+    // as it was (the old contribution stays) and the height not held (its write_settlement does not name the column)
+    const day0 = await rollupDay();
     await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = $1`, [height]);
+    // -> this image rewrites it: nothing subtracted, nothing added again, still not held, so no day counts it twice
+    await write(height, payload);
+    assert.deepEqual(await rollupDay(), day0);
+    assert.ok(!(await held()).some((r) => r.h === height));
+    // an image without the rollup that rewrote a held height may also have left a stale contribution: the fill
+    // recomputes the whole day from the base tables
     await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET claim_count = 2 * claim_count, settled_upokt = 2 * settled_upokt
                    WHERE day = $1`, [day]);
     assert.equal(await fill(), 1);
+    assert.equal(await md5All(), before);
+  });
+
+  it("a height rewritten held -> by an image without the rollup -> by this one is counted once, also by the drift check", async () => {
+    const before = await md5All();
+    const { height, payload } = payloadOf("899713", true);
+    const sums = async () =>
+      (
+        await c.query(
+          `SELECT sum(claim_count)::text n, sum(settled_upokt)::text s, sum(estimated_relays)::text er,
+                  sum(estimated_compute_units)::text ecu FROM ${S}.daily_claims_paid_by_address_service WHERE day = '2026-09-01'`
+        )
+      ).rows[0];
+    const once = await sums();
+    await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = $1`, [height]);
+    await write(height, payload);
+    await write(height, payload);
+    assert.deepEqual(await sums(), once);
+    await c.query(`SELECT ${S}.fill_claims_paid_day('2026-09-01')`);
+    assert.equal(await md5All(), before);
+    // a held height whose rollup row lost an estimate is drift on its next rewrite, as a lost amount is
+    for (const col of ["estimated_relays", "estimated_compute_units"]) {
+      const k = (
+        await c.query(
+          `SELECT p.address, c.service_id FROM ${S}.v_claims_paid p
+           JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+           JOIN ${S}.settlement_blocks sb ON sb.height = p.height WHERE sb.day = '2026-09-01'
+           GROUP BY 1, 2 HAVING count(*) = 1 AND min(p.height) = ${height} AND sum(c.${col}) > 0
+           ORDER BY 1, 2 LIMIT 1`
+        )
+      ).rows[0];
+      assert.ok(k, `precondition: a row whose only claim is at ${height}, with ${col} > 0`);
+      const where = `WHERE day = '2026-09-01' AND address = $1 AND service_id = $2`;
+      // the height's contribution to the row gone but the estimate: claim_count reaches 0 with the estimate left
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET ${col} = ${col} + 1 ${where}`, [k.address, k.service_id]);
+      await assert.rejects(write(height, payload), /rollup drift at height 899713/, col);
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET ${col} = ${col} - 1 ${where}`, [k.address, k.service_id]);
+    }
     assert.equal(await md5All(), before);
   });
 

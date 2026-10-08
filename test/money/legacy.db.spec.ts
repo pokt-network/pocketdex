@@ -429,9 +429,13 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       assert.equal(await answer([shareholder], s, e), truth);
       await corrupt("2026-09-02");
       assert.notEqual(await answer([shareholder], s, e), truth);
-      // one on 2 Sep: both days, and every day before the last one not held, come from the claims
+      // per day: with a height of 2 Sep not held instead, 2 Sep comes from the claims and 1 Sep, held again, from the
+      // rollup (whose changed row shows), never every day before the one not held
       await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = true WHERE height = 899733`);
       await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = 899773`);
+      assert.notEqual(await answer([shareholder], s, e), truth);
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt - 7
+                     WHERE address = ANY($1) AND day = '2026-09-01'`, [[shareholder, ...pair]]);
       assert.equal(await answer([shareholder], s, e), truth);
     } finally {
       await c.query("ROLLBACK");

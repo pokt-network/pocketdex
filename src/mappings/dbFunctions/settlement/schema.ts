@@ -31,8 +31,9 @@ CREATE INDEX IF NOT EXISTS settlement_blocks_block_time_idx ON ${s}.settlement_b
 CREATE INDEX IF NOT EXISTS settlement_blocks_day_idx ON ${s}.settlement_blocks (day);
 -- Whether daily_claims_paid_by_address_service holds the height's contribution. It was added without a rebuild: the
 -- heights written before it have false until fill_claims_paid_day writes their day, and so does a height an image
--- without it writes (its write_settlement does not name the column). A day reads from that rollup only when every
--- height of it is true, and a rewrite subtracts only what a true height added (writer.ts).
+-- without it writes (its write_settlement does not name the column). write_settlement adds and marks a height only when
+-- it is new or was held; a rewrite of a height not held keeps it not held, since an image without the rollup may have
+-- left its old contribution there. Each day reads from that rollup only when every height of it is true (writer.ts).
 ALTER TABLE ${s}.settlement_blocks ADD COLUMN IF NOT EXISTS claims_paid_rollup BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS settlement_blocks_without_claims_paid_idx ON ${s}.settlement_blocks (day) WHERE NOT claims_paid_rollup;
 
