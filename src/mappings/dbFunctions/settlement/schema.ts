@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS ${s}.settlement_blocks (
 );
 CREATE INDEX IF NOT EXISTS settlement_blocks_block_time_idx ON ${s}.settlement_blocks (block_time);
 CREATE INDEX IF NOT EXISTS settlement_blocks_day_idx ON ${s}.settlement_blocks (day);
+-- Whether daily_claims_paid_by_address_service holds the height's contribution. It was added without a rebuild: the
+-- heights written before it have false until fill_claims_paid_day writes their day, and so does a height an image
+-- without it writes (its write_settlement does not name the column). A day reads from that rollup only when every
+-- height of it is true, and a rewrite subtracts only what a true height added (writer.ts).
+ALTER TABLE ${s}.settlement_blocks ADD COLUMN IF NOT EXISTS claims_paid_rollup BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS settlement_blocks_without_claims_paid_idx ON ${s}.settlement_blocks (day) WHERE NOT claims_paid_rollup;
 
 -- Settlement heights left unwritten: the heights a POCKETDEX_MONEY_FROM_HEIGHT override skipped (recorded by the first
 -- height the money step processes past it, src/mappings/money/write.ts), and the history job's [1, h-1].
@@ -298,6 +304,18 @@ CREATE TABLE IF NOT EXISTS ${s}.monthly_income_by_address_supplier_service (
   PRIMARY KEY (address, month, supplier_id, service_id, role, family)
 );
 
+-- Per address, day and service: the claims that paid the address (as a shareholder, the DAO, the service owner or the
+-- application: v_claims_paid, writer.ts), each (address, claim) once, with the claim's settled amount, relays and compute
+-- units. legacy_rewards_by_addresses_and_time_group_by_service reads it for whole days instead of every claim: an operator
+-- paid by 1048 suppliers had ~1.4M claims in 30 days (mainnet, 2026-10-08), and one mainnet day (2026-10-07) is 947k
+-- (address, claim) pairs in 94k rows. Which heights it holds: settlement_blocks.claims_paid_rollup.
+CREATE TABLE IF NOT EXISTS ${s}.daily_claims_paid_by_address_service (
+  day DATE NOT NULL, address TEXT NOT NULL, service_id TEXT NOT NULL, claim_count BIGINT NOT NULL,
+  settled_upokt BIGINT NOT NULL, relays BIGINT NOT NULL, estimated_relays BIGINT NOT NULL,
+  claimed_compute_units BIGINT NOT NULL, estimated_compute_units BIGINT NOT NULL,
+  PRIMARY KEY (address, day, service_id)
+);
+
 -- commission_upokt sums the contributions that have a commission; commission_na_count counts those that do not (the
 -- replayed rows): NULL only when every contribution of the row is one of them, so a day that mixes both (788,944 and
 -- 788,945) keeps the real commission instead of losing it to NULL + x.
@@ -337,6 +355,7 @@ CREATE INDEX IF NOT EXISTS monthly_income_by_address_supplier_month_idx ON ${s}.
 CREATE INDEX IF NOT EXISTS daily_delegator_rewards_by_validator_day_idx ON ${s}.daily_delegator_rewards_by_validator (day);
 CREATE INDEX IF NOT EXISTS daily_validator_rewards_day_idx ON ${s}.daily_validator_rewards (day);
 CREATE INDEX IF NOT EXISTS hourly_income_by_address_supplier_hour_idx ON ${s}.hourly_income_by_address_supplier (hour);
+CREATE INDEX IF NOT EXISTS daily_claims_paid_by_address_service_day_idx ON ${s}.daily_claims_paid_by_address_service (day);
 
 -- The incremental rollups update the same rows at every settlement of their day (~70 per day on mainnet): free
 -- space in each page lets an update stay in the page (HOT: no indexed column changes, except in the two tables
@@ -353,5 +372,6 @@ ALTER TABLE ${s}.monthly_income_by_address_supplier_service SET (fillfactor = 90
 ALTER TABLE ${s}.hourly_income_by_address_supplier SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.daily_validator_rewards SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.daily_delegator_rewards_by_validator SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
+ALTER TABLE ${s}.daily_claims_paid_by_address_service SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 `;
 }

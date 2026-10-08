@@ -1780,6 +1780,10 @@ END $$;
 -- that paid them counts once. Measured on mainnet: pokt1m0yk72fcvut72ujrs7hyf4mzgahe4c9ya429eh on 2026-10-03 got 27
 -- transfers from 20 claims (948613-finalize_block-3067 pays it twice): relays 577,473 live, 289,472 per claim; gross
 -- 553,512,909 live, 277,061,678 per claim; net 209,138,830 in both.
+-- The claims of one address come from daily_claims_paid_by_address_service for the whole days of the range whose every
+-- settlement it holds (settlement_blocks.claims_paid_rollup), and from v_claims_paid for the rest: the edges, and every day
+-- up to the last one it does not hold. A list of addresses reads only v_claims_paid: the rollup counts a claim once per
+-- address, so a claim that paid two addresses of the list would count twice.
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_service(addresses text[],
   start_ts timestamp, end_ts timestamp)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1787,51 +1791,49 @@ DECLARE
   l record := ${s}._legacy_range(start_ts, end_ts);
   f timestamptz := l.start_from AT TIME ZONE 'UTC';
   t timestamptz := (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC';
-  lo bigint; hi bigint; svcs text[];
+  rg record; d1 date; d2 date; lo1 bigint; hi1 bigint; lo2 bigint; hi2 bigint; u date; sups text[]; svcs text[];
 BEGIN
   IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
-  -- as a join on the distinct matched suppliers: written as IN (...) it plans 10x slower (3.4 s against 0.3 s on mainnet)
-  svcs := ARRAY(
-    SELECT DISTINCT ssc.service_id
-    FROM ${s}.supplier_service_configs ssc
-    JOIN (SELECT DISTINCT ssc2.supplier_id
-          FROM ${s}.supplier_service_configs ssc2
-          JOIN ${s}.suppliers su ON su.id = ssc2.supplier_id
-          CROSS JOIN jsonb_array_elements(ssc2.rev_share) AS elem
-          WHERE elem->>'address' = ANY(addresses) AND upper_inf(ssc2._block_range)
-            AND su.stake_status = 'Staked' AND upper_inf(su._block_range)) m ON m.supplier_id = ssc.supplier_id
-    WHERE upper_inf(ssc._block_range));
+  -- resolved once: inside the query a filter would call it for every row it scans
+  sups := ${s}._operator_suppliers(addresses);
+  svcs := ARRAY(SELECT DISTINCT ssc.service_id FROM ${s}.supplier_service_configs ssc
+                WHERE ssc.supplier_id = ANY(sups) AND upper_inf(ssc._block_range));
   IF l.start_from IS NULL OR l.end_to IS NULL OR l.start_from > l.end_to THEN
     RETURN jsonb_build_object('range', l.range, 'data', (
       SELECT jsonb_agg(jsonb_build_object('service_id', sv, 'relays', 0, 'estimated_relays', 0, 'computed_units', 0,
                        'estimated_computed_units', 0, 'gross_rewards', 0, 'net_rewards', 0) ORDER BY sv)
       FROM unnest(svcs) sv));
   END IF;
-  SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < t;
+  rg := ${s}._ranges(f, t, NULL, (SELECT count(DISTINCT a) FROM unnest(addresses) a) <> 1);
+  d1 := rg.d1; d2 := rg.d2; lo1 := rg.lo1; hi1 := rg.hi1; lo2 := rg.lo2; hi2 := rg.hi2;
+  IF d1 <= d2 THEN
+    u := (SELECT max(sb.day) FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN d1 AND d2 AND NOT sb.claims_paid_rollup);
+    IF u IS NOT NULL THEN
+      -- [d1, u] goes to the base with the left edge, which then ends where the days left in the rollup start
+      d1 := u + 1;
+      SELECT coalesce(min(sb.height), 0), coalesce(max(sb.height), -1) INTO lo1, hi1 FROM ${s}.settlement_blocks sb
+      WHERE sb.block_time >= f AND sb.block_time < (d1::timestamp AT TIME ZONE 'UTC');
+    END IF;
+  END IF;
   RETURN jsonb_build_object('range', l.range, 'data', (
     WITH services AS (
       SELECT sv.service_id FROM unnest(svcs) sv(service_id)
     ), paid AS (
-      -- the claims that paid the addresses, each once: every role a claim pays (v_income_base's claim branches)
-      SELECT sp.height, sp.event_idx FROM ${s}.shareholder_payouts sp
-      WHERE sp.recipient_id = ANY(addresses) AND sp.height BETWEEN lo AND hi AND (sp.relay_upokt > 0 OR sp.global_upokt > 0)
+      -- the claims that paid the addresses, each once; one range per branch, so each reaches the view's indexes
+      SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height BETWEEN lo1 AND hi1
       UNION
-      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
-      WHERE c.source_owner_id = ANY(addresses) AND c.height BETWEEN lo AND hi
-        AND (c.relay_to_source_owner_upokt > 0 OR c.global_to_source_owner_upokt > 0)
-      UNION
-      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
-      WHERE c.application_id = ANY(addresses) AND c.height BETWEEN lo AND hi
-        AND (c.relay_to_application_upokt > 0 OR c.global_to_application_upokt > 0)
-      UNION
-      SELECT c.height, c.event_idx FROM ${s}.settlement_blocks sb JOIN ${s}.claim_settlements c USING (height)
-      WHERE sb.dao_address = ANY(addresses) AND sb.height BETWEEN lo AND hi
-        AND (c.relay_to_dao_upokt > 0 OR c.global_to_dao_upokt > 0 OR c.reimbursement_to_dao_upokt > 0)
+      SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height BETWEEN lo2 AND hi2
     ), claims AS (
-      SELECT c.service_id, sum(c.settled_upokt)::numeric settled_upokt, sum(c.relays)::numeric relays,
-             sum(c.estimated_relays)::numeric estimated_relays, sum(c.claimed_compute_units)::numeric compute_units,
-             sum(c.estimated_compute_units)::numeric estimated_compute_units
-      FROM paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx GROUP BY 1
+      SELECT x.service_id, sum(x.settled_upokt)::numeric settled_upokt, sum(x.relays)::numeric relays,
+             sum(x.estimated_relays)::numeric estimated_relays, sum(x.claimed_compute_units)::numeric compute_units,
+             sum(x.estimated_compute_units)::numeric estimated_compute_units
+      FROM (SELECT c.service_id, c.settled_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units
+            FROM paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+            UNION ALL
+            SELECT r.service_id, r.settled_upokt, r.relays, r.estimated_relays, r.claimed_compute_units, r.estimated_compute_units
+            FROM ${s}.daily_claims_paid_by_address_service r
+            WHERE r.address = ANY(addresses) AND r.day BETWEEN d1 AND d2) x
+      GROUP BY 1
     ), net AS (
       SELECT i.service_id, sum(i.amount_upokt) amount_upokt
       FROM ${s}._income(addresses, f, t, NULL, false, false, true, false) i

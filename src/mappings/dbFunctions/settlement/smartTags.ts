@@ -40,6 +40,7 @@ export const OMITTED_TABLES = [
   "daily_validator_rewards",
   "daily_delegator_rewards_by_validator",
   "hourly_income_by_address_supplier",
+  "daily_claims_paid_by_address_service",
   // the Delegation entity (src/mappings/pocket/validator.ts)
   "delegations",
 ];
@@ -107,6 +108,8 @@ const OMITTED_FUNCTIONS = [
   "_legacy_claims_by_service",
   "_legacy_series",
   "_operator_suppliers",
+  // a writer of the money tables, which GraphQL would publish as a mutation (scripts/fill_claims_paid.sql runs it)
+  "fill_claims_paid_day",
 ];
 
 // The legacy_* functions (functions.ts): what each replaces, for its GraphQL description. GraphQL publishes them as
@@ -192,6 +195,7 @@ export function createSettlementSmartTagsFn(dbSchema: string): string {
   return `
 ${tables}
 COMMENT ON VIEW ${s}.v_income_base IS E'@omit';
+COMMENT ON VIEW ${s}.v_claims_paid IS E'@omit';
 DO $$
 DECLARE t regclass; c text;
 BEGIN

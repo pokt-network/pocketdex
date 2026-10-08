@@ -398,6 +398,46 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     }
   });
 
+  it("legacy_rewards_by_addresses_and_time_group_by_service reads the days its rollup holds, and answers as from the claims", async () => {
+    // a shareholder in both families, and a pair of shareholders of the same claims (the DAO lists no service here: no
+    // configuration names it, so its answer is null either way; writer.db.spec.ts checks its rollup rows)
+    const answer = async (addrs: string[], s: string, e: string) =>
+      (await one(`SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)->>'data' d`, [addrs, s, e])).d;
+    await c.query("BEGIN");
+    try {
+      for (const [s, e] of WINDOWS)
+        for (const addrs of [[shareholder], pair]) {
+          const d = await answer(addrs, s, e);
+          assert.ok(d !== null && /"gross_rewards": [1-9]/.test(d), `${addrs} ${s}..${e}: ${d}`);
+          await c.query("SET LOCAL money.no_rollup = on");
+          assert.equal(d, await answer(addrs, s, e), `${addrs} ${s}..${e}`);
+          await c.query("SET LOCAL money.no_rollup = off");
+        }
+      // 1 and 2 Sep are whole days of WINDOWS[0]: a rollup row of 1 Sep changed by hand changes the answer for one address,
+      // and not for a list, which reads only the claims
+      const [s, e] = WINDOWS[0];
+      const truth = await answer([shareholder], s, e);
+      const pairTruth = await answer(pair, s, e);
+      const corrupt = (day: string) =>
+        c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt + 7
+                 WHERE address = ANY($1) AND day = $2`, [[shareholder, ...pair], day]);
+      await corrupt("2026-09-01");
+      assert.notEqual(await answer([shareholder], s, e), truth);
+      assert.equal(await answer(pair, s, e), pairTruth);
+      // a height of 1 Sep the rollup does not hold: 1 Sep is read from the claims, 2 Sep still from the rollup
+      await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = 899733`);
+      assert.equal(await answer([shareholder], s, e), truth);
+      await corrupt("2026-09-02");
+      assert.notEqual(await answer([shareholder], s, e), truth);
+      // one on 2 Sep: both days, and every day before the last one not held, come from the claims
+      await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = true WHERE height = 899733`);
+      await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = 899773`);
+      assert.equal(await answer([shareholder], s, e), truth);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("every legacy_ function accepts the ranges and units the live one accepts, and answers the same at the edges", async () => {
     // [start, end, trunc]: longer than the catalog's caps, exactly 7 days by hour (end + 1 µs is past 7 days), units the
     // catalog has no bucket for, an inverted range and a NULL end: the live function answers all of them

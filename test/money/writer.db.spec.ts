@@ -63,6 +63,7 @@ const TABLES = [
   "daily_validator_rewards",
   "daily_delegator_rewards_by_validator",
   "hourly_income_by_address_supplier",
+  "daily_claims_paid_by_address_service",
 ];
 
 function gz(file: string): Record<string, unknown> {
@@ -621,7 +622,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         [S]
       )
     ).rows;
-    assert.equal(rollups.length, 12);
+    assert.equal(rollups.length, 13);
     const src = async (name: string) =>
       String(
         (await c.query(`SELECT prosrc FROM pg_proc WHERE pronamespace = $1::regnamespace AND proname = $2`, [S, name]))
@@ -662,6 +663,58 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
              (SELECT count(*) FROM (SELECT * FROM d EXCEPT SELECT * FROM m) x)::int only_d`);
     assert.ok(Number(diff.rows[0].n_rows) > 0);
     assert.deepEqual([diff.rows[0].only_m, diff.rows[0].only_d], [0, 0]);
+  });
+
+  it("daily_claims_paid_by_address_service counts each claim once per address it paid, by day and service, as the base does", async () => {
+    const r = (
+      await c.query(`
+        WITH b AS (SELECT sb.day, p.address, c.service_id, count(*)::bigint n, sum(c.settled_upokt)::bigint s,
+                          sum(c.relays)::bigint r, sum(c.estimated_relays)::bigint er, sum(c.claimed_compute_units)::bigint cu,
+                          sum(c.estimated_compute_units)::bigint ecu
+                   FROM ${S}.v_claims_paid p JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+                   JOIN ${S}.settlement_blocks sb ON sb.height = c.height GROUP BY 1, 2, 3),
+             t AS (SELECT day, address, service_id, claim_count, settled_upokt, relays, estimated_relays, claimed_compute_units,
+                          estimated_compute_units FROM ${S}.daily_claims_paid_by_address_service)
+        SELECT (SELECT count(*) FROM t)::int n, (SELECT count(*) FROM (SELECT * FROM t EXCEPT SELECT * FROM b) x)::int only_t,
+               (SELECT count(*) FROM (SELECT * FROM b EXCEPT SELECT * FROM t) x)::int only_b,
+               (SELECT count(*) FROM ${S}.settlement_blocks WHERE NOT claims_paid_rollup)::int unmarked,
+               -- the roles v_claims_paid reads: every claim pays the DAO, and some pay a shareholder in both families
+               (SELECT count(DISTINCT address) FROM ${S}.v_claims_paid p JOIN ${S}.settlement_blocks sb USING (height)
+                WHERE p.address = sb.dao_address)::int dao,
+               (SELECT count(*) FROM ${S}.shareholder_payouts WHERE relay_upokt > 0 AND global_upokt > 0)::int both_families`)
+    ).rows[0];
+    assert.ok(Number(r.n) > 0 && Number(r.dao) > 0 && Number(r.both_families) > 0, JSON.stringify(r));
+    assert.deepEqual([r.only_t, r.only_b, r.unmarked], [0, 0, 0]);
+  });
+
+  it("a day written before daily_claims_paid_by_address_service: a rewrite subtracts nothing it did not add, and fill_claims_paid_day writes it", async () => {
+    const before = await md5All();
+    const day = "2026-09-01";
+    const heights = (await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE day = $1`, [day])).rows[0].n;
+    assert.ok(Number(heights) >= 2, `precondition: the tests above wrote several heights on ${day}`);
+    const fill = async () => Number((await c.query(`SELECT ${S}.fill_claims_paid_day($1) n`, [day])).rows[0].n);
+    // as the rollup arrives on a database written before it: no row, and no height held
+    await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE day = $1`, [day]);
+    await c.query(`DELETE FROM ${S}.daily_claims_paid_by_address_service WHERE day = $1`, [day]);
+    // rewriting one of them subtracts nothing from the rollup (it would go negative: drift) and adds the height
+    const { height, payload } = payloadOf("899713", true);
+    await write(height, payload);
+    const held = await c.query(
+      `SELECT height::int h FROM ${S}.settlement_blocks WHERE day = $1 AND claims_paid_rollup ORDER BY 1`,
+      [day]
+    );
+    assert.deepEqual(held.rows, [{ h: height }]);
+    assert.equal(await fill(), Number(heights) - 1);
+    assert.equal(await md5All(), before);
+    // a day already held is left as it is
+    assert.equal(await fill(), 0);
+    // an image without the rollup rewrote a held height: its old contribution stays in the rollup and the height is
+    // unmarked (that write_settlement does not name the column); the fill recomputes the whole day
+    await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = $1`, [height]);
+    await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET claim_count = 2 * claim_count, settled_upokt = 2 * settled_upokt
+                   WHERE day = $1`, [day]);
+    assert.equal(await fill(), 1);
+    assert.equal(await md5All(), before);
   });
 
   it("rewriting 710013 over a corrupted commission or replayed count, or a commission left on a replayed-only row, is drift", async () => {

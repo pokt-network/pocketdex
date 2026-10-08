@@ -28,6 +28,8 @@ import type { SettlementPayload } from "../../money/payload";
 // 2: daily_claims_by_supplier.claims_with_proof, and daily_validator_rewards.commission_na_count.
 // 3: monthly_income_by_address_supplier_service.
 // 4: daily_delegator_rewards_by_validator.replayed_count.
+// daily_claims_paid_by_address_service came later without a bump (a bump makes every rollup read raise until
+// rebuild_rollups ends): settlement_blocks.claims_paid_rollup says per height whether it holds that height (schema.ts).
 export const ROLLUP_VERSION = 4;
 
 export const writeSettlementProcName = "write_settlement";
@@ -172,12 +174,44 @@ UNION ALL
 SELECT p.height, p.recipient_id, p.role, p.family, '', '', p.amount_upokt, 1
 FROM ${s}.staker_payouts p;
 
+-- The claims that paid an address, once per (address, claim): the claim branches of v_income_base (a shareholder leg, the
+-- DAO, the service owner, the application) with an amount above 0. daily_claims_paid_by_address_service and
+-- legacy_rewards_by_addresses_and_time_group_by_service both read it.
+CREATE OR REPLACE VIEW ${s}.v_claims_paid AS
+SELECT sp.recipient_id AS address, sp.height, sp.event_idx
+FROM ${s}.shareholder_payouts sp WHERE sp.relay_upokt > 0 OR sp.global_upokt > 0
+UNION
+SELECT sb.dao_address, c.height, c.event_idx
+FROM ${s}.claim_settlements c JOIN ${s}.settlement_blocks sb USING (height)
+WHERE c.relay_to_dao_upokt > 0 OR c.global_to_dao_upokt > 0 OR c.reimbursement_to_dao_upokt > 0
+UNION
+SELECT c.source_owner_id, c.height, c.event_idx
+FROM ${s}.claim_settlements c WHERE c.relay_to_source_owner_upokt > 0 OR c.global_to_source_owner_upokt > 0
+UNION
+SELECT c.application_id, c.height, c.event_idx
+FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0 OR c.global_to_application_upokt > 0;
+
 -- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
 CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
-DECLARE d date; hr timestamptz;
+DECLARE d date; hr timestamptz; v_claims_paid boolean;
 BEGIN
-  SELECT day, date_trunc('hour', block_time, 'UTC') INTO d, hr FROM ${s}.settlement_blocks WHERE height = h;
+  SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup INTO d, hr, v_claims_paid
+  FROM ${s}.settlement_blocks WHERE height = h;
   IF d IS NULL THEN RETURN; END IF;
+
+  -- the claims that paid each address at h, per service; subtracted only from a height that added them
+  -- (settlement_blocks.claims_paid_rollup: the heights written before the rollup existed did not)
+  CREATE TEMP TABLE IF NOT EXISTS _paid (address text, service_id text, claim_count bigint, settled_upokt bigint,
+                                         relays bigint, estimated_relays bigint, claimed_compute_units bigint,
+                                         estimated_compute_units bigint) ON COMMIT DROP;
+  TRUNCATE _paid;
+  IF sg > 0 OR v_claims_paid THEN
+    INSERT INTO _paid
+    SELECT p.address, c.service_id, count(*), sum(c.settled_upokt), sum(c.relays), sum(c.estimated_relays),
+           sum(c.claimed_compute_units), sum(c.estimated_compute_units)
+    FROM ${s}.v_claims_paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+    WHERE p.height = h GROUP BY p.address, c.service_id;
+  END IF;
 
   CREATE TEMP TABLE IF NOT EXISTS _inc (address text, role text, family text, supplier_id text, service_id text,
                                         amount_upokt bigint, transfer_count bigint, contribution_count bigint) ON COMMIT DROP;
@@ -320,6 +354,16 @@ BEGIN
     self_delegation_upokt = t.self_delegation_upokt + excluded.self_delegation_upokt, to_delegators_upokt = t.to_delegators_upokt + excluded.to_delegators_upokt,
     commission_na_count = t.commission_na_count + excluded.commission_na_count;
 
+  INSERT INTO ${s}.daily_claims_paid_by_address_service AS t
+  SELECT d, address, service_id, sg * claim_count, sg * settled_upokt, sg * relays, sg * estimated_relays,
+         sg * claimed_compute_units, sg * estimated_compute_units
+  FROM _paid
+  ON CONFLICT (address, day, service_id) DO UPDATE SET
+    claim_count = t.claim_count + excluded.claim_count, settled_upokt = t.settled_upokt + excluded.settled_upokt,
+    relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
+    claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units,
+    estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units;
+
   IF sg < 0 THEN
     -- A row whose contributions are all gone must be back at zero, and no row may go negative. Anything else
     -- means it was added under other rules than the ones subtracting it now. Only the rows this height
@@ -403,7 +447,13 @@ BEGIN
                          -- with no contribution that has a commission left, what is left of the commission must be 0
                          -- (it becomes NULL below); anything else was added under other rules
                          OR (t.commission_na_count = t.contribution_count AND coalesce(t.commission_upokt, 0) <> 0)
-                         OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0))) THEN
+                         OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0)))
+       OR EXISTS (SELECT 1 FROM _paid i CROSS JOIN LATERAL (
+                    SELECT t.claim_count, t.settled_upokt, t.relays, t.claimed_compute_units
+                    FROM ${s}.daily_claims_paid_by_address_service t
+                    WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id LIMIT 1) t
+                  WHERE t.claim_count < 0 OR t.settled_upokt < 0
+                    OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.claimed_compute_units <> 0))) THEN
       RAISE EXCEPTION 'rollup drift at height %: subtracting it left a rollup row negative, or at contribution_count = 0 with a non-zero amount', h;
     END IF;
     DELETE FROM ${s}.daily_income_by_address WHERE day = d AND contribution_count = 0;
@@ -421,6 +471,7 @@ BEGIN
     DELETE FROM ${s}.hourly_income_by_address_supplier WHERE hour = hr AND contribution_count = 0;
     DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day = d AND contribution_count = 0;
     DELETE FROM ${s}.daily_validator_rewards WHERE day = d AND contribution_count = 0;
+    DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day = d AND claim_count = 0;
   END IF;
   -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it
   UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL
@@ -557,9 +608,10 @@ BEGIN
     END IF;
   END IF;
 
-  INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio)
+  -- claims_paid_rollup: _rollup_apply below adds the height to daily_claims_paid_by_address_service
+  INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio, claims_paid_rollup)
   VALUES (h, v_ts, v_era, (SELECT min(recipient_id) FROM _stg_detailed WHERE role = 'dao'),
-          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims));
+          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims), true);
 
   INSERT INTO ${s}.claim_settlements
   SELECT h, c.event_idx, v_ts, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id, c.service_id,
@@ -742,10 +794,35 @@ BEGIN
   DELETE FROM ${s}.hourly_income_by_address_supplier WHERE hour >= m::timestamp AT TIME ZONE 'UTC';
   DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day >= m;
   DELETE FROM ${s}.daily_validator_rewards WHERE day >= m;
+  DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day >= m;
   FOR h IN SELECT height FROM ${s}.settlement_blocks WHERE day >= m ORDER BY height LOOP
     CALL ${s}._rollup_apply(h, 1);
   END LOOP;
-  UPDATE ${s}.settlement_blocks SET rollup_version = ${ROLLUP_VERSION} WHERE day >= m;
+  UPDATE ${s}.settlement_blocks SET rollup_version = ${ROLLUP_VERSION}, claims_paid_rollup = true WHERE day >= m;
+END $$;
+
+-- Writes daily_claims_paid_by_address_service for one UTC day from the base tables, and marks every height of the day as
+-- held (claims_paid_rollup): for the heights written before the rollup existed, or by an image without it. A day whose
+-- heights are all marked is left as it is, so a stopped fill resumes by running again (scripts/fill_claims_paid.sql).
+-- The whole day is recomputed, not only its unmarked heights: an image without the rollup that rewrote a marked height
+-- left its old contribution in the rollup and the height unmarked. It takes the writer's lock, so no height of the day
+-- is written meanwhile. Returns the heights it marked.
+CREATE OR REPLACE FUNCTION ${s}.fill_claims_paid_day(p_day date) RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE marked integer; lo bigint; hi bigint;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
+  IF NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks WHERE day = p_day AND NOT claims_paid_rollup) THEN RETURN 0; END IF;
+  -- the day's heights as a range (days follow heights): a join on the view would compute it for every height first
+  SELECT min(height), max(height) INTO lo, hi FROM ${s}.settlement_blocks WHERE day = p_day;
+  DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day = p_day;
+  INSERT INTO ${s}.daily_claims_paid_by_address_service
+  SELECT p_day, p.address, c.service_id, count(*), sum(c.settled_upokt), sum(c.relays), sum(c.estimated_relays),
+         sum(c.claimed_compute_units), sum(c.estimated_compute_units)
+  FROM ${s}.v_claims_paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+  WHERE p.height BETWEEN lo AND hi GROUP BY p.address, c.service_id;
+  UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true WHERE day = p_day AND NOT claims_paid_rollup;
+  GET DIAGNOSTICS marked = ROW_COUNT;
+  RETURN marked;
 END $$;
 `;
 }
