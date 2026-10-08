@@ -1365,11 +1365,19 @@ ${covered("blocks")}
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, claims_settled_with_proof, claims_settled_without_proof, proofs_submitted, proofs_validated, proofs_invalid, invalid_by_reason) AS (
   WITH x AS (
+    -- without by_service the smaller daily_claims_by_supplier is enough, as in get_supplier_earnings: the by-application
+    -- one was 881k rows for an owner of 1037 suppliers over 30 days (2.4 s on mainnet, 2026-10-08)
+    SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id sup, ''::text svc,
+           d.claims_with_proof with_proof, d.claim_count - d.claims_with_proof without_proof,
+           0 submitted, 0 validated, 0 invalid, NULL::text reason
+    FROM ${s}.daily_claims_by_supplier d
+    WHERE NOT by_service AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rc.d1 AND rc.d2
+    UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id sup, d.service_id svc,
            d.claims_with_proof with_proof, d.claim_count - d.claims_with_proof without_proof,
            0 submitted, 0 validated, 0 invalid, NULL::text reason
     FROM ${s}.daily_claims_by_supplier_application_service d
-    WHERE (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rc.d1 AND rc.d2
+    WHERE by_service AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rc.d1 AND rc.d2
     UNION ALL
     SELECT c.block_time, c.supplier_id, c.service_id, c.settled_with_proof::int, (NOT c.settled_with_proof)::int, 0, 0, 0, NULL
     FROM ${s}.claim_settlements c

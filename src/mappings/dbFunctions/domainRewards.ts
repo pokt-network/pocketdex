@@ -210,5 +210,17 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     // so every call was an index-only scan of the whole 2.7 GB GIST index.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS balances_block_range_upper_idx
       ON ${dbSchema}.balances (upper(_block_range))`,
+    // get_supplier_proofs reads proofs by supplier over a block range. SubQuery's GIST (supplier_id, _block_range) and
+    // (block_id, _block_range) cannot serve that, so an owner's 1037 suppliers over 30 days read every proof of the
+    // network in the range (17.6 s on mainnet, 2026-10-08; 14.7M rows in each table).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_msg_submit_proofs_supplier_block
+      ON ${dbSchema}.msg_submit_proofs (supplier_id, block_id)`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_proof_validity_checkeds_supplier_block
+      ON ${dbSchema}.event_proof_validity_checkeds (supplier_id, block_id)`,
+    // The suppliers that share revenue with an address now (the catalog's `operators`): containment on the live
+    // configs, which otherwise scans all 157k of them (0.36 s on mainnet, 2026-10-08).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_rev_share
+      ON ${dbSchema}.supplier_service_configs USING GIN (rev_share jsonb_path_ops)
+      WHERE upper_inf(_block_range)`,
   ];
 }
