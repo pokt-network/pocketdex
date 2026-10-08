@@ -108,6 +108,7 @@ const OMITTED_FUNCTIONS = [
   "_legacy_claims_by_service",
   "_legacy_series",
   "_operator_suppliers",
+  "_supplier_ids",
   // a writer of the money tables, which GraphQL would publish as a mutation (scripts/fill_claims_paid.sql runs it)
   "fill_claims_paid_day",
 ];
