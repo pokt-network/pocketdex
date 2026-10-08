@@ -1423,7 +1423,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
     await assert.rejects(
       c.query(`SELECT * FROM ${S}.get_supplier_earnings(ARRAY['x'], NULL, NULL, owners => ARRAY['y'])`),
-      /not both/
+      /pass one of suppliers, owners .* or operators/
     );
   });
 
@@ -1918,7 +1918,92 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.equal(formerOwner.rows[0].n, 0);
       await assert.rejects(
         c.query(`SELECT * FROM ${S}.get_supplier_earnings(ARRAY['x'], NULL, NULL, owners => ARRAY['owner-a'])`),
-        /pass suppliers or owners/
+        /pass one of suppliers, owners .* or operators/
+      );
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("the supplier functions take operators: the Staked suppliers whose live configs share revenue with them now, no cap", async () => {
+    await c.query("BEGIN");
+    try {
+      const sups = (
+        await c.query(`SELECT array_agg(DISTINCT supplier_id ORDER BY supplier_id) s FROM ${S}.claim_settlements`)
+      ).rows[0].s as unknown as string[];
+      assert.ok(sups.length > 1);
+      const idle = Array.from({ length: 250 }, (_, i) => `idle-${i + 1}`);
+      await c.query(`CREATE TABLE ${S}.suppliers (id text, stake_status text, _block_range int8range)`);
+      await c.query(
+        `CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range)`
+      );
+      // op-a shares revenue now on every supplier that settled and on 250 idle ones, next to another address; not
+      // through an unstaked supplier, nor through a config that is no longer live (sups[0]'s old one, naming op-b)
+      await c.query(
+        `INSERT INTO ${S}.suppliers SELECT u, 'Staked', int8range(1, NULL) FROM unnest($1::text[] || $2::text[]) u
+         UNION ALL SELECT 'unstaked-1', 'Unstaked', int8range(1, NULL)
+         UNION ALL SELECT 'unstaked-1', 'Staked', int8range(0, 1)`,
+        [sups, idle]
+      );
+      await c.query(
+        `INSERT INTO ${S}.supplier_service_configs
+         SELECT u, 'svc', jsonb_build_array(jsonb_build_object('address', 'someone', 'rev_share_percentage', 40),
+                                            jsonb_build_object('address', 'op-a', 'rev_share_percentage', 60)), int8range(1, NULL)
+         FROM unnest($1::text[] || $2::text[]) u
+         UNION ALL SELECT 'unstaked-1', 'svc', '[{"address": "op-a", "rev_share_percentage": 100}]', int8range(1, NULL)
+         UNION ALL SELECT $3, 'old', '[{"address": "op-b", "rev_share_percentage": 100}]', int8range(0, 1)`,
+        [sups, idle, sups[0]]
+      );
+      const resolve = async (ops: string[]) =>
+        (await c.query(`SELECT ${S}._operator_suppliers($1::text[]) s`, [ops])).rows[0].s as unknown as string[];
+      assert.deepEqual(await resolve(["op-a", "nobody"]), [...sups, ...idle].sort());
+      assert.deepEqual(await resolve(["op-b"]), []);
+      // the same suppliers named by hand, in calls of at most 200
+      const parts = Array.from({ length: Math.ceil(sups.length / 200) }, (_, i) => sups.slice(i * 200, i * 200 + 200));
+      let claimed = BigInt(0);
+      let claims = BigInt(0);
+      for (const part of parts) {
+        const r = (
+          await c.query(
+            `SELECT sum(claimed_upokt)::text a, sum(settled_claims)::text n FROM ${S}.get_supplier_earnings($1::text[], NULL, NULL)`,
+            [part]
+          )
+        ).rows[0];
+        claimed += BigInt(r.a ?? 0);
+        claims += BigInt(r.n ?? 0);
+      }
+      const byOperator = await c.query(
+        `SELECT supplier_id, claimed_upokt::text a, settled_claims::text n FROM ${S}.get_supplier_earnings(suppliers => NULL,
+           range_start => NULL, range_end => NULL, operators => ARRAY['op-a'], by_supplier => false)`
+      );
+      assert.deepEqual(byOperator.rows, [{ supplier_id: "all", a: claimed.toString(), n: claims.toString() }]);
+      // every requested supplier gets its row: the ones that settled, and the 250 idle ones
+      for (const fn of ["get_supplier_earnings", "get_supplier_distribution", "get_supplier_penalties"]) {
+        let named = 0;
+        for (const part of parts)
+          named += Number(
+            (await c.query(`SELECT count(*)::int n FROM ${S}.${fn}($1::text[], NULL, NULL, fill_empty_buckets => true)`, [part]))
+              .rows[0].n
+          );
+        const r = await c.query(
+          `SELECT count(*)::int n FROM ${S}.${fn}(NULL, NULL, NULL, operators => ARRAY['op-a'], fill_empty_buckets => true)`
+        );
+        assert.equal(Number(r.rows[0].n) - idle.length, named, fn);
+        // an operator whose suppliers are all unstaked or gone answers no rows
+        const none = await c.query(`SELECT count(*)::int n FROM ${S}.${fn}(NULL, NULL, NULL, operators => ARRAY['op-b'])`);
+        assert.equal(none.rows[0].n, 0, fn);
+      }
+      // one of suppliers, owners and operators; get_supplier_distribution needs one
+      for (const fn of ["get_supplier_earnings", "get_supplier_distribution", "get_supplier_penalties", "get_supplier_proofs"]) {
+        for (const args of ["ARRAY['x'], NULL, NULL, operators => ARRAY['op-a']", "NULL, NULL, NULL, owners => ARRAY['o'], operators => ARRAY['op-a']"]) {
+          await c.query("SAVEPOINT a");
+          await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(${args})`), /pass one of suppliers, owners .* or operators/, fn);
+          await c.query("ROLLBACK TO SAVEPOINT a");
+        }
+      }
+      await assert.rejects(
+        c.query(`SELECT * FROM ${S}.get_supplier_distribution(NULL, NULL, NULL)`),
+        /pass one of suppliers, owners .* or operators/
       );
     } finally {
       await c.query("ROLLBACK");

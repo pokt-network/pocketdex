@@ -994,12 +994,20 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         suppliers text[], capped boolean, p_covered tstzmultirange, p_span_from timestamptz)
         RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';
       CREATE FUNCTION ${S}._covered_buckets(bucket text, span_first timestamptz, span_last timestamptz, gaps jsonb)
-        RETURNS SETOF timestamptz LANGUAGE sql AS 'SELECT now()';`);
+        RETURNS SETOF timestamptz LANGUAGE sql AS 'SELECT now()';
+      -- a supplier function from before operators
+      CREATE FUNCTION ${S}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
+        bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false,
+        by_supplier boolean DEFAULT true, owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+        RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
     assert.deepEqual(await oids(), before);
     await c.query(`SELECT * FROM ${S}.get_income($1, '2026-09-01T00:00:00Z', '2026-09-03T00:00:00Z', 'hour', fill_empty_buckets => true)`, [
       [shareholder],
+    ]);
+    await c.query(`SELECT * FROM ${S}.get_supplier_earnings($1, '2026-09-01T00:00:00Z', '2026-09-03T00:00:00Z')`, [
+      suppliers.slice(0, 200),
     ]);
   });
 

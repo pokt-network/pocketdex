@@ -25,13 +25,14 @@ import { ROLLUP_VERSION } from "./writer";
 // gives a row per id, false sums the whole list into one row with 'all' (a fleet or group total). Every requested id
 // gets its row or series even without activity (0), and an idle list its zero group row, only with
 // fill_empty_buckets => true; such a row says 'all' in the breakdown columns it has no value for.
-// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs, get_supplier_penalties (with no owners either),
-// get_validator_rewards and get_delegator_income, so a caller never has to send the list; get_delegator_income also
+// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs, get_supplier_penalties (with no owners or
+// operators either), get_validator_rewards and get_delegator_income, so a caller never has to send the list; get_delegator_income also
 // takes validators, keeping the income its delegators got from those validators. The size of such an answer is set by
 // the bucket and the by_* flags, and GraphQL caps its rows (--query-limit).
-// The supplier functions take suppliers or owners: owners resolves, with no cap, the suppliers each owner owns now
-// (the Supplier entity's current version, unstaked suppliers included) and reports their whole history, also from
-// before a change of owner. An owner with no supplier returns no rows.
+// The supplier functions take suppliers, owners or operators: owners resolves, with no cap, the suppliers each owner owns
+// now (the Supplier entity's current version, unstaked suppliers included) and reports their whole history, also from
+// before a change of owner. An owner with no supplier returns no rows. operators resolves, with no cap, the Staked
+// suppliers whose live service configs share revenue with those addresses now (_operator_suppliers), likewise.
 //
 // Coverage: no function fails for it. Heights that were never written must not read as zero, so each answers for the
 // part of the range the money tables cover and says which part that is (_coverage: what is indexed minus the
@@ -271,6 +272,19 @@ BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = ANY(${CATALOG_SQL}) AND p.proretset
              AND pg_get_function_result(p.oid) NOT LIKE '%covered_gaps%' LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
+-- operators came last to the supplier functions: CREATE OR REPLACE with it leaves the signature without it next to the
+-- new one, and two overloads make every call ambiguous, so a database written before has the old one dropped first.
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           WHERE p.pronamespace = '${s}'::regnamespace
+             AND p.proname IN ('get_supplier_earnings', 'get_supplier_distribution', 'get_supplier_penalties', 'get_supplier_proofs')
+             AND NOT ('operators' = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
 END $$;
@@ -596,10 +610,28 @@ ${covered("settled")}
   ) q ORDER BY 1 DESC, 3, 4, 5;
 END $$;
 
+-- The suppliers that share revenue with the addresses now: a live service config lists one of them in its rev_share,
+-- and the supplier is Staked now (get_claim_proofs_data_by_delegators_and_time's matched_suppliers); no cap. Containment
+-- per address, so the partial GIN idx_ssc_live_rev_share serves it: an operator's 1055 suppliers in 0.13 s on mainnet
+-- (2026-10-08), where jsonb_array_elements over every live config took 1 s. PL/pgSQL: a SQL body would need the entity
+-- tables to exist when it is created.
+CREATE OR REPLACE FUNCTION ${s}._operator_suppliers(addresses text[]) RETURNS text[]
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  RETURN ARRAY(
+    SELECT m.supplier_id
+    FROM (SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
+          JOIN ${s}.supplier_service_configs ssc
+            ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a)) AND upper_inf(ssc._block_range)) m
+    WHERE EXISTS (SELECT 1 FROM ${s}.suppliers su WHERE su.id = m.supplier_id AND su.stake_status = 'Staked'
+                    AND su._block_range @> 9223372036854775807::bigint)
+    ORDER BY m.supplier_id);
+END $$;
+
 -- Supplier: what it generated
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, application_id text,
   claimed_upokt numeric, settled_upokt numeric, overservicing_loss_upokt numeric,
   relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, settled_claims bigint,
@@ -608,15 +640,19 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
-  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
+  IF num_nonnulls(suppliers, owners, operators) > 1 THEN
+    RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
   END IF;
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     -- no cap: an owner can have any number of suppliers
     suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
+  ELSIF operators IS NOT NULL THEN
+    PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
+    -- no cap either
+    suppliers := ${s}._operator_suppliers(operators);
   ELSE
-    -- NULL suppliers (and no owners): every supplier
+    -- NULL suppliers (and no owners or operators): every supplier
     PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
   all_suppliers := suppliers IS NULL;
@@ -681,20 +717,24 @@ END $$;
 -- global) that paid that recipient, so a claim with global mint counts twice unless by_reason splits it.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_distribution(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, recipient_id text, role text, family text,
   amount_upokt numeric, transfer_count bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
-  IF (suppliers IS NULL) = (owners IS NULL) THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now)';
+  IF num_nonnulls(suppliers, owners, operators) <> 1 THEN
+    RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
   END IF;
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     -- no cap: an owner can have any number of suppliers
     suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
+  ELSIF operators IS NOT NULL THEN
+    PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
+    -- no cap either
+    suppliers := ${s}._operator_suppliers(operators);
   ELSE
     PERFORM ${s}._validate(suppliers, 'suppliers', range_start, range_end, bucket);
   END IF;
@@ -1138,22 +1178,26 @@ END $$;
 -- claim has no amount_upokt or relay counts on chain: NULL, not 0.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_penalties(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, kind text, reason text, events bigint, claimed_upokt numeric,
   slashed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
-  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
+  IF num_nonnulls(suppliers, owners, operators) > 1 THEN
+    RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
   END IF;
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     -- no cap: an owner can have any number of suppliers
     suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
+  ELSIF operators IS NOT NULL THEN
+    PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
+    -- no cap either
+    suppliers := ${s}._operator_suppliers(operators);
   ELSE
-    -- NULL suppliers (and no owners): every supplier
+    -- NULL suppliers (and no owners or operators): every supplier
     PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
   all_suppliers := suppliers IS NULL;
@@ -1338,7 +1382,7 @@ END $$;
 -- the daily rollup for whole days and claim_settlements at the edges, like get_supplier_earnings.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_proofs(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text,
   claims_settled_with_proof bigint, claims_settled_without_proof bigint,
   proofs_submitted bigint, proofs_validated bigint, proofs_invalid bigint, invalid_by_reason jsonb, covered_from timestamptz,
@@ -1346,15 +1390,19 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; rc record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
-  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
+  IF num_nonnulls(suppliers, owners, operators) > 1 THEN
+    RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
   END IF;
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     -- no cap: an owner can have any number of suppliers
     suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
+  ELSIF operators IS NOT NULL THEN
+    PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
+    -- no cap either
+    suppliers := ${s}._operator_suppliers(operators);
   ELSE
-    -- NULL suppliers (and no owners): every supplier
+    -- NULL suppliers (and no owners or operators): every supplier
     PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   END IF;
   all_suppliers := suppliers IS NULL;
