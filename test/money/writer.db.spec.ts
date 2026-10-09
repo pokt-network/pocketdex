@@ -799,12 +799,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`
         WITH b AS (SELECT date_trunc('month', sb.day::timestamp)::date AS month, c.supplier_id, c.service_id, count(*)::bigint n,
                           sum(c.claimed_upokt)::bigint cl, sum(c.settled_upokt)::bigint st, sum(c.overservicing_loss_upokt)::bigint ol,
-                          sum(c.global_minted_upokt)::bigint gm, sum(c.relays)::bigint r, sum(c.estimated_relays)::bigint er,
+                          sum(c.relays)::bigint r, sum(c.estimated_relays)::bigint er,
                           sum(c.claimed_compute_units)::bigint cu, sum(c.estimated_compute_units)::bigint ecu,
                           count(*) FILTER (WHERE c.settled_with_proof)::bigint p
                    FROM ${S}.claim_settlements c JOIN ${S}.settlement_blocks sb USING (height) GROUP BY 1, 2, 3),
              t AS (SELECT month, supplier_id, service_id, claim_count, claimed_upokt, settled_upokt, overservicing_loss_upokt,
-                          global_minted_upokt, relays, estimated_relays, claimed_compute_units, estimated_compute_units,
+                          relays, estimated_relays, claimed_compute_units, estimated_compute_units,
                           claims_with_proof FROM ${S}.monthly_claims_by_supplier_service)
         SELECT (SELECT count(*) FROM t)::int n, (SELECT count(*) FROM (SELECT * FROM t EXCEPT SELECT * FROM b) x)::int only_t,
                (SELECT count(*) FROM (SELECT * FROM b EXCEPT SELECT * FROM t) x)::int only_b,
@@ -842,21 +842,40 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     await write(height, payload);
     assert.deepEqual(await held(), []);
     assert.equal((await rollupMonth()).n, 0);
-    // the fill holds the writer's lock until it commits: a writer started meanwhile waits for it
     const other = new Client({ connectionString: URL });
     await other.connect();
-    await c.query("BEGIN");
     try {
-      assert.equal(await fill(), Number(heights));
-      const locked = await other.query(`SELECT pg_try_advisory_lock(hashtext('pocketdex.write_settlement')) ok`);
-      assert.equal(locked.rows[0].ok, false);
-      await c.query("COMMIT");
+      // it waits for the writer's lock past the session's lock_timeout (as write_settlement, up to 30 s a try), and
+      // leaves the session's value as it was
+      await other.query(`SELECT pg_advisory_lock(hashtext('pocketdex.write_settlement'))`);
+      await c.query("BEGIN");
+      let ok = false;
+      try {
+        await c.query("SET LOCAL lock_timeout = '50ms'");
+        const filled = fill();
+        filled.catch(() => undefined); // awaited below: a failure there, not as an unhandled rejection meanwhile
+        await new Promise((r) => setTimeout(r, 800)); // past 10 tries of the session's 50 ms
+        await other.query(`SELECT pg_advisory_unlock(hashtext('pocketdex.write_settlement'))`);
+        assert.equal(await filled, Number(heights));
+        assert.equal((await c.query("SELECT current_setting('lock_timeout') t")).rows[0].t, "50ms");
+        // and holds it until it commits: a writer started meanwhile waits for it
+        const locked = await other.query(`SELECT pg_try_advisory_lock(hashtext('pocketdex.write_settlement')) ok`);
+        assert.equal(locked.rows[0].ok, false);
+        ok = true;
+      } finally {
+        await c.query(ok ? "COMMIT" : "ROLLBACK");
+      }
     } finally {
-      await c.query("ROLLBACK");
       await other.end();
     }
     assert.equal(await md5All(), before);
+    // a month already held is left as it is, but not a row left at zero claims
+    await c.query(`INSERT INTO ${S}.monthly_claims_by_supplier_service VALUES ($1, 'zero-row', 'svc', 0, 0, 0, 0, 0, 0, 0, 0, 0)`, [month]);
     assert.equal(await fill(), 0);
+    assert.equal(
+      (await c.query(`SELECT count(*)::int n FROM ${S}.monthly_claims_by_supplier_service WHERE supplier_id = 'zero-row'`)).rows[0].n,
+      0
+    );
     // held -> an image without the rollup rewrites the height: it subtracts and adds the other rollups, leaves this one as
     // it was (the old contribution stays) and the height not held (its write_settlement does not name the column)
     const month0 = await rollupMonth();
@@ -874,27 +893,37 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
   });
 
   it("a held height whose monthly_claims_by_supplier_service row went negative or kept an amount at zero claims is drift", async () => {
-    const before = await md5All();
-    const { height, payload } = payloadOf("899713", true);
-    const k = (
-      await c.query(`SELECT supplier_id, service_id FROM ${S}.claim_settlements
-                     WHERE block_time >= '2026-09-01' AND block_time < '2026-10-01'
-                     GROUP BY 1, 2 HAVING bool_and(height = $1) AND sum(relays) > 0 ORDER BY 1, 2 LIMIT 1`, [height])
-    ).rows[0];
-    assert.ok(k, `precondition: a (supplier, service) whose claims of the month are all at ${height}, with relays`);
-    const where = `WHERE month = '2026-09-01' AND supplier_id = $1 AND service_id = $2`;
-    for (const [col, by] of [
-      ["relays", "relays + 1"], // all of its claims at the height: claim_count reaches 0 with relays left
-      ["relays", "-1"], // below 0
-      ["claims_with_proof", "claim_count + 1"], // more claims with a proof than claims
-    ]) {
-      const old = (await c.query(`SELECT ${col}::text v FROM ${S}.monthly_claims_by_supplier_service ${where}`, [k.supplier_id, k.service_id]))
-        .rows[0].v;
-      await c.query(`UPDATE ${S}.monthly_claims_by_supplier_service SET ${col} = ${by} ${where}`, [k.supplier_id, k.service_id]);
-      await assert.rejects(write(height, payload), /rollup drift at height 899713/, `${col} = ${by}`);
-      await c.query(`UPDATE ${S}.monthly_claims_by_supplier_service SET ${col} = $3 ${where}`, [k.supplier_id, k.service_id, old]);
+    await c.query("BEGIN");
+    try {
+      // its own month: 899713's settlement written again in June, the only height there
+      const height = 550013;
+      const { payload } = payloadOf("899713", true);
+      payload.ts = "2026-06-10T12:00:00.000Z";
+      const writeJune = async () => {
+        for (const { bind, sql } of writeSettlementCalls(S, height, payload)) await c.query(sql, bind);
+      };
+      await writeJune();
+      const k = (
+        await c.query(`SELECT supplier_id, service_id FROM ${S}.claim_settlements WHERE height = $1
+                       GROUP BY 1, 2 HAVING sum(relays) > 0 ORDER BY 1, 2 LIMIT 1`, [height])
+      ).rows[0];
+      assert.ok(k, `precondition: a (supplier, service) with relays at ${height}`);
+      const where = `WHERE month = '2026-06-01' AND supplier_id = $1 AND service_id = $2`;
+      for (const [col, by] of [
+        ["relays", "relays + 1"], // all of its claims at the height: claim_count reaches 0 with relays left
+        ["relays", "-1"], // below 0
+        ["claims_with_proof", "claim_count + 1"], // more claims with a proof than claims
+      ]) {
+        await c.query("SAVEPOINT d");
+        await c.query(`UPDATE ${S}.monthly_claims_by_supplier_service SET ${col} = ${by} ${where}`, [k.supplier_id, k.service_id]);
+        await assert.rejects(writeJune(), /rollup drift at height 550013/, `${col} = ${by}`);
+        await c.query("ROLLBACK TO SAVEPOINT d");
+      }
+      // uncorrupted, the same rewrite passes
+      await writeJune();
+    } finally {
+      await c.query("ROLLBACK");
     }
-    assert.equal(await md5All(), before);
   });
 
   it("rewriting 710013 over a corrupted commission or replayed count, or a commission left on a replayed-only row, is drift", async () => {
@@ -1517,6 +1546,19 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.deepEqual(twins.rows.map((r) => r.proname), catalog.map((n) => n + "_json").sort());
     for (const r of twins.rows) assert.ok(/no row limit/.test(String(r.tag)) && !/@omit/.test(String(r.tag)), String(r.proname));
     for (const n of ["_buckets", "_income"]) assert.deepEqual([n, tags[n]], [n, "@omit"]);
+    // nothing else is published, set-returning or not: every other function is hidden, a writer (published as a
+    // mutation) included
+    const shown = (
+      await c.query(
+        `SELECT p.proname FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.prokind = 'f'
+           AND coalesce(obj_description(p.oid, 'pg_proc'), '') !~ '^@omit' ORDER BY 1`,
+        [S]
+      )
+    ).rows.map((r) => String(r.proname));
+    assert.deepEqual(
+      shown.filter((n) => !catalog.includes(n.replace(/_json$/, "")) && !n.startsWith("legacy_")),
+      []
+    );
     const vrd = await c.query(
       `SELECT count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = '_vrd_range_start'`,
       [S]
@@ -2045,19 +2087,30 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         payload.ts = ts;
         for (const { bind, sql } of writeSettlementCalls(S, h, payload)) await c.query(sql, bind);
       }
-      // owner-m owns every supplier: more than the 200 a list takes, as the owners the explorer asks about
-      const sups = (await c.query(`SELECT array_agg(DISTINCT supplier_id) s FROM ${S}.claim_settlements`)).rows[0]
-        .s as unknown as string[];
+      // owner-m owns every supplier: more than the 200 a list takes, as the owners the explorer asks about; op-m shares
+      // revenue on every other one
+      const sups = (await c.query(`SELECT array_agg(DISTINCT supplier_id ORDER BY supplier_id) s FROM ${S}.claim_settlements`))
+        .rows[0].s as unknown as string[];
       assert.ok(sups.length > 200, `${sups.length} suppliers`);
-      await c.query(`CREATE TABLE ${S}.suppliers (id text, owner_id text, _block_range int8range)`);
-      await c.query(`INSERT INTO ${S}.suppliers SELECT u, 'owner-m', int8range(1, NULL) FROM unnest($1::text[]) u`, [sups]);
-      const json = async (from: string | null, to: string | null, bucket: string | null, bySupplier: boolean, owners: boolean) =>
+      await c.query(`CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_status text, _block_range int8range)`);
+      await c.query(`INSERT INTO ${S}.suppliers SELECT u, 'owner-m', 'Staked', int8range(1, NULL) FROM unnest($1::text[]) u`, [sups]);
+      await c.query(
+        `CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range)`
+      );
+      await c.query(
+        `INSERT INTO ${S}.supplier_service_configs SELECT u, 'svc', '[{"address": "op-m", "rev_share_percentage": 100}]', int8range(1, NULL)
+         FROM unnest($1::text[]) WITH ORDINALITY x(u, i) WHERE i % 2 = 0`,
+        [sups]
+      );
+      type Who = "owners" | "operators" | "every supplier";
+      const json = async (from: string | null, to: string | null, bucket: string | null, bySupplier: boolean, who: Who, fill: boolean) =>
         String(
           (
             await c.query(
               `SELECT ${S}.get_supplier_earnings_json(NULL, $1, $2, $3, by_service => true, by_supplier => $4,
-                 owners => CASE WHEN $5 THEN ARRAY['owner-m'] END)::text j`,
-              [from, to, bucket, bySupplier, owners]
+                 owners => CASE WHEN $5 = 'owners' THEN ARRAY['owner-m'] END,
+                 operators => CASE WHEN $5 = 'operators' THEN ARRAY['op-m'] END, fill_empty_buckets => $6)::text j`,
+              [from, to, bucket, bySupplier, who, fill]
             )
           ).rows[0].j
         );
@@ -2081,13 +2134,17 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ];
       for (const [from, to] of ranges)
         for (const bucket of [null, "month", "year"])
-          for (const [bySupplier, owners] of [
-            [false, true],
-            [true, true],
-            [false, false], // every supplier
-          ]) {
-            const label = `${from} ${to} ${bucket} by_supplier ${bySupplier} owners ${owners}`;
-            const [m, d] = [await json(from, to, bucket, bySupplier, owners), await daily(from, to, bucket, bySupplier, owners)];
+          for (const [bySupplier, who, fill] of [
+            [false, "owners", false],
+            [true, "owners", false],
+            [false, "every supplier", false],
+            [false, "operators", false],
+            [true, "operators", true],
+            [false, "owners", true],
+          ] as Array<[boolean, Who, boolean]>) {
+            const label = `${from} ${to} ${bucket} by_supplier ${bySupplier} ${who} fill_empty_buckets ${fill}`;
+            const args = [from, to, bucket, bySupplier, who, fill] as const;
+            const [m, d] = [await json(...args), await daily(...args)];
             assert.equal(m, d, label);
             if (from !== "2026-08-04T00:00:00Z") assert.ok(JSON.parse(d).data.length > 0, label);
           }

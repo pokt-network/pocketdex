@@ -316,27 +316,36 @@ BEGIN
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count,
         replayed_count = t.replayed_count + excluded.replayed_count;
 
-  INSERT INTO ${s}.daily_claims_by_supplier_application_service AS t
-  SELECT d, supplier_id, application_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt),
-         sg * sum(overservicing_loss_upokt), sg * sum(global_minted_upokt), sg * sum(relays), sg * sum(estimated_relays),
-         sg * sum(claimed_compute_units), sg * sum(estimated_compute_units), sg * count(*) FILTER (WHERE settled_with_proof)
-  FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id, application_id, service_id
-  ON CONFLICT (supplier_id, day, application_id, service_id) DO UPDATE SET
-    claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
-    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
-    relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
-    claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
-    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
-
-  -- only for a held height (settlement_blocks.monthly_claims_rollup), as daily_claims_paid_by_address_service
+  -- one aggregate of the height's claims feeds the daily rollup and the monthly one without the application; the monthly
+  -- one only for a held height (settlement_blocks.monthly_claims_rollup), as daily_claims_paid_by_address_service
+  WITH a AS (
+    SELECT supplier_id, application_id, service_id, count(*) claim_count, sum(claimed_upokt) claimed_upokt,
+           sum(settled_upokt) settled_upokt, sum(overservicing_loss_upokt) overservicing_loss_upokt,
+           sum(global_minted_upokt) global_minted_upokt, sum(relays) relays, sum(estimated_relays) estimated_relays,
+           sum(claimed_compute_units) claimed_compute_units, sum(estimated_compute_units) estimated_compute_units,
+           count(*) FILTER (WHERE settled_with_proof) claims_with_proof
+    FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id, application_id, service_id
+  ), daily AS (
+    INSERT INTO ${s}.daily_claims_by_supplier_application_service AS t
+    SELECT d, supplier_id, application_id, service_id, sg * claim_count, sg * claimed_upokt, sg * settled_upokt,
+           sg * overservicing_loss_upokt, sg * global_minted_upokt, sg * relays, sg * estimated_relays,
+           sg * claimed_compute_units, sg * estimated_compute_units, sg * claims_with_proof
+    FROM a
+    ON CONFLICT (supplier_id, day, application_id, service_id) DO UPDATE SET
+      claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
+      overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
+      relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
+      claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
+      claims_with_proof = t.claims_with_proof + excluded.claims_with_proof
+  )
   INSERT INTO ${s}.monthly_claims_by_supplier_service AS t
-  SELECT date_trunc('month', d)::date, supplier_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt),
-         sg * sum(overservicing_loss_upokt), sg * sum(global_minted_upokt), sg * sum(relays), sg * sum(estimated_relays),
-         sg * sum(claimed_compute_units), sg * sum(estimated_compute_units), sg * count(*) FILTER (WHERE settled_with_proof)
-  FROM ${s}.claim_settlements WHERE height = h AND v_month_held GROUP BY supplier_id, service_id
+  SELECT date_trunc('month', d)::date, supplier_id, service_id, sg * sum(claim_count), sg * sum(claimed_upokt), sg * sum(settled_upokt),
+         sg * sum(overservicing_loss_upokt), sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units),
+         sg * sum(estimated_compute_units), sg * sum(claims_with_proof)
+  FROM a WHERE v_month_held GROUP BY supplier_id, service_id
   ON CONFLICT (supplier_id, month, service_id) DO UPDATE SET
     claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
-    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
+    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt,
     relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
     claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
@@ -445,17 +454,17 @@ BEGIN
                     AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
                          OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
        OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.claimed_upokt, t.settled_upokt, t.overservicing_loss_upokt, t.global_minted_upokt,
-                           t.relays, t.estimated_relays, t.claimed_compute_units, t.estimated_compute_units, t.claims_with_proof
+                    SELECT t.claim_count, t.claimed_upokt, t.settled_upokt, t.overservicing_loss_upokt, t.relays,
+                           t.estimated_relays, t.claimed_compute_units, t.estimated_compute_units, t.claims_with_proof
                     FROM ${s}.monthly_claims_by_supplier_service t
                     WHERE t.supplier_id = c.supplier_id AND t.month = date_trunc('month', d)::date
                       AND t.service_id = c.service_id LIMIT 1) t
                   WHERE c.height = h AND v_month_held
                     AND (t.claim_count < 0 OR t.claimed_upokt < 0 OR t.settled_upokt < 0 OR t.overservicing_loss_upokt < 0
-                         OR t.global_minted_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0 OR t.claimed_compute_units < 0
+                         OR t.relays < 0 OR t.estimated_relays < 0 OR t.claimed_compute_units < 0
                          OR t.estimated_compute_units < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
                          OR (t.claim_count = 0 AND (t.claimed_upokt <> 0 OR t.settled_upokt <> 0 OR t.overservicing_loss_upokt <> 0
-                                                    OR t.global_minted_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
+                                                    OR t.relays <> 0 OR t.estimated_relays <> 0
                                                     OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))))
        OR EXISTS (SELECT 1 FROM ${s}.delegator_validator_payouts p CROSS JOIN LATERAL (
                     SELECT t.contribution_count, t.amount_upokt, t.replayed_count FROM ${s}.daily_delegator_rewards_by_validator t
@@ -882,24 +891,37 @@ BEGIN
 END $$;
 
 -- Writes monthly_claims_by_supplier_service for the UTC month of p_month, and marks every height of it as held
--- (monthly_claims_rollup), as fill_claims_paid_day does for its day: a month whose heights are all marked is left as it is,
--- and otherwise the whole month is recomputed, under the writer's lock (scripts/fill_monthly_claims.sql). From
+-- (monthly_claims_rollup), as fill_claims_paid_day does for its day: a month whose heights are all marked is left as it is
+-- (but its rows left at zero claims), and otherwise the whole month is recomputed (scripts/fill_monthly_claims.sql). From
 -- daily_claims_by_supplier_application_service, which every image keeps for every height: the same claims summed per day,
 -- read through its day index (a mainnet month: 3.1M rows in 2 s, against ~3.5M claims in an 18 GB table). Returns the
 -- heights it marked.
+-- It holds the writer's lock while it works, so no height of the month is written meanwhile, and waits for it as
+-- write_settlement does: at most 30 s per try, whatever the session's lock_timeout, up to 10 tries (the indexer and the
+-- history job hold it for one height at a time).
 CREATE OR REPLACE FUNCTION ${s}.fill_monthly_claims_month(p_month date) RETURNS integer LANGUAGE plpgsql AS $$
 DECLARE marked integer; m1 date := date_trunc('month', p_month::timestamp)::date;
   m2 date := (date_trunc('month', p_month::timestamp) + interval '1 month')::date;
+  v_lock_timeout text := current_setting('lock_timeout');
 BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
+  FOR i IN 1..10 LOOP
+    BEGIN
+      PERFORM set_config('lock_timeout', '30s', true);
+      PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF i = 10 THEN RAISE; END IF;
+    END;
+  END LOOP;
+  PERFORM set_config('lock_timeout', v_lock_timeout, true);
   IF NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks WHERE day >= m1 AND day < m2 AND NOT monthly_claims_rollup) THEN
+    DELETE FROM ${s}.monthly_claims_by_supplier_service WHERE month = m1 AND claim_count = 0;
     RETURN 0;
   END IF;
   DELETE FROM ${s}.monthly_claims_by_supplier_service WHERE month = m1;
   INSERT INTO ${s}.monthly_claims_by_supplier_service
   SELECT m1, supplier_id, service_id, sum(claim_count), sum(claimed_upokt), sum(settled_upokt), sum(overservicing_loss_upokt),
-         sum(global_minted_upokt), sum(relays), sum(estimated_relays), sum(claimed_compute_units), sum(estimated_compute_units),
-         sum(claims_with_proof)
+         sum(relays), sum(estimated_relays), sum(claimed_compute_units), sum(estimated_compute_units), sum(claims_with_proof)
   FROM ${s}.daily_claims_by_supplier_application_service WHERE day >= m1 AND day < m2 GROUP BY supplier_id, service_id;
   UPDATE ${s}.settlement_blocks SET monthly_claims_rollup = true WHERE day >= m1 AND day < m2 AND NOT monthly_claims_rollup;
   GET DIAGNOSTICS marked = ROW_COUNT;

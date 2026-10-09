@@ -322,13 +322,13 @@ CREATE TABLE IF NOT EXISTS ${s}.daily_claims_paid_by_address_service (
   PRIMARY KEY (address, day, service_id)
 );
 
--- Per month, supplier and service: daily_claims_by_supplier_application_service without the application, which
--- get_supplier_earnings by service reads for whole months. Dropping the application alone would not shrink it: an owner of
--- 1037 suppliers had 3.07M rows there and 3.02M distinct (supplier, service, day), against 253k (supplier, service, month)
--- (mainnet, 2026-10-09). Which heights it holds: settlement_blocks.monthly_claims_rollup.
+-- Per month, supplier and service: what get_supplier_earnings by service reads from daily_claims_by_supplier_application_service
+-- (all of it but the application and global_minted_upokt), for whole months. Dropping the application alone would not
+-- shrink it: an owner of 1037 suppliers had 3.07M rows there and 3.02M distinct (supplier, service, day), against 253k
+-- (supplier, service, month) (mainnet, 2026-10-09). Which heights it holds: settlement_blocks.monthly_claims_rollup.
 CREATE TABLE IF NOT EXISTS ${s}.monthly_claims_by_supplier_service (
   month DATE NOT NULL, supplier_id TEXT NOT NULL, service_id TEXT NOT NULL, claim_count BIGINT NOT NULL,
-  claimed_upokt BIGINT NOT NULL, settled_upokt BIGINT NOT NULL, overservicing_loss_upokt BIGINT NOT NULL, global_minted_upokt BIGINT NOT NULL,
+  claimed_upokt BIGINT NOT NULL, settled_upokt BIGINT NOT NULL, overservicing_loss_upokt BIGINT NOT NULL,
   relays BIGINT NOT NULL, estimated_relays BIGINT NOT NULL, claimed_compute_units BIGINT NOT NULL, estimated_compute_units BIGINT NOT NULL,
   claims_with_proof BIGINT NOT NULL,
   PRIMARY KEY (supplier_id, month, service_id)
