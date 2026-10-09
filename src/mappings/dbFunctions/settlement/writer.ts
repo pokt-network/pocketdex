@@ -1,4 +1,5 @@
 import type { SettlementPayload } from "../../money/payload";
+import { createRollupBoundsFillFn } from "./bounds";
 
 // write_settlement(h, payload) writes one settlement height into the tables of ./schema.ts and adds its
 // contribution to the rollups. It is the only writer of those tables: the indexer calls it inside the
@@ -257,7 +258,7 @@ const VALIDATOR = ["commission_na_count > contribution_count",
 // sets such a bound back to h when h still contributes to the row, and the end of _rollup_apply recomputes the bounds that
 // are still negative from the row's base table, for that row only (BOUNDED below). A rewrite that changes nothing
 // recomputes nothing. least/greatest skip a NULL bound (a row written before the bounds): it then holds the heights
-// added since, and its day reads as not held (settlement_blocks.bounds_rollup) until fill_rollup_bounds_day writes it.
+// added since, and its day reads as not held (settlement_blocks.bounds_rollup) until fill_rollup_bounds (bounds.ts) writes it.
 const BOUNDS = `first_height = CASE WHEN sg < 0 THEN CASE WHEN t.first_height = h THEN -h ELSE t.first_height END
                            WHEN t.first_height < 0 THEN excluded.first_height ELSE least(t.first_height, excluded.first_height) END,
     last_height = CASE WHEN sg < 0 THEN CASE WHEN t.last_height = h THEN -h ELSE t.last_height END
@@ -813,7 +814,7 @@ BEGIN
   v_held := v_old_version IS NULL OR v_held;
   v_month_held := v_old_version IS NULL OR v_month_held;
   -- the rollups' first_height / last_height (schema.ts): the bounds are kept for every height, but a height an image
-  -- without them rewrote may be inside a row's bounds without contributing to it, until fill_rollup_bounds_day
+  -- without them rewrote may be inside a row's bounds without contributing to it, until fill_rollup_bounds
   v_bounds_held := v_old_version IS NULL OR v_bounds_held;
   IF v_old_version IS NOT NULL THEN
     IF v_old_version <> ${ROLLUP_VERSION} THEN
@@ -1125,5 +1126,5 @@ BEGIN
   GET DIAGNOSTICS marked = ROW_COUNT;
   RETURN marked;
 END $$;
-`;
+${createRollupBoundsFillFn(s, `pocketdex.${writeSettlementProcName}`)}`;
 }

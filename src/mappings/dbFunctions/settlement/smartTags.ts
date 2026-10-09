@@ -42,6 +42,7 @@ export const OMITTED_TABLES = [
   "hourly_income_by_address_supplier",
   "daily_claims_paid_by_address_service",
   "monthly_claims_by_supplier_service",
+  "rollup_bounds_fill",
   // the Delegation entity (src/mappings/pocket/validator.ts)
   "delegations",
 ];
@@ -114,6 +115,10 @@ const OMITTED_FUNCTIONS = [
   // scripts/fill_monthly_claims.sql run them)
   "fill_claims_paid_day",
   "fill_monthly_claims_month",
+  // the bounds fill's helpers (bounds.ts; its driver and throttle are procedures, which GraphQL does not publish)
+  "_writer_lock",
+  "_fill_rollup_bounds_unit",
+  "_replica_lag",
 ];
 
 // The legacy_* functions (functions.ts): what each replaces, for its GraphQL description. GraphQL publishes them as

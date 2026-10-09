@@ -1045,6 +1045,67 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("fill_rollup_bounds writes the bounds of rows written before them, waits for the replicas, and resumes after a stop", async () => {
+    const before = await md5All();
+    const notices: string[] = [];
+    const onNotice = (m: { message: string }) => notices.push(m.message);
+    (c as unknown as { on(e: string, f: (m: { message: string }) => void): void }).on("notice", onNotice);
+    // a replica that replays 10 s behind for its next reads, then caught up (in place of pg_stat_replication)
+    const lagging = async (reads: number) => {
+      await c.query(`DROP TABLE IF EXISTS ${S}.lag_script; CREATE TABLE ${S}.lag_script (n serial, s numeric)`);
+      await c.query(`INSERT INTO ${S}.lag_script (s) SELECT 10 FROM generate_series(1, $1)`, [reads]);
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$
+                       WITH x AS (DELETE FROM ${S}.lag_script WHERE n = (SELECT min(n) FROM ${S}.lag_script) RETURNING s)
+                       SELECT 1, 1, coalesce((SELECT s FROM x), 0), 0::numeric $f$`);
+    };
+    try {
+      // as on a database written before the bounds: none on any row, no height marked
+      for (const t of ROLLUP_TABLES) await c.query(`UPDATE ${S}.${t} SET first_height = NULL, last_height = NULL`);
+      await c.query(`UPDATE ${S}.settlement_blocks SET bounds_rollup = false`);
+      // stopped while it waits for the replica (statement_timeout, as a Ctrl-C would): what it committed stays
+      await lagging(30);
+      await c.query("SET statement_timeout = '3s'");
+      await assert.rejects(c.query(`CALL ${S}.fill_rollup_bounds()`), /statement timeout/);
+      await c.query("RESET statement_timeout");
+      assert.ok(notices.some((n) => /waiting, replica 10\.0 s and 0\.0 MB behind/.test(n)), notices.join("\n"));
+      const kept = (await c.query(`SELECT array_agg(unit) u FROM ${S}.rollup_bounds_fill`)).rows[0].u as unknown as string[];
+      assert.ok(kept && kept.length >= 1, "the units done before the stop are kept");
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE bounds_rollup`)).rows[0].n, 0);
+      // run again: it resumes after them, waits for the replica, and finishes
+      notices.length = 0;
+      await lagging(2);
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      assert.ok(notices.some((n) => /fill_rollup_bounds: \d{4}-\d{2} done, \d+ heights marked/.test(n)), notices.join("\n"));
+      for (const u of kept) {
+        const [t, day] = u.split(" ");
+        assert.ok(!notices.some((n) => n.startsWith(`fill_rollup_bounds: ${day} ${t} `)), `${u} done before, not redone`);
+      }
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0].n, 0);
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.rollup_bounds_fill`)).rows[0].n, 0);
+      await boundsHold("filled");
+      assert.equal(await md5All(), before);
+      // nothing left: a third run does nothing
+      notices.length = 0;
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      assert.deepEqual(notices, []);
+      // the throttle stops when the replicas' positions cannot be read, and paces the WAL of a minute
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$ SELECT 1, 0, 0::numeric, 0::numeric $f$`);
+      await assert.rejects(c.query(`CALL ${S}._fill_throttle(5, 1e9, NULL, now(), pg_current_wal_lsn(), 0)`), /not readable by this role/);
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$ SELECT 0, 0, 0::numeric, 0::numeric $f$`);
+      const paced = await c.query(`CALL ${S}._fill_throttle(5, 1e9, 1, now() - interval '58 seconds', '0/0'::pg_lsn, 0)`);
+      assert.ok(Number(paced.rows[0].waited) >= 1.5, JSON.stringify(paced.rows[0]));
+    } finally {
+      (c as unknown as { removeListener(e: string, f: unknown): void }).removeListener("notice", onNotice);
+      await c.query("RESET statement_timeout");
+      await c.query(`DROP TABLE IF EXISTS ${S}.lag_script`);
+      // the real _replica_lag back
+      await c.query(createSettlementWriterFn(S));
+    }
+  });
+
   it("subtracting a height raises on each rule of each rollup row it touched, naming the rollup, the key and the rule, and on no other row", async () => {
     // the rules of the check: any column of the rollup (but its key, period and bounds, read here from the catalog) below 0, the
     // invariants between columns listed below, and a row at 0 contributions with any other column not at 0
