@@ -205,7 +205,8 @@ const literal = (x: string) => `'${x.replace(/'/g, "''")}'`;
 // v_zero1 .. v_zero<MAX_CHECKED> in _rollup_apply
 const MAX_CHECKED = 2;
 // The upserts of one statement after an optional prelude of plain CTEs: each a CTE r1, r2, ... but the last, which a later
-// one may read. Plain on an add; on a subtraction checked, then cleared of their rows left at zero.
+// one may read. Plain on an add; on a subtraction checked, then cleared of their rows left at zero, and the rows they left
+// at -h recorded in _bnd for the add of the same rewrite (BOUNDS).
 function upserts(s: string, prelude: string, list: Checked[]): string {
   if (list.length > MAX_CHECKED) throw new Error(`at most ${MAX_CHECKED} upserts in one statement`);
   const head = prelude ? [prelude] : [];
@@ -218,14 +219,16 @@ function upserts(s: string, prelude: string, list: Checked[]): string {
     (u, i) => `r${i + 1} AS (${u.sql}
     RETURNING ${literal(u.t)}::text AS rollup, concat_ws(' / ', ${u.keys.join(", ")}) AS row_key,
       CASE ${checkRules(u).map((r) => `WHEN ${r} THEN ${literal(r)}`).join(" ")} END AS broken,
-      CASE WHEN ${u.count} = 0 THEN ctid END AS zero_row)`
+      CASE WHEN ${u.count} = 0 THEN ctid END AS zero_row,
+      CASE WHEN ${u.count} <> 0 AND (first_height < 0 OR last_height < 0) THEN ctid END AS left_row)`
   );
   const rows = list.length === 1 ? "r1" : `(${list.map((_, i) => `TABLE r${i + 1}`).join(" UNION ALL ")}) r`;
   return `IF sg < 0 THEN
   WITH ${[...head, ...returning].join(", ")}
   SELECT (SELECT format('%s row %s has %s', rollup, row_key, broken) FROM ${rows} WHERE broken IS NOT NULL LIMIT 1),
-         ${list.map((_, i) => `ARRAY(SELECT zero_row FROM r${i + 1} WHERE zero_row IS NOT NULL)`).join(", ")}
-  INTO v_drift, ${list.map((_, i) => `v_zero${i + 1}`).join(", ")};
+         ${list.map((_, i) => `ARRAY(SELECT zero_row FROM r${i + 1} WHERE zero_row IS NOT NULL)`).join(", ")},
+         ${list.map((_, i) => `ARRAY(SELECT left_row FROM r${i + 1} WHERE left_row IS NOT NULL)`).join(", ")}
+  INTO v_drift, ${list.map((_, i) => `v_zero${i + 1}`).join(", ")}, ${list.map((_, i) => `v_left${i + 1}`).join(", ")};
   IF v_drift IS NOT NULL THEN
     RAISE EXCEPTION 'rollup drift at height %: % after subtracting the height', h, v_drift;
   END IF;
@@ -237,7 +240,8 @@ ${list
     IF v_n <> cardinality(v_zero${i + 1}) THEN
       RAISE EXCEPTION 'rollup cleanup at height %: % deleted % of its % rows left at zero', h, ${literal(u.t)}, v_n, cardinality(v_zero${i + 1});
     END IF;
-  END IF;`
+  END IF;
+  IF cardinality(v_left${i + 1}) > 0 THEN INSERT INTO _bnd SELECT ${literal(u.t)}, unnest(v_left${i + 1}); END IF;`
   )
   .join("\n")}
   ELSE
@@ -255,23 +259,22 @@ const VALIDATOR = ["commission_na_count > contribution_count",
 
 // first_height / last_height of a rollup row (schema.ts) under _rollup_apply's ON CONFLICT: an add widens them to h (a new
 // row starts at [h, h]); a subtraction turns a bound equal to h into -h, "h left the row". The add of the same rewrite
-// sets such a bound back to h when h still contributes to the row, and the end of _rollup_apply recomputes the bounds that
-// are still negative from the row's base table, for that row only (BOUNDED below). A rewrite that changes nothing
-// recomputes nothing. least/greatest skip a NULL bound (a row written before the bounds): it then holds the heights
+// sets such a bound back to h when h still contributes to the row. The subtraction records the ctid of each row it left
+// at -h (in its RETURNING, upserts(), and in the commission UPDATE that moves the validator rows), and the end of the add
+// recomputes those still negative from the row's base table, for that row only (BOUNDED below). A row the add took back
+// has a new version, so its recorded ctid finds nothing; a rewrite that changes nothing recomputes nothing. least/greatest skip a NULL bound (a row written before the bounds): it then holds the heights
 // added since, and its day reads as not held (settlement_blocks.bounds_rollup) until fill_rollup_bounds (bounds.ts) writes it.
 const BOUNDS = `first_height = CASE WHEN sg < 0 THEN CASE WHEN t.first_height = h THEN -h ELSE t.first_height END
                            WHEN t.first_height < 0 THEN excluded.first_height ELSE least(t.first_height, excluded.first_height) END,
     last_height = CASE WHEN sg < 0 THEN CASE WHEN t.last_height = h THEN -h ELSE t.last_height END
                        WHEN t.last_height < 0 THEN excluded.last_height ELSE greatest(t.last_height, excluded.last_height) END`;
 
-// Per rollup: its key (without the period), its period column, the keys a height touches (src, in _rollup_apply: _inc,
-// _paid, the height's base rows) and the heights that contribute to one row (base, over [lo, hi], the row's key as
-// r.k[1..]). _rollup_apply uses them to find the rows a subtraction left with a bound of -h, and to recompute those.
+// Per rollup: its key (without the period), its period column and the heights that contribute to one row (base, over
+// [lo, hi], the row's key as r.k[1..]). _rollup_apply uses them to recompute the rows a subtraction left with a bound of -h.
 interface Bounded {
   t: string;
   keys: string[];
   period: "day" | "month" | "hour";
-  src: string;
   base: (lo: string, hi: string) => string;
 }
 function boundedRollups(s: string): Bounded[] {
@@ -284,28 +287,23 @@ function boundedRollups(s: string): Bounded[] {
     `SELECT v.height FROM ${s}.v_income_base v WHERE v.height BETWEEN ${lo} AND ${hi} AND ${match("v", cols)}`;
   const claims = (lo: string, hi: string, cols: Record<string, number>) =>
     `SELECT c.height FROM ${s}.claim_settlements c WHERE c.height BETWEEN ${lo} AND ${hi} AND ${match("c", cols)}`;
-  const claimKeys = `${s}.claim_settlements WHERE height = h`;
   return [
     {
       t: "monthly_income_by_address_supplier",
       keys: ["address", "supplier_id", "role", "family"],
       period: "month",
-      src: "SELECT DISTINCT address, supplier_id, role, family FROM _inc WHERE supplier_id <> ''",
       base: (lo, hi) => income(lo, hi, { address: 1, supplier_id: 2, role: 3, family: 4 }),
     },
     {
       t: "daily_income_by_address",
       keys: ["address", "role", "family"],
       period: "day",
-      src: "SELECT DISTINCT address, role, family FROM _inc",
       base: (lo, hi) => income(lo, hi, { address: 1, role: 2, family: 3 }),
     },
     {
       t: "daily_income_by_address_supplier",
       keys: ["supplier_id", "address", "role", "family"],
       period: "day",
-      src: `SELECT DISTINCT supplier_id, address, role, family FROM _inc WHERE supplier_id <> ''
-            UNION SELECT DISTINCT supplier_id, '', 'stakers', 'relay' FROM ${claimKeys}`,
       // the 'stakers' row counts every claim of the supplier
       base: (lo, hi) =>
         `${income(lo, hi, { supplier_id: 1, address: 2, role: 3, family: 4 })} AND r.k[3] <> 'stakers'
@@ -316,42 +314,36 @@ function boundedRollups(s: string): Bounded[] {
       t: "hourly_income_by_address_supplier",
       keys: ["address", "supplier_id"],
       period: "hour",
-      src: "SELECT DISTINCT address, supplier_id FROM _inc WHERE supplier_id <> ''",
       base: (lo, hi) => income(lo, hi, { address: 1, supplier_id: 2 }),
     },
     {
       t: "daily_income_by_address_service",
       keys: ["address", "role", "family", "service_id"],
       period: "day",
-      src: "SELECT DISTINCT address, role, family, service_id FROM _inc WHERE service_id <> ''",
       base: (lo, hi) => income(lo, hi, { address: 1, role: 2, family: 3, service_id: 4 }),
     },
     {
       t: "monthly_income_by_address_service",
       keys: ["address", "role", "family", "service_id"],
       period: "month",
-      src: "SELECT DISTINCT address, role, family, service_id FROM _inc WHERE service_id <> ''",
       base: (lo, hi) => income(lo, hi, { address: 1, role: 2, family: 3, service_id: 4 }),
     },
     {
       t: "monthly_income_by_address_supplier_service",
       keys: ["address", "supplier_id", "service_id", "role", "family"],
       period: "month",
-      src: "SELECT DISTINCT address, supplier_id, service_id, role, family FROM _inc WHERE supplier_id <> '' AND service_id <> ''",
       base: (lo, hi) => income(lo, hi, { address: 1, supplier_id: 2, service_id: 3, role: 4, family: 5 }),
     },
     {
       t: "daily_claims_by_application_service",
       keys: ["application_id", "service_id"],
       period: "day",
-      src: `SELECT DISTINCT application_id, service_id FROM ${claimKeys}`,
       base: (lo, hi) => claims(lo, hi, { application_id: 1, service_id: 2 }),
     },
     {
       t: "daily_delegator_rewards_by_validator",
       keys: ["delegator", "validator_operator", "family"],
       period: "day",
-      src: `SELECT DISTINCT delegator, validator_operator, family FROM ${s}.delegator_validator_payouts WHERE height = h`,
       base: (lo, hi) =>
         `SELECT p.height FROM ${s}.delegator_validator_payouts p WHERE p.height BETWEEN ${lo} AND ${hi}
            AND p.delegator = r.k[1] AND p.validator_operator = r.k[2] AND p.family = r.k[3]`,
@@ -360,7 +352,6 @@ function boundedRollups(s: string): Bounded[] {
       t: "daily_claims_by_supplier_application_service",
       keys: ["supplier_id", "application_id", "service_id"],
       period: "day",
-      src: `SELECT DISTINCT supplier_id, application_id, service_id FROM ${claimKeys}`,
       base: (lo, hi) => claims(lo, hi, { supplier_id: 1, application_id: 2, service_id: 3 }),
     },
     {
@@ -368,7 +359,6 @@ function boundedRollups(s: string): Bounded[] {
       t: "monthly_claims_by_supplier_service",
       keys: ["supplier_id", "service_id"],
       period: "month",
-      src: `SELECT DISTINCT supplier_id, service_id FROM ${claimKeys}`,
       base: (lo, hi) =>
         `${claims(lo, hi, { supplier_id: 1, service_id: 2 })}
            AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.height = c.height AND sb.monthly_claims_rollup)`,
@@ -377,14 +367,12 @@ function boundedRollups(s: string): Bounded[] {
       t: "daily_claims_by_supplier",
       keys: ["supplier_id"],
       period: "day",
-      src: `SELECT DISTINCT supplier_id FROM ${claimKeys}`,
       base: (lo, hi) => claims(lo, hi, { supplier_id: 1 }),
     },
     {
       t: "daily_validator_rewards",
       keys: ["validator_operator", "family"],
       period: "day",
-      src: `SELECT DISTINCT validator_operator, family FROM ${s}.validator_distributions WHERE height = h`,
       base: (lo, hi) =>
         `SELECT v.height FROM ${s}.validator_distributions v WHERE v.height BETWEEN ${lo} AND ${hi}
            AND v.validator_operator = r.k[1] AND v.family = r.k[2]`,
@@ -394,7 +382,6 @@ function boundedRollups(s: string): Bounded[] {
       t: "daily_claims_paid_by_address_service",
       keys: ["address", "service_id"],
       period: "day",
-      src: "SELECT address, service_id FROM _paid",
       base: (lo, hi) =>
         `SELECT p.height FROM ${s}.v_claims_paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
          WHERE p.height BETWEEN ${lo} AND ${hi} AND p.address = r.k[1] AND c.service_id = r.k[2]
@@ -403,39 +390,27 @@ function boundedRollups(s: string): Bounded[] {
   ];
 }
 
-const PERIOD = { day: "t.day = d", month: "t.month = date_trunc('month', d)::date", hour: "t.hour = hr" } as const;
 const RANGE = { day: ["dlo", "dhi"], month: ["mlo", "mhi"], hour: ["hlo", "hhi"] } as const;
 
 export function createSettlementWriterFn(dbSchema: string): string {
   const s = dbSchema;
   const bounded = boundedRollups(s);
   // the rows a subtraction left with a bound of -h (h was their first or last height) that the add of the same rewrite
-  // did not set back to h: found by one scan of the height's day, month or hour, each recomputed from its base and updated
-  // by its ctid. A probe per key could plan, under stale statistics, a scan of the whole period for every key (the drift
-  // check, 239b791). monthly_income_by_address_supplier_service has no month index: its keys, recorded by the
-  // subtraction, are probed over its primary key, its only index.
-  const NOPERIOD = "monthly_income_by_address_supplier_service";
+  // did not set back to h: their ctids, recorded by the subtraction in _bnd, read by a TID scan, each row recomputed from
+  // its base and updated by its ctid
   const recomputeOne = (r: Bounded) => `      UPDATE ${s}.${r.t} t
       SET first_height = CASE WHEN t.first_height < 0 THEN (SELECT min(z.height) FROM (${r.base(RANGE[r.period][0], RANGE[r.period][1])}) z) ELSE t.first_height END,
           last_height = CASE WHEN t.last_height < 0 THEN (SELECT max(z.height) FROM (${r.base(RANGE[r.period][0], RANGE[r.period][1])}) z) ELSE t.last_height END
       WHERE t.ctid = r.tid;`;
-  const captureBounds = bounded
-    .filter((r) => r.t === NOPERIOD)
-    .map((r) => `    INSERT INTO _bnd SELECT '${r.t}', ARRAY[${r.keys.map((k) => `i.${k}::text`).join(", ")}] FROM (${r.src}) i;`)
-    .join("\n");
   const recomputeBounds = bounded
-    .map((r) =>
-      r.t === NOPERIOD
-        ? `    FOR r IN SELECT n.tid, b.k FROM _bnd b CROSS JOIN LATERAL (
-               SELECT t.ctid tid FROM ${s}.${r.t} t WHERE ${r.keys.map((k, i) => `t.${k} = b.k[${i + 1}]`).join(" AND ")}
-                 AND ${PERIOD[r.period]} AND (t.first_height < 0 OR t.last_height < 0) LIMIT 1) n
-             WHERE b.tbl = '${r.t}' LOOP
+    .map(
+      (r) => `    v_tids := ARRAY(SELECT tid FROM _bnd WHERE tbl = '${r.t}');
+    IF cardinality(v_tids) > 0 THEN
+      FOR r IN SELECT t.ctid tid, ARRAY[${r.keys.map((k) => `t.${k}::text`).join(", ")}] k FROM ${s}.${r.t} t
+               WHERE t.ctid = ANY(v_tids) AND (t.first_height < 0 OR t.last_height < 0) LOOP
 ${recomputeOne(r)}
-    END LOOP;`
-        : `    FOR r IN SELECT t.ctid tid, ARRAY[${r.keys.map((k) => `t.${k}::text`).join(", ")}] k FROM ${s}.${r.t} t
-             WHERE ${PERIOD[r.period]} AND (t.first_height < 0 OR t.last_height < 0) LOOP
-${recomputeOne(r)}
-    END LOOP;`
+      END LOOP;
+    END IF;`
     )
     .join("\n");
   return `
@@ -491,15 +466,15 @@ FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0 OR c.global
 -- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
 CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
 DECLARE d date; hr timestamptz; v_held boolean; v_month_held boolean; v_drift text; v_n bigint;
-  ${Array.from({ length: MAX_CHECKED }, (_, i) => `v_zero${i + 1} tid[];`).join(" ")}
-  dlo bigint; dhi bigint; mlo bigint; mhi bigint; hlo bigint; hhi bigint; r record;
+  ${Array.from({ length: MAX_CHECKED }, (_, i) => `v_zero${i + 1} tid[]; v_left${i + 1} tid[];`).join(" ")}
+  v_tids tid[]; dlo bigint; dhi bigint; mlo bigint; mhi bigint; hlo bigint; hhi bigint; r record;
 BEGIN
   SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup, monthly_claims_rollup INTO d, hr, v_held, v_month_held
   FROM ${s}.settlement_blocks WHERE height = h;
   IF d IS NULL THEN RETURN; END IF;
-  -- a subtraction's height, and the keys it touched in monthly_income_by_address_supplier_service, until the add of the
-  -- same rewrite (first_height / last_height: BOUNDS)
-  CREATE TEMP TABLE IF NOT EXISTS _bnd (tbl text, k text[]) ON COMMIT DROP;
+  -- the rows a subtraction left with a bound of -h, by ctid, until the add of the same rewrite (BOUNDS)
+  CREATE TEMP TABLE IF NOT EXISTS _bnd (tbl text, tid tid) ON COMMIT DROP;
+  IF sg < 0 THEN TRUNCATE _bnd; END IF;
 
   -- the claims that paid each address at h, per service: added and subtracted only for a held height
   -- (settlement_blocks.claims_paid_rollup; write_settlement and rebuild_rollups decide it before calling here)
@@ -704,13 +679,7 @@ BEGIN
     estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
     ${BOUNDS}` }])}
 
-  IF sg < 0 THEN
-    -- the keys it touched: a row of them still there that h was the first or last height of holds -h, which the add of
-    -- the rewrite takes back to h where h still contributes
-    TRUNCATE _bnd;
-    INSERT INTO _bnd VALUES ('', ARRAY[h::text]);
-${captureBounds}
-  ELSIF EXISTS (SELECT 1 FROM _bnd) THEN
+  IF sg > 0 AND EXISTS (SELECT 1 FROM _bnd) THEN
     -- the add of a rewrite: the rows h left that it did not take back, from their base over their day, month or hour
     SELECT min(height), max(height) INTO dlo, dhi FROM ${s}.settlement_blocks WHERE day = d;
     SELECT min(height), max(height) INTO mlo, mhi FROM ${s}.settlement_blocks
@@ -720,9 +689,13 @@ ${captureBounds}
 ${recomputeBounds}
     TRUNCATE _bnd;
   END IF;
-  -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it
-  UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL
-  WHERE day = d AND commission_na_count = contribution_count AND commission_upokt IS NOT NULL;
+  -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it. On a
+  -- subtraction this moves rows h may have left at -h: their new ctids go to _bnd too
+  WITH n AS (
+    UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL
+    WHERE day = d AND commission_na_count = contribution_count AND commission_upokt IS NOT NULL
+    RETURNING ctid, first_height, last_height)
+  INSERT INTO _bnd SELECT 'daily_validator_rewards', ctid FROM n WHERE sg < 0 AND (first_height < 0 OR last_height < 0);
 END $$;
 
 -- Appends one part of a settlement payload to the staging tables, which live until the end of the transaction.

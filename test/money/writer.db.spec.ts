@@ -639,7 +639,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // on a subtraction its upsert (a CTE of one statement, no ';' in it) returns the rows it wrote with the rule each breaks
       // and, at zero contributions, their ctid; the statement reads them and raises right after it, then those rows go
       const sub = new RegExp(`(r\\d) AS \\(INSERT INTO ${S}\\.${t} AS t[^;]*?RETURNING '${t}'::text AS rollup,[^;]*?` +
-                             `AS zero_row\\)\\s*SELECT \\(SELECT format[^;]*? FROM ([^;]*?) WHERE broken IS NOT NULL LIMIT 1\\),[^;]*?` +
+                             `AS left_row\\)\\s*SELECT \\(SELECT format[^;]*? FROM ([^;]*?) WHERE broken IS NOT NULL LIMIT 1\\),[^;]*?` +
                              `INTO v_drift,[^;]*;\\s*IF v_drift IS NOT NULL THEN\\s*` +
                              `RAISE EXCEPTION 'rollup drift at height %: % after subtracting the height'[^;]*;\\s*END IF;` +
                              `[\\s\\S]*?DELETE FROM ${S}\\.${t} WHERE ctid = ANY\\((v_zero\\d)\\) AND \\w+ = 0;\\s*GET DIAGNOSTICS v_n = ROW_COUNT;` +
@@ -992,6 +992,46 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
                                    WHERE l.pid = pg_backend_pid() AND l.mode = 'AccessExclusiveLock' AND k.relname = ANY($1::text[])`,
                                   [ROLLUP_TABLES]);
       assert.equal(locks.rows[0].n, 0);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("a rewrite that leaves a validator row only replayed contributions recomputes the bound it removed", async () => {
+    await c.query("BEGIN");
+    try {
+      const at = async (h: number, ts: string, p: SettlementPayload) => {
+        for (const { bind, sql } of writeSettlementCalls(S, h, { ...p, ts })) await c.query(sql, bind);
+      };
+      // on 21 Aug: 710013's settlement (validators replayed, no commission), then 899713's (the same validators, with one)
+      const replayed = payloadOf("710013", false).payload;
+      const batched = payloadOf("899713", true).payload;
+      await at(899821, "2026-08-21T12:10:00.000Z", replayed);
+      await at(899822, "2026-08-21T12:20:00.000Z", batched);
+      const row = async (v: string, f: string) =>
+        (
+          await c.query(
+            `SELECT first_height || '..' || last_height b, commission_upokt::text c FROM ${S}.daily_validator_rewards
+             WHERE day = '2026-08-21' AND validator_operator = $1 AND family = $2`,
+            [v, f]
+          )
+        ).rows[0];
+      const mixed = (
+        await c.query(
+          `SELECT validator_operator v, family f FROM ${S}.daily_validator_rewards
+           WHERE day = '2026-08-21' AND commission_upokt IS NOT NULL AND commission_na_count BETWEEN 1 AND contribution_count - 1
+             AND first_height = 899821 AND last_height = 899822 ORDER BY 1, 2 LIMIT 1`
+        )
+      ).rows[0];
+      assert.ok(mixed, "precondition: a validator both heights paid on 21 Aug, with and without a commission");
+      // 899822 rewritten with nothing: the row keeps 710013's replayed contributions alone, so the subtraction sets its
+      // commission to NULL (a new version of the row, after its upsert left its last height at -899822) and the add,
+      // which does not touch it, recomputes that bound
+      await at(899822, "2026-08-21T12:20:00.000Z", {
+        ...batched, claims: [], detailed: [], batch: [], vrd: [], reimb: [], expired: [], discarded: [], slashed: [], dv: [],
+      });
+      assert.deepEqual(await row(String(mixed.v), String(mixed.f)), { b: "899821..899821", c: null });
+      await boundsHold("899822 emptied");
     } finally {
       await c.query("ROLLBACK");
     }
