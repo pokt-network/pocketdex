@@ -1783,10 +1783,16 @@ END $$;
 -- that paid them counts once. Measured on mainnet: pokt1m0yk72fcvut72ujrs7hyf4mzgahe4c9ya429eh on 2026-10-03 got 27
 -- transfers from 20 claims (948613-finalize_block-3067 pays it twice): relays 577,473 live, 289,472 per claim; gross
 -- 553,512,909 live, 277,061,678 per claim; net 209,138,830 in both.
--- The claims of one address come from daily_claims_paid_by_address_service for each whole day of the range whose every
--- settlement it holds (settlement_blocks.claims_paid_rollup), and from v_claims_paid for the rest: the edges, and each
--- day with a settlement it does not hold. A list of addresses reads only v_claims_paid: the rollup counts a claim once per
--- address, so a claim that paid two addresses of the list would count twice.
+-- The claims come from daily_claims_paid_by_address_service for each whole day of the range whose every settlement it
+-- holds (settlement_blocks.claims_paid_rollup), and from v_claims_paid for the rest: the edges, and each day with a
+-- settlement it does not hold. The rollup counts a claim once per address: for a list, a claim that paid k >= 2 of its
+-- addresses is in k rows, and k - 1 of them are taken back (corr). Only a shareholder pays a claim of a supplier in more
+-- than one row (the DAO, the service owner and the application are one address per claim), so a list with one of those
+-- among its addresses in the range reads every claim instead. The k - 1 come per supplier and month, or day, where every
+-- claim of the supplier paid each listed shareholder it paid at all (a relay leg on every claim: its income rollups count
+-- one per claim and address), and per claim where not. Measured on mainnet (2026-10-09, 7 rev-share addresses of
+-- overlapping fleets): over 30 days 4,601 supplier-days paid two or more of them, all of that kind; over 238 days 261 of
+-- 32,733 were not (1,648 claims).
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_service(addresses text[],
   start_ts timestamp, end_ts timestamp)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1794,7 +1800,7 @@ DECLARE
   l record := ${s}._legacy_range(start_ts, end_ts);
   f timestamptz := l.start_from AT TIME ZONE 'UTC';
   t timestamptz := (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC';
-  rg record; ud date[]; uh bigint[]; sups text[]; svcs text[];
+  rg record; ud date[]; uh bigint[]; sups text[]; svcs text[]; la text[]; mm date[]; dd date[];
 BEGIN
   IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
   -- resolved once: inside the query a filter would call it for every row it scans
@@ -1807,11 +1813,28 @@ BEGIN
                        'estimated_computed_units', 0, 'gross_rewards', 0, 'net_rewards', 0) ORDER BY sv)
       FROM unnest(svcs) sv));
   END IF;
-  rg := ${s}._ranges(f, t, NULL, (SELECT count(DISTINCT a) FROM unnest(addresses) a) <> 1);
+  la := ARRAY(SELECT DISTINCT a FROM unnest(addresses) a WHERE a IS NOT NULL);
+  rg := ${s}._ranges(f, t, NULL);
+  IF cardinality(la) > 1 AND rg.d1 <= rg.d2
+     AND EXISTS (SELECT 1 FROM ${s}.daily_income_by_address d WHERE d.address = ANY(la) AND d.day BETWEEN rg.d1 AND rg.d2
+                   AND d.role IN ('dao', 'source_owner', 'application')) THEN
+    rg := ${s}._ranges(f, t, NULL, true);
+  END IF;
   -- the rollup days with a settlement the rollup does not hold, and every settlement of those days: read from the claims
   ud := ARRAY(SELECT DISTINCT sb.day FROM ${s}.settlement_blocks sb
               WHERE sb.day BETWEEN rg.d1 AND rg.d2 AND NOT sb.claims_paid_rollup);
   uh := ARRAY(SELECT sb.height FROM ${s}.settlement_blocks sb WHERE sb.day = ANY(ud));
+  IF cardinality(la) > 1 AND rg.d1 <= rg.d2 THEN
+    -- the corrections by month (mm): each month whose every settlement is in the rollup days and held by both rollups;
+    -- by day (dd): the other rollup days the rollup holds
+    mm := ARRAY(SELECT m::date FROM generate_series(date_trunc('month', rg.d1::timestamp), date_trunc('month', rg.d2::timestamp), interval '1 month') m
+                WHERE NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day >= m AND sb.day < m + interval '1 month'
+                                    AND NOT (sb.monthly_claims_rollup AND sb.claims_paid_rollup))
+                  AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day >= m AND sb.day < rg.d1)
+                  AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day > rg.d2 AND sb.day < m + interval '1 month'));
+    dd := ARRAY(SELECT g::date FROM generate_series(rg.d1::timestamp, rg.d2::timestamp, interval '1 day') g
+                WHERE date_trunc('month', g)::date <> ALL(mm) AND g::date <> ALL(ud));
+  END IF;
   RETURN jsonb_build_object('range', l.range, 'data', (
     WITH services AS (
       SELECT sv.service_id FROM unnest(svcs) sv(service_id)
@@ -1822,6 +1845,47 @@ BEGIN
       SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height BETWEEN rg.lo2 AND rg.hi2
       UNION
       SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height = ANY(uh)
+    ), mg AS (
+      -- the supplier-months whose claims paid k >= 2 of the list as shareholders; whole by month when every claim of the
+      -- month paid each of them (rn: its relay legs, one per claim and address)
+      SELECT g.supplier_id, g.month, g.k,
+             g.month = ANY(mm) AND coalesce(cardinality(g.rn) = g.k AND (SELECT sum(s.claim_count) FROM ${s}.monthly_claims_by_supplier_service s
+                                                                          WHERE s.supplier_id = g.supplier_id AND s.month = g.month) = ALL(g.rn), false) clean
+      FROM (SELECT m.supplier_id, m.month, count(DISTINCT m.address) k, array_agg(m.transfer_count) FILTER (WHERE m.family = 'relay') rn
+            FROM ${s}.monthly_income_by_address_supplier m
+            WHERE m.address = ANY(la) AND m.role = 'rev_share' AND cardinality(la) > 1
+              AND m.month >= date_trunc('month', rg.d1::timestamp)::date AND m.month <= rg.d2
+            GROUP BY 1, 2 HAVING count(DISTINCT m.address) >= 2) g
+    ), dg AS (
+      -- the other ones by day: its days the rollup holds outside the whole months, or every day of a month not whole
+      SELECT g.supplier_id, g.day, g.k, coalesce(cardinality(g.rn) = g.k AND c.claim_count = ALL(g.rn), false) clean
+      FROM (SELECT d.supplier_id, d.day, count(DISTINCT d.address) k, array_agg(d.transfer_count) FILTER (WHERE d.family = 'relay') rn
+            FROM mg JOIN ${s}.daily_income_by_address_supplier d
+              ON d.supplier_id = mg.supplier_id AND d.day >= mg.month AND d.day < (mg.month + interval '1 month')::date
+            WHERE NOT mg.clean AND d.address = ANY(la) AND d.role = 'rev_share' AND (d.day = ANY(dd) OR mg.month = ANY(mm))
+            GROUP BY 1, 2 HAVING count(DISTINCT d.address) >= 2) g
+      JOIN ${s}.daily_claims_by_supplier c USING (supplier_id, day)
+    ), corr AS (
+      SELECT s.service_id, (g.k - 1) * s.settled_upokt settled_upokt, (g.k - 1) * s.relays relays,
+             (g.k - 1) * s.estimated_relays estimated_relays, (g.k - 1) * s.claimed_compute_units claimed_compute_units,
+             (g.k - 1) * s.estimated_compute_units estimated_compute_units
+      FROM mg g JOIN ${s}.monthly_claims_by_supplier_service s ON s.supplier_id = g.supplier_id AND s.month = g.month
+      WHERE g.clean
+      UNION ALL
+      SELECT s.service_id, (g.k - 1) * s.settled_upokt, (g.k - 1) * s.relays, (g.k - 1) * s.estimated_relays,
+             (g.k - 1) * s.claimed_compute_units, (g.k - 1) * s.estimated_compute_units
+      FROM dg g JOIN ${s}.daily_claims_by_supplier_application_service s ON s.supplier_id = g.supplier_id AND s.day = g.day
+      WHERE g.clean
+      UNION ALL
+      -- per claim: k, its listed shareholders
+      SELECT c.service_id, (x.k - 1) * c.settled_upokt, (x.k - 1) * c.relays, (x.k - 1) * c.estimated_relays,
+             (x.k - 1) * c.claimed_compute_units, (x.k - 1) * c.estimated_compute_units
+      FROM dg g JOIN ${s}.settlement_blocks sb ON sb.day = g.day
+      JOIN ${s}.claim_settlements c ON c.supplier_id = g.supplier_id AND c.height = sb.height
+      CROSS JOIN LATERAL (SELECT count(DISTINCT sp.recipient_id) k FROM ${s}.shareholder_payouts sp
+                          WHERE sp.height = c.height AND sp.event_idx = c.event_idx AND sp.recipient_id = ANY(la)
+                            AND (sp.relay_upokt > 0 OR sp.global_upokt > 0)) x
+      WHERE NOT g.clean AND x.k >= 2
     ), claims AS (
       SELECT x.service_id, sum(x.settled_upokt)::numeric settled_upokt, sum(x.relays)::numeric relays,
              sum(x.estimated_relays)::numeric estimated_relays, sum(x.claimed_compute_units)::numeric compute_units,
@@ -1832,7 +1896,10 @@ BEGIN
             SELECT r.service_id, r.settled_upokt, r.relays, r.estimated_relays, r.claimed_compute_units, r.estimated_compute_units
             FROM ${s}.daily_claims_paid_by_address_service r
             -- not a row left at zero claims (a subtraction deletes those only at the keys it touched)
-            WHERE r.address = ANY(addresses) AND r.day BETWEEN rg.d1 AND rg.d2 AND r.day <> ALL(ud) AND r.claim_count > 0) x
+            WHERE r.address = ANY(la) AND r.day BETWEEN rg.d1 AND rg.d2 AND r.day <> ALL(ud) AND r.claim_count > 0
+            UNION ALL
+            SELECT x.service_id, -x.settled_upokt, -x.relays, -x.estimated_relays, -x.claimed_compute_units, -x.estimated_compute_units
+            FROM corr x) x
       GROUP BY 1
     ), net AS (
       SELECT i.service_id, sum(i.amount_upokt) amount_upokt
