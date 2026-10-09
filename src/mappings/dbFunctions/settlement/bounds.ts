@@ -135,16 +135,23 @@ function monthFills(s: string): MonthFill[] {
   ];
 }
 
-// Sets the bounds of the rows whose bounds differ from the group's: each row found by its key (a probe per key, LIMIT 1,
-// never a scan of the rollup) and updated by its ctid.
-function setBounds(s: string, t: string, keys: string[], group: string, period: string) {
-  return `UPDATE ${s}.${t} t SET first_height = x.lo, last_height = x.hi
+// Sets the bounds of the rows whose bounds differ from the group's. Joined with the period's rows (period: the rollup's
+// rows of the unit's day or month, read once; the unit runs with nested loops off, so a hash join reads each side once:
+// a nested loop could re-read the period for every group under stale statistics, as the drift check did before 239b791).
+// keysOnly: the rows found by key over the primary key, for monthly_income_by_address_supplier_service, which has no
+// month index and whose primary key is its only index.
+function setBounds(s: string, t: string, keys: string[], group: string, period: string, keysOnly = false) {
+  const match = keys.map((k) => `r.${k} = x.${k}`).join(" AND ");
+  if (keysOnly)
+    {return `UPDATE ${s}.${t} t SET first_height = x.lo, last_height = x.hi
     FROM (SELECT x.lo, x.hi, r.tid FROM (${group}) x
           CROSS JOIN LATERAL (SELECT r.ctid tid, r.first_height f, r.last_height l FROM ${s}.${t} r
-                              WHERE ${keys.map((k) => `r.${k} = x.${k}`).join(" AND ")}${
-    period ? ` AND r.${period}` : ""
-  } LIMIT 1) r
+                              WHERE ${match} AND r.${period} LIMIT 1) r
           WHERE r.f IS DISTINCT FROM x.lo OR r.l IS DISTINCT FROM x.hi) x
+    WHERE t.ctid = x.tid`;}
+  return `UPDATE ${s}.${t} t SET first_height = x.lo, last_height = x.hi
+    FROM (SELECT x.lo, x.hi, r.ctid tid FROM (${group}) x JOIN ${s}.${t} r ON ${match}
+          WHERE r.${period} AND (r.first_height IS DISTINCT FROM x.lo OR r.last_height IS DISTINCT FROM x.hi)) x
     WHERE t.ctid = x.tid`;
 }
 
@@ -155,13 +162,21 @@ export function createRollupBoundsFillFn(s: string, writerLock: string): string 
   const dayUnit = days
     .map(
       (f, i) => `  ${i === 0 ? "IF" : "ELSIF"} p_unit = '${f.t}' THEN
-    ${setBounds(s, f.t, f.keys, f.group, f.t.startsWith("hourly_") ? "" : "day = p_period")};`
+    ${setBounds(
+      s,
+      f.t,
+      f.keys,
+      f.group,
+      f.t.startsWith("hourly_")
+        ? "hour >= (p_period::timestamp AT TIME ZONE 'UTC') AND r.hour < ((p_period + 1)::timestamp AT TIME ZONE 'UTC')"
+        : "day = p_period"
+    )};`
     )
     .join("\n");
   const monthUnit = months
     .map(
       (f) => `  ELSIF p_unit = '${f.t}' THEN
-    ${setBounds(s, f.t, f.keys, f.group, "month = m")};`
+    ${setBounds(s, f.t, f.keys, f.group, "month = m", f.t === "monthly_income_by_address_supplier_service")};`
     )
     .join("\n");
   const sqlList = (xs: string[]) => `ARRAY[${xs.map((x) => `'${x}'`).join(", ")}]::text[]`;
@@ -187,7 +202,7 @@ END $$;
 -- (p_period, the first day: monthly rollups; p_suppliers the group of suppliers for the two filled from the base).
 -- Under the writer's lock. Returns the rows it set.
 CREATE OR REPLACE FUNCTION ${s}._fill_rollup_bounds_unit(p_unit text, p_period date, p_suppliers text[] DEFAULT NULL)
-RETURNS bigint LANGUAGE plpgsql SET plan_cache_mode = force_custom_plan AS $$
+RETURNS bigint LANGUAGE plpgsql SET plan_cache_mode = force_custom_plan SET enable_nestloop = off AS $$
 DECLARE n bigint; dlo bigint; dhi bigint; mlo bigint; mhi bigint; sups text[] := p_suppliers;
   m date := date_trunc('month', p_period::timestamp)::date; m2 date := (date_trunc('month', p_period::timestamp) + interval '1 month')::date;
 BEGIN

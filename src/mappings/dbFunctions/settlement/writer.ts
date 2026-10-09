@@ -409,22 +409,32 @@ const RANGE = { day: ["dlo", "dhi"], month: ["mlo", "mhi"], hour: ["hlo", "hhi"]
 export function createSettlementWriterFn(dbSchema: string): string {
   const s = dbSchema;
   const bounded = boundedRollups(s);
-  // the keys a subtraction touched: a row of them may be left with a bound of -h (h was its first or last height)
-  const captureBounds = bounded
-    .map((r) => `    INSERT INTO _bnd SELECT '${r.t}', ARRAY[${r.keys.map((k) => `i.${k}::text`).join(", ")}] FROM (${r.src}) i;`)
-    .join("\n");
-  // ...of which the add of the same rewrite did not set back to h: found by key (a probe per key, as the drift check does,
-  // never a scan of the rollup), each recomputed from its base over its day, month or hour
-  const recomputeBounds = bounded
-    .map(
-      (r) => `    FOR r IN SELECT b.k FROM _bnd b CROSS JOIN LATERAL (
-               SELECT 1 FROM ${s}.${r.t} t WHERE ${r.keys.map((k, i) => `t.${k} = b.k[${i + 1}]`).join(" AND ")} AND ${PERIOD[r.period]}
-                 AND (t.first_height < 0 OR t.last_height < 0) LIMIT 1) n
-             WHERE b.tbl = '${r.t}' LOOP
-      UPDATE ${s}.${r.t} t
+  // the rows a subtraction left with a bound of -h (h was their first or last height) that the add of the same rewrite
+  // did not set back to h: found by one scan of the height's day, month or hour, each recomputed from its base and updated
+  // by its ctid. A probe per key could plan, under stale statistics, a scan of the whole period for every key (the drift
+  // check, 239b791). monthly_income_by_address_supplier_service has no month index: its keys, recorded by the
+  // subtraction, are probed over its primary key, its only index.
+  const NOPERIOD = "monthly_income_by_address_supplier_service";
+  const recomputeOne = (r: Bounded) => `      UPDATE ${s}.${r.t} t
       SET first_height = CASE WHEN t.first_height < 0 THEN (SELECT min(z.height) FROM (${r.base(RANGE[r.period][0], RANGE[r.period][1])}) z) ELSE t.first_height END,
           last_height = CASE WHEN t.last_height < 0 THEN (SELECT max(z.height) FROM (${r.base(RANGE[r.period][0], RANGE[r.period][1])}) z) ELSE t.last_height END
-      WHERE ${r.keys.map((k, i) => `t.${k} = r.k[${i + 1}]`).join(" AND ")} AND ${PERIOD[r.period]};
+      WHERE t.ctid = r.tid;`;
+  const captureBounds = bounded
+    .filter((r) => r.t === NOPERIOD)
+    .map((r) => `    INSERT INTO _bnd SELECT '${r.t}', ARRAY[${r.keys.map((k) => `i.${k}::text`).join(", ")}] FROM (${r.src}) i;`)
+    .join("\n");
+  const recomputeBounds = bounded
+    .map((r) =>
+      r.t === NOPERIOD
+        ? `    FOR r IN SELECT n.tid, b.k FROM _bnd b CROSS JOIN LATERAL (
+               SELECT t.ctid tid FROM ${s}.${r.t} t WHERE ${r.keys.map((k, i) => `t.${k} = b.k[${i + 1}]`).join(" AND ")}
+                 AND ${PERIOD[r.period]} AND (t.first_height < 0 OR t.last_height < 0) LIMIT 1) n
+             WHERE b.tbl = '${r.t}' LOOP
+${recomputeOne(r)}
+    END LOOP;`
+        : `    FOR r IN SELECT t.ctid tid, ARRAY[${r.keys.map((k) => `t.${k}::text`).join(", ")}] k FROM ${s}.${r.t} t
+             WHERE ${PERIOD[r.period]} AND (t.first_height < 0 OR t.last_height < 0) LOOP
+${recomputeOne(r)}
     END LOOP;`
     )
     .join("\n");
@@ -487,7 +497,8 @@ BEGIN
   SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup, monthly_claims_rollup INTO d, hr, v_held, v_month_held
   FROM ${s}.settlement_blocks WHERE height = h;
   IF d IS NULL THEN RETURN; END IF;
-  -- the rollup keys a subtraction touched, until the add of the same rewrite (first_height / last_height: BOUNDS)
+  -- a subtraction's height, and the keys it touched in monthly_income_by_address_supplier_service, until the add of the
+  -- same rewrite (first_height / last_height: BOUNDS)
   CREATE TEMP TABLE IF NOT EXISTS _bnd (tbl text, k text[]) ON COMMIT DROP;
 
   -- the claims that paid each address at h, per service: added and subtracted only for a held height
@@ -697,6 +708,7 @@ BEGIN
     -- the keys it touched: a row of them still there that h was the first or last height of holds -h, which the add of
     -- the rewrite takes back to h where h still contributes
     TRUNCATE _bnd;
+    INSERT INTO _bnd VALUES ('', ARRAY[h::text]);
 ${captureBounds}
   ELSIF EXISTS (SELECT 1 FROM _bnd) THEN
     -- the add of a rewrite: the rows h left that it did not take back, from their base over their day, month or hour
