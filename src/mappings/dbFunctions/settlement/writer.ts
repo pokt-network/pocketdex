@@ -146,56 +146,99 @@ export function writeSettlementCalls(
   ];
 }
 
-// The drift check of a subtraction, fed by the upserts themselves: each rollup's INSERT ... ON CONFLICT DO UPDATE returns
-// the rows it wrote as they are after it, so the check reads exactly the rows the height touched, with no second read of
-// the table. A row whose contributions are all gone must be back at zero, and no row may go negative: anything else means
-// it was added under other rules than the ones subtracting it now. The error names the rollup, the row's key and the
-// first rule it breaks. The rows left at zero contributions then go by their ctid among the returned rows: the height's
-// keys and nothing else, with nothing to plan (a join of the keys to monthly_income_by_address_supplier_service, which has
-// no month index, planned under statistics without zero rows a scan of the whole table per row left at zero: 57 s for
-// one subtraction locally). An add returns the rows too, with none of this (sg < 0 guards it: every new height pays it).
-function driftReturning(t: string, keys: string[], rules: string[]): string {
-  // the first rule of each rollup is its count below 0
-  const count = rules[0].replace(" < 0", "");
-  return `RETURNING '${t}'::text AS rollup, CASE WHEN sg < 0 THEN concat_ws(' / ', ${keys.join(", ")}) END AS row_key,
-    CASE WHEN sg < 0 THEN CASE ${rules.map((r) => `WHEN ${r} THEN '${r}'`).join(" ")} END END AS broken,
-    CASE WHEN sg < 0 AND ${count} = 0 THEN ctid END AS zero_row`;
+// The drift check of a subtraction, fed by the upserts themselves: on a subtraction (sg < 0) each rollup's INSERT ...
+// ON CONFLICT DO UPDATE returns the rows it wrote as they are after it, so the check reads exactly the rows the height
+// touched, with no second read of the table. No row may go negative, and a row whose contributions are all gone must have
+// every measure back at 0 (the columns its ON CONFLICT sets, read from its SQL, so a new column is checked too): anything
+// else means it was added under other rules than the ones subtracting it now. The error names the rollup, the row's key
+// and the first rule it breaks. The rows left at zero contributions then go by their ctid among the returned rows: the
+// height's keys and nothing else, with nothing to plan (a join of the keys to monthly_income_by_address_supplier_service,
+// which has no month index, planned under statistics without zero rows a scan of the whole table per row left at zero:
+// 57 s for one subtraction locally). An add (every new height, every height of rebuild_rollups) runs the plain upserts.
+//
+// Not swept any more, by decision: a zero row the height did not touch, which only a bug or a hand edit leaves (the
+// writer deletes its own); rebuild_rollups rewrites it. monthly_claims_by_supplier_service and
+// daily_claims_paid_by_address_service are written only for a held height, so a height not held leaves their rows as
+// they are; fill_monthly_claims_month and fill_claims_paid_day rewrite a whole month or day, without its zero rows.
+interface Checked {
+  t: string;
+  // its key without the period, as the error names it
+  keys: string[];
+  // its count of contributions: a row at 0 of it holds nothing
+  count: string;
+  // the rules besides "every measure at 0 when the count is": columns below 0, and columns bounded by the count
+  rules: string[];
+  // INSERT ... ON CONFLICT DO UPDATE SET ..., without RETURNING or ';'
+  sql: string;
 }
-// after the upsert of each rollup of tables (the CTE that returned its rows, the rollup): at most two, v_zero and v_zero2
-function driftRaise(s: string, tables: Array<[string, string]>): string {
-  const rows = tables.length === 1 ? tables[0][0] : `(${tables.map(([cte]) => `TABLE ${cte}`).join(" UNION ALL ")}) r`;
-  const zero = ["v_zero", "v_zero2"];
-  return `SELECT (SELECT format('%s row %s has %s', rollup, row_key, broken) FROM ${rows} WHERE broken IS NOT NULL LIMIT 1),
-         ${tables.map(([cte]) => `ARRAY(SELECT zero_row FROM ${cte} WHERE zero_row IS NOT NULL)`).join(", ")}
-  INTO v_drift, ${tables.map((_, i) => zero[i]).join(", ")};
+// the columns its ON CONFLICT DO UPDATE sets
+function measures(sql: string): string[] {
+  return [...sql.slice(sql.indexOf("DO UPDATE")).matchAll(/(?:\bSET|,)\s+(\w+)\s*=/g)].map((m) => m[1]);
+}
+function checkRules(u: Checked): string[] {
+  const set = measures(u.sql);
+  if (!set.includes(u.count)) throw new Error(`${u.t}: its ON CONFLICT does not set ${u.count}`);
+  return [...u.rules, ...set.filter((m) => m !== u.count).map((m) => `${u.count} = 0 AND ${m} <> 0`)];
+}
+const literal = (x: string) => `'${x.replace(/'/g, "''")}'`;
+// v_zero1 .. v_zero<MAX_CHECKED> in _rollup_apply
+const MAX_CHECKED = 2;
+// The upserts of one statement after an optional prelude of plain CTEs: each a CTE r1, r2, ... but the last, which a later
+// one may read. Plain on an add; on a subtraction checked, then cleared of their rows left at zero.
+function upserts(s: string, prelude: string, list: Checked[]): string {
+  if (list.length > MAX_CHECKED) throw new Error(`at most ${MAX_CHECKED} upserts in one statement`);
+  const head = prelude ? [prelude] : [];
+  const plain =
+    list.length === 1 && !prelude
+      ? `${list[0].sql};`
+      : `WITH ${[...head, ...list.slice(0, -1).map((u, i) => `r${i + 1} AS (${u.sql})`)].join(", ")}
+  ${list[list.length - 1].sql};`;
+  const returning = list.map(
+    (u, i) => `r${i + 1} AS (${u.sql}
+    RETURNING ${literal(u.t)}::text AS rollup, concat_ws(' / ', ${u.keys.join(", ")}) AS row_key,
+      CASE ${checkRules(u).map((r) => `WHEN ${r} THEN ${literal(r)}`).join(" ")} END AS broken,
+      CASE WHEN ${u.count} = 0 THEN ctid END AS zero_row)`
+  );
+  const rows = list.length === 1 ? "r1" : `(${list.map((_, i) => `TABLE r${i + 1}`).join(" UNION ALL ")}) r`;
+  return `IF sg < 0 THEN
+  WITH ${[...head, ...returning].join(", ")}
+  SELECT (SELECT format('%s row %s has %s', rollup, row_key, broken) FROM ${rows} WHERE broken IS NOT NULL LIMIT 1),
+         ${list.map((_, i) => `ARRAY(SELECT zero_row FROM r${i + 1} WHERE zero_row IS NOT NULL)`).join(", ")}
+  INTO v_drift, ${list.map((_, i) => `v_zero${i + 1}`).join(", ")};
   IF v_drift IS NOT NULL THEN
     RAISE EXCEPTION 'rollup drift at height %: % after subtracting the height', h, v_drift;
   END IF;
-${tables.map(([, t], i) => `  IF cardinality(${zero[i]}) > 0 THEN DELETE FROM ${s}.${t} WHERE ctid = ANY(${zero[i]}); END IF;`).join("\n")}`;
+${list
+  .map(
+    (u, i) => `  IF cardinality(v_zero${i + 1}) > 0 THEN
+    DELETE FROM ${s}.${u.t} WHERE ctid = ANY(v_zero${i + 1}) AND ${u.count} = 0;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> cardinality(v_zero${i + 1}) THEN
+      RAISE EXCEPTION 'rollup cleanup at height %: % deleted % of its % rows left at zero', h, ${literal(u.t)}, v_n, cardinality(v_zero${i + 1});
+    END IF;
+  END IF;`
+  )
+  .join("\n")}
+  ELSE
+  ${plain}
+  END IF;`;
 }
 const below = (cols: string[]) => cols.map((c) => `${c} < 0`);
-const leftAtZero = (count: string, cols: string[]) => cols.map((c) => `${count} = 0 AND ${c} <> 0`);
-const INC = [...below(["contribution_count", "amount_upokt"]), ...leftAtZero("contribution_count", ["amount_upokt", "transfer_count"])];
-const HOURLY = [...below(["contribution_count", "amount_upokt"]), ...leftAtZero("contribution_count", ["amount_upokt"])];
-const APP_CLAIMS = [...below(["claim_count", "settled_upokt"]), ...leftAtZero("claim_count", ["settled_upokt", "claimed_upokt", "relays"])];
+const INCOME = below(["contribution_count", "amount_upokt"]);
+const APP_CLAIMS = below(["claim_count", "settled_upokt"]);
 const CLAIMS = [...APP_CLAIMS, "claims_with_proof < 0", "claims_with_proof > claim_count"];
 const MONTHLY_CLAIMS = [
   ...below(["claim_count", "claimed_upokt", "settled_upokt", "overservicing_loss_upokt", "relays", "estimated_relays",
             "claimed_compute_units", "estimated_compute_units", "claims_with_proof"]),
   "claims_with_proof > claim_count",
-  ...leftAtZero("claim_count", ["claimed_upokt", "settled_upokt", "overservicing_loss_upokt", "relays", "estimated_relays",
-                                "claimed_compute_units", "estimated_compute_units"]),
 ];
-const DELEGATOR = [...below(["contribution_count", "amount_upokt", "replayed_count"]), "replayed_count > contribution_count",
-                   ...leftAtZero("contribution_count", ["amount_upokt"])];
+const DELEGATOR = [...below(["contribution_count", "amount_upokt", "replayed_count"]), "replayed_count > contribution_count"];
 // with no contribution that has a commission left, what is left of the commission must be 0 (it becomes NULL below);
 // anything else was added under other rules
 const VALIDATOR = [...below(["contribution_count", "pool_share_upokt", "commission_na_count"]),
                    "commission_na_count > contribution_count",
-                   "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0",
-                   ...leftAtZero("contribution_count", ["pool_share_upokt"])];
-const PAID = [...below(["claim_count", "settled_upokt", "relays", "estimated_relays", "claimed_compute_units", "estimated_compute_units"]),
-              ...leftAtZero("claim_count", ["settled_upokt", "relays", "estimated_relays", "claimed_compute_units", "estimated_compute_units"])];
+                   "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0"];
+const PAID = below(["claim_count", "settled_upokt", "relays", "estimated_relays", "claimed_compute_units", "estimated_compute_units"]);
 
 export function createSettlementWriterFn(dbSchema: string): string {
   const s = dbSchema;
@@ -251,7 +294,8 @@ FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0 OR c.global
 
 -- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
 CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
-DECLARE d date; hr timestamptz; v_held boolean; v_month_held boolean; v_drift text; v_zero tid[]; v_zero2 tid[];
+DECLARE d date; hr timestamptz; v_held boolean; v_month_held boolean; v_drift text; v_n bigint;
+  ${Array.from({ length: MAX_CHECKED }, (_, i) => `v_zero${i + 1} tid[];`).join(" ")}
 BEGIN
   SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup, monthly_claims_rollup INTO d, hr, v_held, v_month_held
   FROM ${s}.settlement_blocks WHERE height = h;
@@ -300,22 +344,18 @@ BEGIN
     FROM ${s}.claim_settlements WHERE height = h;
   END IF;
 
-  WITH up AS (INSERT INTO ${s}.monthly_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier", keys: ["address", "supplier_id", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.monthly_income_by_address_supplier AS t
   SELECT date_trunc('month', d)::date, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
   ON CONFLICT (address, month, supplier_id, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count
-  ${driftReturning("monthly_income_by_address_supplier", ["address", "supplier_id", "role", "family"], INC)})
-  ${driftRaise(s, [["up", "monthly_income_by_address_supplier"]])}
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.daily_income_by_address AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address", keys: ["address", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.daily_income_by_address AS t
   SELECT d, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count) FROM _inc GROUP BY address, role, family
   ON CONFLICT (address, day, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count
-  ${driftReturning("daily_income_by_address", ["address", "role", "family"], INC)})
-  ${driftRaise(s, [["up", "daily_income_by_address"]])}
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.daily_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address_supplier", keys: ["supplier_id", "address", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.daily_income_by_address_supplier AS t
   SELECT d, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
   UNION ALL
@@ -323,43 +363,33 @@ BEGIN
          sg * count(*) FILTER (WHERE relay_to_stakers_upokt > 0), sg * count(*)
   FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id
   ON CONFLICT (supplier_id, day, address, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count
-  ${driftReturning("daily_income_by_address_supplier", ["supplier_id", "address", "role", "family"], INC)})
-  ${driftRaise(s, [["up", "daily_income_by_address_supplier"]])}
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.hourly_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "hourly_income_by_address_supplier", keys: ["address", "supplier_id"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.hourly_income_by_address_supplier AS t
   SELECT address, hr, supplier_id, sg * sum(amount_upokt), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY address, supplier_id
   ON CONFLICT (address, hour, supplier_id) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count
-  ${driftReturning("hourly_income_by_address_supplier", ["address", "supplier_id"], HOURLY)})
-  ${driftRaise(s, [["up", "hourly_income_by_address_supplier"]])}
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.daily_income_by_address_service AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.daily_income_by_address_service AS t
   SELECT d, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
   ON CONFLICT (address, day, role, family, service_id) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count
-  ${driftReturning("daily_income_by_address_service", ["address", "role", "family", "service_id"], INC)})
-  ${driftRaise(s, [["up", "daily_income_by_address_service"]])}
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.monthly_income_by_address_service AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.monthly_income_by_address_service AS t
   SELECT date_trunc('month', d)::date, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
   ON CONFLICT (address, month, role, family, service_id) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count
-  ${driftReturning("monthly_income_by_address_service", ["address", "role", "family", "service_id"], INC)})
-  ${driftRaise(s, [["up", "monthly_income_by_address_service"]])}
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.monthly_income_by_address_supplier_service AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier_service", keys: ["address", "supplier_id", "service_id", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.monthly_income_by_address_supplier_service AS t
   SELECT date_trunc('month', d)::date, address, supplier_id, service_id, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' AND service_id <> '' GROUP BY address, supplier_id, service_id, role, family
   ON CONFLICT (address, month, supplier_id, service_id, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count
-  ${driftReturning("monthly_income_by_address_supplier_service", ["address", "supplier_id", "service_id", "role", "family"], INC)})
-  ${driftRaise(s, [["up", "monthly_income_by_address_supplier_service"]])}
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.daily_claims_by_application_service AS t
+  ${upserts(s, "", [{ t: "daily_claims_by_application_service", keys: ["application_id", "service_id"], count: "claim_count", rules: APP_CLAIMS, sql: `INSERT INTO ${s}.daily_claims_by_application_service AS t
   SELECT d, application_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(relay_minted_upokt),
          sg * sum(overservicing_loss_upokt), sg * sum(mint_ratio_unminted_upokt), sg * sum(global_minted_upokt),
          sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
@@ -377,31 +407,28 @@ BEGIN
     relay_to_stakers_upokt = t.relay_to_stakers_upokt + excluded.relay_to_stakers_upokt,
     global_to_supplier_upokt = t.global_to_supplier_upokt + excluded.global_to_supplier_upokt, global_to_dao_upokt = t.global_to_dao_upokt + excluded.global_to_dao_upokt,
     global_to_source_owner_upokt = t.global_to_source_owner_upokt + excluded.global_to_source_owner_upokt, global_to_application_upokt = t.global_to_application_upokt + excluded.global_to_application_upokt,
-    reimbursement_to_dao_upokt = t.reimbursement_to_dao_upokt + excluded.reimbursement_to_dao_upokt
-  ${driftReturning("daily_claims_by_application_service", ["application_id", "service_id"], APP_CLAIMS)})
-  ${driftRaise(s, [["up", "daily_claims_by_application_service"]])}
+    reimbursement_to_dao_upokt = t.reimbursement_to_dao_upokt + excluded.reimbursement_to_dao_upokt` }])}
 
-  WITH up AS (INSERT INTO ${s}.daily_delegator_rewards_by_validator AS t
+  ${upserts(s, "", [{ t: "daily_delegator_rewards_by_validator", keys: ["delegator", "validator_operator", "family"], count: "contribution_count", rules: DELEGATOR, sql: `INSERT INTO ${s}.daily_delegator_rewards_by_validator AS t
   SELECT d, delegator, validator_operator, family, sg * sum(amount_upokt), sg * count(*),
          sg * count(*) FILTER (WHERE row_source IN ('replay', 'derived_split'))
   FROM ${s}.delegator_validator_payouts WHERE height = h GROUP BY delegator, validator_operator, family
   ON CONFLICT (delegator, day, validator_operator, family) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count,
-        replayed_count = t.replayed_count + excluded.replayed_count
-  ${driftReturning("daily_delegator_rewards_by_validator", ["delegator", "validator_operator", "family"], DELEGATOR)})
-  ${driftRaise(s, [["up", "daily_delegator_rewards_by_validator"]])}
+        replayed_count = t.replayed_count + excluded.replayed_count` }])}
 
   -- one aggregate of the height's claims feeds the daily rollup and the monthly one without the application; the monthly
   -- one only for a held height (settlement_blocks.monthly_claims_rollup), as daily_claims_paid_by_address_service
-  WITH a AS (
+  ${upserts(s, `a AS (
     SELECT supplier_id, application_id, service_id, count(*) claim_count, sum(claimed_upokt) claimed_upokt,
            sum(settled_upokt) settled_upokt, sum(overservicing_loss_upokt) overservicing_loss_upokt,
            sum(global_minted_upokt) global_minted_upokt, sum(relays) relays, sum(estimated_relays) estimated_relays,
            sum(claimed_compute_units) claimed_compute_units, sum(estimated_compute_units) estimated_compute_units,
            count(*) FILTER (WHERE settled_with_proof) claims_with_proof
     FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id, application_id, service_id
-  ), daily AS (
-    INSERT INTO ${s}.daily_claims_by_supplier_application_service AS t
+  )`, [
+    { t: "daily_claims_by_supplier_application_service", keys: ["supplier_id", "application_id", "service_id"], count: "claim_count",
+      rules: CLAIMS, sql: `INSERT INTO ${s}.daily_claims_by_supplier_application_service AS t
     SELECT d, supplier_id, application_id, service_id, sg * claim_count, sg * claimed_upokt, sg * settled_upokt,
            sg * overservicing_loss_upokt, sg * global_minted_upokt, sg * relays, sg * estimated_relays,
            sg * claimed_compute_units, sg * estimated_compute_units, sg * claims_with_proof
@@ -411,9 +438,9 @@ BEGIN
       overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
       relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
       claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
-      claims_with_proof = t.claims_with_proof + excluded.claims_with_proof
-    ${driftReturning("daily_claims_by_supplier_application_service", ["supplier_id", "application_id", "service_id"], CLAIMS)}
-  ), up AS (INSERT INTO ${s}.monthly_claims_by_supplier_service AS t
+      claims_with_proof = t.claims_with_proof + excluded.claims_with_proof` },
+    { t: "monthly_claims_by_supplier_service", keys: ["supplier_id", "service_id"], count: "claim_count", rules: MONTHLY_CLAIMS,
+      sql: `INSERT INTO ${s}.monthly_claims_by_supplier_service AS t
   SELECT date_trunc('month', d)::date, supplier_id, service_id, sg * sum(claim_count), sg * sum(claimed_upokt), sg * sum(settled_upokt),
          sg * sum(overservicing_loss_upokt), sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units),
          sg * sum(estimated_compute_units), sg * sum(claims_with_proof)
@@ -423,11 +450,10 @@ BEGIN
     overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt,
     relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
-    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof
-  ${driftReturning("monthly_claims_by_supplier_service", ["supplier_id", "service_id"], MONTHLY_CLAIMS)})
-  ${driftRaise(s, [["daily", "daily_claims_by_supplier_application_service"], ["up", "monthly_claims_by_supplier_service"]])}
+    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof` },
+  ])}
 
-  WITH up AS (INSERT INTO ${s}.daily_claims_by_supplier AS t
+  ${upserts(s, "", [{ t: "daily_claims_by_supplier", keys: ["supplier_id"], count: "claim_count", rules: CLAIMS, sql: `INSERT INTO ${s}.daily_claims_by_supplier AS t
   SELECT d, supplier_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(overservicing_loss_upokt),
          sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
          sg * count(*) FILTER (WHERE settled_with_proof)
@@ -437,13 +463,11 @@ BEGIN
     overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt,
     relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
-    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof
-  ${driftReturning("daily_claims_by_supplier", ["supplier_id"], CLAIMS)})
-  ${driftRaise(s, [["up", "daily_claims_by_supplier"]])}
+    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof` }])}
 
   -- commission: the sum of the contributions that have one, and how many have none (the replayed rows, NULL); NULL
   -- + x keeps x, so a day mixing both keeps the real commission. A row whose contributions all lack one is NULL.
-  WITH up AS (INSERT INTO ${s}.daily_validator_rewards AS t
+  ${upserts(s, "", [{ t: "daily_validator_rewards", keys: ["validator_operator", "family"], count: "contribution_count", rules: VALIDATOR, sql: `INSERT INTO ${s}.daily_validator_rewards AS t
   SELECT d, validator_operator, family, sg * count(*),
          sg * sum(pool_share_upokt), sg * sum(commission_upokt), sg * sum(self_delegation_upokt), sg * sum(to_delegators_upokt),
          sg * count(*) FILTER (WHERE commission_upokt IS NULL)
@@ -454,11 +478,9 @@ BEGIN
                             WHEN excluded.commission_upokt IS NULL THEN t.commission_upokt
                             ELSE t.commission_upokt + excluded.commission_upokt END,
     self_delegation_upokt = t.self_delegation_upokt + excluded.self_delegation_upokt, to_delegators_upokt = t.to_delegators_upokt + excluded.to_delegators_upokt,
-    commission_na_count = t.commission_na_count + excluded.commission_na_count
-  ${driftReturning("daily_validator_rewards", ["validator_operator", "family"], VALIDATOR)})
-  ${driftRaise(s, [["up", "daily_validator_rewards"]])}
+    commission_na_count = t.commission_na_count + excluded.commission_na_count` }])}
 
-  WITH up AS (INSERT INTO ${s}.daily_claims_paid_by_address_service AS t
+  ${upserts(s, "", [{ t: "daily_claims_paid_by_address_service", keys: ["address", "service_id"], count: "claim_count", rules: PAID, sql: `INSERT INTO ${s}.daily_claims_paid_by_address_service AS t
   SELECT d, address, service_id, sg * claim_count, sg * settled_upokt, sg * relays, sg * estimated_relays,
          sg * claimed_compute_units, sg * estimated_compute_units
   FROM _paid
@@ -466,9 +488,7 @@ BEGIN
     claim_count = t.claim_count + excluded.claim_count, settled_upokt = t.settled_upokt + excluded.settled_upokt,
     relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units,
-    estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units
-  ${driftReturning("daily_claims_paid_by_address_service", ["address", "service_id"], PAID)})
-  ${driftRaise(s, [["up", "daily_claims_paid_by_address_service"]])}
+    estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units` }])}
 
   -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it
   UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL

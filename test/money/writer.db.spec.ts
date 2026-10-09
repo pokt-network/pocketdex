@@ -635,15 +635,19 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const t = String(r.relname);
       const ref = (verb: string) => new RegExp(`${verb} ${S}\\.${t}\\b`);
       assert.match(apply, ref("INSERT INTO"), `${t}: added`);
-      // its upsert (a CTE of one statement, no ';' in it) returns the rows it wrote with the rule each breaks and, at zero
-      // contributions, their ctid; the statement reads them on a subtraction, raises right after it, then deletes those
-      const cte = new RegExp(`(\\w+) AS \\(\\s*INSERT INTO ${S}\\.${t} AS t[^;]*?RETURNING '${t}'::text AS rollup, CASE WHEN sg < 0 THEN [^;]*?` +
-                             `AS zero_row\\s*\\)\\s*SELECT \\(SELECT format[^;]*? FROM ([^;]*?) WHERE broken IS NOT NULL LIMIT 1\\),[^;]*?` +
+      // on a subtraction its upsert (a CTE of one statement, no ';' in it) returns the rows it wrote with the rule each breaks
+      // and, at zero contributions, their ctid; the statement reads them and raises right after it, then those rows go
+      const sub = new RegExp(`(r\\d) AS \\(INSERT INTO ${S}\\.${t} AS t[^;]*?RETURNING '${t}'::text AS rollup,[^;]*?` +
+                             `AS zero_row\\)\\s*SELECT \\(SELECT format[^;]*? FROM ([^;]*?) WHERE broken IS NOT NULL LIMIT 1\\),[^;]*?` +
                              `INTO v_drift,[^;]*;\\s*IF v_drift IS NOT NULL THEN\\s*` +
                              `RAISE EXCEPTION 'rollup drift at height %: % after subtracting the height'[^;]*;\\s*END IF;` +
-                             `(?:\\s*IF cardinality[^;]*; END IF;)*?\\s*IF cardinality\\((v_zero2?)\\) > 0 THEN DELETE FROM ${S}\\.${t} WHERE ctid = ANY\\(\\3\\)`).exec(apply);
-      assert.ok(cte && new RegExp(`\\b${cte[1]}\\b`).test(cte[2]), `${t}: checked on subtraction by its upsert's RETURNING`);
-      assert.ok(cte && apply.includes(`ARRAY(SELECT zero_row FROM ${cte[1]} WHERE zero_row IS NOT NULL)`), `${t}: zero rows deleted`);
+                             `[\\s\\S]*?DELETE FROM ${S}\\.${t} WHERE ctid = ANY\\((v_zero\\d)\\) AND \\w+ = 0;\\s*GET DIAGNOSTICS v_n = ROW_COUNT;` +
+                             `\\s*IF v_n <> cardinality\\(\\3\\) THEN`).exec(apply);
+      assert.ok(sub && new RegExp(`\\b${sub[1]}\\b`).test(sub[2]), `${t}: checked on subtraction by its upsert's RETURNING`);
+      assert.ok(sub && apply.includes(`ARRAY(SELECT zero_row FROM ${sub[1]} WHERE zero_row IS NOT NULL)`), `${t}: zero rows deleted`);
+      // on an add, the same upsert alone
+      const add = new RegExp(`\\n  ELSE\\n  (?:WITH [^;]*?)?INSERT INTO ${S}\\.${t} AS t[^;]*;\\n  END IF;`).exec(apply);
+      assert.ok(add && !add[0].includes("RETURNING"), `${t}: added by a plain upsert`);
       assert.match(rebuild, ref("DELETE FROM"), `${t}: rebuilt`);
       assert.ok(String(r.tag).startsWith("@omit"), `${t}: hidden from GraphQL`);
       assert.ok(String(r.opts).includes("fillfactor=90"), `${t}: fillfactor`);
@@ -893,49 +897,55 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
   });
 
   it("subtracting a height raises on each rule of each rollup row it touched, naming the rollup, the key and the rule, and on no other row", async () => {
-    // the rules as the drift probes before the RETURNING check read them (97ad854), in the order the check names them
+    // the rules of the check: those of the drift probes before it (97ad854), then a row at 0 contributions with any other
+    // column of the rollup (but its key and period) not at 0, read here from the catalog
     const below = (...cols: string[]) => cols.map((col) => `${col} < 0`);
-    const atZero = (count: string, ...cols: string[]) => cols.map((col) => `${count} = 0 AND ${col} <> 0`);
-    const inc = [...below("contribution_count", "amount_upokt"), ...atZero("contribution_count", "amount_upokt", "transfer_count")];
-    const appClaims = [...below("claim_count", "settled_upokt"), ...atZero("claim_count", "settled_upokt", "claimed_upokt", "relays")];
-    const claims = [...appClaims, "claims_with_proof < 0", "claims_with_proof > claim_count"];
+    const income = below("contribution_count", "amount_upokt");
+    const claims = [...below("claim_count", "settled_upokt"), "claims_with_proof < 0", "claims_with_proof > claim_count"];
     const amounts = ["claimed_upokt", "settled_upokt", "overservicing_loss_upokt", "relays", "estimated_relays",
                      "claimed_compute_units", "estimated_compute_units"];
-    const paid = ["settled_upokt", "relays", "estimated_relays", "claimed_compute_units", "estimated_compute_units"];
     const day = "day = $1::date";
     const month = "month = date_trunc('month', $1::date)::date";
-    const rollups: Array<[string, string, string[], string[]]> = [
-      ["daily_income_by_address", day, ["address", "role", "family"], inc],
+    // rollup, its rows of a height's period, key, count, rules besides the zero row's
+    const rollups: Array<[string, string, string[], string, string[]]> = [
+      ["daily_income_by_address", day, ["address", "role", "family"], "contribution_count", income],
       // its 'stakers' rows (address '', from the claims) and its address rows
-      ["daily_income_by_address_supplier", `${day} AND role = 'stakers'`, ["supplier_id", "address", "role", "family"], inc],
-      ["daily_income_by_address_supplier", `${day} AND role <> 'stakers'`, ["supplier_id", "address", "role", "family"], inc],
-      ["daily_income_by_address_service", day, ["address", "role", "family", "service_id"], inc],
-      ["monthly_income_by_address_supplier", month, ["address", "supplier_id", "role", "family"], inc],
-      ["monthly_income_by_address_service", month, ["address", "role", "family", "service_id"], inc],
-      ["monthly_income_by_address_supplier_service", month, ["address", "supplier_id", "service_id", "role", "family"], inc],
+      ["daily_income_by_address_supplier", `${day} AND role = 'stakers'`, ["supplier_id", "address", "role", "family"], "contribution_count", income],
+      ["daily_income_by_address_supplier", `${day} AND role <> 'stakers'`, ["supplier_id", "address", "role", "family"], "contribution_count", income],
+      ["daily_income_by_address_service", day, ["address", "role", "family", "service_id"], "contribution_count", income],
+      ["monthly_income_by_address_supplier", month, ["address", "supplier_id", "role", "family"], "contribution_count", income],
+      ["monthly_income_by_address_service", month, ["address", "role", "family", "service_id"], "contribution_count", income],
+      ["monthly_income_by_address_supplier_service", month, ["address", "supplier_id", "service_id", "role", "family"], "contribution_count", income],
       ["hourly_income_by_address_supplier", "hour = ($1::date + interval '12 hours') AT TIME ZONE 'UTC'", ["address", "supplier_id"],
-       [...below("contribution_count", "amount_upokt"), ...atZero("contribution_count", "amount_upokt")]],
-      ["daily_claims_by_application_service", day, ["application_id", "service_id"], appClaims],
-      ["daily_claims_by_supplier", day, ["supplier_id"], claims],
-      ["daily_claims_by_supplier_application_service", day, ["supplier_id", "application_id", "service_id"], claims],
-      ["monthly_claims_by_supplier_service", month, ["supplier_id", "service_id"],
-       [...below("claim_count", ...amounts, "claims_with_proof"), "claims_with_proof > claim_count", ...atZero("claim_count", ...amounts)]],
-      ["daily_delegator_rewards_by_validator", day, ["delegator", "validator_operator", "family"],
-       [...below("contribution_count", "amount_upokt", "replayed_count"), "replayed_count > contribution_count",
-        ...atZero("contribution_count", "amount_upokt")]],
-      ["daily_validator_rewards", day, ["validator_operator", "family"],
+       "contribution_count", income],
+      ["daily_claims_by_application_service", day, ["application_id", "service_id"], "claim_count", below("claim_count", "settled_upokt")],
+      ["daily_claims_by_supplier", day, ["supplier_id"], "claim_count", claims],
+      ["daily_claims_by_supplier_application_service", day, ["supplier_id", "application_id", "service_id"], "claim_count", claims],
+      ["monthly_claims_by_supplier_service", month, ["supplier_id", "service_id"], "claim_count",
+       [...below("claim_count", ...amounts, "claims_with_proof"), "claims_with_proof > claim_count"]],
+      ["daily_delegator_rewards_by_validator", day, ["delegator", "validator_operator", "family"], "contribution_count",
+       [...below("contribution_count", "amount_upokt", "replayed_count"), "replayed_count > contribution_count"]],
+      ["daily_validator_rewards", day, ["validator_operator", "family"], "contribution_count",
        [...below("contribution_count", "pool_share_upokt", "commission_na_count"), "commission_na_count > contribution_count",
-        "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0",
-        ...atZero("contribution_count", "pool_share_upokt")]],
-      ["daily_claims_paid_by_address_service", day, ["address", "service_id"], [...below("claim_count", ...paid), ...atZero("claim_count", ...paid)]],
+        "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0"]],
+      ["daily_claims_paid_by_address_service", day, ["address", "service_id"], "claim_count",
+       below("claim_count", "settled_upokt", "relays", "estimated_relays", "claimed_compute_units", "estimated_compute_units")],
     ];
-    // the update that breaks the rule, and only it, once the height's contribution is subtracted from a row that holds
-    // nothing else (each height below is the only one of its month, so every row of its periods is its own)
+    const rulesOf = async (t: string, keys: string[], count: string, rules: string[]) => {
+      const cols = (
+        await c.query(`SELECT column_name::text c FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2
+                       ORDER BY ordinal_position`, [S, t])
+      ).rows.map((r) => String(r.c)).filter((col) => ![...keys, "day", "month", "hour", count].includes(col));
+      return [...rules, ...cols.map((col) => `${count} = 0 AND ${col} <> 0`)];
+    };
+    // the column a rule is about, and the update that breaks it, and only it or an earlier rule about the same column, once
+    // the height's contribution is subtracted from a row that holds nothing else (each height below is the only one of its
+    // month, so every row of its periods is its own)
+    const columnOf = (rule: string) => (/^(\w+) < 0$|^\w+ = 0 AND (\w+) <> 0$|^(\w+) > \w+$/.exec(rule) ?? []).slice(1).find(Boolean) ?? "commission_upokt";
     const breaking = (rule: string) => {
-      const m = /^(\w+) < 0$|^\w+ = 0 AND (\w+) <> 0$|^(\w+) > \w+$/.exec(rule);
-      if (m) return `${m[1] ?? m[2] ?? m[3]} = ${m[1] ?? m[2] ?? m[3]} ${m[1] ? "-" : "+"} 1`;
-      assert.equal(rule, "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0");
-      return "commission_upokt = coalesce(commission_upokt, 0) + 1";
+      const col = columnOf(rule);
+      if (rule === `${col} < 0`) return `${col} = ${col} - 1`;
+      return `${col} = coalesce(${col}, 0) + 1`;
     };
     const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     await c.query("BEGIN");
@@ -961,8 +971,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           assert.equal(n, 0, `${t}: no row left after subtracting ${h.height}`);
         }
       await c.query("ROLLBACK TO SAVEPOINT d");
-      let cases = 0;
-      for (const [t, period, keys, rules] of rollups) {
+      const cases: string[] = [];
+      for (const [t, period, keys, count, explicit] of rollups) {
+        const rules = await rulesOf(t, keys, count, explicit);
         const touched: Array<{ h: (typeof heights)[number]; id: string; k: string }> = [];
         for (const h of heights) {
           const r = (await c.query(`SELECT ctid::text id, concat_ws(' / ', ${keys.join(", ")}) k FROM ${S}.${t}
@@ -971,25 +982,33 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         }
         assert.ok(touched.length > 0, `precondition: a ${t} row one of the heights wrote`);
         const { h, id, k } = touched[0];
-        for (const rule of rules) {
+        for (const [i, rule] of rules.entries()) {
+          // the rule, or an earlier one about the same column that the update breaks too (a column at 0 contributions
+          // above its count, a commission left on a row without one)
+          const named = rules.slice(0, i + 1).filter((r) => r === rule || new RegExp(`\\b${columnOf(rule)}\\b`).test(r));
           await c.query("SAVEPOINT d");
           const n = await c.query(`UPDATE ${S}.${t} SET ${breaking(rule)} WHERE ctid = $1::tid RETURNING 1`, [id]);
           assert.equal(n.rows.length, 1);
           // the subtraction of the height's rewrite, alone
           await assert.rejects(
             c.query(`CALL ${S}._rollup_apply($1, -1)`, [h.height]),
-            new RegExp(`: rollup drift at height ${h.height}: ${t} row ${esc(k)} has ${esc(rule)} after subtracting the height$`),
+            new RegExp(`: rollup drift at height ${h.height}: ${t} row ${esc(k)} has (${named.map(esc).join("|")}) after subtracting the height$`),
             `${t}: ${rule}`
           );
           await c.query("ROLLBACK TO SAVEPOINT d");
-          cases++;
+          cases.push(`${t}: ${rule}`);
         }
         // a row of the same period the height did not touch, broken: its rewrite leaves it as it is
         await c.query(`INSERT INTO ${S}.${t} SELECT (jsonb_populate_record(NULL::${S}.${t},
                          to_jsonb(x) || jsonb_build_object($2::text, 'untouched', $3::text, -1))).* FROM ${S}.${t} x WHERE ctid = $1::tid`,
-                       [id, keys[0], rules[0].replace(" < 0", "")]);
+                       [id, keys[0], count]);
       }
-      assert.equal(cases, 89);
+      // columns the probes before the RETURNING check did not read at zero contributions are checked now
+      for (const x of ["daily_claims_by_application_service: claim_count = 0 AND mint_ratio_unminted_upokt <> 0",
+                       "daily_claims_by_supplier_application_service: claim_count = 0 AND global_minted_upokt <> 0",
+                       "daily_validator_rewards: contribution_count = 0 AND self_delegation_upokt <> 0",
+                       "daily_claims_paid_by_address_service: claim_count = 0 AND estimated_compute_units <> 0"])
+        assert.ok(cases.includes(x), x);
       for (const h of heights) await writeAt(h);
       // a row of the gated rollups that a height no longer held does not touch, broken: its rewrite leaves it as it is
       await c.query("SAVEPOINT d");
