@@ -1817,14 +1817,22 @@ BEGIN
   -- a range over a settlement written with an older rollup version raises here, for a list as for one address; a list
   -- raised there before reading the rollup too, in _income (net below), which reads the rollups for any list
   rg := ${s}._ranges(f, t, NULL);
-  -- the rollup days with a settlement the rollup does not hold, and for a list each day one of its addresses was paid as
-  -- the DAO, a service owner or an application (one row per claim there, which the corrections below do not take back):
-  -- read from the claims, with every settlement of those days
+  -- the rollup days with a settlement the rollup does not hold, and for a list each day one of its addresses was paid
+  -- other than as a shareholder (the DAO, a service owner, an application: the corrections below count a claim's listed
+  -- shareholders only): read from the claims, with every settlement of those days. Every role but rev_share and the
+  -- staker roles staker_payouts writes (validator, delegator), so a claim role added later falls back here instead of
+  -- counting twice.
   ud := ARRAY(SELECT sb.day FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2 AND NOT sb.claims_paid_rollup
               UNION
               SELECT d.day FROM ${s}.daily_income_by_address d
               WHERE cardinality(la) > 1 AND d.address = ANY(la) AND d.day BETWEEN rg.d1 AND rg.d2
-                AND d.role IN ('dao', 'source_owner', 'application'));
+                AND d.role NOT IN ('rev_share', 'validator', 'delegator'));
+  IF cardinality(ud) > 0 AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
+                                         WHERE sb.day BETWEEN rg.d1 AND rg.d2 AND sb.day <> ALL(ud)) THEN
+    -- every rollup day read from the claims (a list with the DAO): one height range, not a list of every height
+    rg := ${s}._ranges(f, t, NULL, true);
+    ud := '{}';
+  END IF;
   uh := ARRAY(SELECT sb.height FROM ${s}.settlement_blocks sb WHERE sb.day = ANY(ud));
   IF cardinality(la) > 1 AND rg.d1 <= rg.d2 THEN
     -- the corrections by month (mm): each month whose every settlement is in the rollup days, outside ud (which holds the
