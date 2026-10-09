@@ -1,4 +1,4 @@
-import { ROLLUP_VERSION } from "./writer";
+import { ROLLUP_VERSION, STAKER_ROLES } from "./writer";
 
 // Catalog functions over the settlement money tables (./schema.ts), plus three over SubQuery entity
 // tables (app auto-unstakes, supplier proofs, param history).
@@ -904,7 +904,7 @@ BEGIN
     -- with a supplier or service breakdown, staker income (no supplier, no service) comes from the address rollup
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.address, d.role, d.family, '', '', d.amount_upokt, d.transfer_count
     FROM ${s}.daily_income_by_address d
-    WHERE (by_supplier OR by_service) AND d.role IN ('validator', 'delegator') AND suppliers IS NULL
+    WHERE (by_supplier OR by_service) AND d.role IN (${STAKER_ROLES.map((r) => `'${r}'`).join(", ")}) AND suppliers IS NULL
       AND d.address = ANY(addresses) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT sb.block_time, v.address, v.role, v.family, v.supplier_id, v.service_id, v.amount_upokt, v.transfer_count::bigint
@@ -1787,8 +1787,11 @@ END $$;
 -- holds (settlement_blocks.claims_paid_rollup), and from v_claims_paid for the rest: the edges, and each day with a
 -- settlement it does not hold. The rollup counts a claim once per address: for a list, a claim that paid k >= 2 of its
 -- addresses is in k rows, and k - 1 of them are taken back (corr). The corrections count a claim's listed shareholders
--- only, so each rollup day one of the list's addresses was paid as the DAO, a service owner or an application is read from
--- the claims instead. The k - 1 come per supplier and month, or day, where every claim of the supplier paid each listed
+-- only, so each rollup day one of the list's addresses was paid in any other role than shareholder (rev_share) or staker
+-- (STAKER_ROLES, which no claim pays) is read from the claims instead: today the DAO, a service owner, an application, and
+-- a role added later falls there too instead of counting twice. The days read from the claims go as runs of consecutive
+-- days, each one height range (a list with the DAO, paid every day: one range for the whole span). The k - 1 come per
+-- supplier and month, or day, where every claim of the supplier paid each listed
 -- shareholder it paid at all (a relay leg on every claim: its income rollups count one per claim and address), and per
 -- claim where not. Measured on mainnet (2026-10-09, 7 rev-share addresses of
 -- overlapping fleets): over 30 days 4,601 supplier-days paid two or more of them, all of that kind; over 238 days 261 of
@@ -1800,7 +1803,7 @@ DECLARE
   l record := ${s}._legacy_range(start_ts, end_ts);
   f timestamptz := l.start_from AT TIME ZONE 'UTC';
   t timestamptz := (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC';
-  rg record; ud date[]; uh bigint[]; sups text[]; svcs text[]; la text[]; mm date[]; dd date[];
+  rg record; ud date[]; ulo bigint[]; uhi bigint[]; sups text[]; svcs text[]; la text[]; mm date[]; dd date[];
 BEGIN
   IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
   -- resolved once: inside the query a filter would call it for every row it scans
@@ -1818,22 +1821,18 @@ BEGIN
   -- raised there before reading the rollup too, in _income (net below), which reads the rollups for any list
   rg := ${s}._ranges(f, t, NULL);
   -- the rollup days with a settlement the rollup does not hold, and for a list each day one of its addresses was paid
-  -- other than as a shareholder (the DAO, a service owner, an application: the corrections below count a claim's listed
-  -- shareholders only): read from the claims, with every settlement of those days. Every role but rev_share and the
-  -- staker roles staker_payouts writes (validator, delegator), so a claim role added later falls back here instead of
-  -- counting twice.
+  -- in a role other than shareholder or staker (the corrections below count a claim's listed shareholders only): read
+  -- from the claims, with every settlement of those days
   ud := ARRAY(SELECT sb.day FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2 AND NOT sb.claims_paid_rollup
               UNION
               SELECT d.day FROM ${s}.daily_income_by_address d
               WHERE cardinality(la) > 1 AND d.address = ANY(la) AND d.day BETWEEN rg.d1 AND rg.d2
-                AND d.role NOT IN ('rev_share', 'validator', 'delegator'));
-  IF cardinality(ud) > 0 AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
-                                         WHERE sb.day BETWEEN rg.d1 AND rg.d2 AND sb.day <> ALL(ud)) THEN
-    -- every rollup day read from the claims (a list with the DAO): one height range, not a list of every height
-    rg := ${s}._ranges(f, t, NULL, true);
-    ud := '{}';
-  END IF;
-  uh := ARRAY(SELECT sb.height FROM ${s}.settlement_blocks sb WHERE sb.day = ANY(ud));
+                AND d.role NOT IN ('rev_share', ${STAKER_ROLES.map((r) => `'${r}'`).join(", ")}));
+  -- ...as runs of consecutive days, each the height range of its settlements (days follow heights)
+  SELECT array_agg(lo ORDER BY lo), array_agg(hi ORDER BY lo) INTO ulo, uhi
+  FROM (SELECT min(sb.height) lo, max(sb.height) hi
+        FROM (SELECT u, u - (row_number() OVER (ORDER BY u))::int run FROM unnest(ud) u) x
+        JOIN ${s}.settlement_blocks sb ON sb.day = x.u GROUP BY x.run) r;
   IF cardinality(la) > 1 AND rg.d1 <= rg.d2 THEN
     -- the corrections by month (mm): each month whose every settlement is in the rollup days, outside ud (which holds the
     -- days with a height the claims rollup does not hold) and held by monthly_claims_by_supplier_service;
@@ -1856,7 +1855,10 @@ BEGIN
       UNION
       SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height BETWEEN rg.lo2 AND rg.hi2
       UNION
-      SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height = ANY(uh)
+      -- one scan per run of days read from the claims (LATERAL: each run's range reaches the view's indexes)
+      SELECT p.height, p.event_idx FROM unnest(ulo, uhi) u(lo, hi)
+      CROSS JOIN LATERAL (SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p
+                          WHERE p.address = ANY(addresses) AND p.height BETWEEN u.lo AND u.hi) p
     ), mk AS (
       -- the supplier-months whose claims paid k >= 2 of the list as shareholders (rn: its relay legs, one per claim and
       -- address)

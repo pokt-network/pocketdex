@@ -33,6 +33,11 @@ import type { SettlementPayload } from "../../money/payload";
 // So did monthly_claims_by_supplier_service, with settlement_blocks.monthly_claims_rollup.
 export const ROLLUP_VERSION = 4;
 
+// The roles of staker_payouts (the batch staker rows and, in the settlement_result era, the proposer's legs): the income
+// of validators and delegators, which no claim pays them (v_claims_paid does not read staker_payouts).
+export const STAKER_ROLES = ["validator", "delegator"];
+const STAKER_ROLES_SQL = STAKER_ROLES.map((r) => `'${r}'`).join(", ");
+
 export const writeSettlementProcName = "write_settlement";
 
 // Rows per CALL. The largest mainnet settlement sampled (885,513: 4,172 claims) is ~38k rows and 9.4 MB of
@@ -654,7 +659,7 @@ BEGIN
     INTO v_bad
     FROM (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_detailed GROUP BY 1, 2) dd
     FULL JOIN (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_batch
-               WHERE op_type = 'mod_to_acct' AND role NOT IN ('validator', 'delegator') GROUP BY 1, 2) bb
+               WHERE op_type = 'mod_to_acct' AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
       ON bb.op_reason = dd.op_reason AND bb.recipient_id = dd.recipient_id
     WHERE dd.amount_upokt IS DISTINCT FROM bb.amount_upokt;
     IF v_bad IS NOT NULL THEN
@@ -732,10 +737,10 @@ BEGIN
   -- settlement_result era, the proposer's leg of each claim
   INSERT INTO ${s}.staker_payouts
   SELECT h, event_idx, recipient_id, op_reason, role, family, amount_upokt, v_row_source, 1
-  FROM _stg_batch WHERE op_type = 'mod_to_acct' AND role IN ('validator', 'delegator')
+  FROM _stg_batch WHERE op_type = 'mod_to_acct' AND role IN (${STAKER_ROLES_SQL})
   UNION ALL
   SELECT h, event_idx, recipient_id, op_reason, role, family, amount_upokt, v_row_source, 1
-  FROM _stg_detailed WHERE role IN ('validator', 'delegator');
+  FROM _stg_detailed WHERE role IN (${STAKER_ROLES_SQL});
 
   INSERT INTO ${s}.validator_distributions
   SELECT h, event_idx, op_reason, family, validator_operator, validator_account, commission_rate, pool_share_upokt, commission_upokt,
@@ -804,7 +809,7 @@ BEGIN
     SELECT string_agg(coalesce(dv.delegator, bb.recipient_id) || ' ' || coalesce(dv.family, bb.family), ', ') INTO v_bad
     FROM (SELECT delegator, family, sum(amount_upokt) AS amount_upokt FROM _stg_dv GROUP BY 1, 2) dv
     FULL JOIN (SELECT recipient_id, family, sum(amount_upokt) AS amount_upokt FROM _stg_batch
-               WHERE op_type = 'mod_to_acct' AND role IN ('validator', 'delegator') GROUP BY 1, 2) bb
+               WHERE op_type = 'mod_to_acct' AND role IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
       ON bb.recipient_id = dv.delegator AND bb.family = dv.family
     WHERE dv.amount_upokt IS DISTINCT FROM bb.amount_upokt;
     IF v_bad IS NOT NULL THEN
