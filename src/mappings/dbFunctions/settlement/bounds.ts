@@ -103,7 +103,11 @@ function monthFills(s: string): MonthFill[] {
     {
       t: "monthly_income_by_address_supplier",
       keys: ["supplier_id", "address", "role", "family"],
-      group: fromDays("daily_income_by_address_supplier", ["supplier_id", "address", "role", "family"], "AND role <> 'stakers'"),
+      group: fromDays(
+        "daily_income_by_address_supplier",
+        ["supplier_id", "address", "role", "family"],
+        "AND role <> 'stakers'"
+      ),
       bySuppliers: false,
     },
     {
@@ -137,7 +141,9 @@ function setBounds(s: string, t: string, keys: string[], group: string, period: 
   return `UPDATE ${s}.${t} t SET first_height = x.lo, last_height = x.hi
     FROM (SELECT x.lo, x.hi, r.tid FROM (${group}) x
           CROSS JOIN LATERAL (SELECT r.ctid tid, r.first_height f, r.last_height l FROM ${s}.${t} r
-                              WHERE ${keys.map((k) => `r.${k} = x.${k}`).join(" AND ")}${period ? ` AND r.${period}` : ""} LIMIT 1) r
+                              WHERE ${keys.map((k) => `r.${k} = x.${k}`).join(" AND ")}${
+    period ? ` AND r.${period}` : ""
+  } LIMIT 1) r
           WHERE r.f IS DISTINCT FROM x.lo OR r.l IS DISTINCT FROM x.hi) x
     WHERE t.ctid = x.tid`;
 }
