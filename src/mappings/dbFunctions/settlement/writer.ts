@@ -35,7 +35,7 @@ export const ROLLUP_VERSION = 4;
 
 // The roles of staker_payouts (the batch staker rows and, in the settlement_result era, the proposer's legs): the income
 // of validators and delegators, which no claim pays them (v_claims_paid does not read staker_payouts).
-export const STAKER_ROLES = ["validator", "delegator"] as const;
+const STAKER_ROLES = ["validator", "delegator"] as const;
 // as a SQL list: 'validator', 'delegator'
 export const STAKER_ROLES_SQL = STAKER_ROLES.map((r) => `'${r}'`).join(", ");
 
@@ -146,6 +146,115 @@ export function writeSettlementCalls(
   ];
 }
 
+// The drift check of a subtraction, per rollup: its rows the height touched (the leading column of its primary key in an
+// array of the height's suppliers, addresses, ..., in its day, month or hour, and the exact key among the height's keys),
+// read in one statement, and the first bad one named in the error. A probe per key (LATERAL ... LIMIT 1) planned, under
+// stale statistics, a scan of the whole period through its index for every key (a new day is rare to the planner until
+// analyzed; 42-45 s per subtraction in the test suite on money-pg); this statement is bounded by the rows of those
+// leading keys in the period whichever index serves it. The exact keys are a NOT IN subquery under NOT: PostgreSQL does
+// not turn NOT IN into a join, so it stays one hashed subplan, built once. monthly_income_by_address_supplier_service is
+// probed per key: its primary key is its only index (the scan above read 5.1 s on the mainnet replica for one height,
+// the height's addresses holding most of the month's rows there).
+interface Drift {
+  t: string;
+  lead: string;
+  leads: string;
+  period: string;
+  keys: string[];
+  src: string;
+  bad: string;
+  gate?: string;
+  // probed per key over the primary key (its only index), from src as i
+  probe?: boolean;
+}
+function driftChecks(s: string): string {
+  const inc = "t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))";
+  const claim = `t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
+                OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))`;
+  const month = "t.month = date_trunc('month', d)::date";
+  const claims = `${s}.claim_settlements WHERE height = h`;
+  const checks: Drift[] = [
+    { t: "daily_income_by_address", lead: "address", leads: "v_addrs", period: "t.day = d",
+      keys: ["address", "role", "family"], src: "SELECT address, role, family FROM _inc", bad: inc },
+    { t: "daily_income_by_address_supplier", lead: "supplier_id", leads: "v_sups", period: "t.day = d",
+      keys: ["supplier_id", "address", "role", "family"],
+      src: `SELECT supplier_id, address, role, family FROM _inc WHERE supplier_id <> ''
+            UNION ALL SELECT supplier_id, '', 'stakers', 'relay' FROM ${claims}`, bad: inc },
+    { t: "daily_income_by_address_service", lead: "address", leads: "v_addrs", period: "t.day = d",
+      keys: ["address", "role", "family", "service_id"],
+      src: "SELECT address, role, family, service_id FROM _inc WHERE service_id <> ''", bad: inc },
+    { t: "monthly_income_by_address_supplier", lead: "address", leads: "v_addrs", period: month,
+      keys: ["address", "supplier_id", "role", "family"],
+      src: "SELECT address, supplier_id, role, family FROM _inc WHERE supplier_id <> ''", bad: inc },
+    { t: "monthly_income_by_address_service", lead: "address", leads: "v_addrs", period: month,
+      keys: ["address", "role", "family", "service_id"],
+      src: "SELECT address, role, family, service_id FROM _inc WHERE service_id <> ''", bad: inc },
+    { t: "monthly_income_by_address_supplier_service", lead: "address", leads: "v_addrs", period: month,
+      keys: ["address", "supplier_id", "service_id", "role", "family"],
+      src: "SELECT address, supplier_id, service_id, role, family FROM _inc WHERE supplier_id <> '' AND service_id <> ''", bad: inc,
+      probe: true },
+    { t: "hourly_income_by_address_supplier", lead: "address", leads: "v_addrs", period: "t.hour = hr",
+      keys: ["address", "supplier_id"], src: "SELECT address, supplier_id FROM _inc WHERE supplier_id <> ''",
+      bad: "t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND t.amount_upokt <> 0)" },
+    { t: "daily_claims_by_application_service", lead: "application_id", leads: "v_apps", period: "t.day = d",
+      keys: ["application_id", "service_id"], src: `SELECT application_id, service_id FROM ${claims}`,
+      bad: "t.claim_count < 0 OR t.settled_upokt < 0 OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))" },
+    { t: "daily_claims_by_supplier", lead: "supplier_id", leads: "v_sups", period: "t.day = d",
+      keys: ["supplier_id"], src: `SELECT supplier_id FROM ${claims}`, bad: claim },
+    { t: "daily_claims_by_supplier_application_service", lead: "supplier_id", leads: "v_sups", period: "t.day = d",
+      keys: ["supplier_id", "application_id", "service_id"], src: `SELECT supplier_id, application_id, service_id FROM ${claims}`,
+      bad: claim },
+    { t: "monthly_claims_by_supplier_service", lead: "supplier_id", leads: "v_sups", period: month, gate: "v_month_held",
+      keys: ["supplier_id", "service_id"], src: `SELECT supplier_id, service_id FROM ${claims}`,
+      bad: `t.claim_count < 0 OR t.claimed_upokt < 0 OR t.settled_upokt < 0 OR t.overservicing_loss_upokt < 0
+                OR t.relays < 0 OR t.estimated_relays < 0 OR t.claimed_compute_units < 0
+                OR t.estimated_compute_units < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
+                OR (t.claim_count = 0 AND (t.claimed_upokt <> 0 OR t.settled_upokt <> 0 OR t.overservicing_loss_upokt <> 0
+                                           OR t.relays <> 0 OR t.estimated_relays <> 0
+                                           OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))` },
+    { t: "daily_delegator_rewards_by_validator", lead: "delegator", leads: "v_dels", period: "t.day = d",
+      keys: ["delegator", "validator_operator", "family"],
+      src: `SELECT delegator, validator_operator, family FROM ${s}.delegator_validator_payouts WHERE height = h`,
+      bad: `t.contribution_count < 0 OR t.amount_upokt < 0 OR t.replayed_count < 0 OR t.replayed_count > t.contribution_count
+                OR (t.contribution_count = 0 AND t.amount_upokt <> 0)` },
+    { t: "daily_validator_rewards", lead: "validator_operator", leads: "v_vals", period: "t.day = d",
+      keys: ["validator_operator", "family"],
+      src: `SELECT validator_operator, family FROM ${s}.validator_distributions WHERE height = h`,
+      // with no contribution that has a commission left, what is left of the commission must be 0 (it becomes NULL
+      // below); anything else was added under other rules
+      bad: `t.contribution_count < 0 OR t.pool_share_upokt < 0
+                OR t.commission_na_count < 0 OR t.commission_na_count > t.contribution_count
+                OR (t.commission_na_count = t.contribution_count AND coalesce(t.commission_upokt, 0) <> 0)
+                OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0)` },
+    { t: "daily_claims_paid_by_address_service", lead: "address", leads: "v_paid", period: "t.day = d", gate: "v_held",
+      keys: ["address", "service_id"], src: "SELECT address, service_id FROM _paid",
+      bad: `t.claim_count < 0 OR t.settled_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0
+                OR t.claimed_compute_units < 0 OR t.estimated_compute_units < 0
+                OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
+                                           OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))` },
+  ];
+  return checks
+    .map((c) => {
+      const cols = c.keys.map((k) => `t.${k}`);
+      const key = cols.length === 1 ? cols[0] : `(${cols.join(", ")})`;
+      if (c.probe)
+        {return `    SELECT concat_ws(' / ', ${cols.join(", ")}) INTO v_drift FROM (${c.src}) i CROSS JOIN LATERAL (
+      SELECT * FROM ${s}.${c.t} t WHERE ${c.keys.map((k) => `t.${k} = i.${k}`).join(" AND ")} AND ${c.period} LIMIT 1) t
+    WHERE ${c.bad} LIMIT 1;
+    IF v_drift IS NOT NULL THEN
+      RAISE EXCEPTION 'rollup drift at height %: % row % was left negative, or at zero contributions with an amount, by subtracting the height', h, '${c.t}', v_drift;
+    END IF;`;}
+      return `    SELECT concat_ws(' / ', ${cols.join(", ")}) INTO v_drift FROM ${s}.${c.t} t
+    WHERE ${c.gate ? `${c.gate} AND ` : ""}t.${c.lead} = ANY(${c.leads}) AND ${c.period}
+      AND NOT (${key} NOT IN (${c.src}))
+      AND (${c.bad}) LIMIT 1;
+    IF v_drift IS NOT NULL THEN
+      RAISE EXCEPTION 'rollup drift at height %: % row % was left negative, or at zero contributions with an amount, by subtracting the height', h, '${c.t}', v_drift;
+    END IF;`;
+    })
+    .join("\n");
+}
+
 export function createSettlementWriterFn(dbSchema: string): string {
   const s = dbSchema;
   return `
@@ -200,7 +309,8 @@ FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0 OR c.global
 
 -- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
 CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
-DECLARE d date; hr timestamptz; v_held boolean; v_month_held boolean;
+DECLARE d date; hr timestamptz; v_held boolean; v_month_held boolean; v_drift text;
+  v_addrs text[]; v_sups text[]; v_apps text[]; v_dels text[]; v_vals text[]; v_paid text[];
 BEGIN
   SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup, monthly_claims_rollup INTO d, hr, v_held, v_month_held
   FROM ${s}.settlement_blocks WHERE height = h;
@@ -395,66 +505,16 @@ BEGIN
 
   IF sg < 0 THEN
     -- A row whose contributions are all gone must be back at zero, and no row may go negative. Anything else
-    -- means it was added under other rules than the ones subtracting it now. Each rollup's rows of the height's day,
-    -- month or hour are read in one scan (a row the height did not touch did not change, so it passes as before). A probe
-    -- per key of the height (LATERAL ... LIMIT 1) planned, under stale statistics, a scan of the whole period through its
-    -- index for every key: a new day is rare to the planner until the table is analyzed, and 'stakers' rows share one
-    -- address in daily_income_by_address_supplier's (address, day) index (money-pg: 42-45 s per subtraction in the test
-    -- suite; 1.5 s for 8,000 keys on a 16k-row day against 1 ms for one read of the day). One scan is bounded by the
-    -- period's rows whichever plan serves it. monthly_income_by_address_supplier_service keeps its probes: its primary key
-    -- is its only index.
-    IF EXISTS (SELECT 1 FROM ${s}.daily_income_by_address t WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_income_by_address_supplier t WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_income_by_address_service t WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.monthly_income_by_address_supplier t WHERE t.month = date_trunc('month', d)::date AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.monthly_income_by_address_service t WHERE t.month = date_trunc('month', d)::date AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_supplier_service t
-                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
-                      AND t.service_id = i.service_id AND t.role = i.role AND t.family = i.family LIMIT 1) t
-                  WHERE i.supplier_id <> '' AND i.service_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.hourly_income_by_address_supplier t
-                  WHERE t.hour = hr AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_by_application_service t
-                  WHERE t.day = d
-                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_by_supplier t
-                  WHERE t.day = d
-                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
-                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_by_supplier_application_service t
-                  WHERE t.day = d
-                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
-                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.monthly_claims_by_supplier_service t
-                  WHERE t.month = date_trunc('month', d)::date AND v_month_held
-                    AND (t.claim_count < 0 OR t.claimed_upokt < 0 OR t.settled_upokt < 0 OR t.overservicing_loss_upokt < 0
-                         OR t.relays < 0 OR t.estimated_relays < 0 OR t.claimed_compute_units < 0
-                         OR t.estimated_compute_units < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
-                         OR (t.claim_count = 0 AND (t.claimed_upokt <> 0 OR t.settled_upokt <> 0 OR t.overservicing_loss_upokt <> 0
-                                                    OR t.relays <> 0 OR t.estimated_relays <> 0
-                                                    OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_delegator_rewards_by_validator t
-                  WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR t.replayed_count < 0
-                                       OR t.replayed_count > t.contribution_count
-                                       OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_validator_rewards t
-                  WHERE t.day = d
-                    AND (t.contribution_count < 0 OR t.pool_share_upokt < 0
-                         OR t.commission_na_count < 0 OR t.commission_na_count > t.contribution_count
-                         -- with no contribution that has a commission left, what is left of the commission must be 0
-                         -- (it becomes NULL below); anything else was added under other rules
-                         OR (t.commission_na_count = t.contribution_count AND coalesce(t.commission_upokt, 0) <> 0)
-                         OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_paid_by_address_service t
-                  WHERE t.day = d
-                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0
-                         OR t.claimed_compute_units < 0 OR t.estimated_compute_units < 0
-                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
-                                                    OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0)))) THEN
-      RAISE EXCEPTION 'rollup drift at height %: subtracting it left a rollup row negative, or at contribution_count = 0 with a non-zero amount', h;
-    END IF;
+    -- means it was added under other rules than the ones subtracting it now. Only the rows this height touched can have
+    -- changed, so only they are checked (driftChecks): the keys come from _inc, _paid and the height's base rows, which
+    -- are deleted only after this subtraction.
+    v_addrs := ARRAY(SELECT DISTINCT address FROM _inc);
+    v_sups := ARRAY(SELECT DISTINCT supplier_id FROM ${s}.claim_settlements WHERE height = h);
+    v_apps := ARRAY(SELECT DISTINCT application_id FROM ${s}.claim_settlements WHERE height = h);
+    v_dels := ARRAY(SELECT DISTINCT delegator FROM ${s}.delegator_validator_payouts WHERE height = h);
+    v_vals := ARRAY(SELECT DISTINCT validator_operator FROM ${s}.validator_distributions WHERE height = h);
+    v_paid := ARRAY(SELECT DISTINCT address FROM _paid);
+${driftChecks(s)}
     DELETE FROM ${s}.daily_income_by_address WHERE day = d AND contribution_count = 0;
     DELETE FROM ${s}.daily_income_by_address_supplier WHERE day = d AND contribution_count = 0;
     DELETE FROM ${s}.daily_income_by_address_service WHERE day = d AND contribution_count = 0;

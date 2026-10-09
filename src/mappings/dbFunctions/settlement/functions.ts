@@ -1833,13 +1833,14 @@ BEGIN
   -- rank among the settlement days less its rank among the days of ud is constant along a run
   SELECT array_agg(lo ORDER BY lo), array_agg(hi ORDER BY lo) INTO ulo, uhi
   FROM (SELECT min(x.height) lo, max(x.height) hi
-        FROM (SELECT sb.height, dense_rank() OVER (ORDER BY sb.day)
-                                - dense_rank() OVER (PARTITION BY sb.day = ANY(ud) ORDER BY sb.day) run, sb.day = ANY(ud) fallback
-              FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2) x
+        FROM (SELECT y.height, y.fallback,
+                     dense_rank() OVER (ORDER BY y.day) - dense_rank() OVER (PARTITION BY y.fallback ORDER BY y.day) run
+              FROM (SELECT sb.height, sb.day, sb.day = ANY(ud) fallback
+                    FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2) y) x
         WHERE x.fallback GROUP BY x.run) r;
   -- the corrections only when a rollup day is left to read from the rollup
   IF cardinality(la) > 1 AND rg.d1 <= rg.d2
-     AND (SELECT count(DISTINCT sb.day) FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2) > cardinality(ud) THEN
+     AND EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2 AND sb.day <> ALL(ud)) THEN
     -- the corrections by month (mm): each month whose every settlement is in the rollup days, outside ud (which holds the
     -- days with a height the claims rollup does not hold) and held by monthly_claims_by_supplier_service;
     -- by day (dd): the other rollup days outside ud

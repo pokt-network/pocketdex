@@ -632,17 +632,18 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     const apply = await src("_rollup_apply");
     const rebuild = await src("rebuild_rollups");
     const subtract = apply.slice(apply.lastIndexOf("IF sg < 0 THEN"));
-    const raise = subtract.indexOf("RAISE EXCEPTION 'rollup drift");
+    // the drift checks come first (each raising for its rollup), then the cleanup of the rows left at zero
+    const cleanup = subtract.indexOf(`DELETE FROM ${S}.daily_income_by_address WHERE`);
     const [probe, zeros] = [
-      subtract.slice(0, raise),
-      // up to the END IF of the subtraction, not of the probe
-      subtract.slice(raise, subtract.indexOf("\n  END IF;", raise)),
+      subtract.slice(0, cleanup),
+      // up to the END IF of the subtraction
+      subtract.slice(cleanup, subtract.indexOf("\n  END IF;", cleanup)),
     ];
     for (const r of rollups) {
       const t = String(r.relname);
       const ref = (verb: string) => new RegExp(`${verb} ${S}\\.${t}\\b`);
       assert.match(apply, ref("INSERT INTO"), `${t}: added`);
-      assert.match(probe, ref("FROM"), `${t}: probed on subtraction`);
+      assert.match(probe, new RegExp(`FROM ${S}\\.${t} t[\\s\\S]*?'${t}', v_drift`), `${t}: checked on subtraction, named in its error`);
       assert.match(zeros, ref("DELETE FROM"), `${t}: zero rows deleted`);
       assert.match(rebuild, ref("DELETE FROM"), `${t}: rebuilt`);
       assert.ok(String(r.tag).startsWith("@omit"), `${t}: hidden from GraphQL`);
@@ -919,11 +920,29 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         await assert.rejects(writeJune(), /rollup drift at height 550013/, `${col} = ${by}`);
         await c.query("ROLLBACK TO SAVEPOINT d");
       }
-      // a 'stakers' row of daily_income_by_address_supplier (address '') driven below 0 is drift too
+      // a 'stakers' row of daily_income_by_address_supplier (address ''), a monthly and an hourly row the height touched,
+      // driven below 0: drift, named
+      const addr = (await c.query(`SELECT recipient_id a FROM ${S}.shareholder_payouts WHERE height = $1 AND relay_upokt > 0 LIMIT 1`,
+                                  [height])).rows[0].a as string;
+      for (const [t, set, where, args] of [
+        ["daily_income_by_address_supplier", "amount_upokt = -1", "day = '2026-06-10' AND address = '' AND role = 'stakers' AND supplier_id = $1", [k.supplier_id]],
+        ["monthly_income_by_address_service", "amount_upokt = -1", "month = '2026-06-01' AND address = $1", [addr]],
+        ["hourly_income_by_address_supplier", "amount_upokt = -1", "hour = '2026-06-10T12:00:00Z' AND address = $1", [addr]],
+      ] as Array<[string, string, string, unknown[]]>) {
+        await c.query("SAVEPOINT d");
+        const n = await c.query(`UPDATE ${S}.${t} SET ${set} WHERE ${where} RETURNING 1`, args);
+        assert.ok(n.rows.length > 0, `precondition: a ${t} row the height touched`);
+        await assert.rejects(writeJune(), new RegExp(`rollup drift at height 550013: ${t} row `), t);
+        await c.query("ROLLBACK TO SAVEPOINT d");
+      }
+      // a bad row the height did not touch (another supplier, another address, that day) does not stop its rewrite
       await c.query("SAVEPOINT d");
-      await c.query(`UPDATE ${S}.daily_income_by_address_supplier SET amount_upokt = -1
-                     WHERE day = '2026-06-10' AND address = '' AND role = 'stakers' AND supplier_id = $1`, [k.supplier_id]);
-      await assert.rejects(writeJune(), /rollup drift at height 550013/, "a stakers row below 0");
+      await c.query(`INSERT INTO ${S}.daily_claims_by_supplier (day, supplier_id, claim_count, claimed_upokt, settled_upokt,
+                       overservicing_loss_upokt, relays, estimated_relays, claimed_compute_units, estimated_compute_units, claims_with_proof)
+                     VALUES ('2026-06-10', 'untouched-supplier', -1, -5, -5, 0, 0, 0, 0, 0, 0)`);
+      await c.query(`INSERT INTO ${S}.daily_income_by_address (day, address, role, family, amount_upokt, transfer_count, contribution_count)
+                     VALUES ('2026-06-10', 'untouched-address', 'rev_share', 'relay', -9, 1, 1)`);
+      await writeJune();
       await c.query("ROLLBACK TO SAVEPOINT d");
       // uncorrupted, the same rewrite passes
       await writeJune();
