@@ -665,15 +665,14 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
   settled_claims_with_proof bigint, settled_claims_without_proof bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz; use_month boolean; mm date[];
-  dr datemultirange;
+DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz; use_month boolean; mm date[]; dd date[];
 BEGIN
   -- NULL (no suppliers, owners or operators): every supplier
   suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
   all_suppliers := suppliers IS NULL;
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
-  -- the months read from monthly_claims_by_supplier_service (mm), and the rollup days left to the daily rollup (dr)
+  -- the months read from monthly_claims_by_supplier_service (mm), and the rollup days left to the daily rollup (dd)
   use_month := by_service AND NOT by_application AND coalesce(bucket, 'month') IN ('month', 'year') AND rg.d1 <= rg.d2;
   IF use_month THEN
     mm := ARRAY(SELECT m::date FROM generate_series(date_trunc('month', rg.d1::timestamp), date_trunc('month', rg.d2::timestamp), interval '1 month') m
@@ -681,8 +680,12 @@ ${covered("settled")}
                                   WHERE sb.day >= m AND sb.day < m + interval '1 month' AND NOT sb.monthly_claims_rollup)
                   AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day >= m AND sb.day < rg.d1)
                   AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day > rg.d2 AND sb.day < m + interval '1 month'));
-    dr := datemultirange(daterange(rg.d1, rg.d2, '[]'))
-          - datemultirange(VARIADIC ARRAY(SELECT daterange(m, (m + interval '1 month')::date) FROM unnest(mm) m));
+    use_month := cardinality(mm) > 0;
+    -- each day as an array element: the btree takes it with the suppliers as index conditions (an owner's 1216
+    -- suppliers over 24 days: 254k rows in 0.27 s on mainnet), where a join on day ranges was planned as a scan of
+    -- every row of the suppliers (0.9 s for 8 days)
+    dd := ARRAY(SELECT g::date FROM generate_series(rg.d1::timestamp, rg.d2::timestamp, interval '1 day') g
+                WHERE date_trunc('month', g)::date <> ALL(mm));
   END IF;
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
@@ -705,8 +708,8 @@ ${covered("settled")}
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
            d.claim_count, d.claims_with_proof
-    FROM unnest(dr) r JOIN ${s}.daily_claims_by_supplier_application_service d ON d.day >= lower(r) AND d.day < upper(r)
-    WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers))
+    FROM ${s}.daily_claims_by_supplier_application_service d
+    WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day = ANY(dd)
     UNION ALL
     SELECT d.month::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
