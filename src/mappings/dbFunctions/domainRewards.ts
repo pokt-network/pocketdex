@@ -219,6 +219,12 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
       ON ${dbSchema}.event_proof_validity_checkeds (supplier_id, block_id)`,
     // The suppliers that share revenue with an address now (the catalog's `operators`): containment on the live
     // configs, which otherwise scans all 157k of them (0.36 s on mainnet, 2026-10-08).
+    // Claims and proofs looked up by session (PostGraphile `sessionId: { in: [...] }`): with no index on session_id,
+    // each lookup scanned the table (38.8 s on event_claim_settleds, 18.2 s on msg_submit_proofs, mainnet 2026-10-09).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_claim_settleds_session_id
+      ON ${dbSchema}.event_claim_settleds (session_id)`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_msg_submit_proofs_session_id
+      ON ${dbSchema}.msg_submit_proofs (session_id)`,
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_rev_share
       ON ${dbSchema}.supplier_service_configs USING GIN (rev_share jsonb_path_ops)
       WHERE upper_inf(_block_range)`,
