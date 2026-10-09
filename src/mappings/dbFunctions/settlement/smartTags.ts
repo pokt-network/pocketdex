@@ -156,7 +156,7 @@ const DESCRIPTIONS: Record<string, string> = {
   get_gateway_spend:
     "Gateway spend: what the applications delegated to each gateway spent, by the delegation in force at each settlement height; by_application, by_service, by_gateway.",
   get_supplier_earnings:
-    "Supplier earnings: claimed and settled upokt, overservicing loss, relays, compute units and settled claims (with and without a proof); suppliers NULL = every supplier, or owners = the suppliers they own now, or operators = the Staked suppliers whose service configs share revenue with them now; by_service, by_application, by_supplier.",
+    "Supplier earnings: claimed and settled upokt, overservicing loss, relays, compute units, settled claims (with and without a proof) and the first and last settlement height of those claims (NULL where not known yet); suppliers NULL = every supplier, or owners = the suppliers they own now, or operators = the Staked suppliers whose service configs share revenue with them now; by_service, by_application, by_supplier.",
   get_supplier_distribution:
     "Supplier distribution: how what a supplier generated was paid out (each shareholder, the DAO, the service owner; stakers in one row); by_reason (in the family column: relay / global), by_supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now) in place of suppliers.",
   get_income:

@@ -14,6 +14,24 @@
 // - Adding a rollup requires rebuilding it (rebuild_rollups) before any height is rewritten; otherwise
 //   the subtract step of a rewrite runs against rows that never received that height's contribution.
 //   Changing how a rollup is computed requires bumping ROLLUP_VERSION in ./writer.ts for the same reason.
+// Every rollup: _rollup_apply (./writer.ts) keeps first_height / last_height on each of their rows.
+export const ROLLUP_TABLES = [
+  "daily_claims_by_application_service",
+  "daily_claims_by_supplier",
+  "daily_claims_by_supplier_application_service",
+  "daily_income_by_address",
+  "monthly_income_by_address_supplier",
+  "daily_income_by_address_supplier",
+  "daily_income_by_address_service",
+  "monthly_income_by_address_service",
+  "monthly_income_by_address_supplier_service",
+  "daily_claims_paid_by_address_service",
+  "monthly_claims_by_supplier_service",
+  "daily_validator_rewards",
+  "daily_delegator_rewards_by_validator",
+  "hourly_income_by_address_supplier",
+];
+
 export function createSettlementTablesFn(dbSchema: string): string {
   const s = dbSchema;
   return `
@@ -41,6 +59,12 @@ CREATE INDEX IF NOT EXISTS settlement_blocks_without_claims_paid_idx ON ${s}.set
 -- writes. Each month reads from that rollup only when every height of it is true (get_supplier_earnings).
 ALTER TABLE ${s}.settlement_blocks ADD COLUMN IF NOT EXISTS monthly_claims_rollup BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS settlement_blocks_without_monthly_claims_idx ON ${s}.settlement_blocks (day) WHERE NOT monthly_claims_rollup;
+-- Whether every rollup row the height contributed to has it inside its first_height / last_height (end of this file),
+-- kept as claims_paid_rollup is: false for the heights written before the bounds until fill_rollup_bounds_day writes their
+-- day, and for a height an image without them writes. A reader trusts a row's bounds only when every height of the row's
+-- day, month or hour is true; otherwise it answers NULL, never a height from a partial row.
+ALTER TABLE ${s}.settlement_blocks ADD COLUMN IF NOT EXISTS bounds_rollup BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS settlement_blocks_without_bounds_idx ON ${s}.settlement_blocks (day) WHERE NOT bounds_rollup;
 
 -- Settlement heights left unwritten: the heights a POCKETDEX_MONEY_FROM_HEIGHT override skipped (recorded by the first
 -- height the money step processes past it, src/mappings/money/write.ts), and the history job's [1, h-1].
@@ -393,5 +417,22 @@ ALTER TABLE ${s}.daily_validator_rewards SET (fillfactor = 90, autovacuum_vacuum
 ALTER TABLE ${s}.daily_delegator_rewards_by_validator SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.daily_claims_paid_by_address_service SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.monthly_claims_by_supplier_service SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
+
+-- The settlement heights that formed each rollup row: the lowest and the highest that contributed to it, so one row can be
+-- recomputed or audited from its base table over [first_height, last_height], and a catalog function can say when a group
+-- last settled. Added without a rebuild: NULL (no default, so the ALTER only changes the catalog) until the row receives a
+-- height or fill_rollup_bounds_day writes its day; settlement_blocks.bounds_rollup says which heights they hold.
+-- Altered only when a column is missing: ALTER TABLE takes its ACCESS EXCLUSIVE lock even when IF NOT EXISTS then
+-- changes nothing, which every start would queue behind the readers of these tables.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[${ROLLUP_TABLES.map((t) => `'${t}'`).join(", ")}] LOOP
+    IF (SELECT count(*) FROM pg_attribute WHERE attrelid = format('${s}.%I', t)::regclass
+          AND attname IN ('first_height', 'last_height') AND NOT attisdropped) < 2 THEN
+      EXECUTE format('ALTER TABLE ${s}.%I ADD COLUMN IF NOT EXISTS first_height BIGINT, ADD COLUMN IF NOT EXISTS last_height BIGINT', t);
+    END IF;
+  END LOOP;
+END $$;
 `;
 }

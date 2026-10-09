@@ -12,7 +12,7 @@ import { after, before, describe, it } from "node:test";
 import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
 import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
-import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlement/schema";
+import { createSettlementTablesFn, ROLLUP_TABLES } from "../../src/mappings/dbFunctions/settlement/schema";
 import { createSettlementSmartTagsFn, OMITTED_TABLES, UNUSED_ENTITY_TABLES } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import {
   createSettlementWriterFn,
@@ -624,6 +624,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       )
     ).rows;
     assert.equal(rollups.length, 14);
+    assert.equal(ROLLUP_TABLES.length, 14);
     const src = async (name: string) =>
       String(
         (await c.query(`SELECT prosrc FROM pg_proc WHERE pronamespace = $1::regnamespace AND proname = $2`, [S, name]))
@@ -652,6 +653,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.ok(String(r.tag).startsWith("@omit"), `${t}: hidden from GraphQL`);
       assert.ok(String(r.opts).includes("fillfactor=90"), `${t}: fillfactor`);
       assert.ok(TABLES.includes(t), `${t}: in the md5 of the rewrite and rebuild tests`);
+      assert.ok(ROLLUP_TABLES.includes(t), `${t}: first_height / last_height (ROLLUP_TABLES)`);
+      assert.match(apply, new RegExp(`INSERT INTO ${S}\\.${t} AS t[\\s\\S]*?first_height = CASE`), `${t}: bounds kept`);
     }
   });
 
@@ -896,8 +899,154 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.equal(await md5All(), before);
   });
 
+  // Per rollup, from its base rows (not from the writer's SQL): the lowest and highest settlement height of the rows each
+  // rollup row sums, as [key..., first_height, last_height]. Rows in one and not the other, per rollup.
+  const auditBounds = async () => {
+    const inc = `${S}.v_income_base v JOIN ${S}.settlement_blocks sb USING (height)`;
+    const cl = `${S}.claim_settlements c JOIN ${S}.settlement_blocks sb USING (height)`;
+    const month = "date_trunc('month', sb.day::timestamp)::date";
+    const base: Record<string, [string, string]> = {
+      daily_claims_by_application_service: ["day, application_id, service_id", `SELECT sb.day, c.application_id, c.service_id, min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2, 3`],
+      daily_claims_by_supplier: ["day, supplier_id", `SELECT sb.day, c.supplier_id, min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2`],
+      daily_claims_by_supplier_application_service: ["day, supplier_id, application_id, service_id",
+        `SELECT sb.day, c.supplier_id, c.application_id, c.service_id, min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2, 3, 4`],
+      monthly_claims_by_supplier_service: ["month, supplier_id, service_id",
+        `SELECT ${month}, c.supplier_id, c.service_id, min(c.height), max(c.height) FROM ${cl} WHERE sb.monthly_claims_rollup GROUP BY 1, 2, 3`],
+      daily_income_by_address: ["day, address, role, family", `SELECT sb.day, v.address, v.role, v.family, min(v.height), max(v.height) FROM ${inc} GROUP BY 1, 2, 3, 4`],
+      monthly_income_by_address_supplier: ["month, supplier_id, address, role, family",
+        `SELECT ${month}, v.supplier_id, v.address, v.role, v.family, min(v.height), max(v.height) FROM ${inc} WHERE v.supplier_id <> '' GROUP BY 1, 2, 3, 4, 5`],
+      daily_income_by_address_supplier: ["day, supplier_id, address, role, family",
+        `SELECT sb.day, v.supplier_id, v.address, v.role, v.family, min(v.height), max(v.height) FROM ${inc} WHERE v.supplier_id <> '' GROUP BY 1, 2, 3, 4, 5
+         UNION ALL SELECT sb.day, c.supplier_id, '', 'stakers', 'relay', min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2`],
+      daily_income_by_address_service: ["day, address, role, family, service_id",
+        `SELECT sb.day, v.address, v.role, v.family, v.service_id, min(v.height), max(v.height) FROM ${inc} WHERE v.service_id <> '' GROUP BY 1, 2, 3, 4, 5`],
+      monthly_income_by_address_service: ["month, address, role, family, service_id",
+        `SELECT ${month}, v.address, v.role, v.family, v.service_id, min(v.height), max(v.height) FROM ${inc} WHERE v.service_id <> '' GROUP BY 1, 2, 3, 4, 5`],
+      monthly_income_by_address_supplier_service: ["month, address, supplier_id, service_id, role, family",
+        `SELECT ${month}, v.address, v.supplier_id, v.service_id, v.role, v.family, min(v.height), max(v.height) FROM ${inc}
+         WHERE v.supplier_id <> '' AND v.service_id <> '' GROUP BY 1, 2, 3, 4, 5, 6`],
+      daily_claims_paid_by_address_service: ["day, address, service_id",
+        `SELECT sb.day, p.address, c.service_id, min(p.height), max(p.height) FROM ${S}.v_claims_paid p
+         JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx JOIN ${S}.settlement_blocks sb ON sb.height = p.height
+         WHERE sb.claims_paid_rollup GROUP BY 1, 2, 3`],
+      daily_validator_rewards: ["day, validator_operator, family",
+        `SELECT sb.day, x.validator_operator, x.family, min(x.height), max(x.height) FROM ${S}.validator_distributions x JOIN ${S}.settlement_blocks sb USING (height) GROUP BY 1, 2, 3`],
+      daily_delegator_rewards_by_validator: ["day, delegator, validator_operator, family",
+        `SELECT sb.day, x.delegator, x.validator_operator, x.family, min(x.height), max(x.height) FROM ${S}.delegator_validator_payouts x
+         JOIN ${S}.settlement_blocks sb USING (height) GROUP BY 1, 2, 3, 4`],
+      hourly_income_by_address_supplier: ["hour, address, supplier_id",
+        `SELECT date_trunc('hour', sb.block_time, 'UTC'), v.address, v.supplier_id, min(v.height), max(v.height) FROM ${inc}
+         WHERE v.supplier_id <> '' GROUP BY 1, 2, 3`],
+    };
+    assert.deepEqual(Object.keys(base).sort(), [...ROLLUP_TABLES].sort());
+    const out: Record<string, string> = {};
+    for (const [t, [keys, sql]] of Object.entries(base)) {
+      const r = (
+        await c.query(`WITH b AS (${sql}), t AS (SELECT ${keys}, first_height, last_height FROM ${S}.${t})
+                       SELECT (SELECT count(*) FROM t)::int n, (SELECT count(*) FROM (SELECT * FROM t EXCEPT SELECT * FROM b) x)::int only_t,
+                              (SELECT count(*) FROM (SELECT * FROM b EXCEPT SELECT * FROM t) x)::int only_b`)
+      ).rows[0];
+      out[t] = `${r.n} rows, ${r.only_t} not from the base, ${r.only_b} missing`;
+    }
+    return out;
+  };
+  const boundsHold = async (label: string) => {
+    for (const [t, v] of Object.entries(await auditBounds()))
+      assert.match(v, /^\d+ rows, 0 not from the base, 0 missing$/, `${label}: ${t} ${v}`);
+  };
+
+  it("every rollup row's first_height / last_height are the lowest and highest height of the base rows it sums", async () => {
+    const a = await auditBounds();
+    // the rollups the fixtures above write (the two claim-paid and claims rollups held, validators and delegators paid)
+    for (const t of ROLLUP_TABLES) assert.ok(!a[t].startsWith("0 rows"), `${t}: ${a[t]}`);
+    await boundsHold("as written");
+    // every height written here holds its bounds
+    assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0].n, 0);
+  });
+
+  it("the bounds columns come to rollups written before them by a catalog change alone, no table rewritten", async () => {
+    const files = async () =>
+      (
+        await c.query(`SELECT relname, pg_relation_filenode(oid)::text f FROM pg_class
+                       WHERE relnamespace = $1::regnamespace AND relname = ANY($2::text[]) ORDER BY 1`, [S, ROLLUP_TABLES])
+      ).rows;
+    await c.query("BEGIN");
+    try {
+      // as on a database written before them
+      for (const t of ROLLUP_TABLES) await c.query(`ALTER TABLE ${S}.${t} DROP COLUMN first_height, DROP COLUMN last_height`);
+      const before = await files();
+      assert.equal(before.length, ROLLUP_TABLES.length);
+      await c.query(createSettlementTablesFn(S));
+      assert.deepEqual(await files(), before);
+      const cols = await c.query(`SELECT count(*)::int n FROM information_schema.columns WHERE table_schema = $1
+                                  AND table_name = ANY($2::text[]) AND column_name IN ('first_height', 'last_height')`, [S, ROLLUP_TABLES]);
+      assert.equal(cols.rows[0].n, 2 * ROLLUP_TABLES.length);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    // a start on a database that has them alters nothing, and takes no lock on a rollup for it
+    await c.query("BEGIN");
+    try {
+      await c.query(createSettlementTablesFn(S));
+      const locks = await c.query(`SELECT count(*)::int n FROM pg_locks l JOIN pg_class k ON k.oid = l.relation
+                                   WHERE l.pid = pg_backend_pid() AND l.mode = 'AccessExclusiveLock' AND k.relname = ANY($1::text[])`,
+                                  [ROLLUP_TABLES]);
+      assert.equal(locks.rows[0].n, 0);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("a rewrite that removes a row's first or last height recomputes it from the base, and one that keeps it changes nothing", async () => {
+    await c.query("BEGIN");
+    try {
+      const at = async (h: number, ts: string, p: SettlementPayload) => {
+        for (const { bind, sql } of writeSettlementCalls(S, h, { ...p, ts })) await c.query(sql, bind);
+      };
+      const emptied = (p: SettlementPayload): SettlementPayload =>
+        ({ ...p, claims: [], detailed: [], batch: [], vrd: [], reimb: [], expired: [], discarded: [], slashed: [], dv: [] });
+      // two small settlements, each three times on 20 Aug (nothing else settled that day), the last one in a later hour:
+      // 694993's claims (supplier and claim rollups), 703773's validator and delegator payouts (staker rollups)
+      const p = payloadOf("694993", false).payload;
+      const q = payloadOf("703773", false).payload;
+      assert.ok(q.vrd.length > 0 && q.dv.length > 0, "precondition: 703773 pays validators and delegators");
+      for (const [h, ts] of [[899801, "12:10"], [899802, "12:20"], [899803, "13:30"]] as const) await at(h, `2026-08-20T${ts}:00.000Z`, p);
+      for (const [h, ts] of [[899811, "12:10"], [899812, "12:20"], [899813, "13:30"]] as const) await at(h, `2026-08-20T${ts}:00.000Z`, q);
+      const supplier = p.claims[0].supplier_id;
+      const validator = q.vrd[0].validator_operator;
+      const rows = async () =>
+        (
+          await c.query(
+            `SELECT (SELECT first_height || '..' || last_height FROM ${S}.daily_claims_by_supplier WHERE supplier_id = $1 AND day = '2026-08-20') s,
+                    (SELECT min(first_height) || '..' || max(last_height) FROM ${S}.daily_validator_rewards
+                     WHERE validator_operator = $2 AND day = '2026-08-20') v`,
+            [supplier, validator]
+          )
+        ).rows[0];
+      assert.deepEqual(await rows(), { s: "899801..899803", v: "899811..899813" });
+      await boundsHold("written three times");
+      // the same settlements written again: nothing moves
+      const before = await md5All();
+      await at(899803, "2026-08-20T13:30:00.000Z", p);
+      await at(899813, "2026-08-20T13:30:00.000Z", q);
+      assert.equal(await md5All(), before);
+      // the last ones rewritten with nothing: every row they were the last height of goes back, from the base
+      await at(899803, "2026-08-20T13:30:00.000Z", emptied(p));
+      await at(899813, "2026-08-20T13:30:00.000Z", emptied(q));
+      assert.deepEqual(await rows(), { s: "899801..899802", v: "899811..899812" });
+      await boundsHold("last heights emptied");
+      // and the first ones: every row they were the first height of goes up
+      await at(899801, "2026-08-20T12:10:00.000Z", emptied(p));
+      await at(899811, "2026-08-20T12:10:00.000Z", emptied(q));
+      assert.deepEqual(await rows(), { s: "899802..899802", v: "899812..899812" });
+      await boundsHold("first heights emptied");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("subtracting a height raises on each rule of each rollup row it touched, naming the rollup, the key and the rule, and on no other row", async () => {
-    // the rules of the check: any column of the rollup (but its key and period, read here from the catalog) below 0, the
+    // the rules of the check: any column of the rollup (but its key, period and bounds, read here from the catalog) below 0, the
     // invariants between columns listed below, and a row at 0 contributions with any other column not at 0
     const claims = ["claims_with_proof > claim_count"];
     const day = "day = $1::date";
@@ -928,7 +1077,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const cols = (
         await c.query(`SELECT column_name::text c FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2
                        ORDER BY ordinal_position`, [S, t])
-      ).rows.map((r) => String(r.c)).filter((col) => ![...keys, "day", "month", "hour", count].includes(col));
+      ).rows.map((r) => String(r.c)).filter((col) => ![...keys, "day", "month", "hour", count, "first_height", "last_height"].includes(col));
       assert.ok(cols.length > 0, `${t}: measures besides ${count}`);
       return [`${count} < 0`, ...cols.map((col) => `${col} < 0`), ...rules, ...cols.map((col) => `${count} = 0 AND ${col} <> 0`)];
     };
@@ -2170,6 +2319,69 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         assert.equal(total(rollup), total(base), `${from} ${to} ${bucket}: total`);
         assert.deepEqual(rollup, base, `${from} ${to} ${bucket}`);
       }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_supplier_earnings gives each row's first and last settled height, from the rollups as from the claims, NULL where not held", async () => {
+    const q = `SELECT ${S}.get_supplier_earnings_json(NULL, $1, $2, $3, by_service => $4, by_application => $5, by_supplier => $6)::text j`;
+    const both = async (args: unknown[]) => {
+      const r = String((await c.query(q, args)).rows[0].j);
+      await c.query("SAVEPOINT b");
+      try {
+        await c.query("SET LOCAL money.no_rollup = on");
+        return [r, String((await c.query(q, args)).rows[0].j)];
+      } finally {
+        await c.query("ROLLBACK TO SAVEPOINT b");
+      }
+    };
+    await c.query("BEGIN");
+    try {
+      for (const [from, to] of [
+        [null, null], // whole days: the rollups' bounds
+        ["2026-09-01T11:00:00Z", "2026-09-01T13:00:00Z"], // inside one day: the claims' heights
+        ["2026-08-30T00:00:00Z", "2026-09-03T00:00:00Z"],
+      ])
+        // bucket=day takes ranges of up to 92 days
+        for (const bucket of from === null ? [null, "month"] : [null, "day", "month"])
+          for (const [byService, byApplication, bySupplier] of [
+            [false, false, true], [false, false, false], [true, false, true], [true, false, false],
+            [false, true, true], [true, true, false],
+          ]) {
+            const [r, b] = await both([from, to, bucket, byService, byApplication, bySupplier]);
+            assert.match(b, /"last_settled_height": "\d+"/, `${from} ${to} ${bucket}`);
+            assert.equal(r, b, `${from} ${to} ${bucket} service ${byService} application ${byApplication} supplier ${bySupplier}`);
+          }
+      // per supplier over the whole history: the lowest and highest height of its claims
+      const want = (
+        await c.query(`SELECT supplier_id, min(height)::text f, max(height)::text l FROM ${S}.claim_settlements GROUP BY 1 ORDER BY 1`)
+      ).rows;
+      const got = (
+        await c.query(`SELECT supplier_id, first_settled_height::text f, last_settled_height::text l
+                       FROM ${S}.get_supplier_earnings(NULL, NULL, NULL) ORDER BY 1`)
+      ).rows;
+      assert.deepEqual(got, want);
+      // a height of 1 Sep whose bounds the rollups may not hold: every group 1 Sep is in reads NULL, the amounts as before,
+      // and a range inside that day still has its heights (a settlement at 15:00 the range leaves out: the day is read from
+      // the claims, an edge)
+      const amounts = `SELECT supplier_id, settled_upokt::text s FROM ${S}.get_supplier_earnings(NULL, NULL, NULL) ORDER BY 1`;
+      const settled = (await c.query(amounts)).rows;
+      await c.query(`UPDATE ${S}.settlement_blocks SET bounds_rollup = false WHERE height = 899713`);
+      const unheld = (
+        await c.query(`SELECT count(*)::int n, count(last_settled_height)::int l, count(first_settled_height)::int f
+                       FROM ${S}.get_supplier_earnings(NULL, NULL, NULL)`)
+      ).rows[0];
+      assert.ok(Number(unheld.n) > 0);
+      assert.deepEqual([unheld.l, unheld.f], [0, 0]);
+      assert.deepEqual((await c.query(amounts)).rows, settled);
+      await c.query(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version)
+                     SELECT 899799, '2026-09-01T15:00:00Z', era, day, rollup_version FROM ${S}.settlement_blocks WHERE height = 899713`);
+      const inside = (
+        await c.query(`SELECT count(*)::int n, count(last_settled_height)::int l
+                       FROM ${S}.get_supplier_earnings(NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z')`)
+      ).rows[0];
+      assert.ok(Number(inside.n) > 0 && inside.l === inside.n, JSON.stringify(inside));
     } finally {
       await c.query("ROLLBACK");
     }
