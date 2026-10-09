@@ -199,10 +199,13 @@ END $$;
 
 -- How far behind the primary its replicas replay, read live (pg_stat_get_wal_senders, not the per-transaction snapshot of
 -- pg_stat_activity): senders, how many of them show a replay position (a role without pg_monitor sees NULL), the
--- largest replay_lag in seconds and the largest distance in bytes from the current WAL position.
+-- largest replay_lag in seconds and the largest distance in bytes from the current WAL position. A replica that has
+-- replayed everything counts 0 s: replay_lag keeps its last measure for a while once the WAL goes quiet (measured on a
+-- local delayed replica: 4.0 s shown for ~10 s with 0 bytes left).
 CREATE OR REPLACE FUNCTION ${s}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric, OUT lag_bytes numeric)
 LANGUAGE sql VOLATILE AS $$
-  SELECT count(*)::int, count(w.replay_lsn)::int, coalesce(max(extract(epoch FROM w.replay_lag)), 0),
+  SELECT count(*)::int, count(w.replay_lsn)::int,
+         coalesce(max(CASE WHEN w.replay_lsn >= pg_current_wal_lsn() THEN 0 ELSE extract(epoch FROM w.replay_lag) END), 0),
          coalesce(max(pg_wal_lsn_diff(pg_current_wal_lsn(), w.replay_lsn)), 0)
   FROM pg_stat_get_wal_senders() w
 $$;
