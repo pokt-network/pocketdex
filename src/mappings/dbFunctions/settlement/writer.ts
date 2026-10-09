@@ -395,110 +395,64 @@ BEGIN
 
   IF sg < 0 THEN
     -- A row whose contributions are all gone must be back at zero, and no row may go negative. Anything else
-    -- means it was added under other rules than the ones subtracting it now. Only the rows this height
-    -- touched can have changed, so each check probes them by primary key: the keys come from _inc and from
-    -- the height's base rows, which are deleted only after this subtraction. The LIMIT 1 laterals keep it a
-    -- probe per key; as a plain join the planner prefers scanning the whole rollup for the bad rows.
-    IF EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                 SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address t
-                 WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family LIMIT 1) t
-               WHERE t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0)))
-       -- daily_income_by_address_supplier: the day's rows of the height's suppliers, read as one set and not probed by key.
-       -- Its (address, day) index draws a probe by address, which under stale statistics read, for each key, every row of
-       -- the day with that address: the 'stakers' rows (address '', one per supplier) or the DAO's (measured on money-pg:
-       -- 20 s for one height; 1.5 s for 8,000 keys on a 16k-row day, against 1 ms for the set). Bounded by the day's rows
-       -- whichever index serves it; rows of those suppliers the height did not touch did not change.
-       OR EXISTS (SELECT 1 FROM ${s}.daily_income_by_address_supplier t
-                  WHERE t.day = d AND t.supplier_id IN (SELECT c.supplier_id FROM ${s}.claim_settlements c WHERE c.height = h)
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address_service t
-                    WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family
-                      AND t.service_id = i.service_id LIMIT 1) t
-                  WHERE i.service_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_supplier t
-                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
-                      AND t.role = i.role AND t.family = i.family LIMIT 1) t
-                  WHERE i.supplier_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_service t
-                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.role = i.role
-                      AND t.family = i.family AND t.service_id = i.service_id LIMIT 1) t
-                  WHERE i.service_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+    -- means it was added under other rules than the ones subtracting it now. Each rollup's rows of the height's day,
+    -- month or hour are read in one scan (a row the height did not touch did not change, so it passes as before). A probe
+    -- per key of the height (LATERAL ... LIMIT 1) planned, under stale statistics, a scan of the whole period through its
+    -- index for every key: a new day is rare to the planner until the table is analyzed, and 'stakers' rows share one
+    -- address in daily_income_by_address_supplier's (address, day) index (money-pg: 42-45 s per subtraction in the test
+    -- suite; 1.5 s for 8,000 keys on a 16k-row day against 1 ms for one read of the day). One scan is bounded by the
+    -- period's rows whichever plan serves it. monthly_income_by_address_supplier_service keeps its probes: its primary key
+    -- is its only index.
+    IF EXISTS (SELECT 1 FROM ${s}.daily_income_by_address t WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.daily_income_by_address_supplier t WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.daily_income_by_address_service t WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.monthly_income_by_address_supplier t WHERE t.month = date_trunc('month', d)::date AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.monthly_income_by_address_service t WHERE t.month = date_trunc('month', d)::date AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
        OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
                     SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_supplier_service t
                     WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
                       AND t.service_id = i.service_id AND t.role = i.role AND t.family = i.family LIMIT 1) t
                   WHERE i.supplier_id <> '' AND i.service_id <> ''
                     AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt FROM ${s}.hourly_income_by_address_supplier t
-                    WHERE t.address = i.address AND t.hour = hr AND t.supplier_id = i.supplier_id LIMIT 1) t
-                  WHERE i.supplier_id <> '' AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays FROM ${s}.daily_claims_by_application_service t
-                    WHERE t.application_id = c.application_id AND t.day = d AND t.service_id = c.service_id LIMIT 1) t
-                  WHERE c.height = h
+       OR EXISTS (SELECT 1 FROM ${s}.hourly_income_by_address_supplier t
+                  WHERE t.hour = hr AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
+       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_by_application_service t
+                  WHERE t.day = d
                     AND (t.claim_count < 0 OR t.settled_upokt < 0 OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays, t.claims_with_proof
-                    FROM ${s}.daily_claims_by_supplier t
-                    WHERE t.supplier_id = c.supplier_id AND t.day = d LIMIT 1) t
-                  WHERE c.height = h
+       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_by_supplier t
+                  WHERE t.day = d
                     AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
                          OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays, t.claims_with_proof
-                    FROM ${s}.daily_claims_by_supplier_application_service t
-                    WHERE t.supplier_id = c.supplier_id AND t.day = d AND t.application_id = c.application_id
-                      AND t.service_id = c.service_id LIMIT 1) t
-                  WHERE c.height = h
+       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_by_supplier_application_service t
+                  WHERE t.day = d
                     AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
                          OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.claimed_upokt, t.settled_upokt, t.overservicing_loss_upokt, t.relays,
-                           t.estimated_relays, t.claimed_compute_units, t.estimated_compute_units, t.claims_with_proof
-                    FROM ${s}.monthly_claims_by_supplier_service t
-                    WHERE t.supplier_id = c.supplier_id AND t.month = date_trunc('month', d)::date
-                      AND t.service_id = c.service_id LIMIT 1) t
-                  WHERE c.height = h AND v_month_held
+       OR EXISTS (SELECT 1 FROM ${s}.monthly_claims_by_supplier_service t
+                  WHERE t.month = date_trunc('month', d)::date AND v_month_held
                     AND (t.claim_count < 0 OR t.claimed_upokt < 0 OR t.settled_upokt < 0 OR t.overservicing_loss_upokt < 0
                          OR t.relays < 0 OR t.estimated_relays < 0 OR t.claimed_compute_units < 0
                          OR t.estimated_compute_units < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
                          OR (t.claim_count = 0 AND (t.claimed_upokt <> 0 OR t.settled_upokt <> 0 OR t.overservicing_loss_upokt <> 0
                                                     OR t.relays <> 0 OR t.estimated_relays <> 0
                                                     OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.delegator_validator_payouts p CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.replayed_count FROM ${s}.daily_delegator_rewards_by_validator t
-                    WHERE t.delegator = p.delegator AND t.day = d AND t.validator_operator = p.validator_operator
-                      AND t.family = p.family LIMIT 1) t
-                  WHERE p.height = h AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR t.replayed_count < 0
-                                          OR t.replayed_count > t.contribution_count
-                                          OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM ${s}.validator_distributions v CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.pool_share_upokt, t.commission_upokt, t.commission_na_count
-                    FROM ${s}.daily_validator_rewards t
-                    WHERE t.validator_operator = v.validator_operator AND t.day = d AND t.family = v.family LIMIT 1) t
-                  WHERE v.height = h
+       OR EXISTS (SELECT 1 FROM ${s}.daily_delegator_rewards_by_validator t
+                  WHERE t.day = d AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR t.replayed_count < 0
+                                       OR t.replayed_count > t.contribution_count
+                                       OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
+       OR EXISTS (SELECT 1 FROM ${s}.daily_validator_rewards t
+                  WHERE t.day = d
                     AND (t.contribution_count < 0 OR t.pool_share_upokt < 0
                          OR t.commission_na_count < 0 OR t.commission_na_count > t.contribution_count
                          -- with no contribution that has a commission left, what is left of the commission must be 0
                          -- (it becomes NULL below); anything else was added under other rules
                          OR (t.commission_na_count = t.contribution_count AND coalesce(t.commission_upokt, 0) <> 0)
                          OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM _paid i CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.relays, t.estimated_relays, t.claimed_compute_units,
-                           t.estimated_compute_units
-                    FROM ${s}.daily_claims_paid_by_address_service t
-                    WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id LIMIT 1) t
-                  WHERE t.claim_count < 0 OR t.settled_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0
-                    OR t.claimed_compute_units < 0 OR t.estimated_compute_units < 0
-                    OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
-                                               OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))) THEN
+       OR EXISTS (SELECT 1 FROM ${s}.daily_claims_paid_by_address_service t
+                  WHERE t.day = d
+                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0
+                         OR t.claimed_compute_units < 0 OR t.estimated_compute_units < 0
+                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
+                                                    OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0)))) THEN
       RAISE EXCEPTION 'rollup drift at height %: subtracting it left a rollup row negative, or at contribution_count = 0 with a non-zero amount', h;
     END IF;
     DELETE FROM ${s}.daily_income_by_address WHERE day = d AND contribution_count = 0;
