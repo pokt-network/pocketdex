@@ -148,10 +148,10 @@ export function writeSettlementCalls(
 
 // The drift check of a subtraction, fed by the upserts themselves: on a subtraction (sg < 0) each rollup's INSERT ...
 // ON CONFLICT DO UPDATE returns the rows it wrote as they are after it, so the check reads exactly the rows the height
-// touched, with no second read of the table. No row may go negative, and a row whose contributions are all gone must have
-// every measure back at 0 (the columns its ON CONFLICT sets, read from its SQL, so a new column is checked too): anything
-// else means it was added under other rules than the ones subtracting it now. The error names the rollup, the row's key
-// and the first rule it breaks. The rows left at zero contributions then go by their ctid among the returned rows: the
+// touched, with no second read of the table. No measure may go below 0, and a row whose contributions are all gone must
+// have every measure back at 0 (its measures: the columns its ON CONFLICT sets, read from its SQL, so a new column is
+// checked too), on top of the invariants between columns each rollup states: anything else means it was added under
+// other rules than the ones subtracting it now. The error names the rollup, the row's key and the first rule it breaks. The rows left at zero contributions then go by their ctid among the returned rows: the
 // height's keys and nothing else, with nothing to plan (a join of the keys to monthly_income_by_address_supplier_service,
 // which has no month index, planned under statistics without zero rows a scan of the whole table per row left at zero:
 // 57 s for one subtraction locally). An add (every new height, every height of rebuild_rollups) runs the plain upserts.
@@ -166,19 +166,34 @@ interface Checked {
   keys: string[];
   // its count of contributions: a row at 0 of it holds nothing
   count: string;
-  // the rules besides "every measure at 0 when the count is": columns below 0, and columns bounded by the count
+  // its invariants between columns (every measure at 0 or above, and at 0 with the count, are generated)
   rules: string[];
   // INSERT ... ON CONFLICT DO UPDATE SET ..., without RETURNING or ';'
   sql: string;
 }
-// the columns its ON CONFLICT DO UPDATE sets
-function measures(sql: string): string[] {
-  return [...sql.slice(sql.indexOf("DO UPDATE")).matchAll(/(?:\bSET|,)\s+(\w+)\s*=/g)].map((m) => m[1]);
+// the columns its ON CONFLICT DO UPDATE sets: its SET list split at the commas outside parentheses and CASE ... END, each
+// item "column = ..."; anything else stops the generation
+function measures(t: string, sql: string): string[] {
+  const set = sql.slice(sql.indexOf("DO UPDATE")).replace(/^DO UPDATE\s+SET\b/, "");
+  const items = [""];
+  let depth = 0;
+  for (const part of set.split(/(\bCASE\b|\bEND\b|[(),])/)) {
+    if (part === "CASE" || part === "(") depth++;
+    if (part === "END" || part === ")") depth--;
+    if (part === "," && depth === 0) items.push("");
+    else items[items.length - 1] += part;
+  }
+  return items.map((item) => {
+    const m = /^\s*(\w+)\s*=[^=]/.exec(item);
+    if (!m || depth !== 0) throw new Error(`${t}: cannot read a measure from its SET item "${item.trim()}"`);
+    return m[1];
+  });
 }
 function checkRules(u: Checked): string[] {
-  const set = measures(u.sql);
+  const set = measures(u.t, u.sql);
   if (!set.includes(u.count)) throw new Error(`${u.t}: its ON CONFLICT does not set ${u.count}`);
-  return [...u.rules, ...set.filter((m) => m !== u.count).map((m) => `${u.count} = 0 AND ${m} <> 0`)];
+  const others = set.filter((m) => m !== u.count);
+  return [`${u.count} < 0`, ...others.map((m) => `${m} < 0`), ...u.rules, ...others.map((m) => `${u.count} = 0 AND ${m} <> 0`)];
 }
 const literal = (x: string) => `'${x.replace(/'/g, "''")}'`;
 // v_zero1 .. v_zero<MAX_CHECKED> in _rollup_apply
@@ -223,22 +238,16 @@ ${list
   ${plain}
   END IF;`;
 }
-const below = (cols: string[]) => cols.map((c) => `${c} < 0`);
-const INCOME = below(["contribution_count", "amount_upokt"]);
-const APP_CLAIMS = below(["claim_count", "settled_upokt"]);
-const CLAIMS = [...APP_CLAIMS, "claims_with_proof < 0", "claims_with_proof > claim_count"];
-const MONTHLY_CLAIMS = [
-  ...below(["claim_count", "claimed_upokt", "settled_upokt", "overservicing_loss_upokt", "relays", "estimated_relays",
-            "claimed_compute_units", "estimated_compute_units", "claims_with_proof"]),
-  "claims_with_proof > claim_count",
-];
-const DELEGATOR = [...below(["contribution_count", "amount_upokt", "replayed_count"]), "replayed_count > contribution_count"];
+const INCOME: string[] = [];
+const APP_CLAIMS: string[] = [];
+const CLAIMS = ["claims_with_proof > claim_count"];
+const MONTHLY_CLAIMS = ["claims_with_proof > claim_count"];
+const DELEGATOR = ["replayed_count > contribution_count"];
 // with no contribution that has a commission left, what is left of the commission must be 0 (it becomes NULL below);
 // anything else was added under other rules
-const VALIDATOR = [...below(["contribution_count", "pool_share_upokt", "commission_na_count"]),
-                   "commission_na_count > contribution_count",
+const VALIDATOR = ["commission_na_count > contribution_count",
                    "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0"];
-const PAID = below(["claim_count", "settled_upokt", "relays", "estimated_relays", "claimed_compute_units", "estimated_compute_units"]);
+const PAID: string[] = [];
 
 export function createSettlementWriterFn(dbSchema: string): string {
   const s = dbSchema;
