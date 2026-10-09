@@ -714,8 +714,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.equal((await rollupDay()).n, 0);
     assert.equal(await fill(), Number(heights));
     assert.equal(await md5All(), before);
-    // a day already held is left as it is
+    // a day already held is left as it is, but not a row left at zero claims
+    await c.query(`INSERT INTO ${S}.daily_claims_paid_by_address_service VALUES ($1, 'zero-row', 'svc', 0, 0, 0, 0, 0, 0)`, [day]);
     assert.equal(await fill(), 0);
+    assert.equal(
+      (await c.query(`SELECT count(*)::int n FROM ${S}.daily_claims_paid_by_address_service WHERE address = 'zero-row'`)).rows[0].n,
+      0
+    );
     // held -> an image without the rollup rewrites the height: it subtracts and adds the other rollups, leaves this one
     // as it was (the old contribution stays) and the height not held (its write_settlement does not name the column)
     const day0 = await rollupDay();
@@ -767,6 +772,24 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await assert.rejects(write(height, payload), /rollup drift at height 899713/, col);
       await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET ${col} = ${col} - 1 ${where}`, [k.address, k.service_id]);
     }
+    // any column going negative is drift too, on a row that other heights keep above 0 claims
+    const m = (
+      await c.query(
+        `SELECT p.address, c.service_id FROM ${S}.v_claims_paid p
+         JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+         JOIN ${S}.settlement_blocks sb ON sb.height = p.height WHERE sb.day = '2026-09-01'
+         GROUP BY 1, 2 HAVING count(*) >= 2 AND count(*) FILTER (WHERE p.height = ${height}) >= 1
+         ORDER BY 1, 2 LIMIT 1`
+      )
+    ).rows[0];
+    assert.ok(m, `precondition: a row with claims at ${height} and at another height`);
+    const whereM = `WHERE day = '2026-09-01' AND address = $1 AND service_id = $2`;
+    const relays = (
+      await c.query(`SELECT relays::text r FROM ${S}.daily_claims_paid_by_address_service ${whereM}`, [m.address, m.service_id])
+    ).rows[0].r;
+    await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET relays = -1 ${whereM}`, [m.address, m.service_id]);
+    await assert.rejects(write(height, payload), /rollup drift at height 899713/, "relays below 0");
+    await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET relays = $3 ${whereM}`, [m.address, m.service_id, relays]);
     assert.equal(await md5All(), before);
   });
 

@@ -437,6 +437,21 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt - 7
                      WHERE address = ANY($1) AND day = '2026-09-01'`, [[shareholder, ...pair]]);
       assert.equal(await answer([shareholder], s, e), truth);
+      // a row left at zero claims on 1 Sep (held, read from the rollup) is not read; the same row with one claim is.
+      // Its service is one the shareholder's supplier is configured for now and that settled nothing, listed with 0.
+      await c.query(
+        `INSERT INTO ${S}.supplier_service_configs VALUES ($1, 'zero-svc', jsonb_build_array(jsonb_build_object('address', $2::text)), int8range(1, NULL))`,
+        [suppliers[0], shareholder]
+      );
+      const listed = await answer([shareholder], s, e);
+      assert.match(String(listed), /"service_id": "zero-svc", "net_rewards": 0, "gross_rewards": 0/);
+      await c.query(
+        `INSERT INTO ${S}.daily_claims_paid_by_address_service VALUES ('2026-09-01', $1, 'zero-svc', 0, 999, 5, 5, 5, 5)`,
+        [shareholder]
+      );
+      assert.equal(await answer([shareholder], s, e), listed);
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET claim_count = 1 WHERE service_id = 'zero-svc'`);
+      assert.match(String(await answer([shareholder], s, e)), /"service_id": "zero-svc", "net_rewards": 0, "gross_rewards": 999/);
     } finally {
       await c.query("ROLLBACK");
     }

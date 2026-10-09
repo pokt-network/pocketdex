@@ -1799,7 +1799,8 @@ BEGIN
             UNION ALL
             SELECT r.service_id, r.settled_upokt, r.relays, r.estimated_relays, r.claimed_compute_units, r.estimated_compute_units
             FROM ${s}.daily_claims_paid_by_address_service r
-            WHERE r.address = ANY(addresses) AND r.day BETWEEN rg.d1 AND rg.d2 AND r.day <> ALL(ud)) x
+            -- not a row left at zero claims (a subtraction deletes those only at the keys it touched)
+            WHERE r.address = ANY(addresses) AND r.day BETWEEN rg.d1 AND rg.d2 AND r.day <> ALL(ud) AND r.claim_count > 0) x
       GROUP BY 1
     ), net AS (
       SELECT i.service_id, sum(i.amount_upokt) amount_upokt

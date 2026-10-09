@@ -453,7 +453,8 @@ BEGIN
                            t.estimated_compute_units
                     FROM ${s}.daily_claims_paid_by_address_service t
                     WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id LIMIT 1) t
-                  WHERE t.claim_count < 0 OR t.settled_upokt < 0
+                  WHERE t.claim_count < 0 OR t.settled_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0
+                    OR t.claimed_compute_units < 0 OR t.estimated_compute_units < 0
                     OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
                                                OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))) THEN
       RAISE EXCEPTION 'rollup drift at height %: subtracting it left a rollup row negative, or at contribution_count = 0 with a non-zero amount', h;
@@ -822,7 +823,11 @@ CREATE OR REPLACE FUNCTION ${s}.fill_claims_paid_day(p_day date) RETURNS integer
 DECLARE marked integer; lo bigint; hi bigint;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
-  IF NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks WHERE day = p_day AND NOT claims_paid_rollup) THEN RETURN 0; END IF;
+  IF NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks WHERE day = p_day AND NOT claims_paid_rollup) THEN
+    -- a held day is kept, but not its rows left at zero claims
+    DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day = p_day AND claim_count = 0;
+    RETURN 0;
+  END IF;
   -- the day's heights as a range (days follow heights): a join on the view would compute it for every height first
   SELECT min(height), max(height) INTO lo, hi FROM ${s}.settlement_blocks WHERE day = p_day;
   DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day = p_day;
