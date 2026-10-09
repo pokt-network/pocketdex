@@ -40,6 +40,7 @@ export const OMITTED_TABLES = [
   "daily_validator_rewards",
   "daily_delegator_rewards_by_validator",
   "hourly_income_by_address_supplier",
+  "daily_claims_paid_by_address_service",
   // the Delegation entity (src/mappings/pocket/validator.ts)
   "delegations",
 ];
@@ -106,6 +107,10 @@ const OMITTED_FUNCTIONS = [
   "_json_strings",
   "_legacy_claims_by_service",
   "_legacy_series",
+  "_operator_suppliers",
+  "_supplier_ids",
+  // a writer of the money tables, which GraphQL would publish as a mutation (scripts/fill_claims_paid.sql runs it)
+  "fill_claims_paid_day",
 ];
 
 // The legacy_* functions (functions.ts): what each replaces, for its GraphQL description. GraphQL publishes them as
@@ -148,9 +153,9 @@ const DESCRIPTIONS: Record<string, string> = {
   get_gateway_spend:
     "Gateway spend: what the applications delegated to each gateway spent, by the delegation in force at each settlement height; by_application, by_service, by_gateway.",
   get_supplier_earnings:
-    "Supplier earnings: claimed and settled upokt, overservicing loss, relays, compute units and settled claims (with and without a proof); suppliers NULL = every supplier, or owners = the suppliers they own now; by_service, by_application, by_supplier.",
+    "Supplier earnings: claimed and settled upokt, overservicing loss, relays, compute units and settled claims (with and without a proof); suppliers NULL = every supplier, or owners = the suppliers they own now, or operators = the Staked suppliers whose service configs share revenue with them now; by_service, by_application, by_supplier.",
   get_supplier_distribution:
-    "Supplier distribution: how what a supplier generated was paid out (each shareholder, the DAO, the service owner; stakers in one row); by_reason (in the family column: relay / global), by_supplier; owners in place of suppliers.",
+    "Supplier distribution: how what a supplier generated was paid out (each shareholder, the DAO, the service owner; stakers in one row); by_reason (in the family column: relay / global), by_supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now) in place of suppliers.",
   get_income:
     "Income of any address (shareholder, DAO, service owner, application, validator, delegator) by role; by_reason (in the family column: relay / global), by_supplier (the supplier that generated it), by_service, by_address.",
   get_validator_rewards:
@@ -160,13 +165,13 @@ const DESCRIPTIONS: Record<string, string> = {
   get_supply_flows:
     "Network supply flows: burn, relay mint (mint_equals_burn), mint_ratio_unminted, overservicing loss, global mint and reimbursement, each by receiving role (by_role), plus slashes. Mainnet 690,685 to 716,533: one supplier paid a shareholder twice (poktroll v0.1.29 to v0.1.33), and the supplier role of mint_equals_burn and global_mint includes that overpayment (about 39 POKT), which came from the supplier module, not from the mint.",
   get_supplier_penalties:
-    "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; suppliers NULL = every supplier; by_service, by_supplier; owners in place of suppliers.",
+    "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; suppliers NULL = every supplier; by_service, by_supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now) in place of suppliers.",
   get_service_usage:
     "Service usage: claimed and settled upokt, relays, compute units and claims per service; services, or top_by_settled = N for the N services that settled the most (rank_by_settled); by_service.",
   get_app_auto_unstakes:
     "Applications the chain unstaked because their stake fell below the minimum; applications NULL = every application.",
   get_supplier_proofs:
-    "Supplier proofs: claims settled with and without a proof, proofs submitted, validated and invalid (by reason), each counted in the block of its own event; suppliers NULL = every supplier; owners in place of suppliers.",
+    "Supplier proofs: claims settled with and without a proof, proofs submitted, validated and invalid (by reason), each counted in the block of its own event; suppliers NULL = every supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now) in place of suppliers.",
   get_param_history:
     "Governance parameter history: each version whose value differs from the previous one, with previous_value; namespaces / keys NULL = all.",
 };
@@ -191,6 +196,7 @@ export function createSettlementSmartTagsFn(dbSchema: string): string {
   return `
 ${tables}
 COMMENT ON VIEW ${s}.v_income_base IS E'@omit';
+COMMENT ON VIEW ${s}.v_claims_paid IS E'@omit';
 DO $$
 DECLARE t regclass; c text;
 BEGIN

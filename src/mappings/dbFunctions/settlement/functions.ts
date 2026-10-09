@@ -25,13 +25,14 @@ import { ROLLUP_VERSION } from "./writer";
 // gives a row per id, false sums the whole list into one row with 'all' (a fleet or group total). Every requested id
 // gets its row or series even without activity (0), and an idle list its zero group row, only with
 // fill_empty_buckets => true; such a row says 'all' in the breakdown columns it has no value for.
-// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs, get_supplier_penalties (with no owners either),
-// get_validator_rewards and get_delegator_income, so a caller never has to send the list; get_delegator_income also
+// A NULL id list means every id in get_supplier_earnings, get_supplier_proofs, get_supplier_penalties (with no owners or
+// operators either), get_validator_rewards and get_delegator_income, so a caller never has to send the list; get_delegator_income also
 // takes validators, keeping the income its delegators got from those validators. The size of such an answer is set by
 // the bucket and the by_* flags, and GraphQL caps its rows (--query-limit).
-// The supplier functions take suppliers or owners: owners resolves, with no cap, the suppliers each owner owns now
-// (the Supplier entity's current version, unstaked suppliers included) and reports their whole history, also from
-// before a change of owner. An owner with no supplier returns no rows.
+// The supplier functions take suppliers, owners or operators: owners resolves, with no cap, the suppliers each owner owns
+// now (the Supplier entity's current version, unstaked suppliers included) and reports their whole history, also from
+// before a change of owner. An owner with no supplier returns no rows. operators resolves, with no cap, the Staked
+// suppliers whose live service configs share revenue with those addresses now (_operator_suppliers), likewise.
 //
 // Coverage: no function fails for it. Heights that were never written must not read as zero, so each answers for the
 // part of the range the money tables cover and says which part that is (_coverage: what is indexed minus the
@@ -271,6 +272,19 @@ BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = ANY(${CATALOG_SQL}) AND p.proretset
              AND pg_get_function_result(p.oid) NOT LIKE '%covered_gaps%' LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
+-- operators came last to the supplier functions: CREATE OR REPLACE with it leaves the signature without it next to the
+-- new one, and two overloads make every call ambiguous, so a database written before has the old one dropped first.
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           WHERE p.pronamespace = '${s}'::regnamespace
+             AND p.proname IN ('get_supplier_earnings', 'get_supplier_distribution', 'get_supplier_penalties', 'get_supplier_proofs')
+             AND NOT ('operators' = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
 END $$;
@@ -596,10 +610,51 @@ ${covered("settled")}
   ) q ORDER BY 1 DESC, 3, 4, 5;
 END $$;
 
+-- The suppliers that share revenue with the addresses now: a live service config lists one of them in its rev_share,
+-- and the supplier is Staked now (get_claim_proofs_data_by_delegators_and_time's matched_suppliers); no cap. Containment
+-- per address, so the partial GIN idx_ssc_live_rev_share serves it: an operator's 1055 suppliers in 0.13 s on mainnet
+-- (2026-10-08), where jsonb_array_elements over every live config took 1 s. PL/pgSQL: a SQL body would need the entity
+-- tables to exist when it is created.
+CREATE OR REPLACE FUNCTION ${s}._operator_suppliers(addresses text[]) RETURNS text[]
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  RETURN ARRAY(
+    SELECT m.supplier_id
+    FROM (SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
+          JOIN ${s}.supplier_service_configs ssc
+            ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a)) AND upper_inf(ssc._block_range)) m
+    WHERE EXISTS (SELECT 1 FROM ${s}.suppliers su WHERE su.id = m.supplier_id AND su.stake_status = 'Staked'
+                    AND su._block_range @> 9223372036854775807::bigint)
+    ORDER BY m.supplier_id);
+END $$;
+
+-- The suppliers a supplier function answers for, from its three lists, of which it takes at most one: suppliers as given
+-- (up to 200), owners (the suppliers each owns now, no cap) or operators (_operator_suppliers, no cap). NULL = every
+-- supplier, which p_require_one refuses (get_supplier_distribution needs one of the lists).
+CREATE OR REPLACE FUNCTION ${s}._supplier_ids(suppliers text[], owners text[], operators text[], p_require_one boolean,
+  range_start timestamptz, range_end timestamptz, bucket text) RETURNS text[]
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF num_nonnulls(suppliers, owners, operators) > 1 OR (p_require_one AND num_nonnulls(suppliers, owners, operators) = 0) THEN
+    RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
+  END IF;
+  IF owners IS NOT NULL THEN
+    PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
+    RETURN ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su
+                 WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
+  END IF;
+  IF operators IS NOT NULL THEN
+    PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
+    RETURN ${s}._operator_suppliers(operators);
+  END IF;
+  PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
+  RETURN suppliers;
+END $$;
+
 -- Supplier: what it generated
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, application_id text,
   claimed_upokt numeric, settled_upokt numeric, overservicing_loss_upokt numeric,
   relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, settled_claims bigint,
@@ -608,17 +663,8 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
-  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
-  END IF;
-  IF owners IS NOT NULL THEN
-    PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
-    -- no cap: an owner can have any number of suppliers
-    suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
-  ELSE
-    -- NULL suppliers (and no owners): every supplier
-    PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
-  END IF;
+  -- NULL (no suppliers, owners or operators): every supplier
+  suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
   all_suppliers := suppliers IS NULL;
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
@@ -681,23 +727,14 @@ END $$;
 -- global) that paid that recipient, so a claim with global mint counts twice unless by_reason splits it.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_distribution(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, recipient_id text, role text, family text,
   amount_upokt numeric, transfer_count bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
-  IF (suppliers IS NULL) = (owners IS NULL) THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now)';
-  END IF;
-  IF owners IS NOT NULL THEN
-    PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
-    -- no cap: an owner can have any number of suppliers
-    suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
-  ELSE
-    PERFORM ${s}._validate(suppliers, 'suppliers', range_start, range_end, bucket);
-  END IF;
+  suppliers := ${s}._supplier_ids(suppliers, owners, operators, true, range_start, range_end, bucket);
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
@@ -1138,24 +1175,15 @@ END $$;
 -- claim has no amount_upokt or relay counts on chain: NULL, not 0.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_penalties(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, kind text, reason text, events bigint, claimed_upokt numeric,
   slashed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
-  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
-  END IF;
-  IF owners IS NOT NULL THEN
-    PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
-    -- no cap: an owner can have any number of suppliers
-    suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
-  ELSE
-    -- NULL suppliers (and no owners): every supplier
-    PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
-  END IF;
+  -- NULL (no suppliers, owners or operators): every supplier
+  suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
   all_suppliers := suppliers IS NULL;
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket, true);
@@ -1338,7 +1366,7 @@ END $$;
 -- the daily rollup for whole days and claim_settlements at the edges, like get_supplier_earnings.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_proofs(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text,
   claims_settled_with_proof bigint, claims_settled_without_proof bigint,
   proofs_submitted bigint, proofs_validated bigint, proofs_invalid bigint, invalid_by_reason jsonb, covered_from timestamptz,
@@ -1346,17 +1374,8 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; rc record; sp record; all_suppliers boolean; cv record; fb timestamptz;
 BEGIN
-  IF suppliers IS NOT NULL AND owners IS NOT NULL THEN
-    RAISE EXCEPTION 'pass suppliers or owners (the suppliers they own now), not both';
-  END IF;
-  IF owners IS NOT NULL THEN
-    PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
-    -- no cap: an owner can have any number of suppliers
-    suppliers := ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
-  ELSE
-    -- NULL suppliers (and no owners): every supplier
-    PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
-  END IF;
+  -- NULL (no suppliers, owners or operators): every supplier
+  suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
   all_suppliers := suppliers IS NULL;
 ${covered("blocks")}
   rg := ${s}._block_heights(range_start, range_end);
@@ -1365,11 +1384,19 @@ ${covered("blocks")}
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, claims_settled_with_proof, claims_settled_without_proof, proofs_submitted, proofs_validated, proofs_invalid, invalid_by_reason) AS (
   WITH x AS (
+    -- without by_service the smaller daily_claims_by_supplier is enough, as in get_supplier_earnings: the by-application
+    -- one was 881k rows for an owner of 1037 suppliers over 30 days (2.4 s on mainnet, 2026-10-08)
+    SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id sup, ''::text svc,
+           d.claims_with_proof with_proof, d.claim_count - d.claims_with_proof without_proof,
+           0 submitted, 0 validated, 0 invalid, NULL::text reason
+    FROM ${s}.daily_claims_by_supplier d
+    WHERE NOT by_service AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rc.d1 AND rc.d2
+    UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id sup, d.service_id svc,
            d.claims_with_proof with_proof, d.claim_count - d.claims_with_proof without_proof,
            0 submitted, 0 validated, 0 invalid, NULL::text reason
     FROM ${s}.daily_claims_by_supplier_application_service d
-    WHERE (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rc.d1 AND rc.d2
+    WHERE by_service AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rc.d1 AND rc.d2
     UNION ALL
     SELECT c.block_time, c.supplier_id, c.service_id, c.settled_with_proof::int, (NOT c.settled_with_proof)::int, 0, 0, 0, NULL
     FROM ${s}.claim_settlements c
@@ -1724,6 +1751,10 @@ END $$;
 -- that paid them counts once. Measured on mainnet: pokt1m0yk72fcvut72ujrs7hyf4mzgahe4c9ya429eh on 2026-10-03 got 27
 -- transfers from 20 claims (948613-finalize_block-3067 pays it twice): relays 577,473 live, 289,472 per claim; gross
 -- 553,512,909 live, 277,061,678 per claim; net 209,138,830 in both.
+-- The claims of one address come from daily_claims_paid_by_address_service for each whole day of the range whose every
+-- settlement it holds (settlement_blocks.claims_paid_rollup), and from v_claims_paid for the rest: the edges, and each
+-- day with a settlement it does not hold. A list of addresses reads only v_claims_paid: the rollup counts a claim once per
+-- address, so a claim that paid two addresses of the list would count twice.
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_service(addresses text[],
   start_ts timestamp, end_ts timestamp)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1731,51 +1762,46 @@ DECLARE
   l record := ${s}._legacy_range(start_ts, end_ts);
   f timestamptz := l.start_from AT TIME ZONE 'UTC';
   t timestamptz := (l.end_to + interval '1 microsecond') AT TIME ZONE 'UTC';
-  lo bigint; hi bigint; svcs text[];
+  rg record; ud date[]; uh bigint[]; sups text[]; svcs text[];
 BEGIN
   IF l.empty THEN RETURN jsonb_build_object('range', l.range, 'data', NULL); END IF;
-  -- as a join on the distinct matched suppliers: written as IN (...) it plans 10x slower (3.4 s against 0.3 s on mainnet)
-  svcs := ARRAY(
-    SELECT DISTINCT ssc.service_id
-    FROM ${s}.supplier_service_configs ssc
-    JOIN (SELECT DISTINCT ssc2.supplier_id
-          FROM ${s}.supplier_service_configs ssc2
-          JOIN ${s}.suppliers su ON su.id = ssc2.supplier_id
-          CROSS JOIN jsonb_array_elements(ssc2.rev_share) AS elem
-          WHERE elem->>'address' = ANY(addresses) AND upper_inf(ssc2._block_range)
-            AND su.stake_status = 'Staked' AND upper_inf(su._block_range)) m ON m.supplier_id = ssc.supplier_id
-    WHERE upper_inf(ssc._block_range));
+  -- resolved once: inside the query a filter would call it for every row it scans
+  sups := ${s}._operator_suppliers(addresses);
+  svcs := ARRAY(SELECT DISTINCT ssc.service_id FROM ${s}.supplier_service_configs ssc
+                WHERE ssc.supplier_id = ANY(sups) AND upper_inf(ssc._block_range));
   IF l.start_from IS NULL OR l.end_to IS NULL OR l.start_from > l.end_to THEN
     RETURN jsonb_build_object('range', l.range, 'data', (
       SELECT jsonb_agg(jsonb_build_object('service_id', sv, 'relays', 0, 'estimated_relays', 0, 'computed_units', 0,
                        'estimated_computed_units', 0, 'gross_rewards', 0, 'net_rewards', 0) ORDER BY sv)
       FROM unnest(svcs) sv));
   END IF;
-  SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb WHERE sb.block_time >= f AND sb.block_time < t;
+  rg := ${s}._ranges(f, t, NULL, (SELECT count(DISTINCT a) FROM unnest(addresses) a) <> 1);
+  -- the rollup days with a settlement the rollup does not hold, and every settlement of those days: read from the claims
+  ud := ARRAY(SELECT DISTINCT sb.day FROM ${s}.settlement_blocks sb
+              WHERE sb.day BETWEEN rg.d1 AND rg.d2 AND NOT sb.claims_paid_rollup);
+  uh := ARRAY(SELECT sb.height FROM ${s}.settlement_blocks sb WHERE sb.day = ANY(ud));
   RETURN jsonb_build_object('range', l.range, 'data', (
     WITH services AS (
       SELECT sv.service_id FROM unnest(svcs) sv(service_id)
     ), paid AS (
-      -- the claims that paid the addresses, each once: every role a claim pays (v_income_base's claim branches)
-      SELECT sp.height, sp.event_idx FROM ${s}.shareholder_payouts sp
-      WHERE sp.recipient_id = ANY(addresses) AND sp.height BETWEEN lo AND hi AND (sp.relay_upokt > 0 OR sp.global_upokt > 0)
+      -- the claims that paid the addresses, each once; one set of heights per branch, so each reaches the view's indexes
+      SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height BETWEEN rg.lo1 AND rg.hi1
       UNION
-      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
-      WHERE c.source_owner_id = ANY(addresses) AND c.height BETWEEN lo AND hi
-        AND (c.relay_to_source_owner_upokt > 0 OR c.global_to_source_owner_upokt > 0)
+      SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height BETWEEN rg.lo2 AND rg.hi2
       UNION
-      SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
-      WHERE c.application_id = ANY(addresses) AND c.height BETWEEN lo AND hi
-        AND (c.relay_to_application_upokt > 0 OR c.global_to_application_upokt > 0)
-      UNION
-      SELECT c.height, c.event_idx FROM ${s}.settlement_blocks sb JOIN ${s}.claim_settlements c USING (height)
-      WHERE sb.dao_address = ANY(addresses) AND sb.height BETWEEN lo AND hi
-        AND (c.relay_to_dao_upokt > 0 OR c.global_to_dao_upokt > 0 OR c.reimbursement_to_dao_upokt > 0)
+      SELECT p.height, p.event_idx FROM ${s}.v_claims_paid p WHERE p.address = ANY(addresses) AND p.height = ANY(uh)
     ), claims AS (
-      SELECT c.service_id, sum(c.settled_upokt)::numeric settled_upokt, sum(c.relays)::numeric relays,
-             sum(c.estimated_relays)::numeric estimated_relays, sum(c.claimed_compute_units)::numeric compute_units,
-             sum(c.estimated_compute_units)::numeric estimated_compute_units
-      FROM paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx GROUP BY 1
+      SELECT x.service_id, sum(x.settled_upokt)::numeric settled_upokt, sum(x.relays)::numeric relays,
+             sum(x.estimated_relays)::numeric estimated_relays, sum(x.claimed_compute_units)::numeric compute_units,
+             sum(x.estimated_compute_units)::numeric estimated_compute_units
+      FROM (SELECT c.service_id, c.settled_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units
+            FROM paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+            UNION ALL
+            SELECT r.service_id, r.settled_upokt, r.relays, r.estimated_relays, r.claimed_compute_units, r.estimated_compute_units
+            FROM ${s}.daily_claims_paid_by_address_service r
+            -- not a row left at zero claims (a subtraction deletes those only at the keys it touched)
+            WHERE r.address = ANY(addresses) AND r.day BETWEEN rg.d1 AND rg.d2 AND r.day <> ALL(ud) AND r.claim_count > 0) x
+      GROUP BY 1
     ), net AS (
       SELECT i.service_id, sum(i.amount_upokt) amount_upokt
       FROM ${s}._income(addresses, f, t, NULL, false, false, true, false) i

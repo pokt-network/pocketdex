@@ -398,6 +398,65 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     }
   });
 
+  it("legacy_rewards_by_addresses_and_time_group_by_service reads the days its rollup holds, and answers as from the claims", async () => {
+    // a shareholder in both families, and a pair of shareholders of the same claims (the DAO lists no service here: no
+    // configuration names it, so its answer is null either way; writer.db.spec.ts checks its rollup rows)
+    const answer = async (addrs: string[], s: string, e: string) =>
+      (await one(`SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)->>'data' d`, [addrs, s, e])).d;
+    await c.query("BEGIN");
+    try {
+      for (const [s, e] of WINDOWS)
+        for (const addrs of [[shareholder], pair]) {
+          const d = await answer(addrs, s, e);
+          assert.ok(d !== null && /"gross_rewards": [1-9]/.test(d), `${addrs} ${s}..${e}: ${d}`);
+          await c.query("SET LOCAL money.no_rollup = on");
+          assert.equal(d, await answer(addrs, s, e), `${addrs} ${s}..${e}`);
+          await c.query("SET LOCAL money.no_rollup = off");
+        }
+      // 1 and 2 Sep are whole days of WINDOWS[0]: a rollup row of 1 Sep changed by hand changes the answer for one address,
+      // and not for a list, which reads only the claims
+      const [s, e] = WINDOWS[0];
+      const truth = await answer([shareholder], s, e);
+      const pairTruth = await answer(pair, s, e);
+      const corrupt = (day: string) =>
+        c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt + 7
+                 WHERE address = ANY($1) AND day = $2`, [[shareholder, ...pair], day]);
+      await corrupt("2026-09-01");
+      assert.notEqual(await answer([shareholder], s, e), truth);
+      assert.equal(await answer(pair, s, e), pairTruth);
+      // a height of 1 Sep the rollup does not hold: 1 Sep is read from the claims, 2 Sep still from the rollup
+      await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = 899733`);
+      assert.equal(await answer([shareholder], s, e), truth);
+      await corrupt("2026-09-02");
+      assert.notEqual(await answer([shareholder], s, e), truth);
+      // per day: with a height of 2 Sep not held instead, 2 Sep comes from the claims and 1 Sep, held again, from the
+      // rollup (whose changed row shows), never every day before the one not held
+      await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = true WHERE height = 899733`);
+      await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = 899773`);
+      assert.notEqual(await answer([shareholder], s, e), truth);
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt - 7
+                     WHERE address = ANY($1) AND day = '2026-09-01'`, [[shareholder, ...pair]]);
+      assert.equal(await answer([shareholder], s, e), truth);
+      // a row left at zero claims on 1 Sep (held, read from the rollup) is not read; the same row with one claim is.
+      // Its service is one the shareholder's supplier is configured for now and that settled nothing, listed with 0.
+      await c.query(
+        `INSERT INTO ${S}.supplier_service_configs VALUES ($1, 'zero-svc', jsonb_build_array(jsonb_build_object('address', $2::text)), int8range(1, NULL))`,
+        [suppliers[0], shareholder]
+      );
+      const listed = await answer([shareholder], s, e);
+      assert.match(String(listed), /"service_id": "zero-svc", "net_rewards": 0, "gross_rewards": 0/);
+      await c.query(
+        `INSERT INTO ${S}.daily_claims_paid_by_address_service VALUES ('2026-09-01', $1, 'zero-svc', 0, 999, 5, 5, 5, 5)`,
+        [shareholder]
+      );
+      assert.equal(await answer([shareholder], s, e), listed);
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET claim_count = 1 WHERE service_id = 'zero-svc'`);
+      assert.match(String(await answer([shareholder], s, e)), /"service_id": "zero-svc", "net_rewards": 0, "gross_rewards": 999/);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("every legacy_ function accepts the ranges and units the live one accepts, and answers the same at the edges", async () => {
     // [start, end, trunc]: longer than the catalog's caps, exactly 7 days by hour (end + 1 µs is past 7 days), units the
     // catalog has no bucket for, an inverted range and a NULL end: the live function answers all of them
@@ -994,12 +1053,20 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         suppliers text[], capped boolean, p_covered tstzmultirange, p_span_from timestamptz)
         RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';
       CREATE FUNCTION ${S}._covered_buckets(bucket text, span_first timestamptz, span_last timestamptz, gaps jsonb)
-        RETURNS SETOF timestamptz LANGUAGE sql AS 'SELECT now()';`);
+        RETURNS SETOF timestamptz LANGUAGE sql AS 'SELECT now()';
+      -- a supplier function from before operators
+      CREATE FUNCTION ${S}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
+        bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false,
+        by_supplier boolean DEFAULT true, owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
+        RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
     assert.deepEqual(await oids(), before);
     await c.query(`SELECT * FROM ${S}.get_income($1, '2026-09-01T00:00:00Z', '2026-09-03T00:00:00Z', 'hour', fill_empty_buckets => true)`, [
       [shareholder],
+    ]);
+    await c.query(`SELECT * FROM ${S}.get_supplier_earnings($1, '2026-09-01T00:00:00Z', '2026-09-03T00:00:00Z')`, [
+      suppliers.slice(0, 200),
     ]);
   });
 

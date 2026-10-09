@@ -63,6 +63,7 @@ const TABLES = [
   "daily_validator_rewards",
   "daily_delegator_rewards_by_validator",
   "hourly_income_by_address_supplier",
+  "daily_claims_paid_by_address_service",
 ];
 
 function gz(file: string): Record<string, unknown> {
@@ -621,7 +622,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         [S]
       )
     ).rows;
-    assert.equal(rollups.length, 12);
+    assert.equal(rollups.length, 13);
     const src = async (name: string) =>
       String(
         (await c.query(`SELECT prosrc FROM pg_proc WHERE pronamespace = $1::regnamespace AND proname = $2`, [S, name]))
@@ -662,6 +663,134 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
              (SELECT count(*) FROM (SELECT * FROM d EXCEPT SELECT * FROM m) x)::int only_d`);
     assert.ok(Number(diff.rows[0].n_rows) > 0);
     assert.deepEqual([diff.rows[0].only_m, diff.rows[0].only_d], [0, 0]);
+  });
+
+  it("daily_claims_paid_by_address_service counts each claim once per address it paid, by day and service, as the base does", async () => {
+    const r = (
+      await c.query(`
+        WITH b AS (SELECT sb.day, p.address, c.service_id, count(*)::bigint n, sum(c.settled_upokt)::bigint s,
+                          sum(c.relays)::bigint r, sum(c.estimated_relays)::bigint er, sum(c.claimed_compute_units)::bigint cu,
+                          sum(c.estimated_compute_units)::bigint ecu
+                   FROM ${S}.v_claims_paid p JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+                   JOIN ${S}.settlement_blocks sb ON sb.height = c.height GROUP BY 1, 2, 3),
+             t AS (SELECT day, address, service_id, claim_count, settled_upokt, relays, estimated_relays, claimed_compute_units,
+                          estimated_compute_units FROM ${S}.daily_claims_paid_by_address_service)
+        SELECT (SELECT count(*) FROM t)::int n, (SELECT count(*) FROM (SELECT * FROM t EXCEPT SELECT * FROM b) x)::int only_t,
+               (SELECT count(*) FROM (SELECT * FROM b EXCEPT SELECT * FROM t) x)::int only_b,
+               (SELECT count(*) FROM ${S}.settlement_blocks WHERE NOT claims_paid_rollup)::int unmarked,
+               -- the roles v_claims_paid reads: every claim pays the DAO, and some pay a shareholder in both families
+               (SELECT count(DISTINCT address) FROM ${S}.v_claims_paid p JOIN ${S}.settlement_blocks sb USING (height)
+                WHERE p.address = sb.dao_address)::int dao,
+               (SELECT count(*) FROM ${S}.shareholder_payouts WHERE relay_upokt > 0 AND global_upokt > 0)::int both_families`)
+    ).rows[0];
+    assert.ok(Number(r.n) > 0 && Number(r.dao) > 0 && Number(r.both_families) > 0, JSON.stringify(r));
+    assert.deepEqual([r.only_t, r.only_b, r.unmarked], [0, 0, 0]);
+  });
+
+  it("a day written before daily_claims_paid_by_address_service: a rewrite subtracts nothing it did not add, and fill_claims_paid_day writes it", async () => {
+    const before = await md5All();
+    const day = "2026-09-01";
+    const heights = (await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE day = $1`, [day])).rows[0].n;
+    assert.ok(Number(heights) >= 2, `precondition: the tests above wrote several heights on ${day}`);
+    const fill = async () => Number((await c.query(`SELECT ${S}.fill_claims_paid_day($1) n`, [day])).rows[0].n);
+    const rollupDay = async () =>
+      (
+        await c.query(
+          `SELECT count(*)::int n, coalesce(md5(string_agg(x::text, '|' ORDER BY x::text)), '') h
+           FROM ${S}.daily_claims_paid_by_address_service x WHERE day = $1`,
+          [day]
+        )
+      ).rows[0];
+    const held = async () =>
+      (await c.query(`SELECT height::int h FROM ${S}.settlement_blocks WHERE day = $1 AND claims_paid_rollup ORDER BY 1`, [day]))
+        .rows;
+    // as the rollup arrives on a database written before it: no row, and no height held
+    await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE day = $1`, [day]);
+    await c.query(`DELETE FROM ${S}.daily_claims_paid_by_address_service WHERE day = $1`, [day]);
+    // rewriting one of them subtracts nothing (it would go negative: drift) and adds nothing: it stays not held
+    const { height, payload } = payloadOf("899713", true);
+    await write(height, payload);
+    assert.deepEqual(await held(), []);
+    assert.equal((await rollupDay()).n, 0);
+    assert.equal(await fill(), Number(heights));
+    assert.equal(await md5All(), before);
+    // a day already held is left as it is, but not a row left at zero claims
+    await c.query(`INSERT INTO ${S}.daily_claims_paid_by_address_service VALUES ($1, 'zero-row', 'svc', 0, 0, 0, 0, 0, 0)`, [day]);
+    assert.equal(await fill(), 0);
+    assert.equal(
+      (await c.query(`SELECT count(*)::int n FROM ${S}.daily_claims_paid_by_address_service WHERE address = 'zero-row'`)).rows[0].n,
+      0
+    );
+    // held -> an image without the rollup rewrites the height: it subtracts and adds the other rollups, leaves this one
+    // as it was (the old contribution stays) and the height not held (its write_settlement does not name the column)
+    const day0 = await rollupDay();
+    await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = $1`, [height]);
+    // -> this image rewrites it: nothing subtracted, nothing added again, still not held, so no day counts it twice
+    await write(height, payload);
+    assert.deepEqual(await rollupDay(), day0);
+    assert.ok(!(await held()).some((r) => r.h === height));
+    // an image without the rollup that rewrote a held height may also have left a stale contribution: the fill
+    // recomputes the whole day from the base tables
+    await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET claim_count = 2 * claim_count, settled_upokt = 2 * settled_upokt
+                   WHERE day = $1`, [day]);
+    assert.equal(await fill(), 1);
+    assert.equal(await md5All(), before);
+  });
+
+  it("a height rewritten held -> by an image without the rollup -> by this one is counted once, also by the drift check", async () => {
+    const before = await md5All();
+    const { height, payload } = payloadOf("899713", true);
+    const sums = async () =>
+      (
+        await c.query(
+          `SELECT sum(claim_count)::text n, sum(settled_upokt)::text s, sum(estimated_relays)::text er,
+                  sum(estimated_compute_units)::text ecu FROM ${S}.daily_claims_paid_by_address_service WHERE day = '2026-09-01'`
+        )
+      ).rows[0];
+    const once = await sums();
+    await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = $1`, [height]);
+    await write(height, payload);
+    await write(height, payload);
+    assert.deepEqual(await sums(), once);
+    await c.query(`SELECT ${S}.fill_claims_paid_day('2026-09-01')`);
+    assert.equal(await md5All(), before);
+    // a held height whose rollup row lost an estimate is drift on its next rewrite, as a lost amount is
+    for (const col of ["estimated_relays", "estimated_compute_units"]) {
+      const k = (
+        await c.query(
+          `SELECT p.address, c.service_id FROM ${S}.v_claims_paid p
+           JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+           JOIN ${S}.settlement_blocks sb ON sb.height = p.height WHERE sb.day = '2026-09-01'
+           GROUP BY 1, 2 HAVING count(*) = 1 AND min(p.height) = ${height} AND sum(c.${col}) > 0
+           ORDER BY 1, 2 LIMIT 1`
+        )
+      ).rows[0];
+      assert.ok(k, `precondition: a row whose only claim is at ${height}, with ${col} > 0`);
+      const where = `WHERE day = '2026-09-01' AND address = $1 AND service_id = $2`;
+      // the height's contribution to the row gone but the estimate: claim_count reaches 0 with the estimate left
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET ${col} = ${col} + 1 ${where}`, [k.address, k.service_id]);
+      await assert.rejects(write(height, payload), /rollup drift at height 899713/, col);
+      await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET ${col} = ${col} - 1 ${where}`, [k.address, k.service_id]);
+    }
+    // any column going negative is drift too, on a row that other heights keep above 0 claims
+    const m = (
+      await c.query(
+        `SELECT p.address, c.service_id FROM ${S}.v_claims_paid p
+         JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
+         JOIN ${S}.settlement_blocks sb ON sb.height = p.height WHERE sb.day = '2026-09-01'
+         GROUP BY 1, 2 HAVING count(*) >= 2 AND count(*) FILTER (WHERE p.height = ${height}) >= 1
+         ORDER BY 1, 2 LIMIT 1`
+      )
+    ).rows[0];
+    assert.ok(m, `precondition: a row with claims at ${height} and at another height`);
+    const whereM = `WHERE day = '2026-09-01' AND address = $1 AND service_id = $2`;
+    const relays = (
+      await c.query(`SELECT relays::text r FROM ${S}.daily_claims_paid_by_address_service ${whereM}`, [m.address, m.service_id])
+    ).rows[0].r;
+    await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET relays = -1 ${whereM}`, [m.address, m.service_id]);
+    await assert.rejects(write(height, payload), /rollup drift at height 899713/, "relays below 0");
+    await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET relays = $3 ${whereM}`, [m.address, m.service_id, relays]);
+    assert.equal(await md5All(), before);
   });
 
   it("rewriting 710013 over a corrupted commission or replayed count, or a commission left on a replayed-only row, is drift", async () => {
@@ -1423,7 +1552,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
     await assert.rejects(
       c.query(`SELECT * FROM ${S}.get_supplier_earnings(ARRAY['x'], NULL, NULL, owners => ARRAY['y'])`),
-      /not both/
+      /pass one of suppliers, owners .* or operators/
     );
   });
 
@@ -1918,7 +2047,92 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.equal(formerOwner.rows[0].n, 0);
       await assert.rejects(
         c.query(`SELECT * FROM ${S}.get_supplier_earnings(ARRAY['x'], NULL, NULL, owners => ARRAY['owner-a'])`),
-        /pass suppliers or owners/
+        /pass one of suppliers, owners .* or operators/
+      );
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("the supplier functions take operators: the Staked suppliers whose live configs share revenue with them now, no cap", async () => {
+    await c.query("BEGIN");
+    try {
+      const sups = (
+        await c.query(`SELECT array_agg(DISTINCT supplier_id ORDER BY supplier_id) s FROM ${S}.claim_settlements`)
+      ).rows[0].s as unknown as string[];
+      assert.ok(sups.length > 1);
+      const idle = Array.from({ length: 250 }, (_, i) => `idle-${i + 1}`);
+      await c.query(`CREATE TABLE ${S}.suppliers (id text, stake_status text, _block_range int8range)`);
+      await c.query(
+        `CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range)`
+      );
+      // op-a shares revenue now on every supplier that settled and on 250 idle ones, next to another address; not
+      // through an unstaked supplier, nor through a config that is no longer live (sups[0]'s old one, naming op-b)
+      await c.query(
+        `INSERT INTO ${S}.suppliers SELECT u, 'Staked', int8range(1, NULL) FROM unnest($1::text[] || $2::text[]) u
+         UNION ALL SELECT 'unstaked-1', 'Unstaked', int8range(1, NULL)
+         UNION ALL SELECT 'unstaked-1', 'Staked', int8range(0, 1)`,
+        [sups, idle]
+      );
+      await c.query(
+        `INSERT INTO ${S}.supplier_service_configs
+         SELECT u, 'svc', jsonb_build_array(jsonb_build_object('address', 'someone', 'rev_share_percentage', 40),
+                                            jsonb_build_object('address', 'op-a', 'rev_share_percentage', 60)), int8range(1, NULL)
+         FROM unnest($1::text[] || $2::text[]) u
+         UNION ALL SELECT 'unstaked-1', 'svc', '[{"address": "op-a", "rev_share_percentage": 100}]', int8range(1, NULL)
+         UNION ALL SELECT $3, 'old', '[{"address": "op-b", "rev_share_percentage": 100}]', int8range(0, 1)`,
+        [sups, idle, sups[0]]
+      );
+      const resolve = async (ops: string[]) =>
+        (await c.query(`SELECT ${S}._operator_suppliers($1::text[]) s`, [ops])).rows[0].s as unknown as string[];
+      assert.deepEqual(await resolve(["op-a", "nobody"]), [...sups, ...idle].sort());
+      assert.deepEqual(await resolve(["op-b"]), []);
+      // the same suppliers named by hand, in calls of at most 200
+      const parts = Array.from({ length: Math.ceil(sups.length / 200) }, (_, i) => sups.slice(i * 200, i * 200 + 200));
+      let claimed = BigInt(0);
+      let claims = BigInt(0);
+      for (const part of parts) {
+        const r = (
+          await c.query(
+            `SELECT sum(claimed_upokt)::text a, sum(settled_claims)::text n FROM ${S}.get_supplier_earnings($1::text[], NULL, NULL)`,
+            [part]
+          )
+        ).rows[0];
+        claimed += BigInt(r.a ?? 0);
+        claims += BigInt(r.n ?? 0);
+      }
+      const byOperator = await c.query(
+        `SELECT supplier_id, claimed_upokt::text a, settled_claims::text n FROM ${S}.get_supplier_earnings(suppliers => NULL,
+           range_start => NULL, range_end => NULL, operators => ARRAY['op-a'], by_supplier => false)`
+      );
+      assert.deepEqual(byOperator.rows, [{ supplier_id: "all", a: claimed.toString(), n: claims.toString() }]);
+      // every requested supplier gets its row: the ones that settled, and the 250 idle ones
+      for (const fn of ["get_supplier_earnings", "get_supplier_distribution", "get_supplier_penalties"]) {
+        let named = 0;
+        for (const part of parts)
+          named += Number(
+            (await c.query(`SELECT count(*)::int n FROM ${S}.${fn}($1::text[], NULL, NULL, fill_empty_buckets => true)`, [part]))
+              .rows[0].n
+          );
+        const r = await c.query(
+          `SELECT count(*)::int n FROM ${S}.${fn}(NULL, NULL, NULL, operators => ARRAY['op-a'], fill_empty_buckets => true)`
+        );
+        assert.equal(Number(r.rows[0].n) - idle.length, named, fn);
+        // an operator whose suppliers are all unstaked or gone answers no rows
+        const none = await c.query(`SELECT count(*)::int n FROM ${S}.${fn}(NULL, NULL, NULL, operators => ARRAY['op-b'])`);
+        assert.equal(none.rows[0].n, 0, fn);
+      }
+      // one of suppliers, owners and operators; get_supplier_distribution needs one
+      for (const fn of ["get_supplier_earnings", "get_supplier_distribution", "get_supplier_penalties", "get_supplier_proofs"]) {
+        for (const args of ["ARRAY['x'], NULL, NULL, operators => ARRAY['op-a']", "NULL, NULL, NULL, owners => ARRAY['o'], operators => ARRAY['op-a']"]) {
+          await c.query("SAVEPOINT a");
+          await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(${args})`), /pass one of suppliers, owners .* or operators/, fn);
+          await c.query("ROLLBACK TO SAVEPOINT a");
+        }
+      }
+      await assert.rejects(
+        c.query(`SELECT * FROM ${S}.get_supplier_distribution(NULL, NULL, NULL)`),
+        /pass one of suppliers, owners .* or operators/
       );
     } finally {
       await c.query("ROLLBACK");
