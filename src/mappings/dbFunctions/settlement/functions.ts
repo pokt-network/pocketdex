@@ -651,7 +651,11 @@ BEGIN
   RETURN suppliers;
 END $$;
 
--- Supplier: what it generated
+-- Supplier: what it generated. By service without application, with no bucket or a month or year one, each UTC month
+-- inside the rollup days comes from monthly_claims_by_supplier_service when that rollup holds every settlement of the month
+-- (settlement_blocks.monthly_claims_rollup) and the month has none outside those days; the other days from
+-- daily_claims_by_supplier_application_service. An owner of 1037 suppliers by service over its whole history read 3.07M
+-- daily rows there (mainnet, 2026-10-09), and has 253k monthly ones.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false, by_supplier boolean DEFAULT true,
   owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
@@ -661,13 +665,25 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
   settled_claims_with_proof bigint, settled_claims_without_proof bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
+DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz; use_month boolean; mm date[];
+  dr datemultirange;
 BEGIN
   -- NULL (no suppliers, owners or operators): every supplier
   suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
   all_suppliers := suppliers IS NULL;
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  -- the months read from monthly_claims_by_supplier_service (mm), and the rollup days left to the daily rollup (dr)
+  use_month := by_service AND NOT by_application AND coalesce(bucket, 'month') IN ('month', 'year') AND rg.d1 <= rg.d2;
+  IF use_month THEN
+    mm := ARRAY(SELECT m::date FROM generate_series(date_trunc('month', rg.d1::timestamp), date_trunc('month', rg.d2::timestamp), interval '1 month') m
+                WHERE NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
+                                  WHERE sb.day >= m AND sb.day < m + interval '1 month' AND NOT sb.monthly_claims_rollup)
+                  AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day >= m AND sb.day < rg.d1)
+                  AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb WHERE sb.day > rg.d2 AND sb.day < m + interval '1 month'));
+    dr := datemultirange(daterange(rg.d1, rg.d2, '[]'))
+          - datemultirange(VARIADIC ARRAY(SELECT daterange(m, (m + interval '1 month')::date) FROM unnest(mm) m));
+  END IF;
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof) AS (
@@ -683,7 +699,20 @@ ${covered("settled")}
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
            d.claim_count, d.claims_with_proof
     FROM ${s}.daily_claims_by_supplier_application_service d
-    WHERE (by_service OR by_application) AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rg.d1 AND rg.d2
+    WHERE (by_service OR by_application) AND NOT use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers))
+      AND d.day BETWEEN rg.d1 AND rg.d2
+    UNION ALL
+    SELECT d.day::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
+           d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
+           d.claim_count, d.claims_with_proof
+    FROM unnest(dr) r JOIN ${s}.daily_claims_by_supplier_application_service d ON d.day >= lower(r) AND d.day < upper(r)
+    WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers))
+    UNION ALL
+    SELECT d.month::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
+           d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
+           d.claim_count, d.claims_with_proof
+    FROM ${s}.monthly_claims_by_supplier_service d
+    WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.month = ANY(mm)
     UNION ALL
     SELECT c.block_time, c.supplier_id, c.service_id, c.application_id, c.claimed_upokt, c.settled_upokt,
            c.overservicing_loss_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, 1::bigint,

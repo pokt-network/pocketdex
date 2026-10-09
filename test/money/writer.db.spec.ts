@@ -64,6 +64,7 @@ const TABLES = [
   "daily_delegator_rewards_by_validator",
   "hourly_income_by_address_supplier",
   "daily_claims_paid_by_address_service",
+  "monthly_claims_by_supplier_service",
 ];
 
 function gz(file: string): Record<string, unknown> {
@@ -622,7 +623,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         [S]
       )
     ).rows;
-    assert.equal(rollups.length, 13);
+    assert.equal(rollups.length, 14);
     const src = async (name: string) =>
       String(
         (await c.query(`SELECT prosrc FROM pg_proc WHERE pronamespace = $1::regnamespace AND proname = $2`, [S, name]))
@@ -790,6 +791,109 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET relays = -1 ${whereM}`, [m.address, m.service_id]);
     await assert.rejects(write(height, payload), /rollup drift at height 899713/, "relays below 0");
     await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET relays = $3 ${whereM}`, [m.address, m.service_id, relays]);
+    assert.equal(await md5All(), before);
+  });
+
+  it("monthly_claims_by_supplier_service sums the claims per month, supplier and service, as the base does, every height held", async () => {
+    const r = (
+      await c.query(`
+        WITH b AS (SELECT date_trunc('month', sb.day::timestamp)::date AS month, c.supplier_id, c.service_id, count(*)::bigint n,
+                          sum(c.claimed_upokt)::bigint cl, sum(c.settled_upokt)::bigint st, sum(c.overservicing_loss_upokt)::bigint ol,
+                          sum(c.global_minted_upokt)::bigint gm, sum(c.relays)::bigint r, sum(c.estimated_relays)::bigint er,
+                          sum(c.claimed_compute_units)::bigint cu, sum(c.estimated_compute_units)::bigint ecu,
+                          count(*) FILTER (WHERE c.settled_with_proof)::bigint p
+                   FROM ${S}.claim_settlements c JOIN ${S}.settlement_blocks sb USING (height) GROUP BY 1, 2, 3),
+             t AS (SELECT month, supplier_id, service_id, claim_count, claimed_upokt, settled_upokt, overservicing_loss_upokt,
+                          global_minted_upokt, relays, estimated_relays, claimed_compute_units, estimated_compute_units,
+                          claims_with_proof FROM ${S}.monthly_claims_by_supplier_service)
+        SELECT (SELECT count(*) FROM t)::int n, (SELECT count(*) FROM (SELECT * FROM t EXCEPT SELECT * FROM b) x)::int only_t,
+               (SELECT count(*) FROM (SELECT * FROM b EXCEPT SELECT * FROM t) x)::int only_b,
+               (SELECT count(*) FROM ${S}.settlement_blocks WHERE NOT monthly_claims_rollup)::int unmarked,
+               (SELECT sum(claims_with_proof) FROM t)::int with_proof, (SELECT sum(overservicing_loss_upokt) FROM t)::text ol`)
+    ).rows[0];
+    assert.ok(Number(r.n) > 0 && Number(r.with_proof) > 0, JSON.stringify(r));
+    assert.deepEqual([r.only_t, r.only_b, r.unmarked], [0, 0, 0]);
+  });
+
+  it("a month written before monthly_claims_by_supplier_service: a rewrite adds nothing to it, and fill_monthly_claims_month writes it", async () => {
+    const before = await md5All();
+    const month = "2026-09-01";
+    const heights = (
+      await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE date_trunc('month', day::timestamp) = $1`, [month])
+    ).rows[0].n;
+    assert.ok(Number(heights) >= 2, `precondition: the tests above wrote several heights in ${month}`);
+    // any day of the month names it
+    const fill = async () => Number((await c.query(`SELECT ${S}.fill_monthly_claims_month('2026-09-17') n`)).rows[0].n);
+    const rollupMonth = async () =>
+      (
+        await c.query(
+          `SELECT count(*)::int n, coalesce(md5(string_agg(x::text, '|' ORDER BY x::text)), '') h
+           FROM ${S}.monthly_claims_by_supplier_service x WHERE month = $1`,
+          [month]
+        )
+      ).rows[0];
+    const held = async () =>
+      (await c.query(`SELECT height::int h FROM ${S}.settlement_blocks WHERE monthly_claims_rollup ORDER BY 1`)).rows;
+    // as the rollup arrives on a database written before it: no row, and no height held
+    await c.query(`UPDATE ${S}.settlement_blocks SET monthly_claims_rollup = false`);
+    await c.query(`DELETE FROM ${S}.monthly_claims_by_supplier_service`);
+    // rewriting one of them subtracts nothing (it would go negative: drift) and adds nothing: it stays not held
+    const { height, payload } = payloadOf("899713", true);
+    await write(height, payload);
+    assert.deepEqual(await held(), []);
+    assert.equal((await rollupMonth()).n, 0);
+    // the fill holds the writer's lock until it commits: a writer started meanwhile waits for it
+    const other = new Client({ connectionString: URL });
+    await other.connect();
+    await c.query("BEGIN");
+    try {
+      assert.equal(await fill(), Number(heights));
+      const locked = await other.query(`SELECT pg_try_advisory_lock(hashtext('pocketdex.write_settlement')) ok`);
+      assert.equal(locked.rows[0].ok, false);
+      await c.query("COMMIT");
+    } finally {
+      await c.query("ROLLBACK");
+      await other.end();
+    }
+    assert.equal(await md5All(), before);
+    assert.equal(await fill(), 0);
+    // held -> an image without the rollup rewrites the height: it subtracts and adds the other rollups, leaves this one as
+    // it was (the old contribution stays) and the height not held (its write_settlement does not name the column)
+    const month0 = await rollupMonth();
+    await c.query(`UPDATE ${S}.settlement_blocks SET monthly_claims_rollup = false WHERE height = $1`, [height]);
+    // -> this image rewrites it: nothing subtracted, nothing added again, still not held, so no month counts it twice
+    await write(height, payload);
+    assert.deepEqual(await rollupMonth(), month0);
+    assert.ok(!(await held()).some((r) => r.h === height));
+    // an image without the rollup that rewrote a held height may also have left a stale contribution: the fill
+    // recomputes the whole month
+    await c.query(`UPDATE ${S}.monthly_claims_by_supplier_service SET claim_count = 2 * claim_count, settled_upokt = 2 * settled_upokt
+                   WHERE month = $1`, [month]);
+    assert.equal(await fill(), 1);
+    assert.equal(await md5All(), before);
+  });
+
+  it("a held height whose monthly_claims_by_supplier_service row went negative or kept an amount at zero claims is drift", async () => {
+    const before = await md5All();
+    const { height, payload } = payloadOf("899713", true);
+    const k = (
+      await c.query(`SELECT supplier_id, service_id FROM ${S}.claim_settlements
+                     WHERE block_time >= '2026-09-01' AND block_time < '2026-10-01'
+                     GROUP BY 1, 2 HAVING bool_and(height = $1) AND sum(relays) > 0 ORDER BY 1, 2 LIMIT 1`, [height])
+    ).rows[0];
+    assert.ok(k, `precondition: a (supplier, service) whose claims of the month are all at ${height}, with relays`);
+    const where = `WHERE month = '2026-09-01' AND supplier_id = $1 AND service_id = $2`;
+    for (const [col, by] of [
+      ["relays", "relays + 1"], // all of its claims at the height: claim_count reaches 0 with relays left
+      ["relays", "-1"], // below 0
+      ["claims_with_proof", "claim_count + 1"], // more claims with a proof than claims
+    ]) {
+      const old = (await c.query(`SELECT ${col}::text v FROM ${S}.monthly_claims_by_supplier_service ${where}`, [k.supplier_id, k.service_id]))
+        .rows[0].v;
+      await c.query(`UPDATE ${S}.monthly_claims_by_supplier_service SET ${col} = ${by} ${where}`, [k.supplier_id, k.service_id]);
+      await assert.rejects(write(height, payload), /rollup drift at height 899713/, `${col} = ${by}`);
+      await c.query(`UPDATE ${S}.monthly_claims_by_supplier_service SET ${col} = $3 ${where}`, [k.supplier_id, k.service_id, old]);
+    }
     assert.equal(await md5All(), before);
   });
 
@@ -1922,6 +2026,100 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         assert.equal(total(rollup), total(base), `${from} ${to} ${bucket}: total`);
         assert.deepEqual(rollup, base, `${from} ${to} ${bucket}`);
       }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_supplier_earnings by service reads whole held months from monthly_claims_by_supplier_service and equals the daily path", async () => {
+    await c.query("BEGIN");
+    try {
+      // 899713's settlement written again on 15 July (mid-day), 3 August (midnight) and 20 August: three months with claims,
+      // and a month with two settlement days
+      for (const [h, ts] of [
+        [600013, "2026-07-15T08:30:00.000Z"],
+        [650013, "2026-08-03T00:00:00.000Z"],
+        [670013, "2026-08-20T18:00:00.000Z"],
+      ] as const) {
+        const { payload } = payloadOf("899713", true);
+        payload.ts = ts;
+        for (const { bind, sql } of writeSettlementCalls(S, h, payload)) await c.query(sql, bind);
+      }
+      // owner-m owns every supplier: more than the 200 a list takes, as the owners the explorer asks about
+      const sups = (await c.query(`SELECT array_agg(DISTINCT supplier_id) s FROM ${S}.claim_settlements`)).rows[0]
+        .s as unknown as string[];
+      assert.ok(sups.length > 200, `${sups.length} suppliers`);
+      await c.query(`CREATE TABLE ${S}.suppliers (id text, owner_id text, _block_range int8range)`);
+      await c.query(`INSERT INTO ${S}.suppliers SELECT u, 'owner-m', int8range(1, NULL) FROM unnest($1::text[]) u`, [sups]);
+      const json = async (from: string | null, to: string | null, bucket: string | null, bySupplier: boolean, owners: boolean) =>
+        String(
+          (
+            await c.query(
+              `SELECT ${S}.get_supplier_earnings_json(NULL, $1, $2, $3, by_service => true, by_supplier => $4,
+                 owners => CASE WHEN $5 THEN ARRAY['owner-m'] END)::text j`,
+              [from, to, bucket, bySupplier, owners]
+            )
+          ).rows[0].j
+        );
+      const daily = async (...args: Parameters<typeof json>) => {
+        await c.query("SAVEPOINT r");
+        try {
+          await c.query("SET LOCAL money.no_rollup = on");
+          return await json(...args);
+        } finally {
+          await c.query("ROLLBACK TO SAVEPOINT r");
+        }
+      };
+      const ranges: Array<[string | null, string | null]> = [
+        [null, null], // the whole history: every month whole
+        ["2025-09-01T12:00:00Z", "2026-09-01T12:00:00.000001Z"], // a year, both ends mid-day
+        ["2026-07-01T00:00:00Z", "2026-09-01T00:00:00Z"], // aligned: July and August whole
+        ["2026-07-10T00:00:00Z", "2026-08-25T00:00:00Z"], // mid-month ends with nothing outside them: July, August whole
+        ["2026-07-15T08:30:00.000001Z", "2026-08-20T18:00:00Z"], // +1 µs: July's settlement out, August's last one out
+        ["2026-08-01T00:00:00Z", "2026-08-10T00:00:00Z"], // inside August, a settlement after it: no whole month
+        ["2026-08-04T00:00:00Z", "2026-08-10T00:00:00Z"], // nothing settled
+      ];
+      for (const [from, to] of ranges)
+        for (const bucket of [null, "month", "year"])
+          for (const [bySupplier, owners] of [
+            [false, true],
+            [true, true],
+            [false, false], // every supplier
+          ]) {
+            const label = `${from} ${to} ${bucket} by_supplier ${bySupplier} owners ${owners}`;
+            const [m, d] = [await json(from, to, bucket, bySupplier, owners), await daily(from, to, bucket, bySupplier, owners)];
+            assert.equal(m, d, label);
+            if (from !== "2026-08-04T00:00:00Z") assert.ok(JSON.parse(d).data.length > 0, label);
+          }
+      // the months are read from the rollup: a changed July row changes the whole-history answer, not the daily one
+      const settled = async (from: string | null, noRollup: boolean) => {
+        await c.query("SAVEPOINT s");
+        try {
+          if (noRollup) await c.query("SET LOCAL money.no_rollup = on");
+          return (
+            await c.query(
+              `SELECT sum(settled_upokt)::text s FROM ${S}.get_supplier_earnings(NULL, $1, NULL, by_service => true, by_supplier => false,
+                 owners => ARRAY['owner-m'])`,
+              [from]
+            )
+          ).rows[0].s as string;
+        } finally {
+          await c.query("ROLLBACK TO SAVEPOINT s");
+        }
+      };
+      const want = await settled(null, true);
+      const julyRows = (await c.query(`SELECT count(*)::int n FROM ${S}.monthly_claims_by_supplier_service WHERE month = '2026-07-01'`))
+        .rows[0].n;
+      assert.ok(Number(julyRows) > 0);
+      await c.query(`UPDATE ${S}.monthly_claims_by_supplier_service SET settled_upokt = settled_upokt + 7 WHERE month = '2026-07-01'`);
+      assert.equal(await settled(null, false), (BigInt(want) + BigInt(7 * Number(julyRows))).toString());
+      assert.equal(await settled(null, true), want);
+      // July is not whole when the range starts after its settlement: from the days
+      const fromAug = await settled("2026-07-15T08:30:00.000001Z", true);
+      assert.equal(await settled("2026-07-15T08:30:00.000001Z", false), fromAug);
+      // a month with a height the rollup does not hold is read from the days: the marker gates it
+      await c.query(`UPDATE ${S}.settlement_blocks SET monthly_claims_rollup = false WHERE height = 600013`);
+      assert.equal(await settled(null, false), want);
     } finally {
       await c.query("ROLLBACK");
     }

@@ -41,6 +41,7 @@ export const OMITTED_TABLES = [
   "daily_delegator_rewards_by_validator",
   "hourly_income_by_address_supplier",
   "daily_claims_paid_by_address_service",
+  "monthly_claims_by_supplier_service",
   // the Delegation entity (src/mappings/pocket/validator.ts)
   "delegations",
 ];

@@ -30,6 +30,7 @@ import type { SettlementPayload } from "../../money/payload";
 // 4: daily_delegator_rewards_by_validator.replayed_count.
 // daily_claims_paid_by_address_service came later without a bump (a bump makes every rollup read raise until
 // rebuild_rollups ends): settlement_blocks.claims_paid_rollup says per height whether it holds that height (schema.ts).
+// So did monthly_claims_by_supplier_service, with settlement_blocks.monthly_claims_rollup.
 export const ROLLUP_VERSION = 4;
 
 export const writeSettlementProcName = "write_settlement";
@@ -193,9 +194,9 @@ FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0 OR c.global
 
 -- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
 CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
-DECLARE d date; hr timestamptz; v_held boolean;
+DECLARE d date; hr timestamptz; v_held boolean; v_month_held boolean;
 BEGIN
-  SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup INTO d, hr, v_held
+  SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup, monthly_claims_rollup INTO d, hr, v_held, v_month_held
   FROM ${s}.settlement_blocks WHERE height = h;
   IF d IS NULL THEN RETURN; END IF;
 
@@ -327,6 +328,19 @@ BEGIN
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
     claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
 
+  -- only for a held height (settlement_blocks.monthly_claims_rollup), as daily_claims_paid_by_address_service
+  INSERT INTO ${s}.monthly_claims_by_supplier_service AS t
+  SELECT date_trunc('month', d)::date, supplier_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt),
+         sg * sum(overservicing_loss_upokt), sg * sum(global_minted_upokt), sg * sum(relays), sg * sum(estimated_relays),
+         sg * sum(claimed_compute_units), sg * sum(estimated_compute_units), sg * count(*) FILTER (WHERE settled_with_proof)
+  FROM ${s}.claim_settlements WHERE height = h AND v_month_held GROUP BY supplier_id, service_id
+  ON CONFLICT (supplier_id, month, service_id) DO UPDATE SET
+    claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
+    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
+    relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
+    claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
+    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
+
   INSERT INTO ${s}.daily_claims_by_supplier AS t
   SELECT d, supplier_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(overservicing_loss_upokt),
          sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
@@ -430,6 +444,19 @@ BEGIN
                   WHERE c.height = h
                     AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
                          OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
+       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
+                    SELECT t.claim_count, t.claimed_upokt, t.settled_upokt, t.overservicing_loss_upokt, t.global_minted_upokt,
+                           t.relays, t.estimated_relays, t.claimed_compute_units, t.estimated_compute_units, t.claims_with_proof
+                    FROM ${s}.monthly_claims_by_supplier_service t
+                    WHERE t.supplier_id = c.supplier_id AND t.month = date_trunc('month', d)::date
+                      AND t.service_id = c.service_id LIMIT 1) t
+                  WHERE c.height = h AND v_month_held
+                    AND (t.claim_count < 0 OR t.claimed_upokt < 0 OR t.settled_upokt < 0 OR t.overservicing_loss_upokt < 0
+                         OR t.global_minted_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0 OR t.claimed_compute_units < 0
+                         OR t.estimated_compute_units < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
+                         OR (t.claim_count = 0 AND (t.claimed_upokt <> 0 OR t.settled_upokt <> 0 OR t.overservicing_loss_upokt <> 0
+                                                    OR t.global_minted_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
+                                                    OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))))
        OR EXISTS (SELECT 1 FROM ${s}.delegator_validator_payouts p CROSS JOIN LATERAL (
                     SELECT t.contribution_count, t.amount_upokt, t.replayed_count FROM ${s}.daily_delegator_rewards_by_validator t
                     WHERE t.delegator = p.delegator AND t.day = d AND t.validator_operator = p.validator_operator
@@ -477,6 +504,10 @@ BEGIN
     -- by the height's keys: a mainnet day is ~90k rows
     DELETE FROM ${s}.daily_claims_paid_by_address_service t USING _paid i
     WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id AND t.claim_count = 0;
+    -- by the height's keys: a mainnet month is ~160k rows
+    DELETE FROM ${s}.monthly_claims_by_supplier_service t USING ${s}.claim_settlements c
+    WHERE c.height = h AND t.supplier_id = c.supplier_id AND t.month = date_trunc('month', d)::date
+      AND t.service_id = c.service_id AND t.claim_count = 0;
   END IF;
   -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it
   UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL
@@ -544,6 +575,7 @@ DECLARE
   v_row_source text := p->>'row_source';
   v_old_version int;
   v_held boolean;
+  v_month_held boolean;
   v_bad text;
   v_lock_timeout text := current_setting('lock_timeout');
 BEGIN
@@ -572,11 +604,14 @@ BEGIN
   END IF;
 
   -- rewrite: subtract the old contribution from the rollups before deleting the base rows
-  SELECT rollup_version, claims_paid_rollup INTO v_old_version, v_held FROM ${s}.settlement_blocks WHERE height = h;
+  SELECT rollup_version, claims_paid_rollup, monthly_claims_rollup INTO v_old_version, v_held, v_month_held
+  FROM ${s}.settlement_blocks WHERE height = h;
   -- daily_claims_paid_by_address_service takes the height only when it is new or was held: an existing height that is
   -- not held (written before the rollup, or rewritten by an image without it, which may have left its old contribution
-  -- there) stays not held, and its day reads the claims until fill_claims_paid_day recomputes the day
+  -- there) stays not held, and its day reads the claims until fill_claims_paid_day recomputes the day.
+  -- monthly_claims_by_supplier_service likewise, its month read from the daily rollup until fill_monthly_claims_month.
   v_held := v_old_version IS NULL OR v_held;
+  v_month_held := v_old_version IS NULL OR v_month_held;
   IF v_old_version IS NOT NULL THEN
     IF v_old_version <> ${ROLLUP_VERSION} THEN
       RAISE EXCEPTION 'height % was written with rollup version %, this code is version ${ROLLUP_VERSION}: run rebuild_rollups first',
@@ -618,10 +653,12 @@ BEGIN
     END IF;
   END IF;
 
-  -- claims_paid_rollup: when held, _rollup_apply below adds the height to daily_claims_paid_by_address_service
-  INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio, claims_paid_rollup)
+  -- claims_paid_rollup / monthly_claims_rollup: when held, _rollup_apply below adds the height to
+  -- daily_claims_paid_by_address_service / monthly_claims_by_supplier_service
+  INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio, claims_paid_rollup,
+                                      monthly_claims_rollup)
   VALUES (h, v_ts, v_era, (SELECT min(recipient_id) FROM _stg_detailed WHERE role = 'dao'),
-          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims), v_held);
+          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims), v_held, v_month_held);
 
   INSERT INTO ${s}.claim_settlements
   SELECT h, c.event_idx, v_ts, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id, c.service_id,
@@ -805,8 +842,11 @@ BEGIN
   DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day >= m;
   DELETE FROM ${s}.daily_validator_rewards WHERE day >= m;
   DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day >= m;
-  -- held before the loop: _rollup_apply adds only a held height to daily_claims_paid_by_address_service
-  UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true WHERE day >= m AND NOT claims_paid_rollup;
+  DELETE FROM ${s}.monthly_claims_by_supplier_service WHERE month >= m;
+  -- held before the loop: _rollup_apply adds only a held height to daily_claims_paid_by_address_service and
+  -- monthly_claims_by_supplier_service
+  UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true, monthly_claims_rollup = true
+  WHERE day >= m AND NOT (claims_paid_rollup AND monthly_claims_rollup);
   FOR h IN SELECT height FROM ${s}.settlement_blocks WHERE day >= m ORDER BY height LOOP
     CALL ${s}._rollup_apply(h, 1);
   END LOOP;
@@ -837,6 +877,31 @@ BEGIN
   FROM ${s}.v_claims_paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
   WHERE p.height BETWEEN lo AND hi GROUP BY p.address, c.service_id;
   UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true WHERE day = p_day AND NOT claims_paid_rollup;
+  GET DIAGNOSTICS marked = ROW_COUNT;
+  RETURN marked;
+END $$;
+
+-- Writes monthly_claims_by_supplier_service for the UTC month of p_month, and marks every height of it as held
+-- (monthly_claims_rollup), as fill_claims_paid_day does for its day: a month whose heights are all marked is left as it is,
+-- and otherwise the whole month is recomputed, under the writer's lock (scripts/fill_monthly_claims.sql). From
+-- daily_claims_by_supplier_application_service, which every image keeps for every height: the same claims summed per day,
+-- read through its day index (a mainnet month: 3.1M rows in 2 s, against ~3.5M claims in an 18 GB table). Returns the
+-- heights it marked.
+CREATE OR REPLACE FUNCTION ${s}.fill_monthly_claims_month(p_month date) RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE marked integer; m1 date := date_trunc('month', p_month::timestamp)::date;
+  m2 date := (date_trunc('month', p_month::timestamp) + interval '1 month')::date;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
+  IF NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks WHERE day >= m1 AND day < m2 AND NOT monthly_claims_rollup) THEN
+    RETURN 0;
+  END IF;
+  DELETE FROM ${s}.monthly_claims_by_supplier_service WHERE month = m1;
+  INSERT INTO ${s}.monthly_claims_by_supplier_service
+  SELECT m1, supplier_id, service_id, sum(claim_count), sum(claimed_upokt), sum(settled_upokt), sum(overservicing_loss_upokt),
+         sum(global_minted_upokt), sum(relays), sum(estimated_relays), sum(claimed_compute_units), sum(estimated_compute_units),
+         sum(claims_with_proof)
+  FROM ${s}.daily_claims_by_supplier_application_service WHERE day >= m1 AND day < m2 GROUP BY supplier_id, service_id;
+  UPDATE ${s}.settlement_blocks SET monthly_claims_rollup = true WHERE day >= m1 AND day < m2 AND NOT monthly_claims_rollup;
   GET DIAGNOSTICS marked = ROW_COUNT;
   RETURN marked;
 END $$;
