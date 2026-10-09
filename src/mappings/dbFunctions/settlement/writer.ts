@@ -35,8 +35,9 @@ export const ROLLUP_VERSION = 4;
 
 // The roles of staker_payouts (the batch staker rows and, in the settlement_result era, the proposer's legs): the income
 // of validators and delegators, which no claim pays them (v_claims_paid does not read staker_payouts).
-export const STAKER_ROLES = ["validator", "delegator"];
-const STAKER_ROLES_SQL = STAKER_ROLES.map((r) => `'${r}'`).join(", ");
+export const STAKER_ROLES = ["validator", "delegator"] as const;
+// as a SQL list: 'validator', 'delegator'
+export const STAKER_ROLES_SQL = STAKER_ROLES.map((r) => `'${r}'`).join(", ");
 
 export const writeSettlementProcName = "write_settlement";
 
@@ -402,14 +403,14 @@ BEGIN
                  SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address t
                  WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family LIMIT 1) t
                WHERE t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0)))
-       OR EXISTS (SELECT 1 FROM (SELECT supplier_id, address, role, family FROM _inc WHERE supplier_id <> ''
-                                 UNION ALL
-                                 SELECT supplier_id, '', 'stakers', 'relay' FROM ${s}.claim_settlements WHERE height = h) i
-                  CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address_supplier t
-                    WHERE t.supplier_id = i.supplier_id AND t.day = d AND t.address = i.address AND t.role = i.role
-                      AND t.family = i.family LIMIT 1) t
-                  WHERE t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0)))
+       -- daily_income_by_address_supplier: the day's rows of the height's suppliers, read as one set and not probed by key.
+       -- Its (address, day) index draws a probe by address, which under stale statistics read, for each key, every row of
+       -- the day with that address: the 'stakers' rows (address '', one per supplier) or the DAO's (measured on money-pg:
+       -- 20 s for one height; 1.5 s for 8,000 keys on a 16k-row day, against 1 ms for the set). Bounded by the day's rows
+       -- whichever index serves it; rows of those suppliers the height did not touch did not change.
+       OR EXISTS (SELECT 1 FROM ${s}.daily_income_by_address_supplier t
+                  WHERE t.day = d AND t.supplier_id IN (SELECT c.supplier_id FROM ${s}.claim_settlements c WHERE c.height = h)
+                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
        OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
                     SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address_service t
                     WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family

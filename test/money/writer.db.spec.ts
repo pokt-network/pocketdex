@@ -919,6 +919,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         await assert.rejects(writeJune(), /rollup drift at height 550013/, `${col} = ${by}`);
         await c.query("ROLLBACK TO SAVEPOINT d");
       }
+      // a 'stakers' row of daily_income_by_address_supplier (address '') driven below 0 is drift too
+      await c.query("SAVEPOINT d");
+      await c.query(`UPDATE ${S}.daily_income_by_address_supplier SET amount_upokt = -1
+                     WHERE day = '2026-06-10' AND address = '' AND role = 'stakers' AND supplier_id = $1`, [k.supplier_id]);
+      await assert.rejects(writeJune(), /rollup drift at height 550013/, "a stakers row below 0");
+      await c.query("ROLLBACK TO SAVEPOINT d");
       // uncorrupted, the same rewrite passes
       await writeJune();
     } finally {

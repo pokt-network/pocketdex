@@ -1,4 +1,4 @@
-import { ROLLUP_VERSION, STAKER_ROLES } from "./writer";
+import { ROLLUP_VERSION, STAKER_ROLES_SQL } from "./writer";
 
 // Catalog functions over the settlement money tables (./schema.ts), plus three over SubQuery entity
 // tables (app auto-unstakes, supplier proofs, param history).
@@ -904,7 +904,7 @@ BEGIN
     -- with a supplier or service breakdown, staker income (no supplier, no service) comes from the address rollup
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.address, d.role, d.family, '', '', d.amount_upokt, d.transfer_count
     FROM ${s}.daily_income_by_address d
-    WHERE (by_supplier OR by_service) AND d.role IN (${STAKER_ROLES.map((r) => `'${r}'`).join(", ")}) AND suppliers IS NULL
+    WHERE (by_supplier OR by_service) AND d.role IN (${STAKER_ROLES_SQL}) AND suppliers IS NULL
       AND d.address = ANY(addresses) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT sb.block_time, v.address, v.role, v.family, v.supplier_id, v.service_id, v.amount_upokt, v.transfer_count::bigint
@@ -1790,7 +1790,8 @@ END $$;
 -- only, so each rollup day one of the list's addresses was paid in any other role than shareholder (rev_share) or staker
 -- (STAKER_ROLES, which no claim pays) is read from the claims instead: today the DAO, a service owner, an application, and
 -- a role added later falls there too instead of counting twice. The days read from the claims go as runs of consecutive
--- days, each one height range (a list with the DAO, paid every day: one range for the whole span). The k - 1 come per
+-- settlement days (a day without settlements does not break a run), each one height range: a list with the DAO, paid
+-- every day, is one range for the whole span, and then no correction is computed at all. The k - 1 come per
 -- supplier and month, or day, where every claim of the supplier paid each listed
 -- shareholder it paid at all (a relay leg on every claim: its income rollups count one per claim and address), and per
 -- claim where not. Measured on mainnet (2026-10-09, 7 rev-share addresses of
@@ -1827,13 +1828,18 @@ BEGIN
               UNION
               SELECT d.day FROM ${s}.daily_income_by_address d
               WHERE cardinality(la) > 1 AND d.address = ANY(la) AND d.day BETWEEN rg.d1 AND rg.d2
-                AND d.role NOT IN ('rev_share', ${STAKER_ROLES.map((r) => `'${r}'`).join(", ")}));
-  -- ...as runs of consecutive days, each the height range of its settlements (days follow heights)
+                AND d.role NOT IN ('rev_share', ${STAKER_ROLES_SQL}));
+  -- ...as runs of consecutive settlement days, each the height range of its settlements (days follow heights): a day's
+  -- rank among the settlement days less its rank among the days of ud is constant along a run
   SELECT array_agg(lo ORDER BY lo), array_agg(hi ORDER BY lo) INTO ulo, uhi
-  FROM (SELECT min(sb.height) lo, max(sb.height) hi
-        FROM (SELECT u, u - (row_number() OVER (ORDER BY u))::int run FROM unnest(ud) u) x
-        JOIN ${s}.settlement_blocks sb ON sb.day = x.u GROUP BY x.run) r;
-  IF cardinality(la) > 1 AND rg.d1 <= rg.d2 THEN
+  FROM (SELECT min(x.height) lo, max(x.height) hi
+        FROM (SELECT sb.height, dense_rank() OVER (ORDER BY sb.day)
+                                - dense_rank() OVER (PARTITION BY sb.day = ANY(ud) ORDER BY sb.day) run, sb.day = ANY(ud) fallback
+              FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2) x
+        WHERE x.fallback GROUP BY x.run) r;
+  -- the corrections only when a rollup day is left to read from the rollup
+  IF cardinality(la) > 1 AND rg.d1 <= rg.d2
+     AND (SELECT count(DISTINCT sb.day) FROM ${s}.settlement_blocks sb WHERE sb.day BETWEEN rg.d1 AND rg.d2) > cardinality(ud) THEN
     -- the corrections by month (mm): each month whose every settlement is in the rollup days, outside ud (which holds the
     -- days with a height the claims rollup does not hold) and held by monthly_claims_by_supplier_service;
     -- by day (dd): the other rollup days outside ud
@@ -1864,7 +1870,7 @@ BEGIN
       -- address)
       SELECT m.supplier_id, m.month, count(DISTINCT m.address) k, array_agg(m.transfer_count) FILTER (WHERE m.family = 'relay') rn
       FROM ${s}.monthly_income_by_address_supplier m
-      WHERE m.address = ANY(la) AND m.role = 'rev_share'
+      WHERE m.address = ANY(la) AND m.role = 'rev_share' AND (mm IS NOT NULL OR dd IS NOT NULL)
         AND m.month >= date_trunc('month', rg.d1::timestamp)::date AND m.month <= rg.d2
       GROUP BY 1, 2 HAVING count(DISTINCT m.address) >= 2
     ), mn AS (

@@ -32,7 +32,7 @@ import {
   createSettlementWriterFn,
   recordMoneyProgressCall,
   recordMoneySkipCall,
-  STAKER_ROLES,
+  STAKER_ROLES_SQL,
   writeSettlementCalls,
 } from "../../src/mappings/dbFunctions/settlement/writer";
 import { planGap } from "../../src/mappings/money/history/job";
@@ -542,7 +542,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         const off = await one(
           `SELECT (SELECT count(*) FROM ${S}.settlement_blocks WHERE day = $2 AND NOT claims_paid_rollup)::int unheld,
                   (SELECT count(*) FROM ${S}.daily_income_by_address WHERE address = ANY($1) AND day = $2
-                     AND role NOT IN ('rev_share', 'validator', 'delegator'))::int roles`,
+                     AND role NOT IN ('rev_share', ${STAKER_ROLES_SQL}))::int roles`,
           [fleet, m.day]
         );
         assert.deepEqual([off.unheld, off.roles], [0, 0], `precondition: ${m.day} is read from the rollup for the fleet`);
@@ -602,12 +602,11 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       const roles = await one(
         `SELECT count(*) FILTER (WHERE NOT EXISTS (
                   SELECT 1 FROM ${S}.daily_income_by_address d WHERE d.address = p.address AND d.day = sb.day
-                    AND d.role <> 'rev_share' AND d.role <> ALL($1::text[])))::int missed,
+                    AND d.role NOT IN ('rev_share', ${STAKER_ROLES_SQL})))::int missed,
                 count(DISTINCT p.address)::int addresses
          FROM ${S}.v_claims_paid p JOIN ${S}.settlement_blocks sb USING (height)
          WHERE NOT EXISTS (SELECT 1 FROM ${S}.shareholder_payouts sp WHERE sp.height = p.height AND sp.event_idx = p.event_idx
-                             AND sp.recipient_id = p.address AND (sp.relay_upokt > 0 OR sp.global_upokt > 0))`,
-        [STAKER_ROLES]
+                             AND sp.recipient_id = p.address AND (sp.relay_upokt > 0 OR sp.global_upokt > 0))`
       );
       // the DAO, the service owners (pair[0] among them) and the application
       assert.ok(Number(roles.addresses) >= 3, JSON.stringify(roles));
@@ -629,7 +628,8 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       assert.notEqual(await shifted("2026-09-01"), truth);
       // a role the fallback has never seen (a claim role added later) sends its day to the claims as well
       await undone(async () => {
-        await c.query(`INSERT INTO ${S}.daily_income_by_address VALUES ('2026-09-01', $1, 'some_new_role', 'relay', 1, 1, 1)`, [pair[1]]);
+        await c.query(`INSERT INTO ${S}.daily_income_by_address (day, address, role, family, amount_upokt, transfer_count, contribution_count)
+                       VALUES ('2026-09-01', $1, 'some_new_role', 'relay', 1, 1, 1)`, [pair[1]]);
         assert.equal(await shifted("2026-09-01"), await answer(pair, ws, we));
       });
       // the DAO in the list: paid by every claim (every settlement day of the window), so both days are one run of days read
@@ -666,6 +666,62 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
             await c.query("ROLLBACK TO SAVEPOINT v");
           }
       });
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("legacy_rewards_by_addresses_and_time_group_by_service reads fallback days around a rollup day as separate runs", async () => {
+    const answer = async (addrs: string[], s: string, e: string) =>
+      (await one(`SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)->>'data' d`, [addrs, s, e])).d;
+    const fromClaims = async (addrs: string[], s: string, e: string) => {
+      await c.query("SAVEPOINT b");
+      try {
+        await c.query("SET LOCAL money.no_rollup = on");
+        return await answer(addrs, s, e);
+      } finally {
+        await c.query("ROLLBACK TO SAVEPOINT b");
+      }
+    };
+    await c.query("BEGIN");
+    try {
+      // a third settlement day, 3 Sep, covered: the fixture's settlement once more
+      const f = fx();
+      const payload = buildSettlementPayload(899793, new Date("2026-09-03T06:00:00Z"), eraAtHeight("pocket", f.height), f.events);
+      assert.ok(payload);
+      addDelegatorValidator(899793, payload, validators());
+      for (const { bind, sql } of writeSettlementCalls(S, 899793, payload)) await c.query(sql, bind);
+      await c.query(`INSERT INTO ${S}.blocks VALUES (899793, '2026-09-03 06:00'); UPDATE ${S}.money_progress SET height = 899793`);
+      // pair[0] the service owner of a claim on 1 Sep and of one on 3 Sep: those two days read from the claims, 2 Sep from
+      // the rollup, corrected
+      for (const h of [899713, 899793]) {
+        const n = await c.query(`UPDATE ${S}.claim_settlements SET source_owner_id = $1, relay_to_source_owner_upokt = 3
+                                 WHERE (height, event_idx) = (SELECT height, min(event_idx) FROM ${S}.claim_settlements WHERE height = $2 GROUP BY 1)
+                                 RETURNING 1`, [pair[0], h]);
+        assert.equal(n.rows.length, 1, `precondition: a claim at ${h}`);
+      }
+      await c.query(`CALL ${S}.rebuild_rollups('2026-09-01')`);
+      const roleDays = (
+        await c.query(`SELECT array_agg(DISTINCT day::text ORDER BY day::text) d FROM ${S}.daily_income_by_address
+                       WHERE address = ANY($1) AND role NOT IN ('rev_share', ${STAKER_ROLES_SQL})`, [pair])
+      ).rows[0].d as unknown as string[];
+      assert.deepEqual(roleDays, ["2026-09-01", "2026-09-03"]);
+      const [s, e] = ["2026-09-01T00:00:00Z", "2026-09-03T23:59:59.999999Z"];
+      const truth = await answer(pair, s, e);
+      assert.equal(truth, await fromClaims(pair, s, e));
+      const shifted = async (day: string) => {
+        await c.query("SAVEPOINT r");
+        try {
+          await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt + 7
+                         WHERE address = ANY($1) AND day = $2`, [pair, day]);
+          return await answer(pair, s, e);
+        } finally {
+          await c.query("ROLLBACK TO SAVEPOINT r");
+        }
+      };
+      assert.notEqual(await shifted("2026-09-02"), truth);
+      assert.equal(await shifted("2026-09-01"), truth);
+      assert.equal(await shifted("2026-09-03"), truth);
     } finally {
       await c.query("ROLLBACK");
     }
