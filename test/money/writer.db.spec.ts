@@ -1168,10 +1168,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const unmarked = (await c.query(`SELECT array_agg(height::text) h FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0]
         .h as unknown as string[];
       assert.deepEqual(unmarked, [last.h]);
-      assert.ok(notices.some((n) => n.includes(`${heights - 1} heights marked`)), notices.join("\n"));
-      assert.ok(notices.some((n) => n.includes("1 heights left unmarked, written during the fill")), notices.join("\n"));
-      // once every writer keeps the bounds, the next run marks it
+      assert.ok(notices.some((n) => n.endsWith(`done, ${heights - 1} heights marked`)), notices.join("\n"));
+      assert.ok(notices.some((n) => / 1 heights left unmarked, written while the fill ran/.test(n)), notices.join("\n"));
+      // once every writer keeps the bounds (the real _replica_lag back), the next run marks it
       await c.query(createSettlementWriterFn(S));
+      const lagSrc = (await c.query(`SELECT prosrc FROM pg_proc WHERE oid = '${S}._replica_lag'::regproc`)).rows[0].prosrc as string;
+      assert.ok(lagSrc.includes("pg_stat_get_wal_senders") && !lagSrc.includes("bounds_rollup"), lagSrc);
       await c.query(`CALL ${S}.fill_rollup_bounds()`);
       assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0].n, 0);
       await boundsHold("marked on the next run");

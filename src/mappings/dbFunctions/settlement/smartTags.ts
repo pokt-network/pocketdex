@@ -118,6 +118,7 @@ const OMITTED_FUNCTIONS = [
   // the bounds fill's helpers (bounds.ts; its driver and throttle are procedures, which GraphQL does not publish)
   "_writer_lock",
   "_fill_rollup_bounds_unit",
+  "_fill_rollup_bounds_by_key",
   "_replica_lag",
 ];
 

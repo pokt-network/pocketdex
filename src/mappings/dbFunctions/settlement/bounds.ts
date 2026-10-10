@@ -165,14 +165,13 @@ export function createRollupBoundsFillFn(s: string, writerLock: string): string 
     )
     .join("\n");
   // monthly_income_by_address_supplier_service has no month index (its primary key, its only index, leads with the
-  // address): its rows are probed by key over the primary key, a nested loop forced for that one statement.
+  // address): its rows are probed by key over the primary key, in a function of its own that forces a nested loop.
+  const byKey = months.find((f) => f.t === "monthly_income_by_address_supplier_service") as MonthFill;
   const monthUnit = months
     .map((f) =>
-      f.t === "monthly_income_by_address_supplier_service"
+      f === byKey
         ? `  ELSIF p_unit = '${f.t}' THEN
-    PERFORM set_config('enable_nestloop', 'on', true), set_config('enable_hashjoin', 'off', true),
-            set_config('enable_mergejoin', 'off', true);
-    ${setBounds(s, f.t, f.keys, f.group, "t.month = m")};`
+    RETURN ${s}._fill_rollup_bounds_by_key(sups, mlo, mhi, m);`
         : `  ELSIF p_unit = '${f.t}' THEN
     ${setBounds(s, f.t, f.keys, f.group, f.bySuppliers ? "t.month = m AND t.supplier_id = ANY(sups)" : "t.month = m")};`
     )
@@ -196,13 +195,24 @@ BEGIN
   PERFORM set_config('lock_timeout', v_lock_timeout, true);
 END $$;
 
+-- The monthly_income_by_address_supplier_service unit of _fill_rollup_bounds_unit: a nested loop over the group, each
+-- row probed over the primary key (the planner settings are the function's, restored when it returns).
+CREATE OR REPLACE FUNCTION ${s}._fill_rollup_bounds_by_key(sups text[], mlo bigint, mhi bigint, m date) RETURNS bigint
+LANGUAGE plpgsql SET plan_cache_mode = force_custom_plan SET enable_nestloop = on SET enable_hashjoin = off
+SET enable_mergejoin = off AS $$
+DECLARE n bigint;
+BEGIN
+  ${setBounds(s, byKey.t, byKey.keys, byKey.group, "t.month = m")};
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END $$;
+
 -- One unit of fill_rollup_bounds: the bounds of one rollup for one day (p_period, daily and hourly rollups) or one month
 -- (p_period, the first day: monthly rollups; p_suppliers the group of suppliers for the two filled from the base).
 -- Under the writer's lock. Returns the rows it set.
 CREATE OR REPLACE FUNCTION ${s}._fill_rollup_bounds_unit(p_unit text, p_period date, p_suppliers text[] DEFAULT NULL)
 RETURNS bigint LANGUAGE plpgsql SET plan_cache_mode = force_custom_plan SET enable_nestloop = off AS $$
 DECLARE n bigint; dlo bigint; dhi bigint; mlo bigint; mhi bigint; sups text[] := p_suppliers;
-  v_hashjoin text := current_setting('enable_hashjoin'); v_mergejoin text := current_setting('enable_mergejoin');
   m date := date_trunc('month', p_period::timestamp)::date; m2 date := (date_trunc('month', p_period::timestamp) + interval '1 month')::date;
 BEGIN
   PERFORM ${s}._writer_lock();
@@ -214,12 +224,11 @@ ${monthUnit}
     RAISE EXCEPTION 'fill_rollup_bounds: no unit %', p_unit;
   END IF;
   GET DIAGNOSTICS n = ROW_COUNT;
-  PERFORM set_config('enable_hashjoin', v_hashjoin, true), set_config('enable_mergejoin', v_mergejoin, true);
   RETURN n;
 END $$;
 
 -- How far behind the primary its replicas replay, read live (pg_stat_get_wal_senders, not the per-transaction snapshot of
--- pg_stat_activity), a base backup's sender left out (it has no replay position): senders, how many of them show a replay
+-- pg_stat_activity), a base backup's sender left out (it has no replay position; a role without pg_monitor sees every state NULL, so it keeps them all): senders, how many of them show a replay
 -- position (a role without pg_monitor sees NULL), the largest replay_lag in seconds and the largest distance in bytes
 -- from the current WAL position. A replica that has
 -- replayed everything counts 0 s: replay_lag keeps its last measure for a while once the WAL goes quiet (measured on a
@@ -229,7 +238,7 @@ LANGUAGE sql VOLATILE AS $$
   SELECT count(*)::int, count(w.replay_lsn)::int,
          coalesce(max(CASE WHEN w.replay_lsn >= pg_current_wal_lsn() THEN 0 ELSE extract(epoch FROM w.replay_lag) END), 0),
          coalesce(max(pg_wal_lsn_diff(pg_current_wal_lsn(), w.replay_lsn)), 0)
-  FROM pg_stat_get_wal_senders() w WHERE w.state <> 'backup'
+  FROM pg_stat_get_wal_senders() w WHERE w.state IS DISTINCT FROM 'backup'
 $$;
 
 -- Waits, one second at a time and committing between them (no snapshot held while waiting), while a replica is more than
@@ -279,8 +288,9 @@ BEGIN
   FOR m IN SELECT DISTINCT date_trunc('month', sb.day::timestamp)::date FROM ${s}.settlement_blocks sb WHERE NOT sb.bounds_rollup
            ORDER BY 1 DESC LOOP
     EXIT WHEN p_months IS NOT NULL AND done >= p_months;
-    -- the heights this run fills: only these are marked at the end. A height that appears unmarked meanwhile was written
-    -- by an image without the bounds (its rows' bounds not widened), so it is left unmarked and the month is redone later.
+    -- the heights this run fills: only these are marked at the end. A height that appears unmarked meanwhile (written by an
+    -- image without the bounds, whose rows' bounds it did not widen) is left unmarked, and the month is redone by a later
+    -- run. The fill is meant to run once every writer keeps the bounds; this only keeps a mistaken run from marking them.
     hs := ARRAY(SELECT sb.height FROM ${s}.settlement_blocks sb
                 WHERE sb.day >= m AND sb.day < (m + interval '1 month')::date AND NOT sb.bounds_rollup);
     -- the days, newest first; each (rollup, day) once, also across runs
@@ -331,7 +341,7 @@ BEGIN
     COMMIT;
     RAISE NOTICE 'fill_rollup_bounds: % done, % heights marked', to_char(m, 'YYYY-MM'), n;
     IF left_n > 0 THEN
-      RAISE WARNING 'fill_rollup_bounds: % % heights left unmarked, written during the fill by an image without the bounds; run the fill again once every writer runs this image',
+      RAISE WARNING 'fill_rollup_bounds: % % heights left unmarked, written while the fill ran (an image without the bounds?); run the fill again once every writer runs this image',
         to_char(m, 'YYYY-MM'), left_n;
     END IF;
     done := done + 1;
