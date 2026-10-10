@@ -12,7 +12,7 @@ import { after, before, describe, it } from "node:test";
 import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
 import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
-import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlement/schema";
+import { createSettlementTablesFn, ROLLUP_TABLES } from "../../src/mappings/dbFunctions/settlement/schema";
 import { createSettlementSmartTagsFn, OMITTED_TABLES, UNUSED_ENTITY_TABLES } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import {
   createSettlementWriterFn,
@@ -624,6 +624,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       )
     ).rows;
     assert.equal(rollups.length, 14);
+    assert.equal(ROLLUP_TABLES.length, 14);
     const src = async (name: string) =>
       String(
         (await c.query(`SELECT prosrc FROM pg_proc WHERE pronamespace = $1::regnamespace AND proname = $2`, [S, name]))
@@ -638,7 +639,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // on a subtraction its upsert (a CTE of one statement, no ';' in it) returns the rows it wrote with the rule each breaks
       // and, at zero contributions, their ctid; the statement reads them and raises right after it, then those rows go
       const sub = new RegExp(`(r\\d) AS \\(INSERT INTO ${S}\\.${t} AS t[^;]*?RETURNING '${t}'::text AS rollup,[^;]*?` +
-                             `AS zero_row\\)\\s*SELECT \\(SELECT format[^;]*? FROM ([^;]*?) WHERE broken IS NOT NULL LIMIT 1\\),[^;]*?` +
+                             `AS left_row\\)\\s*SELECT \\(SELECT format[^;]*? FROM ([^;]*?) WHERE broken IS NOT NULL LIMIT 1\\),[^;]*?` +
                              `INTO v_drift,[^;]*;\\s*IF v_drift IS NOT NULL THEN\\s*` +
                              `RAISE EXCEPTION 'rollup drift at height %: % after subtracting the height'[^;]*;\\s*END IF;` +
                              `[\\s\\S]*?DELETE FROM ${S}\\.${t} WHERE ctid = ANY\\((v_zero\\d)\\) AND \\w+ = 0;\\s*GET DIAGNOSTICS v_n = ROW_COUNT;` +
@@ -652,6 +653,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.ok(String(r.tag).startsWith("@omit"), `${t}: hidden from GraphQL`);
       assert.ok(String(r.opts).includes("fillfactor=90"), `${t}: fillfactor`);
       assert.ok(TABLES.includes(t), `${t}: in the md5 of the rewrite and rebuild tests`);
+      assert.ok(ROLLUP_TABLES.includes(t), `${t}: first_height / last_height (ROLLUP_TABLES)`);
+      assert.match(apply, new RegExp(`INSERT INTO ${S}\\.${t} AS t[\\s\\S]*?first_height = CASE`), `${t}: bounds kept`);
     }
   });
 
@@ -896,8 +899,292 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.equal(await md5All(), before);
   });
 
+  // Per rollup, from its base rows (not from the writer's SQL): the lowest and highest settlement height of the rows each
+  // rollup row sums, as [key..., first_height, last_height]. Rows in one and not the other, per rollup.
+  const auditBounds = async () => {
+    const inc = `${S}.v_income_base v JOIN ${S}.settlement_blocks sb USING (height)`;
+    const cl = `${S}.claim_settlements c JOIN ${S}.settlement_blocks sb USING (height)`;
+    const month = "date_trunc('month', sb.day::timestamp)::date";
+    const base: Record<string, [string, string]> = {
+      daily_claims_by_application_service: ["day, application_id, service_id", `SELECT sb.day, c.application_id, c.service_id, min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2, 3`],
+      daily_claims_by_supplier: ["day, supplier_id", `SELECT sb.day, c.supplier_id, min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2`],
+      daily_claims_by_supplier_application_service: ["day, supplier_id, application_id, service_id",
+        `SELECT sb.day, c.supplier_id, c.application_id, c.service_id, min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2, 3, 4`],
+      monthly_claims_by_supplier_service: ["month, supplier_id, service_id",
+        `SELECT ${month}, c.supplier_id, c.service_id, min(c.height), max(c.height) FROM ${cl} WHERE sb.monthly_claims_rollup GROUP BY 1, 2, 3`],
+      daily_income_by_address: ["day, address, role, family", `SELECT sb.day, v.address, v.role, v.family, min(v.height), max(v.height) FROM ${inc} GROUP BY 1, 2, 3, 4`],
+      monthly_income_by_address_supplier: ["month, supplier_id, address, role, family",
+        `SELECT ${month}, v.supplier_id, v.address, v.role, v.family, min(v.height), max(v.height) FROM ${inc} WHERE v.supplier_id <> '' GROUP BY 1, 2, 3, 4, 5`],
+      daily_income_by_address_supplier: ["day, supplier_id, address, role, family",
+        `SELECT sb.day, v.supplier_id, v.address, v.role, v.family, min(v.height), max(v.height) FROM ${inc} WHERE v.supplier_id <> '' GROUP BY 1, 2, 3, 4, 5
+         UNION ALL SELECT sb.day, c.supplier_id, '', 'stakers', 'relay', min(c.height), max(c.height) FROM ${cl} GROUP BY 1, 2`],
+      daily_income_by_address_service: ["day, address, role, family, service_id",
+        `SELECT sb.day, v.address, v.role, v.family, v.service_id, min(v.height), max(v.height) FROM ${inc} WHERE v.service_id <> '' GROUP BY 1, 2, 3, 4, 5`],
+      monthly_income_by_address_service: ["month, address, role, family, service_id",
+        `SELECT ${month}, v.address, v.role, v.family, v.service_id, min(v.height), max(v.height) FROM ${inc} WHERE v.service_id <> '' GROUP BY 1, 2, 3, 4, 5`],
+      monthly_income_by_address_supplier_service: ["month, address, supplier_id, service_id, role, family",
+        `SELECT ${month}, v.address, v.supplier_id, v.service_id, v.role, v.family, min(v.height), max(v.height) FROM ${inc}
+         WHERE v.supplier_id <> '' AND v.service_id <> '' GROUP BY 1, 2, 3, 4, 5, 6`],
+      daily_claims_paid_by_address_service: ["day, address, service_id",
+        `SELECT sb.day, p.address, c.service_id, min(p.height), max(p.height) FROM ${S}.v_claims_paid p
+         JOIN ${S}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx JOIN ${S}.settlement_blocks sb ON sb.height = p.height
+         WHERE sb.claims_paid_rollup GROUP BY 1, 2, 3`],
+      daily_validator_rewards: ["day, validator_operator, family",
+        `SELECT sb.day, x.validator_operator, x.family, min(x.height), max(x.height) FROM ${S}.validator_distributions x JOIN ${S}.settlement_blocks sb USING (height) GROUP BY 1, 2, 3`],
+      daily_delegator_rewards_by_validator: ["day, delegator, validator_operator, family",
+        `SELECT sb.day, x.delegator, x.validator_operator, x.family, min(x.height), max(x.height) FROM ${S}.delegator_validator_payouts x
+         JOIN ${S}.settlement_blocks sb USING (height) GROUP BY 1, 2, 3, 4`],
+      hourly_income_by_address_supplier: ["hour, address, supplier_id",
+        `SELECT date_trunc('hour', sb.block_time, 'UTC'), v.address, v.supplier_id, min(v.height), max(v.height) FROM ${inc}
+         WHERE v.supplier_id <> '' GROUP BY 1, 2, 3`],
+    };
+    assert.deepEqual(Object.keys(base).sort(), [...ROLLUP_TABLES].sort());
+    const out: Record<string, string> = {};
+    for (const [t, [keys, sql]] of Object.entries(base)) {
+      const r = (
+        await c.query(`WITH b AS (${sql}), t AS (SELECT ${keys}, first_height, last_height FROM ${S}.${t})
+                       SELECT (SELECT count(*) FROM t)::int n, (SELECT count(*) FROM (SELECT * FROM t EXCEPT SELECT * FROM b) x)::int only_t,
+                              (SELECT count(*) FROM (SELECT * FROM b EXCEPT SELECT * FROM t) x)::int only_b`)
+      ).rows[0];
+      out[t] = `${r.n} rows, ${r.only_t} not from the base, ${r.only_b} missing`;
+    }
+    return out;
+  };
+  const boundsHold = async (label: string) => {
+    for (const [t, v] of Object.entries(await auditBounds()))
+      assert.match(v, /^\d+ rows, 0 not from the base, 0 missing$/, `${label}: ${t} ${v}`);
+  };
+
+  it("every rollup row's first_height / last_height are the lowest and highest height of the base rows it sums", async () => {
+    const a = await auditBounds();
+    // the rollups the fixtures above write (the two claim-paid and claims rollups held, validators and delegators paid)
+    for (const t of ROLLUP_TABLES) assert.ok(!a[t].startsWith("0 rows"), `${t}: ${a[t]}`);
+    await boundsHold("as written");
+    // every height written here holds its bounds
+    assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0].n, 0);
+  });
+
+  it("the bounds columns come to rollups written before them by a catalog change alone, no table rewritten", async () => {
+    const files = async () =>
+      (
+        await c.query(`SELECT relname, pg_relation_filenode(oid)::text f FROM pg_class
+                       WHERE relnamespace = $1::regnamespace AND relname = ANY($2::text[]) ORDER BY 1`, [S, ROLLUP_TABLES])
+      ).rows;
+    await c.query("BEGIN");
+    try {
+      // as on a database written before them
+      for (const t of ROLLUP_TABLES) await c.query(`ALTER TABLE ${S}.${t} DROP COLUMN first_height, DROP COLUMN last_height`);
+      const before = await files();
+      assert.equal(before.length, ROLLUP_TABLES.length);
+      await c.query(createSettlementTablesFn(S));
+      assert.deepEqual(await files(), before);
+      const cols = await c.query(`SELECT count(*)::int n FROM information_schema.columns WHERE table_schema = $1
+                                  AND table_name = ANY($2::text[]) AND column_name IN ('first_height', 'last_height')`, [S, ROLLUP_TABLES]);
+      assert.equal(cols.rows[0].n, 2 * ROLLUP_TABLES.length);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    // a start on a database that has them alters nothing, and takes no lock on a rollup for it
+    await c.query("BEGIN");
+    try {
+      await c.query(createSettlementTablesFn(S));
+      const locks = await c.query(`SELECT count(*)::int n FROM pg_locks l JOIN pg_class k ON k.oid = l.relation
+                                   WHERE l.pid = pg_backend_pid() AND l.mode = 'AccessExclusiveLock' AND k.relname = ANY($1::text[])`,
+                                  [ROLLUP_TABLES]);
+      assert.equal(locks.rows[0].n, 0);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("a rewrite that leaves a validator row only replayed contributions recomputes the bound it removed", async () => {
+    await c.query("BEGIN");
+    try {
+      const at = async (h: number, ts: string, p: SettlementPayload) => {
+        for (const { bind, sql } of writeSettlementCalls(S, h, { ...p, ts })) await c.query(sql, bind);
+      };
+      // on 21 Aug: 710013's settlement (validators replayed, no commission), then 899713's (the same validators, with one)
+      const replayed = payloadOf("710013", false).payload;
+      const batched = payloadOf("899713", true).payload;
+      await at(899821, "2026-08-21T12:10:00.000Z", replayed);
+      await at(899822, "2026-08-21T12:20:00.000Z", batched);
+      const row = async (v: string, f: string) =>
+        (
+          await c.query(
+            `SELECT first_height || '..' || last_height b, commission_upokt::text c FROM ${S}.daily_validator_rewards
+             WHERE day = '2026-08-21' AND validator_operator = $1 AND family = $2`,
+            [v, f]
+          )
+        ).rows[0];
+      const mixed = (
+        await c.query(
+          `SELECT validator_operator v, family f FROM ${S}.daily_validator_rewards
+           WHERE day = '2026-08-21' AND commission_upokt IS NOT NULL AND commission_na_count BETWEEN 1 AND contribution_count - 1
+             AND first_height = 899821 AND last_height = 899822 ORDER BY 1, 2 LIMIT 1`
+        )
+      ).rows[0];
+      assert.ok(mixed, "precondition: a validator both heights paid on 21 Aug, with and without a commission");
+      // 899822 rewritten with nothing: the row keeps 710013's replayed contributions alone, so the subtraction sets its
+      // commission to NULL (a new version of the row, after its upsert left its last height at -899822) and the add,
+      // which does not touch it, recomputes that bound
+      await at(899822, "2026-08-21T12:20:00.000Z", {
+        ...batched, claims: [], detailed: [], batch: [], vrd: [], reimb: [], expired: [], discarded: [], slashed: [], dv: [],
+      });
+      assert.deepEqual(await row(String(mixed.v), String(mixed.f)), { b: "899821..899821", c: null });
+      await boundsHold("899822 emptied");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("a rewrite that removes a row's first or last height recomputes it from the base, and one that keeps it changes nothing", async () => {
+    await c.query("BEGIN");
+    try {
+      const at = async (h: number, ts: string, p: SettlementPayload) => {
+        for (const { bind, sql } of writeSettlementCalls(S, h, { ...p, ts })) await c.query(sql, bind);
+      };
+      const emptied = (p: SettlementPayload): SettlementPayload =>
+        ({ ...p, claims: [], detailed: [], batch: [], vrd: [], reimb: [], expired: [], discarded: [], slashed: [], dv: [] });
+      // two small settlements, each three times on 20 Aug (nothing else settled that day), the last one in a later hour:
+      // 694993's claims (supplier and claim rollups), 703773's validator and delegator payouts (staker rollups)
+      const p = payloadOf("694993", false).payload;
+      const q = payloadOf("703773", false).payload;
+      assert.ok(q.vrd.length > 0 && q.dv.length > 0, "precondition: 703773 pays validators and delegators");
+      for (const [h, ts] of [[899801, "12:10"], [899802, "12:20"], [899803, "13:30"]] as const) await at(h, `2026-08-20T${ts}:00.000Z`, p);
+      for (const [h, ts] of [[899811, "12:10"], [899812, "12:20"], [899813, "13:30"]] as const) await at(h, `2026-08-20T${ts}:00.000Z`, q);
+      const supplier = p.claims[0].supplier_id;
+      const validator = q.vrd[0].validator_operator;
+      const rows = async () =>
+        (
+          await c.query(
+            `SELECT (SELECT first_height || '..' || last_height FROM ${S}.daily_claims_by_supplier WHERE supplier_id = $1 AND day = '2026-08-20') s,
+                    (SELECT min(first_height) || '..' || max(last_height) FROM ${S}.daily_validator_rewards
+                     WHERE validator_operator = $2 AND day = '2026-08-20') v`,
+            [supplier, validator]
+          )
+        ).rows[0];
+      assert.deepEqual(await rows(), { s: "899801..899803", v: "899811..899813" });
+      await boundsHold("written three times");
+      // the same settlements written again: nothing moves
+      const before = await md5All();
+      await at(899803, "2026-08-20T13:30:00.000Z", p);
+      await at(899813, "2026-08-20T13:30:00.000Z", q);
+      assert.equal(await md5All(), before);
+      // the last ones rewritten with nothing: every row they were the last height of goes back, from the base
+      await at(899803, "2026-08-20T13:30:00.000Z", emptied(p));
+      await at(899813, "2026-08-20T13:30:00.000Z", emptied(q));
+      assert.deepEqual(await rows(), { s: "899801..899802", v: "899811..899812" });
+      await boundsHold("last heights emptied");
+      // and the first ones: every row they were the first height of goes up
+      await at(899801, "2026-08-20T12:10:00.000Z", emptied(p));
+      await at(899811, "2026-08-20T12:10:00.000Z", emptied(q));
+      assert.deepEqual(await rows(), { s: "899802..899802", v: "899812..899812" });
+      await boundsHold("first heights emptied");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("fill_rollup_bounds writes the bounds of rows written before them, waits for the replicas, and resumes after a stop", async () => {
+    const before = await md5All();
+    const notices: string[] = [];
+    const onNotice = (m: { message: string }) => notices.push(m.message);
+    (c as unknown as { on(e: string, f: (m: { message: string }) => void): void }).on("notice", onNotice);
+    // a replica that replays 10 s behind for its next reads, then caught up (in place of pg_stat_replication)
+    const lagging = async (reads: number) => {
+      await c.query(`DROP TABLE IF EXISTS ${S}.lag_script; CREATE TABLE ${S}.lag_script (n serial, s numeric)`);
+      await c.query(`INSERT INTO ${S}.lag_script (s) SELECT 10 FROM generate_series(1, $1)`, [reads]);
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$
+                       WITH x AS (DELETE FROM ${S}.lag_script WHERE n = (SELECT min(n) FROM ${S}.lag_script) RETURNING s)
+                       SELECT 1, 1, coalesce((SELECT s FROM x), 0), 0::numeric $f$`);
+    };
+    try {
+      // as on a database written before the bounds: none on any row, no height marked
+      for (const t of ROLLUP_TABLES) await c.query(`UPDATE ${S}.${t} SET first_height = NULL, last_height = NULL`);
+      await c.query(`UPDATE ${S}.settlement_blocks SET bounds_rollup = false`);
+      // stopped while it waits for the replica (statement_timeout, as a Ctrl-C would): what it committed stays
+      await lagging(30);
+      await c.query("SET statement_timeout = '3s'");
+      await assert.rejects(c.query(`CALL ${S}.fill_rollup_bounds()`), /statement timeout/);
+      await c.query("RESET statement_timeout");
+      assert.ok(notices.some((n) => /waiting, replica 10\.0 s and 0\.0 MB behind/.test(n)), notices.join("\n"));
+      const kept = (await c.query(`SELECT array_agg(unit) u FROM ${S}.rollup_bounds_fill`)).rows[0].u as unknown as string[];
+      assert.ok(kept && kept.length >= 1, "the units done before the stop are kept");
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE bounds_rollup`)).rows[0].n, 0);
+      // run again: it resumes after them, waits for the replica, and finishes
+      notices.length = 0;
+      await lagging(2);
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      assert.ok(notices.some((n) => /fill_rollup_bounds: \d{4}-\d{2} done, \d+ heights marked/.test(n)), notices.join("\n"));
+      for (const u of kept) {
+        const [t, day] = u.split(" ");
+        assert.ok(!notices.some((n) => n.startsWith(`fill_rollup_bounds: ${day} ${t} `)), `${u} done before, not redone`);
+      }
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0].n, 0);
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.rollup_bounds_fill`)).rows[0].n, 0);
+      await boundsHold("filled");
+      assert.equal(await md5All(), before);
+      // nothing left: a third run does nothing
+      notices.length = 0;
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      assert.deepEqual(notices, []);
+      // the throttle stops when the replicas' positions cannot be read, and paces the WAL of a minute
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$ SELECT 1, 0, 0::numeric, 0::numeric $f$`);
+      await assert.rejects(c.query(`CALL ${S}._fill_throttle(5, 1e9, NULL, now(), pg_current_wal_lsn(), 0)`), /not readable by this role/);
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$ SELECT 0, 0, 0::numeric, 0::numeric $f$`);
+      const paced = await c.query(`CALL ${S}._fill_throttle(5, 1e9, 1, now() - interval '58 seconds', '0/0'::pg_lsn, 0)`);
+      assert.ok(Number(paced.rows[0].waited) >= 1.5, JSON.stringify(paced.rows[0]));
+    } finally {
+      (c as unknown as { removeListener(e: string, f: unknown): void }).removeListener("notice", onNotice);
+      await c.query("RESET statement_timeout");
+      await c.query(`DROP TABLE IF EXISTS ${S}.lag_script`);
+      // the real _replica_lag back
+      await c.query(createSettlementWriterFn(S));
+    }
+  });
+
+  it("fill_rollup_bounds marks only the heights it found unmarked when it took the month, not one an image without the bounds wrote meanwhile", async () => {
+    const notices: string[] = [];
+    const onNotice = (m: { message: string }) => notices.push(m.message);
+    (c as unknown as { on(e: string, f: (m: { message: string }) => void): void }).on("notice", onNotice);
+    const last = (
+      await c.query(`SELECT max(height)::text h, date_trunc('month', max(day))::date::text m FROM ${S}.settlement_blocks`)
+    ).rows[0] as { h: string; m: string };
+    const month = `day >= '${last.m}'::date AND day < ('${last.m}'::date + interval '1 month')`;
+    try {
+      // the month's heights unmarked, but its last one, which the fake replica read below unmarks once the run has
+      // taken the month: as an older image writing that height during the fill would leave it
+      await c.query(`UPDATE ${S}.settlement_blocks SET bounds_rollup = (height = $1) WHERE ${month}`, [last.h]);
+      const heights = Number((await c.query(`SELECT count(*) n FROM ${S}.settlement_blocks WHERE ${month}`)).rows[0].n);
+      assert.ok(heights >= 2, `the month has ${heights} heights`);
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$
+                       UPDATE ${S}.settlement_blocks SET bounds_rollup = false WHERE height = ${last.h} AND bounds_rollup;
+                       SELECT 1, 1, 0::numeric, 0::numeric $f$`);
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      const unmarked = (await c.query(`SELECT array_agg(height::text) h FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0]
+        .h as unknown as string[];
+      assert.deepEqual(unmarked, [last.h]);
+      assert.ok(notices.some((n) => n.endsWith(`done, ${heights - 1} heights marked`)), notices.join("\n"));
+      assert.ok(notices.some((n) => / 1 heights left unmarked, written while the fill ran/.test(n)), notices.join("\n"));
+      // once every writer keeps the bounds (the real _replica_lag back), the next run marks it
+      await c.query(createSettlementWriterFn(S));
+      const lagSrc = (await c.query(`SELECT prosrc FROM pg_proc WHERE oid = '${S}._replica_lag'::regproc`)).rows[0].prosrc as string;
+      assert.ok(lagSrc.includes("pg_stat_get_wal_senders") && !lagSrc.includes("bounds_rollup"), lagSrc);
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0].n, 0);
+      await boundsHold("marked on the next run");
+    } finally {
+      (c as unknown as { removeListener(e: string, f: unknown): void }).removeListener("notice", onNotice);
+      await c.query(createSettlementWriterFn(S));
+    }
+  });
+
   it("subtracting a height raises on each rule of each rollup row it touched, naming the rollup, the key and the rule, and on no other row", async () => {
-    // the rules of the check: any column of the rollup (but its key and period, read here from the catalog) below 0, the
+    // the rules of the check: any column of the rollup (but its key, period and bounds, read here from the catalog) below 0, the
     // invariants between columns listed below, and a row at 0 contributions with any other column not at 0
     const claims = ["claims_with_proof > claim_count"];
     const day = "day = $1::date";
@@ -928,7 +1215,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const cols = (
         await c.query(`SELECT column_name::text c FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2
                        ORDER BY ordinal_position`, [S, t])
-      ).rows.map((r) => String(r.c)).filter((col) => ![...keys, "day", "month", "hour", count].includes(col));
+      ).rows.map((r) => String(r.c)).filter((col) => ![...keys, "day", "month", "hour", count, "first_height", "last_height"].includes(col));
       assert.ok(cols.length > 0, `${t}: measures besides ${count}`);
       return [`${count} < 0`, ...cols.map((col) => `${col} < 0`), ...rules, ...cols.map((col) => `${count} = 0 AND ${col} <> 0`)];
     };
@@ -2170,6 +2457,69 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         assert.equal(total(rollup), total(base), `${from} ${to} ${bucket}: total`);
         assert.deepEqual(rollup, base, `${from} ${to} ${bucket}`);
       }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_supplier_earnings gives each row's first and last settled height, from the rollups as from the claims, NULL where not held", async () => {
+    const q = `SELECT ${S}.get_supplier_earnings_json(NULL, $1, $2, $3, by_service => $4, by_application => $5, by_supplier => $6)::text j`;
+    const both = async (args: unknown[]) => {
+      const r = String((await c.query(q, args)).rows[0].j);
+      await c.query("SAVEPOINT b");
+      try {
+        await c.query("SET LOCAL money.no_rollup = on");
+        return [r, String((await c.query(q, args)).rows[0].j)];
+      } finally {
+        await c.query("ROLLBACK TO SAVEPOINT b");
+      }
+    };
+    await c.query("BEGIN");
+    try {
+      for (const [from, to] of [
+        [null, null], // whole days: the rollups' bounds
+        ["2026-09-01T11:00:00Z", "2026-09-01T13:00:00Z"], // inside one day: the claims' heights
+        ["2026-08-30T00:00:00Z", "2026-09-03T00:00:00Z"],
+      ])
+        // bucket=day takes ranges of up to 92 days
+        for (const bucket of from === null ? [null, "month"] : [null, "day", "month"])
+          for (const [byService, byApplication, bySupplier] of [
+            [false, false, true], [false, false, false], [true, false, true], [true, false, false],
+            [false, true, true], [true, true, false],
+          ]) {
+            const [r, b] = await both([from, to, bucket, byService, byApplication, bySupplier]);
+            assert.match(b, /"last_settled_height": "\d+"/, `${from} ${to} ${bucket}`);
+            assert.equal(r, b, `${from} ${to} ${bucket} service ${byService} application ${byApplication} supplier ${bySupplier}`);
+          }
+      // per supplier over the whole history: the lowest and highest height of its claims
+      const want = (
+        await c.query(`SELECT supplier_id, min(height)::text f, max(height)::text l FROM ${S}.claim_settlements GROUP BY 1 ORDER BY 1`)
+      ).rows;
+      const got = (
+        await c.query(`SELECT supplier_id, first_settled_height::text f, last_settled_height::text l
+                       FROM ${S}.get_supplier_earnings(NULL, NULL, NULL) ORDER BY 1`)
+      ).rows;
+      assert.deepEqual(got, want);
+      // a height of 1 Sep whose bounds the rollups may not hold: every group 1 Sep is in reads NULL, the amounts as before,
+      // and a range inside that day still has its heights (a settlement at 15:00 the range leaves out: the day is read from
+      // the claims, an edge)
+      const amounts = `SELECT supplier_id, settled_upokt::text s FROM ${S}.get_supplier_earnings(NULL, NULL, NULL) ORDER BY 1`;
+      const settled = (await c.query(amounts)).rows;
+      await c.query(`UPDATE ${S}.settlement_blocks SET bounds_rollup = false WHERE height = 899713`);
+      const unheld = (
+        await c.query(`SELECT count(*)::int n, count(last_settled_height)::int l, count(first_settled_height)::int f
+                       FROM ${S}.get_supplier_earnings(NULL, NULL, NULL)`)
+      ).rows[0];
+      assert.ok(Number(unheld.n) > 0);
+      assert.deepEqual([unheld.l, unheld.f], [0, 0]);
+      assert.deepEqual((await c.query(amounts)).rows, settled);
+      await c.query(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version)
+                     SELECT 899799, '2026-09-01T15:00:00Z', era, day, rollup_version FROM ${S}.settlement_blocks WHERE height = 899713`);
+      const inside = (
+        await c.query(`SELECT count(*)::int n, count(last_settled_height)::int l
+                       FROM ${S}.get_supplier_earnings(NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z')`)
+      ).rows[0];
+      assert.ok(Number(inside.n) > 0 && inside.l === inside.n, JSON.stringify(inside));
     } finally {
       await c.query("ROLLBACK");
     }
