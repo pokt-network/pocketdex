@@ -276,6 +276,18 @@ BEGIN
   END LOOP;
 END $$;
 
+-- first_settled_height / last_settled_height came later to get_supplier_earnings's rows: a return type CREATE OR REPLACE
+-- cannot change, so a database written before has its old one dropped first (the _json twin is rebuilt below).
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           WHERE p.pronamespace = '${s}'::regnamespace AND p.proname = 'get_supplier_earnings'
+             AND pg_get_function_result(p.oid) NOT LIKE '%last_settled_height%' LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
 -- operators came last to the supplier functions: CREATE OR REPLACE with it leaves the signature without it next to the
 -- new one, and two overloads make every call ambiguous, so a database written before has the old one dropped first.
 DO $$
@@ -651,7 +663,9 @@ BEGIN
   RETURN suppliers;
 END $$;
 
--- Supplier: what it generated. By service without application, with no bucket or a month or year one, each UTC month
+-- Supplier: what it generated, and the first and last settlement height of the claims of each row (the rollups'
+-- first_height / last_height and the edge claims' heights; NULL when a rollup row of the group has a height whose bounds
+-- it may not hold yet). By service without application, with no bucket or a month or year one, each UTC month
 -- inside the rollup days comes from monthly_claims_by_supplier_service when that rollup holds every settlement of the month
 -- (settlement_blocks.monthly_claims_rollup) and the month has none outside those days; the other days from
 -- daily_claims_by_supplier_application_service. An owner of 1037 suppliers by service over its whole history read 3.07M
@@ -662,16 +676,21 @@ CREATE OR REPLACE FUNCTION ${s}.get_supplier_earnings(suppliers text[], range_st
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, application_id text,
   claimed_upokt numeric, settled_upokt numeric, overservicing_loss_upokt numeric,
   relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, settled_claims bigint,
-  settled_claims_with_proof bigint, settled_claims_without_proof bigint, covered_from timestamptz,
-  covered_to timestamptz, covered_gaps jsonb)
+  settled_claims_with_proof bigint, settled_claims_without_proof bigint, first_settled_height bigint,
+  last_settled_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz; use_month boolean; mm date[]; dd date[];
+  nb date[]; nbm date[];
 BEGIN
   -- NULL (no suppliers, owners or operators): every supplier
   suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
   all_suppliers := suppliers IS NULL;
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  -- the rollup days, and their months, with a height whose first_height / last_height the rollups may not hold
+  -- (settlement_blocks.bounds_rollup): a row of those reads as NULL height, and so does each group it is in
+  nb := ARRAY(SELECT DISTINCT sb.day FROM ${s}.settlement_blocks sb WHERE NOT sb.bounds_rollup AND sb.day BETWEEN rg.d1 AND rg.d2);
+  nbm := ARRAY(SELECT DISTINCT date_trunc('month', u::timestamp)::date FROM unnest(nb) u);
   -- the months read from monthly_claims_by_supplier_service (mm), and the rollup days left to the daily rollup (dd)
   use_month := by_service AND NOT by_application AND coalesce(bucket, 'month') IN ('month', 'year') AND rg.d1 <= rg.d2;
   IF use_month THEN
@@ -689,37 +708,41 @@ ${covered("settled")}
   END IF;
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
-  WITH res0(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof) AS (
+  WITH res0(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof, first_settled_height, last_settled_height) AS (
   WITH r AS (
     -- without a breakdown the smaller daily_claims_by_supplier is enough (25x fewer rows over every supplier)
     SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id, ''::text service_id, ''::text application_id, d.claimed_upokt,
            d.settled_upokt, d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
-           d.claim_count claims, d.claims_with_proof with_proof
+           d.claim_count claims, d.claims_with_proof with_proof,
+           CASE WHEN d.day <> ALL(nb) THEN d.first_height END fh, CASE WHEN d.day <> ALL(nb) THEN d.last_height END lh
     FROM ${s}.daily_claims_by_supplier d
     WHERE NOT (by_service OR by_application) AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, d.application_id, d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
-           d.claim_count, d.claims_with_proof
+           d.claim_count, d.claims_with_proof,
+           CASE WHEN d.day <> ALL(nb) THEN d.first_height END, CASE WHEN d.day <> ALL(nb) THEN d.last_height END
     FROM ${s}.daily_claims_by_supplier_application_service d
     WHERE (by_service OR by_application) AND NOT use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers))
       AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
-           d.claim_count, d.claims_with_proof
+           d.claim_count, d.claims_with_proof,
+           CASE WHEN d.day <> ALL(nb) THEN d.first_height END, CASE WHEN d.day <> ALL(nb) THEN d.last_height END
     FROM ${s}.daily_claims_by_supplier_application_service d
     WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day = ANY(dd)
     UNION ALL
     SELECT d.month::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
-           d.claim_count, d.claims_with_proof
+           d.claim_count, d.claims_with_proof,
+           CASE WHEN d.month <> ALL(nbm) THEN d.first_height END, CASE WHEN d.month <> ALL(nbm) THEN d.last_height END
     FROM ${s}.monthly_claims_by_supplier_service d
     WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.month = ANY(mm)
     UNION ALL
     SELECT c.block_time, c.supplier_id, c.service_id, c.application_id, c.claimed_upokt, c.settled_upokt,
            c.overservicing_loss_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, 1::bigint,
-           c.settled_with_proof::int::bigint
+           c.settled_with_proof::int::bigint, c.height, c.height
     FROM ${s}.claim_settlements c
     WHERE (all_suppliers OR c.supplier_id = ANY(suppliers)) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
   )
@@ -728,24 +751,26 @@ ${covered("settled")}
          sum(r.claimed_upokt)::numeric, sum(r.settled_upokt)::numeric, sum(r.overservicing_loss_upokt)::numeric,
          sum(r.relays)::numeric, sum(r.estimated_relays)::numeric, sum(r.claimed_compute_units)::numeric,
          sum(r.estimated_compute_units)::numeric, sum(r.claims)::bigint,
-         sum(r.with_proof)::bigint, sum(r.claims - r.with_proof)::bigint
+         sum(r.with_proof)::bigint, sum(r.claims - r.with_proof)::bigint,
+         -- a height only when every row of the group holds its bounds
+         CASE WHEN bool_and(r.fh IS NOT NULL) THEN min(r.fh) END, CASE WHEN bool_and(r.lh IS NOT NULL) THEN max(r.lh) END
   FROM r GROUP BY 1, 2, 3, 4, 5
-  ), res(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof) AS (
+  ), res(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof, first_settled_height, last_settled_height) AS (
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint, NULL::bigint, NULL::bigint
   FROM (SELECT DISTINCT unnest(suppliers) id) u
   WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.supplier_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, 0::bigint, 0::bigint, NULL::bigint, NULL::bigint
   WHERE fill_empty_buckets AND NOT by_supplier AND fb IS NOT NULL AND (all_suppliers OR cardinality(suppliers) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
-  SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.service_id, k.application_id, CASE WHEN k.claimed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.settled_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overservicing_loss_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_with_proof_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_without_proof_na THEN NULL ELSE 0 END
+  SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.service_id, k.application_id, CASE WHEN k.claimed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.settled_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overservicing_loss_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_with_proof_na THEN NULL ELSE 0 END, CASE WHEN k.settled_claims_without_proof_na THEN NULL ELSE 0 END, NULL::bigint, NULL::bigint
   FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.covered) b
   CROSS JOIN (SELECT r.supplier_id, r.service_id, r.application_id, bool_and(r.claimed_upokt IS NULL) claimed_upokt_na, bool_and(r.settled_upokt IS NULL) settled_upokt_na, bool_and(r.overservicing_loss_upokt IS NULL) overservicing_loss_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.settled_claims IS NULL) settled_claims_na, bool_and(r.settled_claims_with_proof IS NULL) settled_claims_with_proof_na, bool_and(r.settled_claims_without_proof IS NULL) settled_claims_without_proof_na FROM res r GROUP BY r.supplier_id, r.service_id, r.application_id) k
   WHERE bucket IS NOT NULL AND fill_empty_buckets
