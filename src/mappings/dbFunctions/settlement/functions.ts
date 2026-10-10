@@ -1797,9 +1797,13 @@ END $$;
 -- claim where not. Measured on mainnet (2026-10-09, 7 rev-share addresses of
 -- overlapping fleets): over 30 days 4,601 supplier-days paid two or more of them, all of that kind; over 238 days 261 of
 -- 32,733 were not (1,648 claims).
+-- jit = off: the main query is estimated at ~3-4.5M (the corrections' joins, planned for any list), past
+-- jit_optimize_above_cost and jit_inline_above_cost, and JIT compiled 265 functions with inlining and optimization for
+-- 1.4-1.8 s of a call whose execution took 17 ms (mainnet replica, 2026-10-10, 30 days: one address 1.5 s -> 0.14 s,
+-- nodefleet's 7 wallets 2.8 s -> 0.82 s).
 CREATE OR REPLACE FUNCTION ${s}.legacy_rewards_by_addresses_and_time_group_by_service(addresses text[],
   start_ts timestamp, end_ts timestamp)
-RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+RETURNS jsonb LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE
   l record := ${s}._legacy_range(start_ts, end_ts);
   f timestamptz := l.start_from AT TIME ZONE 'UTC';

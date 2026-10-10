@@ -671,6 +671,18 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     }
   });
 
+  it("legacy_rewards_by_addresses_and_time_group_by_service runs with JIT off", async () => {
+    // its main query is estimated past jit_optimize_above_cost for any list: JIT compiling took 1.4-1.8 s of a call that
+    // executed in 17 ms on the mainnet replica (2026-10-10)
+    const r = await c.query(
+      `SELECT p.proconfig::text cfg FROM pg_proc p WHERE p.pronamespace = $1::regnamespace
+         AND p.proname = 'legacy_rewards_by_addresses_and_time_group_by_service'`,
+      [S]
+    );
+    assert.equal(r.rows.length, 1);
+    assert.match(String(r.rows[0].cfg), /\bjit=off\b/);
+  });
+
   it("legacy_rewards_by_addresses_and_time_group_by_service reads fallback days around a rollup day as separate runs", async () => {
     const answer = async (addrs: string[], s: string, e: string) =>
       (await one(`SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)->>'data' d`, [addrs, s, e])).d;
