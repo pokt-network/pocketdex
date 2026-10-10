@@ -36,6 +36,11 @@ CREATE INDEX IF NOT EXISTS settlement_blocks_day_idx ON ${s}.settlement_blocks (
 -- left its old contribution there. Each day reads from that rollup only when every height of it is true (writer.ts).
 ALTER TABLE ${s}.settlement_blocks ADD COLUMN IF NOT EXISTS claims_paid_rollup BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS settlement_blocks_without_claims_paid_idx ON ${s}.settlement_blocks (day) WHERE NOT claims_paid_rollup;
+-- Whether monthly_claims_by_supplier_service holds the height's contribution, kept as claims_paid_rollup is: false for
+-- the heights written before it until fill_monthly_claims_month writes their month, and for a height an image without it
+-- writes. Each month reads from that rollup only when every height of it is true (get_supplier_earnings).
+ALTER TABLE ${s}.settlement_blocks ADD COLUMN IF NOT EXISTS monthly_claims_rollup BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS settlement_blocks_without_monthly_claims_idx ON ${s}.settlement_blocks (day) WHERE NOT monthly_claims_rollup;
 
 -- Settlement heights left unwritten: the heights a POCKETDEX_MONEY_FROM_HEIGHT override skipped (recorded by the first
 -- height the money step processes past it, src/mappings/money/write.ts), and the history job's [1, h-1].
@@ -317,6 +322,18 @@ CREATE TABLE IF NOT EXISTS ${s}.daily_claims_paid_by_address_service (
   PRIMARY KEY (address, day, service_id)
 );
 
+-- Per month, supplier and service: what get_supplier_earnings by service reads from daily_claims_by_supplier_application_service
+-- (all of it but the application and global_minted_upokt), for whole months. Dropping the application alone would not
+-- shrink it: an owner of 1037 suppliers had 3.07M rows there and 3.02M distinct (supplier, service, day), against 253k
+-- (supplier, service, month) (mainnet, 2026-10-09). Which heights it holds: settlement_blocks.monthly_claims_rollup.
+CREATE TABLE IF NOT EXISTS ${s}.monthly_claims_by_supplier_service (
+  month DATE NOT NULL, supplier_id TEXT NOT NULL, service_id TEXT NOT NULL, claim_count BIGINT NOT NULL,
+  claimed_upokt BIGINT NOT NULL, settled_upokt BIGINT NOT NULL, overservicing_loss_upokt BIGINT NOT NULL,
+  relays BIGINT NOT NULL, estimated_relays BIGINT NOT NULL, claimed_compute_units BIGINT NOT NULL, estimated_compute_units BIGINT NOT NULL,
+  claims_with_proof BIGINT NOT NULL,
+  PRIMARY KEY (supplier_id, month, service_id)
+);
+
 -- commission_upokt sums the contributions that have a commission; commission_na_count counts those that do not (the
 -- replayed rows): NULL only when every contribution of the row is one of them, so a day that mixes both (788,944 and
 -- 788,945) keeps the real commission instead of losing it to NULL + x.
@@ -357,6 +374,7 @@ CREATE INDEX IF NOT EXISTS daily_delegator_rewards_by_validator_day_idx ON ${s}.
 CREATE INDEX IF NOT EXISTS daily_validator_rewards_day_idx ON ${s}.daily_validator_rewards (day);
 CREATE INDEX IF NOT EXISTS hourly_income_by_address_supplier_hour_idx ON ${s}.hourly_income_by_address_supplier (hour);
 CREATE INDEX IF NOT EXISTS daily_claims_paid_by_address_service_day_idx ON ${s}.daily_claims_paid_by_address_service (day);
+CREATE INDEX IF NOT EXISTS monthly_claims_by_supplier_service_month_idx ON ${s}.monthly_claims_by_supplier_service (month);
 
 -- The incremental rollups update the same rows at every settlement of their day (~70 per day on mainnet): free
 -- space in each page lets an update stay in the page (HOT: no indexed column changes, except in the two tables
@@ -374,5 +392,6 @@ ALTER TABLE ${s}.hourly_income_by_address_supplier SET (fillfactor = 90, autovac
 ALTER TABLE ${s}.daily_validator_rewards SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.daily_delegator_rewards_by_validator SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 ALTER TABLE ${s}.daily_claims_paid_by_address_service SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
+ALTER TABLE ${s}.monthly_claims_by_supplier_service SET (fillfactor = 90, autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
 `;
 }

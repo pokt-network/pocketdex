@@ -32,6 +32,7 @@ import {
   createSettlementWriterFn,
   recordMoneyProgressCall,
   recordMoneySkipCall,
+  STAKER_ROLES_SQL,
   writeSettlementCalls,
 } from "../../src/mappings/dbFunctions/settlement/writer";
 import { planGap } from "../../src/mappings/money/history/job";
@@ -413,8 +414,8 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
           assert.equal(d, await answer(addrs, s, e), `${addrs} ${s}..${e}`);
           await c.query("SET LOCAL money.no_rollup = off");
         }
-      // 1 and 2 Sep are whole days of WINDOWS[0]: a rollup row of 1 Sep changed by hand changes the answer for one address,
-      // and not for a list, which reads only the claims
+      // 1 and 2 Sep are whole days of WINDOWS[0]: a rollup row of 1 Sep changed by hand changes the answer, for one address
+      // and for a list
       const [s, e] = WINDOWS[0];
       const truth = await answer([shareholder], s, e);
       const pairTruth = await answer(pair, s, e);
@@ -423,7 +424,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
                  WHERE address = ANY($1) AND day = $2`, [[shareholder, ...pair], day]);
       await corrupt("2026-09-01");
       assert.notEqual(await answer([shareholder], s, e), truth);
-      assert.equal(await answer(pair, s, e), pairTruth);
+      assert.notEqual(await answer(pair, s, e), pairTruth);
       // a height of 1 Sep the rollup does not hold: 1 Sep is read from the claims, 2 Sep still from the rollup
       await c.query(`UPDATE ${S}.settlement_blocks SET claims_paid_rollup = false WHERE height = 899733`);
       assert.equal(await answer([shareholder], s, e), truth);
@@ -452,6 +453,275 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       assert.equal(await answer([shareholder], s, e), listed);
       await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET claim_count = 1 WHERE service_id = 'zero-svc'`);
       assert.match(String(await answer([shareholder], s, e)), /"service_id": "zero-svc", "net_rewards": 0, "gross_rewards": 999/);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("legacy_rewards_by_addresses_and_time_group_by_service counts once a claim paid by several addresses of a list", async () => {
+    const answer = async (addrs: string[], s: string, e: string) =>
+      (await one(`SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)->>'data' d`, [addrs, s, e])).d;
+    const fromClaims = async (addrs: string[], s: string, e: string) => {
+      await c.query("SAVEPOINT b");
+      try {
+        await c.query("SET LOCAL money.no_rollup = on");
+        return await answer(addrs, s, e);
+      } finally {
+        await c.query("ROLLBACK TO SAVEPOINT b");
+      }
+    };
+    // runs f, then undoes what it changed (one savepoint name per call: they nest)
+    let savepoints = 0;
+    const undone = async <T>(f: () => Promise<T>) => {
+      const name = `u${++savepoints}`;
+      await c.query(`SAVEPOINT ${name}`);
+      try {
+        return await f();
+      } finally {
+        await c.query(`ROLLBACK TO SAVEPOINT ${name}`);
+        await c.query(`RELEASE SAVEPOINT ${name}`);
+      }
+    };
+    // per claim, from the payouts themselves: its listed shareholders paid in any family (paid), and in the relay family
+    const perClaim = `
+      SELECT c.supplier_id, sb.day, c.height, c.event_idx,
+             coalesce(array_agg(sp.recipient_id ORDER BY sp.recipient_id) FILTER (WHERE sp.relay_upokt > 0 OR sp.global_upokt > 0), '{}') paid,
+             coalesce(array_agg(sp.recipient_id ORDER BY sp.recipient_id) FILTER (WHERE sp.relay_upokt > 0), '{}') relay
+      FROM ${S}.claim_settlements c JOIN ${S}.settlement_blocks sb USING (height)
+      LEFT JOIN ${S}.shareholder_payouts sp ON sp.height = c.height AND sp.event_idx = c.event_idx AND sp.recipient_id = ANY($1)
+      GROUP BY 1, 2, 3, 4`;
+    const [ws, we] = WINDOWS[0];
+    const lists = (fleet: string[]): Array<[string, string[]]> => [
+      ["pair", pair],
+      ["fleet", fleet],
+      ["fleet twice", [...fleet, ...fleet]],
+    ];
+    const windows = [...WINDOWS, ["2026-08-01T00:00:00Z", "2026-09-30T23:59:59.999999Z"]];
+    const check = async (label: string, ls: Array<[string, string[]]>, wins: string[][]) => {
+      for (const [name, addrs] of ls)
+        for (const [s, e] of wins) {
+          const [r, b] = [await answer(addrs, s, e), await fromClaims(addrs, s, e)];
+          assert.ok(b !== null && /"gross_rewards": [1-9]/.test(b), `${label} ${name} ${s}..${e}: ${b}`);
+          assert.equal(r, b, `${label} ${name} ${s}..${e}`);
+        }
+    };
+    await c.query("BEGIN");
+    try {
+      // every shareholder of the suppliers that paid `shareholder`: many overlap on the same claims
+      const fleet = (
+        await c.query(`SELECT array_agg(DISTINCT recipient_id ORDER BY recipient_id) a FROM ${S}.shareholder_payouts
+                       WHERE supplier_id = ANY($1)`, [suppliers])
+      ).rows[0].a as unknown as string[];
+      // one supplier-day whose claims paid two or more of them: one claim stops paying one of them (its leg removed), and
+      // another pays one of them in the global family only, so the supplier-day mixes k and is not whole for that address
+      const two = (
+        await c.query(
+          `SELECT sp.height, sp.event_idx, min(sp.recipient_id) a FROM ${S}.shareholder_payouts sp
+           WHERE sp.recipient_id = ANY($1) AND sp.relay_upokt > 0 AND sp.global_upokt > 0 AND sp.height = 899713
+           GROUP BY 1, 2 HAVING count(*) >= 2 ORDER BY 1, 2 LIMIT 2`,
+          [fleet]
+        )
+      ).rows;
+      assert.equal(two.length, 2, "precondition: two claims at 899713 paying two listed shareholders in both families");
+      await c.query(`DELETE FROM ${S}.shareholder_payouts WHERE height = $1 AND event_idx = $2 AND recipient_id = $3`,
+                    [two[0].height, two[0].event_idx, two[0].a]);
+      await c.query(`UPDATE ${S}.shareholder_payouts SET relay_upokt = 0 WHERE height = $1 AND event_idx = $2 AND recipient_id = $3`,
+                    [two[1].height, two[1].event_idx, two[1].a]);
+      await c.query(`CALL ${S}.rebuild_rollups('2026-09-01')`);
+      // that supplier-day mixes k for the fleet, and is a rollup day of WINDOWS[0] that the fleet reads from the rollup (all
+      // of its heights held, no listed address paid other than as a shareholder that day)
+      const mixed = (
+        await c.query(`SELECT supplier_id, day::text, array_agg(DISTINCT cardinality(paid)) ks FROM (${perClaim}) x
+                       GROUP BY 1, 2 HAVING count(DISTINCT cardinality(paid)) >= 2 AND max(cardinality(paid)) >= 2`, [fleet])
+      ).rows;
+      assert.ok(mixed.length > 0, "precondition: a supplier-day whose claims paid different numbers of listed shareholders");
+      const rd = await one(`SELECT d1::text, d2::text FROM ${S}._ranges($1::timestamp AT TIME ZONE 'UTC',
+                              ($2::timestamp + interval '1 microsecond') AT TIME ZONE 'UTC', NULL)`, [ws, we]);
+      for (const m of mixed) {
+        assert.ok(String(rd.d1) <= String(m.day) && String(m.day) <= String(rd.d2), `precondition: ${m.day} is a rollup day of ${ws}..${we} (${rd.d1}..${rd.d2})`);
+        const off = await one(
+          `SELECT (SELECT count(*) FROM ${S}.settlement_blocks WHERE day = $2 AND NOT claims_paid_rollup)::int unheld,
+                  (SELECT count(*) FROM ${S}.daily_income_by_address WHERE address = ANY($1) AND day = $2
+                     AND role NOT IN ('rev_share', ${STAKER_ROLES_SQL}))::int roles`,
+          [fleet, m.day]
+        );
+        assert.deepEqual([off.unheld, off.roles], [0, 0], `precondition: ${m.day} is read from the rollup for the fleet`);
+      }
+      // a supplier whose every September claim paid the same two or more listed shareholders, each in the relay family: its
+      // correction is by month (whole September) or by day, and a changed row of the rollup that path reads shows
+      const whole = await one(
+        `SELECT x.supplier_id, min(x.day)::text AS day FROM (${perClaim}) x WHERE x.day >= '2026-09-01' AND x.day < '2026-10-01'
+         GROUP BY 1 HAVING count(DISTINCT x.paid) = 1 AND bool_and(x.paid = x.relay) AND min(cardinality(x.paid)) >= 2
+         ORDER BY 1 LIMIT 1`,
+        [fleet]
+      );
+      assert.ok(whole, "precondition: a supplier whose September claims all paid the same listed shareholders");
+      const moves = async (sql: string, args: unknown[]) => {
+        const before = await answer(fleet, ws, we);
+        return undone(async () => {
+          await c.query(sql, args);
+          return (await answer(fleet, ws, we)) !== before;
+        });
+      };
+      const monthRow = () =>
+        moves(`UPDATE ${S}.monthly_claims_by_supplier_service SET settled_upokt = settled_upokt + 7
+               WHERE supplier_id = $1 AND month = '2026-09-01'`, [whole.supplier_id]);
+      const dayRow = () =>
+        moves(`UPDATE ${S}.daily_claims_by_supplier_application_service SET settled_upokt = settled_upokt + 7
+               WHERE supplier_id = $1 AND day = $2`, [whole.supplier_id, whole.day]);
+      // September whole: by supplier-month from monthly_claims_by_supplier_service, per claim for the mixed supplier-day
+      assert.deepEqual([await monthRow(), await dayRow()], [true, false], "by month: the monthly rollup is read");
+      await check("by month", lists(fleet), windows);
+      // a September height monthly_claims_by_supplier_service does not hold: by supplier-day, and per claim
+      await undone(async () => {
+        await c.query(`UPDATE ${S}.settlement_blocks SET monthly_claims_rollup = false WHERE height = 899773`);
+        assert.deepEqual([await monthRow(), await dayRow()], [false, true], "by day: the daily rollup is read");
+        await check("by day", lists(fleet), windows);
+      });
+
+      // roles other than shareholder, apart from the cases above (neither of the pair is in the fleet): pair[0] the service
+      // owner of a claim on 2 Sep at 00:00, and an application paid on 1 Sep at 23:30 by a claim that pays pair[0] as a
+      // shareholder too (in the list with the pair, that claim is in two rollup rows, only one of them a shareholder's; 1 Sep
+      // is a role day of that list through the application alone)
+      const owned = (
+        await c.query(`UPDATE ${S}.claim_settlements SET source_owner_id = $1, relay_to_source_owner_upokt = 3
+                       WHERE (height, event_idx) = (SELECT height, min(event_idx) FROM ${S}.claim_settlements WHERE height = 899753 GROUP BY 1)
+                       RETURNING event_idx`, [pair[0]])
+      ).rows;
+      assert.equal(owned.length, 1, "precondition: the claim pair[0] owns the service of");
+      const app = (
+        await c.query(`UPDATE ${S}.claim_settlements SET relay_to_application_upokt = 5
+                       WHERE (height, event_idx) = (SELECT height, min(event_idx) FROM ${S}.shareholder_payouts
+                                                    WHERE height = 899733 AND recipient_id = $1 GROUP BY 1)
+                       RETURNING application_id`, [pair[0]])
+      ).rows;
+      assert.equal(app.length, 1, "precondition: a claim at 899733 that pays pair[0] as a shareholder");
+      await c.query(`CALL ${S}.rebuild_rollups('2026-09-01')`);
+      // the method relies on this: every address a claim pays that is not one of its shareholders is paid in a role the
+      // fallback reads (any but rev_share and the staker roles); a branch of v_claims_paid without such a leg fails here
+      const roles = await one(
+        `SELECT count(*) FILTER (WHERE NOT EXISTS (
+                  SELECT 1 FROM ${S}.daily_income_by_address d WHERE d.address = p.address AND d.day = sb.day
+                    AND d.role NOT IN ('rev_share', ${STAKER_ROLES_SQL})))::int missed,
+                count(DISTINCT p.address)::int addresses
+         FROM ${S}.v_claims_paid p JOIN ${S}.settlement_blocks sb USING (height)
+         WHERE NOT EXISTS (SELECT 1 FROM ${S}.shareholder_payouts sp WHERE sp.height = p.height AND sp.event_idx = p.event_idx
+                             AND sp.recipient_id = p.address AND (sp.relay_upokt > 0 OR sp.global_upokt > 0))`
+      );
+      // the DAO, the service owners (pair[0] among them) and the application
+      assert.ok(Number(roles.addresses) >= 3, JSON.stringify(roles));
+      assert.equal(roles.missed, 0);
+      // WINDOWS[2] and WINDOWS[3] have the application's 1 Sep 23:30 on an edge, WINDOWS[0] on a rollup day; the last
+      // window has pair[0]'s service-owner leg (2 Sep 00:00) on its edge, next to 1 Sep, corrected from the rollup
+      await check("roles", [["pair", pair], ["pair and application", [...pair, app[0].application_id as string]]],
+        [...windows, ["2026-09-01T00:00:00Z", "2026-09-02T05:00:00Z"]]);
+      // only the days a listed address was paid other than as a shareholder are read from the claims: 2 Sep for the pair
+      // (pair[0] owns a service there), the rollup still for 1 Sep
+      const truth = await answer(pair, ws, we);
+      const shifted = (day: string) =>
+        undone(async () => {
+          await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt + 7
+                         WHERE address = ANY($1) AND day = $2`, [pair, day]);
+          return answer(pair, ws, we);
+        });
+      assert.equal(await shifted("2026-09-02"), truth);
+      assert.notEqual(await shifted("2026-09-01"), truth);
+      // a role the fallback has never seen (a claim role added later) sends its day to the claims as well
+      await undone(async () => {
+        await c.query(`INSERT INTO ${S}.daily_income_by_address (day, address, role, family, amount_upokt, transfer_count, contribution_count)
+                       VALUES ('2026-09-01', $1, 'some_new_role', 'relay', 1, 1, 1)`, [pair[1]]);
+        assert.equal(await shifted("2026-09-01"), await answer(pair, ws, we));
+      });
+      // the DAO in the list: paid by every claim (every settlement day of the window), so both days are one run of days read
+      // from the claims, one height range; the rollup is not read
+      const dao = (await one(`SELECT dao_address d FROM ${S}.settlement_blocks WHERE dao_address IS NOT NULL LIMIT 1`)).d as string;
+      const daoDays = await one(
+        `SELECT (SELECT count(DISTINCT day) FROM ${S}.settlement_blocks WHERE day BETWEEN '2026-09-01' AND '2026-09-02')::int days,
+                (SELECT count(DISTINCT day) FROM ${S}.daily_income_by_address WHERE address = $1 AND role = 'dao'
+                   AND day BETWEEN '2026-09-01' AND '2026-09-02')::int dao_days`,
+        [dao]
+      );
+      assert.deepEqual([daoDays.days, daoDays.dao_days], [2, 2], "precondition: the DAO paid on both settlement days of the window");
+      const withDao = await answer([...pair, dao], ws, we);
+      assert.equal(withDao, await fromClaims([...pair, dao], ws, we));
+      assert.equal(
+        await undone(async () => {
+          await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt + 7 WHERE address = ANY($1)`,
+                        [[...pair, dao]]);
+          return answer([...pair, dao], ws, we);
+        }),
+        withDao
+      );
+      // a settlement written with an older rollup version: a list raises, as one address does, and as a list did before
+      // it read the claims rollup (its net, from _income, reads the rollups for any list)
+      await undone(async () => {
+        await c.query(`UPDATE ${S}.settlement_blocks SET rollup_version = rollup_version - 1 WHERE height = 899733`);
+        for (const sql of [
+          `SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)`,
+          `SELECT * FROM ${S}._income($1, $2, $3, NULL, false, false, true, false)`,
+        ])
+          for (const addrs of [pair, [shareholder], [...pair, dao]]) {
+            await c.query("SAVEPOINT v");
+            await assert.rejects(c.query(sql, [addrs, ws, we]), /run rebuild_rollups first/, `${sql} ${addrs.length}`);
+            await c.query("ROLLBACK TO SAVEPOINT v");
+          }
+      });
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("legacy_rewards_by_addresses_and_time_group_by_service reads fallback days around a rollup day as separate runs", async () => {
+    const answer = async (addrs: string[], s: string, e: string) =>
+      (await one(`SELECT ${S}.legacy_rewards_by_addresses_and_time_group_by_service($1, $2, $3)->>'data' d`, [addrs, s, e])).d;
+    const fromClaims = async (addrs: string[], s: string, e: string) => {
+      await c.query("SAVEPOINT b");
+      try {
+        await c.query("SET LOCAL money.no_rollup = on");
+        return await answer(addrs, s, e);
+      } finally {
+        await c.query("ROLLBACK TO SAVEPOINT b");
+      }
+    };
+    await c.query("BEGIN");
+    try {
+      // a third settlement day, 3 Sep, covered: the fixture's settlement once more
+      const f = fx();
+      const payload = buildSettlementPayload(899793, new Date("2026-09-03T06:00:00Z"), eraAtHeight("pocket", f.height), f.events);
+      assert.ok(payload);
+      addDelegatorValidator(899793, payload, validators());
+      for (const { bind, sql } of writeSettlementCalls(S, 899793, payload)) await c.query(sql, bind);
+      await c.query(`INSERT INTO ${S}.blocks VALUES (899793, '2026-09-03 06:00'); UPDATE ${S}.money_progress SET height = 899793`);
+      // pair[0] the service owner of a claim on 1 Sep and of one on 3 Sep: those two days read from the claims, 2 Sep from
+      // the rollup, corrected
+      for (const h of [899713, 899793]) {
+        const n = await c.query(`UPDATE ${S}.claim_settlements SET source_owner_id = $1, relay_to_source_owner_upokt = 3
+                                 WHERE (height, event_idx) = (SELECT height, min(event_idx) FROM ${S}.claim_settlements WHERE height = $2 GROUP BY 1)
+                                 RETURNING 1`, [pair[0], h]);
+        assert.equal(n.rows.length, 1, `precondition: a claim at ${h}`);
+      }
+      await c.query(`CALL ${S}.rebuild_rollups('2026-09-01')`);
+      const roleDays = (
+        await c.query(`SELECT array_agg(DISTINCT day::text ORDER BY day::text) d FROM ${S}.daily_income_by_address
+                       WHERE address = ANY($1) AND role NOT IN ('rev_share', ${STAKER_ROLES_SQL})`, [pair])
+      ).rows[0].d as unknown as string[];
+      assert.deepEqual(roleDays, ["2026-09-01", "2026-09-03"]);
+      const [s, e] = ["2026-09-01T00:00:00Z", "2026-09-03T23:59:59.999999Z"];
+      const truth = await answer(pair, s, e);
+      assert.equal(truth, await fromClaims(pair, s, e));
+      const shifted = async (day: string) => {
+        await c.query("SAVEPOINT r");
+        try {
+          await c.query(`UPDATE ${S}.daily_claims_paid_by_address_service SET settled_upokt = settled_upokt + 7
+                         WHERE address = ANY($1) AND day = $2`, [pair, day]);
+          return await answer(pair, s, e);
+        } finally {
+          await c.query("ROLLBACK TO SAVEPOINT r");
+        }
+      };
+      assert.notEqual(await shifted("2026-09-02"), truth);
+      assert.equal(await shifted("2026-09-01"), truth);
+      assert.equal(await shifted("2026-09-03"), truth);
     } finally {
       await c.query("ROLLBACK");
     }

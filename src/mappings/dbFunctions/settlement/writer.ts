@@ -30,7 +30,14 @@ import type { SettlementPayload } from "../../money/payload";
 // 4: daily_delegator_rewards_by_validator.replayed_count.
 // daily_claims_paid_by_address_service came later without a bump (a bump makes every rollup read raise until
 // rebuild_rollups ends): settlement_blocks.claims_paid_rollup says per height whether it holds that height (schema.ts).
+// So did monthly_claims_by_supplier_service, with settlement_blocks.monthly_claims_rollup.
 export const ROLLUP_VERSION = 4;
+
+// The roles of staker_payouts (the batch staker rows and, in the settlement_result era, the proposer's legs): the income
+// of validators and delegators, which no claim pays them (v_claims_paid does not read staker_payouts).
+const STAKER_ROLES = ["validator", "delegator"] as const;
+// as a SQL list: 'validator', 'delegator'
+export const STAKER_ROLES_SQL = STAKER_ROLES.map((r) => `'${r}'`).join(", ");
 
 export const writeSettlementProcName = "write_settlement";
 
@@ -139,6 +146,109 @@ export function writeSettlementCalls(
   ];
 }
 
+// The drift check of a subtraction, fed by the upserts themselves: on a subtraction (sg < 0) each rollup's INSERT ...
+// ON CONFLICT DO UPDATE returns the rows it wrote as they are after it, so the check reads exactly the rows the height
+// touched, with no second read of the table. No measure may go below 0, and a row whose contributions are all gone must
+// have every measure back at 0 (its measures: the columns its ON CONFLICT sets, read from its SQL, so a new column is
+// checked too), on top of the invariants between columns each rollup states: anything else means it was added under
+// other rules than the ones subtracting it now. The error names the rollup, the row's key and the first rule it breaks.
+// The rows left at zero contributions then go by their ctid among the returned rows: the height's keys and nothing
+// else, with nothing to plan (a join of the keys to monthly_income_by_address_supplier_service, which has no month
+// index, planned under statistics without zero rows a scan of the whole table per row left at zero: 57 s for one
+// subtraction locally). An add (every new height, every height of rebuild_rollups) runs the plain upserts.
+//
+// Not swept any more, by decision: a zero row the height did not touch, which only a bug or a hand edit leaves (the
+// writer deletes its own); rebuild_rollups rewrites it. monthly_claims_by_supplier_service and
+// daily_claims_paid_by_address_service are written only for a held height, so a height not held leaves their rows as
+// they are; fill_monthly_claims_month and fill_claims_paid_day rewrite a whole month or day, without its zero rows.
+interface Checked {
+  t: string;
+  // its key without the period, as the error names it
+  keys: string[];
+  // its count of contributions: a row at 0 of it holds nothing
+  count: string;
+  // its invariants between columns (every measure at 0 or above, and at 0 with the count, are generated)
+  rules: string[];
+  // INSERT ... ON CONFLICT DO UPDATE SET ..., without RETURNING or ';'
+  sql: string;
+}
+// the columns its ON CONFLICT DO UPDATE sets: its SET list split at the commas outside parentheses and CASE ... END, each
+// item "column = ..."; anything else stops the generation
+function measures(t: string, sql: string): string[] {
+  const set = sql.slice(sql.indexOf("DO UPDATE")).replace(/^DO UPDATE\s+SET\b/, "");
+  const items = [""];
+  let depth = 0;
+  for (const part of set.split(/(\bCASE\b|\bEND\b|[(),])/i)) {
+    const word = part.toUpperCase();
+    if (word === "CASE" || part === "(") depth++;
+    if (word === "END" || part === ")") depth--;
+    if (part === "," && depth === 0) items.push("");
+    else items[items.length - 1] += part;
+  }
+  if (depth !== 0) throw new Error(`${t}: its SET list does not balance its parentheses and CASE ... END (depth ${depth} at its end)`);
+  return items.map((item) => {
+    const m = /^\s*(\w+)\s*=[^=]/.exec(item);
+    if (!m) throw new Error(`${t}: cannot read a measure from its SET item "${item.trim()}"`);
+    return m[1];
+  });
+}
+function checkRules(u: Checked): string[] {
+  const set = measures(u.t, u.sql);
+  if (!set.includes(u.count)) throw new Error(`${u.t}: its ON CONFLICT does not set ${u.count}`);
+  const others = set.filter((m) => m !== u.count);
+  return [`${u.count} < 0`, ...others.map((m) => `${m} < 0`), ...u.rules, ...others.map((m) => `${u.count} = 0 AND ${m} <> 0`)];
+}
+const literal = (x: string) => `'${x.replace(/'/g, "''")}'`;
+// v_zero1 .. v_zero<MAX_CHECKED> in _rollup_apply
+const MAX_CHECKED = 2;
+// The upserts of one statement after an optional prelude of plain CTEs: each a CTE r1, r2, ... but the last, which a later
+// one may read. Plain on an add; on a subtraction checked, then cleared of their rows left at zero.
+function upserts(s: string, prelude: string, list: Checked[]): string {
+  if (list.length > MAX_CHECKED) throw new Error(`at most ${MAX_CHECKED} upserts in one statement`);
+  const head = prelude ? [prelude] : [];
+  const plain =
+    list.length === 1 && !prelude
+      ? `${list[0].sql};`
+      : `WITH ${[...head, ...list.slice(0, -1).map((u, i) => `r${i + 1} AS (${u.sql})`)].join(", ")}
+  ${list[list.length - 1].sql};`;
+  const returning = list.map(
+    (u, i) => `r${i + 1} AS (${u.sql}
+    RETURNING ${literal(u.t)}::text AS rollup, concat_ws(' / ', ${u.keys.join(", ")}) AS row_key,
+      CASE ${checkRules(u).map((r) => `WHEN ${r} THEN ${literal(r)}`).join(" ")} END AS broken,
+      CASE WHEN ${u.count} = 0 THEN ctid END AS zero_row)`
+  );
+  const rows = list.length === 1 ? "r1" : `(${list.map((_, i) => `TABLE r${i + 1}`).join(" UNION ALL ")}) r`;
+  return `IF sg < 0 THEN
+  WITH ${[...head, ...returning].join(", ")}
+  SELECT (SELECT format('%s row %s has %s', rollup, row_key, broken) FROM ${rows} WHERE broken IS NOT NULL LIMIT 1),
+         ${list.map((_, i) => `ARRAY(SELECT zero_row FROM r${i + 1} WHERE zero_row IS NOT NULL)`).join(", ")}
+  INTO v_drift, ${list.map((_, i) => `v_zero${i + 1}`).join(", ")};
+  IF v_drift IS NOT NULL THEN
+    RAISE EXCEPTION 'rollup drift at height %: % after subtracting the height', h, v_drift;
+  END IF;
+${list
+  .map(
+    (u, i) => `  IF cardinality(v_zero${i + 1}) > 0 THEN
+    DELETE FROM ${s}.${u.t} WHERE ctid = ANY(v_zero${i + 1}) AND ${u.count} = 0;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> cardinality(v_zero${i + 1}) THEN
+      RAISE EXCEPTION 'rollup cleanup at height %: % deleted % of its % rows left at zero', h, ${literal(u.t)}, v_n, cardinality(v_zero${i + 1});
+    END IF;
+  END IF;`
+  )
+  .join("\n")}
+  ELSE
+  ${plain}
+  END IF;`;
+}
+const CLAIMS = ["claims_with_proof > claim_count"];
+const MONTHLY_CLAIMS = ["claims_with_proof > claim_count"];
+const DELEGATOR = ["replayed_count > contribution_count"];
+// with no contribution that has a commission left, what is left of the commission must be 0 (it becomes NULL below);
+// anything else was added under other rules
+const VALIDATOR = ["commission_na_count > contribution_count",
+                   "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0"];
+
 export function createSettlementWriterFn(dbSchema: string): string {
   const s = dbSchema;
   return `
@@ -193,9 +303,10 @@ FROM ${s}.claim_settlements c WHERE c.relay_to_application_upokt > 0 OR c.global
 
 -- Adds (sg = 1) or subtracts (sg = -1) the contribution of height h to every rollup.
 CREATE OR REPLACE PROCEDURE ${s}._rollup_apply(h bigint, sg int) LANGUAGE plpgsql AS $$
-DECLARE d date; hr timestamptz; v_held boolean;
+DECLARE d date; hr timestamptz; v_held boolean; v_month_held boolean; v_drift text; v_n bigint;
+  ${Array.from({ length: MAX_CHECKED }, (_, i) => `v_zero${i + 1} tid[];`).join(" ")}
 BEGIN
-  SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup INTO d, hr, v_held
+  SELECT day, date_trunc('hour', block_time, 'UTC'), claims_paid_rollup, monthly_claims_rollup INTO d, hr, v_held, v_month_held
   FROM ${s}.settlement_blocks WHERE height = h;
   IF d IS NULL THEN RETURN; END IF;
 
@@ -242,18 +353,18 @@ BEGIN
     FROM ${s}.claim_settlements WHERE height = h;
   END IF;
 
-  INSERT INTO ${s}.monthly_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier", keys: ["address", "supplier_id", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.monthly_income_by_address_supplier AS t
   SELECT date_trunc('month', d)::date, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
   ON CONFLICT (address, month, supplier_id, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  INSERT INTO ${s}.daily_income_by_address AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address", keys: ["address", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.daily_income_by_address AS t
   SELECT d, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count) FROM _inc GROUP BY address, role, family
   ON CONFLICT (address, day, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  INSERT INTO ${s}.daily_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address_supplier", keys: ["supplier_id", "address", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.daily_income_by_address_supplier AS t
   SELECT d, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
   UNION ALL
@@ -261,33 +372,33 @@ BEGIN
          sg * count(*) FILTER (WHERE relay_to_stakers_upokt > 0), sg * count(*)
   FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id
   ON CONFLICT (supplier_id, day, address, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  INSERT INTO ${s}.hourly_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "hourly_income_by_address_supplier", keys: ["address", "supplier_id"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.hourly_income_by_address_supplier AS t
   SELECT address, hr, supplier_id, sg * sum(amount_upokt), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY address, supplier_id
   ON CONFLICT (address, hour, supplier_id) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count;
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  INSERT INTO ${s}.daily_income_by_address_service AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.daily_income_by_address_service AS t
   SELECT d, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
   ON CONFLICT (address, day, role, family, service_id) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  INSERT INTO ${s}.monthly_income_by_address_service AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.monthly_income_by_address_service AS t
   SELECT date_trunc('month', d)::date, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
   ON CONFLICT (address, month, role, family, service_id) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  INSERT INTO ${s}.monthly_income_by_address_supplier_service AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier_service", keys: ["address", "supplier_id", "service_id", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.monthly_income_by_address_supplier_service AS t
   SELECT date_trunc('month', d)::date, address, supplier_id, service_id, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' AND service_id <> '' GROUP BY address, supplier_id, service_id, role, family
   ON CONFLICT (address, month, supplier_id, service_id, role, family) DO UPDATE
-    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count;
+    SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  INSERT INTO ${s}.daily_claims_by_application_service AS t
+  ${upserts(s, "", [{ t: "daily_claims_by_application_service", keys: ["application_id", "service_id"], count: "claim_count", rules: [], sql: `INSERT INTO ${s}.daily_claims_by_application_service AS t
   SELECT d, application_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(relay_minted_upokt),
          sg * sum(overservicing_loss_upokt), sg * sum(mint_ratio_unminted_upokt), sg * sum(global_minted_upokt),
          sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
@@ -305,29 +416,53 @@ BEGIN
     relay_to_stakers_upokt = t.relay_to_stakers_upokt + excluded.relay_to_stakers_upokt,
     global_to_supplier_upokt = t.global_to_supplier_upokt + excluded.global_to_supplier_upokt, global_to_dao_upokt = t.global_to_dao_upokt + excluded.global_to_dao_upokt,
     global_to_source_owner_upokt = t.global_to_source_owner_upokt + excluded.global_to_source_owner_upokt, global_to_application_upokt = t.global_to_application_upokt + excluded.global_to_application_upokt,
-    reimbursement_to_dao_upokt = t.reimbursement_to_dao_upokt + excluded.reimbursement_to_dao_upokt;
+    reimbursement_to_dao_upokt = t.reimbursement_to_dao_upokt + excluded.reimbursement_to_dao_upokt` }])}
 
-  INSERT INTO ${s}.daily_delegator_rewards_by_validator AS t
+  ${upserts(s, "", [{ t: "daily_delegator_rewards_by_validator", keys: ["delegator", "validator_operator", "family"], count: "contribution_count", rules: DELEGATOR, sql: `INSERT INTO ${s}.daily_delegator_rewards_by_validator AS t
   SELECT d, delegator, validator_operator, family, sg * sum(amount_upokt), sg * count(*),
          sg * count(*) FILTER (WHERE row_source IN ('replay', 'derived_split'))
   FROM ${s}.delegator_validator_payouts WHERE height = h GROUP BY delegator, validator_operator, family
   ON CONFLICT (delegator, day, validator_operator, family) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count,
-        replayed_count = t.replayed_count + excluded.replayed_count;
+        replayed_count = t.replayed_count + excluded.replayed_count` }])}
 
-  INSERT INTO ${s}.daily_claims_by_supplier_application_service AS t
-  SELECT d, supplier_id, application_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt),
-         sg * sum(overservicing_loss_upokt), sg * sum(global_minted_upokt), sg * sum(relays), sg * sum(estimated_relays),
-         sg * sum(claimed_compute_units), sg * sum(estimated_compute_units), sg * count(*) FILTER (WHERE settled_with_proof)
-  FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id, application_id, service_id
-  ON CONFLICT (supplier_id, day, application_id, service_id) DO UPDATE SET
+  -- one aggregate of the height's claims feeds the daily rollup and the monthly one without the application; the monthly
+  -- one only for a held height (settlement_blocks.monthly_claims_rollup), as daily_claims_paid_by_address_service
+  ${upserts(s, `a AS (
+    SELECT supplier_id, application_id, service_id, count(*) claim_count, sum(claimed_upokt) claimed_upokt,
+           sum(settled_upokt) settled_upokt, sum(overservicing_loss_upokt) overservicing_loss_upokt,
+           sum(global_minted_upokt) global_minted_upokt, sum(relays) relays, sum(estimated_relays) estimated_relays,
+           sum(claimed_compute_units) claimed_compute_units, sum(estimated_compute_units) estimated_compute_units,
+           count(*) FILTER (WHERE settled_with_proof) claims_with_proof
+    FROM ${s}.claim_settlements WHERE height = h GROUP BY supplier_id, application_id, service_id
+  )`, [
+    { t: "daily_claims_by_supplier_application_service", keys: ["supplier_id", "application_id", "service_id"], count: "claim_count",
+      rules: CLAIMS, sql: `INSERT INTO ${s}.daily_claims_by_supplier_application_service AS t
+    SELECT d, supplier_id, application_id, service_id, sg * claim_count, sg * claimed_upokt, sg * settled_upokt,
+           sg * overservicing_loss_upokt, sg * global_minted_upokt, sg * relays, sg * estimated_relays,
+           sg * claimed_compute_units, sg * estimated_compute_units, sg * claims_with_proof
+    FROM a
+    ON CONFLICT (supplier_id, day, application_id, service_id) DO UPDATE SET
+      claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
+      overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
+      relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
+      claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
+      claims_with_proof = t.claims_with_proof + excluded.claims_with_proof` },
+    { t: "monthly_claims_by_supplier_service", keys: ["supplier_id", "service_id"], count: "claim_count", rules: MONTHLY_CLAIMS,
+      sql: `INSERT INTO ${s}.monthly_claims_by_supplier_service AS t
+  SELECT date_trunc('month', d)::date, supplier_id, service_id, sg * sum(claim_count), sg * sum(claimed_upokt), sg * sum(settled_upokt),
+         sg * sum(overservicing_loss_upokt), sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units),
+         sg * sum(estimated_compute_units), sg * sum(claims_with_proof)
+  FROM a WHERE v_month_held GROUP BY supplier_id, service_id
+  ON CONFLICT (supplier_id, month, service_id) DO UPDATE SET
     claim_count = t.claim_count + excluded.claim_count, claimed_upokt = t.claimed_upokt + excluded.claimed_upokt, settled_upokt = t.settled_upokt + excluded.settled_upokt,
-    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt, global_minted_upokt = t.global_minted_upokt + excluded.global_minted_upokt,
+    overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt,
     relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
-    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
+    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof` },
+  ])}
 
-  INSERT INTO ${s}.daily_claims_by_supplier AS t
+  ${upserts(s, "", [{ t: "daily_claims_by_supplier", keys: ["supplier_id"], count: "claim_count", rules: CLAIMS, sql: `INSERT INTO ${s}.daily_claims_by_supplier AS t
   SELECT d, supplier_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(overservicing_loss_upokt),
          sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
          sg * count(*) FILTER (WHERE settled_with_proof)
@@ -337,11 +472,11 @@ BEGIN
     overservicing_loss_upokt = t.overservicing_loss_upokt + excluded.overservicing_loss_upokt,
     relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units, estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units,
-    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof;
+    claims_with_proof = t.claims_with_proof + excluded.claims_with_proof` }])}
 
   -- commission: the sum of the contributions that have one, and how many have none (the replayed rows, NULL); NULL
   -- + x keeps x, so a day mixing both keeps the real commission. A row whose contributions all lack one is NULL.
-  INSERT INTO ${s}.daily_validator_rewards AS t
+  ${upserts(s, "", [{ t: "daily_validator_rewards", keys: ["validator_operator", "family"], count: "contribution_count", rules: VALIDATOR, sql: `INSERT INTO ${s}.daily_validator_rewards AS t
   SELECT d, validator_operator, family, sg * count(*),
          sg * sum(pool_share_upokt), sg * sum(commission_upokt), sg * sum(self_delegation_upokt), sg * sum(to_delegators_upokt),
          sg * count(*) FILTER (WHERE commission_upokt IS NULL)
@@ -352,9 +487,9 @@ BEGIN
                             WHEN excluded.commission_upokt IS NULL THEN t.commission_upokt
                             ELSE t.commission_upokt + excluded.commission_upokt END,
     self_delegation_upokt = t.self_delegation_upokt + excluded.self_delegation_upokt, to_delegators_upokt = t.to_delegators_upokt + excluded.to_delegators_upokt,
-    commission_na_count = t.commission_na_count + excluded.commission_na_count;
+    commission_na_count = t.commission_na_count + excluded.commission_na_count` }])}
 
-  INSERT INTO ${s}.daily_claims_paid_by_address_service AS t
+  ${upserts(s, "", [{ t: "daily_claims_paid_by_address_service", keys: ["address", "service_id"], count: "claim_count", rules: [], sql: `INSERT INTO ${s}.daily_claims_paid_by_address_service AS t
   SELECT d, address, service_id, sg * claim_count, sg * settled_upokt, sg * relays, sg * estimated_relays,
          sg * claimed_compute_units, sg * estimated_compute_units
   FROM _paid
@@ -362,122 +497,8 @@ BEGIN
     claim_count = t.claim_count + excluded.claim_count, settled_upokt = t.settled_upokt + excluded.settled_upokt,
     relays = t.relays + excluded.relays, estimated_relays = t.estimated_relays + excluded.estimated_relays,
     claimed_compute_units = t.claimed_compute_units + excluded.claimed_compute_units,
-    estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units;
+    estimated_compute_units = t.estimated_compute_units + excluded.estimated_compute_units` }])}
 
-  IF sg < 0 THEN
-    -- A row whose contributions are all gone must be back at zero, and no row may go negative. Anything else
-    -- means it was added under other rules than the ones subtracting it now. Only the rows this height
-    -- touched can have changed, so each check probes them by primary key: the keys come from _inc and from
-    -- the height's base rows, which are deleted only after this subtraction. The LIMIT 1 laterals keep it a
-    -- probe per key; as a plain join the planner prefers scanning the whole rollup for the bad rows.
-    IF EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                 SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address t
-                 WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family LIMIT 1) t
-               WHERE t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0)))
-       OR EXISTS (SELECT 1 FROM (SELECT supplier_id, address, role, family FROM _inc WHERE supplier_id <> ''
-                                 UNION ALL
-                                 SELECT supplier_id, '', 'stakers', 'relay' FROM ${s}.claim_settlements WHERE height = h) i
-                  CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address_supplier t
-                    WHERE t.supplier_id = i.supplier_id AND t.day = d AND t.address = i.address AND t.role = i.role
-                      AND t.family = i.family LIMIT 1) t
-                  WHERE t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0)))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.daily_income_by_address_service t
-                    WHERE t.address = i.address AND t.day = d AND t.role = i.role AND t.family = i.family
-                      AND t.service_id = i.service_id LIMIT 1) t
-                  WHERE i.service_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_supplier t
-                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
-                      AND t.role = i.role AND t.family = i.family LIMIT 1) t
-                  WHERE i.supplier_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_service t
-                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.role = i.role
-                      AND t.family = i.family AND t.service_id = i.service_id LIMIT 1) t
-                  WHERE i.service_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.transfer_count FROM ${s}.monthly_income_by_address_supplier_service t
-                    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
-                      AND t.service_id = i.service_id AND t.role = i.role AND t.family = i.family LIMIT 1) t
-                  WHERE i.supplier_id <> '' AND i.service_id <> ''
-                    AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND (t.amount_upokt <> 0 OR t.transfer_count <> 0))))
-       OR EXISTS (SELECT 1 FROM _inc i CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt FROM ${s}.hourly_income_by_address_supplier t
-                    WHERE t.address = i.address AND t.hour = hr AND t.supplier_id = i.supplier_id LIMIT 1) t
-                  WHERE i.supplier_id <> '' AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays FROM ${s}.daily_claims_by_application_service t
-                    WHERE t.application_id = c.application_id AND t.day = d AND t.service_id = c.service_id LIMIT 1) t
-                  WHERE c.height = h
-                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays, t.claims_with_proof
-                    FROM ${s}.daily_claims_by_supplier t
-                    WHERE t.supplier_id = c.supplier_id AND t.day = d LIMIT 1) t
-                  WHERE c.height = h
-                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
-                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.claim_settlements c CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.claimed_upokt, t.relays, t.claims_with_proof
-                    FROM ${s}.daily_claims_by_supplier_application_service t
-                    WHERE t.supplier_id = c.supplier_id AND t.day = d AND t.application_id = c.application_id
-                      AND t.service_id = c.service_id LIMIT 1) t
-                  WHERE c.height = h
-                    AND (t.claim_count < 0 OR t.settled_upokt < 0 OR t.claims_with_proof < 0 OR t.claims_with_proof > t.claim_count
-                         OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.claimed_upokt <> 0 OR t.relays <> 0))))
-       OR EXISTS (SELECT 1 FROM ${s}.delegator_validator_payouts p CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.amount_upokt, t.replayed_count FROM ${s}.daily_delegator_rewards_by_validator t
-                    WHERE t.delegator = p.delegator AND t.day = d AND t.validator_operator = p.validator_operator
-                      AND t.family = p.family LIMIT 1) t
-                  WHERE p.height = h AND (t.contribution_count < 0 OR t.amount_upokt < 0 OR t.replayed_count < 0
-                                          OR t.replayed_count > t.contribution_count
-                                          OR (t.contribution_count = 0 AND t.amount_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM ${s}.validator_distributions v CROSS JOIN LATERAL (
-                    SELECT t.contribution_count, t.pool_share_upokt, t.commission_upokt, t.commission_na_count
-                    FROM ${s}.daily_validator_rewards t
-                    WHERE t.validator_operator = v.validator_operator AND t.day = d AND t.family = v.family LIMIT 1) t
-                  WHERE v.height = h
-                    AND (t.contribution_count < 0 OR t.pool_share_upokt < 0
-                         OR t.commission_na_count < 0 OR t.commission_na_count > t.contribution_count
-                         -- with no contribution that has a commission left, what is left of the commission must be 0
-                         -- (it becomes NULL below); anything else was added under other rules
-                         OR (t.commission_na_count = t.contribution_count AND coalesce(t.commission_upokt, 0) <> 0)
-                         OR (t.contribution_count = 0 AND t.pool_share_upokt <> 0)))
-       OR EXISTS (SELECT 1 FROM _paid i CROSS JOIN LATERAL (
-                    SELECT t.claim_count, t.settled_upokt, t.relays, t.estimated_relays, t.claimed_compute_units,
-                           t.estimated_compute_units
-                    FROM ${s}.daily_claims_paid_by_address_service t
-                    WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id LIMIT 1) t
-                  WHERE t.claim_count < 0 OR t.settled_upokt < 0 OR t.relays < 0 OR t.estimated_relays < 0
-                    OR t.claimed_compute_units < 0 OR t.estimated_compute_units < 0
-                    OR (t.claim_count = 0 AND (t.settled_upokt <> 0 OR t.relays <> 0 OR t.estimated_relays <> 0
-                                               OR t.claimed_compute_units <> 0 OR t.estimated_compute_units <> 0))) THEN
-      RAISE EXCEPTION 'rollup drift at height %: subtracting it left a rollup row negative, or at contribution_count = 0 with a non-zero amount', h;
-    END IF;
-    DELETE FROM ${s}.daily_income_by_address WHERE day = d AND contribution_count = 0;
-    DELETE FROM ${s}.daily_income_by_address_supplier WHERE day = d AND contribution_count = 0;
-    DELETE FROM ${s}.daily_income_by_address_service WHERE day = d AND contribution_count = 0;
-    DELETE FROM ${s}.daily_claims_by_application_service WHERE day = d AND claim_count = 0;
-    DELETE FROM ${s}.daily_claims_by_supplier WHERE day = d AND claim_count = 0;
-    DELETE FROM ${s}.daily_claims_by_supplier_application_service WHERE day = d AND claim_count = 0;
-    DELETE FROM ${s}.monthly_income_by_address_supplier WHERE month = date_trunc('month', d)::date AND contribution_count = 0;
-    DELETE FROM ${s}.monthly_income_by_address_service WHERE month = date_trunc('month', d)::date AND contribution_count = 0;
-    -- by the height's keys, not the whole month: the table has no month index
-    DELETE FROM ${s}.monthly_income_by_address_supplier_service t USING _inc i
-    WHERE t.address = i.address AND t.month = date_trunc('month', d)::date AND t.supplier_id = i.supplier_id
-      AND t.service_id = i.service_id AND t.role = i.role AND t.family = i.family AND t.contribution_count = 0;
-    DELETE FROM ${s}.hourly_income_by_address_supplier WHERE hour = hr AND contribution_count = 0;
-    DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day = d AND contribution_count = 0;
-    DELETE FROM ${s}.daily_validator_rewards WHERE day = d AND contribution_count = 0;
-    -- by the height's keys: a mainnet day is ~90k rows
-    DELETE FROM ${s}.daily_claims_paid_by_address_service t USING _paid i
-    WHERE t.address = i.address AND t.day = d AND t.service_id = i.service_id AND t.claim_count = 0;
-  END IF;
   -- once the contributions with a commission are all gone, the row has none: NULL, as rebuild_rollups would write it
   UPDATE ${s}.daily_validator_rewards SET commission_upokt = NULL
   WHERE day = d AND commission_na_count = contribution_count AND commission_upokt IS NOT NULL;
@@ -544,6 +565,7 @@ DECLARE
   v_row_source text := p->>'row_source';
   v_old_version int;
   v_held boolean;
+  v_month_held boolean;
   v_bad text;
   v_lock_timeout text := current_setting('lock_timeout');
 BEGIN
@@ -572,11 +594,14 @@ BEGIN
   END IF;
 
   -- rewrite: subtract the old contribution from the rollups before deleting the base rows
-  SELECT rollup_version, claims_paid_rollup INTO v_old_version, v_held FROM ${s}.settlement_blocks WHERE height = h;
+  SELECT rollup_version, claims_paid_rollup, monthly_claims_rollup INTO v_old_version, v_held, v_month_held
+  FROM ${s}.settlement_blocks WHERE height = h;
   -- daily_claims_paid_by_address_service takes the height only when it is new or was held: an existing height that is
   -- not held (written before the rollup, or rewritten by an image without it, which may have left its old contribution
-  -- there) stays not held, and its day reads the claims until fill_claims_paid_day recomputes the day
+  -- there) stays not held, and its day reads the claims until fill_claims_paid_day recomputes the day.
+  -- monthly_claims_by_supplier_service likewise, its month read from the daily rollup until fill_monthly_claims_month.
   v_held := v_old_version IS NULL OR v_held;
+  v_month_held := v_old_version IS NULL OR v_month_held;
   IF v_old_version IS NOT NULL THEN
     IF v_old_version <> ${ROLLUP_VERSION} THEN
       RAISE EXCEPTION 'height % was written with rollup version %, this code is version ${ROLLUP_VERSION}: run rebuild_rollups first',
@@ -610,7 +635,7 @@ BEGIN
     INTO v_bad
     FROM (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_detailed GROUP BY 1, 2) dd
     FULL JOIN (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_batch
-               WHERE op_type = 'mod_to_acct' AND role NOT IN ('validator', 'delegator') GROUP BY 1, 2) bb
+               WHERE op_type = 'mod_to_acct' AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
       ON bb.op_reason = dd.op_reason AND bb.recipient_id = dd.recipient_id
     WHERE dd.amount_upokt IS DISTINCT FROM bb.amount_upokt;
     IF v_bad IS NOT NULL THEN
@@ -618,10 +643,12 @@ BEGIN
     END IF;
   END IF;
 
-  -- claims_paid_rollup: when held, _rollup_apply below adds the height to daily_claims_paid_by_address_service
-  INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio, claims_paid_rollup)
+  -- claims_paid_rollup / monthly_claims_rollup: when held, _rollup_apply below adds the height to
+  -- daily_claims_paid_by_address_service / monthly_claims_by_supplier_service
+  INSERT INTO ${s}.settlement_blocks (height, block_time, era, dao_address, day, rollup_version, mint_ratio, claims_paid_rollup,
+                                      monthly_claims_rollup)
   VALUES (h, v_ts, v_era, (SELECT min(recipient_id) FROM _stg_detailed WHERE role = 'dao'),
-          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims), v_held);
+          (v_ts AT TIME ZONE 'UTC')::date, ${ROLLUP_VERSION}, (SELECT min(mint_ratio) FROM _stg_claims), v_held, v_month_held);
 
   INSERT INTO ${s}.claim_settlements
   SELECT h, c.event_idx, v_ts, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id, c.service_id,
@@ -686,10 +713,10 @@ BEGIN
   -- settlement_result era, the proposer's leg of each claim
   INSERT INTO ${s}.staker_payouts
   SELECT h, event_idx, recipient_id, op_reason, role, family, amount_upokt, v_row_source, 1
-  FROM _stg_batch WHERE op_type = 'mod_to_acct' AND role IN ('validator', 'delegator')
+  FROM _stg_batch WHERE op_type = 'mod_to_acct' AND role IN (${STAKER_ROLES_SQL})
   UNION ALL
   SELECT h, event_idx, recipient_id, op_reason, role, family, amount_upokt, v_row_source, 1
-  FROM _stg_detailed WHERE role IN ('validator', 'delegator');
+  FROM _stg_detailed WHERE role IN (${STAKER_ROLES_SQL});
 
   INSERT INTO ${s}.validator_distributions
   SELECT h, event_idx, op_reason, family, validator_operator, validator_account, commission_rate, pool_share_upokt, commission_upokt,
@@ -758,7 +785,7 @@ BEGIN
     SELECT string_agg(coalesce(dv.delegator, bb.recipient_id) || ' ' || coalesce(dv.family, bb.family), ', ') INTO v_bad
     FROM (SELECT delegator, family, sum(amount_upokt) AS amount_upokt FROM _stg_dv GROUP BY 1, 2) dv
     FULL JOIN (SELECT recipient_id, family, sum(amount_upokt) AS amount_upokt FROM _stg_batch
-               WHERE op_type = 'mod_to_acct' AND role IN ('validator', 'delegator') GROUP BY 1, 2) bb
+               WHERE op_type = 'mod_to_acct' AND role IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
       ON bb.recipient_id = dv.delegator AND bb.family = dv.family
     WHERE dv.amount_upokt IS DISTINCT FROM bb.amount_upokt;
     IF v_bad IS NOT NULL THEN
@@ -805,8 +832,11 @@ BEGIN
   DELETE FROM ${s}.daily_delegator_rewards_by_validator WHERE day >= m;
   DELETE FROM ${s}.daily_validator_rewards WHERE day >= m;
   DELETE FROM ${s}.daily_claims_paid_by_address_service WHERE day >= m;
-  -- held before the loop: _rollup_apply adds only a held height to daily_claims_paid_by_address_service
-  UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true WHERE day >= m AND NOT claims_paid_rollup;
+  DELETE FROM ${s}.monthly_claims_by_supplier_service WHERE month >= m;
+  -- held before the loop: _rollup_apply adds only a held height to daily_claims_paid_by_address_service and
+  -- monthly_claims_by_supplier_service
+  UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true, monthly_claims_rollup = true
+  WHERE day >= m AND NOT (claims_paid_rollup AND monthly_claims_rollup);
   FOR h IN SELECT height FROM ${s}.settlement_blocks WHERE day >= m ORDER BY height LOOP
     CALL ${s}._rollup_apply(h, 1);
   END LOOP;
@@ -837,6 +867,44 @@ BEGIN
   FROM ${s}.v_claims_paid p JOIN ${s}.claim_settlements c ON c.height = p.height AND c.event_idx = p.event_idx
   WHERE p.height BETWEEN lo AND hi GROUP BY p.address, c.service_id;
   UPDATE ${s}.settlement_blocks SET claims_paid_rollup = true WHERE day = p_day AND NOT claims_paid_rollup;
+  GET DIAGNOSTICS marked = ROW_COUNT;
+  RETURN marked;
+END $$;
+
+-- Writes monthly_claims_by_supplier_service for the UTC month of p_month, and marks every height of it as held
+-- (monthly_claims_rollup), as fill_claims_paid_day does for its day: a month whose heights are all marked is left as it is
+-- (but its rows left at zero claims), and otherwise the whole month is recomputed (scripts/fill_monthly_claims.sql). From
+-- daily_claims_by_supplier_application_service, which every image keeps for every height: the same claims summed per day,
+-- read through its day index (a mainnet month: 3.1M rows in 2 s, against ~3.5M claims in an 18 GB table). Returns the
+-- heights it marked.
+-- It holds the writer's lock while it works, so no height of the month is written meanwhile, and waits for it as
+-- write_settlement does: at most 30 s per try, whatever the session's lock_timeout, up to 10 tries (the indexer and the
+-- history job hold it for one height at a time).
+CREATE OR REPLACE FUNCTION ${s}.fill_monthly_claims_month(p_month date) RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE marked integer; m1 date := date_trunc('month', p_month::timestamp)::date;
+  m2 date := (date_trunc('month', p_month::timestamp) + interval '1 month')::date;
+  v_lock_timeout text := current_setting('lock_timeout');
+BEGIN
+  FOR i IN 1..10 LOOP
+    BEGIN
+      PERFORM set_config('lock_timeout', '30s', true);
+      PERFORM pg_advisory_xact_lock(hashtext('pocketdex.${writeSettlementProcName}'));
+      EXIT;
+    EXCEPTION WHEN lock_not_available THEN
+      IF i = 10 THEN RAISE; END IF;
+    END;
+  END LOOP;
+  PERFORM set_config('lock_timeout', v_lock_timeout, true);
+  IF NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks WHERE day >= m1 AND day < m2 AND NOT monthly_claims_rollup) THEN
+    DELETE FROM ${s}.monthly_claims_by_supplier_service WHERE month = m1 AND claim_count = 0;
+    RETURN 0;
+  END IF;
+  DELETE FROM ${s}.monthly_claims_by_supplier_service WHERE month = m1;
+  INSERT INTO ${s}.monthly_claims_by_supplier_service
+  SELECT m1, supplier_id, service_id, sum(claim_count), sum(claimed_upokt), sum(settled_upokt), sum(overservicing_loss_upokt),
+         sum(relays), sum(estimated_relays), sum(claimed_compute_units), sum(estimated_compute_units), sum(claims_with_proof)
+  FROM ${s}.daily_claims_by_supplier_application_service WHERE day >= m1 AND day < m2 GROUP BY supplier_id, service_id;
+  UPDATE ${s}.settlement_blocks SET monthly_claims_rollup = true WHERE day >= m1 AND day < m2 AND NOT monthly_claims_rollup;
   GET DIAGNOSTICS marked = ROW_COUNT;
   RETURN marked;
 END $$;
