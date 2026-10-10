@@ -151,10 +151,11 @@ export function writeSettlementCalls(
 // touched, with no second read of the table. No measure may go below 0, and a row whose contributions are all gone must
 // have every measure back at 0 (its measures: the columns its ON CONFLICT sets, read from its SQL, so a new column is
 // checked too), on top of the invariants between columns each rollup states: anything else means it was added under
-// other rules than the ones subtracting it now. The error names the rollup, the row's key and the first rule it breaks. The rows left at zero contributions then go by their ctid among the returned rows: the
-// height's keys and nothing else, with nothing to plan (a join of the keys to monthly_income_by_address_supplier_service,
-// which has no month index, planned under statistics without zero rows a scan of the whole table per row left at zero:
-// 57 s for one subtraction locally). An add (every new height, every height of rebuild_rollups) runs the plain upserts.
+// other rules than the ones subtracting it now. The error names the rollup, the row's key and the first rule it breaks.
+// The rows left at zero contributions then go by their ctid among the returned rows: the height's keys and nothing
+// else, with nothing to plan (a join of the keys to monthly_income_by_address_supplier_service, which has no month
+// index, planned under statistics without zero rows a scan of the whole table per row left at zero: 57 s for one
+// subtraction locally). An add (every new height, every height of rebuild_rollups) runs the plain upserts.
 //
 // Not swept any more, by decision: a zero row the height did not touch, which only a bug or a hand edit leaves (the
 // writer deletes its own); rebuild_rollups rewrites it. monthly_claims_by_supplier_service and
@@ -177,15 +178,17 @@ function measures(t: string, sql: string): string[] {
   const set = sql.slice(sql.indexOf("DO UPDATE")).replace(/^DO UPDATE\s+SET\b/, "");
   const items = [""];
   let depth = 0;
-  for (const part of set.split(/(\bCASE\b|\bEND\b|[(),])/)) {
-    if (part === "CASE" || part === "(") depth++;
-    if (part === "END" || part === ")") depth--;
+  for (const part of set.split(/(\bCASE\b|\bEND\b|[(),])/i)) {
+    const word = part.toUpperCase();
+    if (word === "CASE" || part === "(") depth++;
+    if (word === "END" || part === ")") depth--;
     if (part === "," && depth === 0) items.push("");
     else items[items.length - 1] += part;
   }
+  if (depth !== 0) throw new Error(`${t}: its SET list does not balance its parentheses and CASE ... END (depth ${depth} at its end)`);
   return items.map((item) => {
     const m = /^\s*(\w+)\s*=[^=]/.exec(item);
-    if (!m || depth !== 0) throw new Error(`${t}: cannot read a measure from its SET item "${item.trim()}"`);
+    if (!m) throw new Error(`${t}: cannot read a measure from its SET item "${item.trim()}"`);
     return m[1];
   });
 }
@@ -238,8 +241,6 @@ ${list
   ${plain}
   END IF;`;
 }
-const INCOME: string[] = [];
-const APP_CLAIMS: string[] = [];
 const CLAIMS = ["claims_with_proof > claim_count"];
 const MONTHLY_CLAIMS = ["claims_with_proof > claim_count"];
 const DELEGATOR = ["replayed_count > contribution_count"];
@@ -247,7 +248,6 @@ const DELEGATOR = ["replayed_count > contribution_count"];
 // anything else was added under other rules
 const VALIDATOR = ["commission_na_count > contribution_count",
                    "commission_na_count = contribution_count AND coalesce(commission_upokt, 0) <> 0"];
-const PAID: string[] = [];
 
 export function createSettlementWriterFn(dbSchema: string): string {
   const s = dbSchema;
@@ -353,18 +353,18 @@ BEGIN
     FROM ${s}.claim_settlements WHERE height = h;
   END IF;
 
-  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier", keys: ["address", "supplier_id", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.monthly_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier", keys: ["address", "supplier_id", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.monthly_income_by_address_supplier AS t
   SELECT date_trunc('month', d)::date, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
   ON CONFLICT (address, month, supplier_id, role, family) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  ${upserts(s, "", [{ t: "daily_income_by_address", keys: ["address", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.daily_income_by_address AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address", keys: ["address", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.daily_income_by_address AS t
   SELECT d, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count) FROM _inc GROUP BY address, role, family
   ON CONFLICT (address, day, role, family) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  ${upserts(s, "", [{ t: "daily_income_by_address_supplier", keys: ["supplier_id", "address", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.daily_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address_supplier", keys: ["supplier_id", "address", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.daily_income_by_address_supplier AS t
   SELECT d, supplier_id, address, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY supplier_id, address, role, family
   UNION ALL
@@ -374,31 +374,31 @@ BEGIN
   ON CONFLICT (supplier_id, day, address, role, family) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  ${upserts(s, "", [{ t: "hourly_income_by_address_supplier", keys: ["address", "supplier_id"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.hourly_income_by_address_supplier AS t
+  ${upserts(s, "", [{ t: "hourly_income_by_address_supplier", keys: ["address", "supplier_id"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.hourly_income_by_address_supplier AS t
   SELECT address, hr, supplier_id, sg * sum(amount_upokt), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' GROUP BY address, supplier_id
   ON CONFLICT (address, hour, supplier_id) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  ${upserts(s, "", [{ t: "daily_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.daily_income_by_address_service AS t
+  ${upserts(s, "", [{ t: "daily_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.daily_income_by_address_service AS t
   SELECT d, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
   ON CONFLICT (address, day, role, family, service_id) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  ${upserts(s, "", [{ t: "monthly_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.monthly_income_by_address_service AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_service", keys: ["address", "role", "family", "service_id"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.monthly_income_by_address_service AS t
   SELECT date_trunc('month', d)::date, address, role, family, service_id, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE service_id <> '' GROUP BY address, role, family, service_id
   ON CONFLICT (address, month, role, family, service_id) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier_service", keys: ["address", "supplier_id", "service_id", "role", "family"], count: "contribution_count", rules: INCOME, sql: `INSERT INTO ${s}.monthly_income_by_address_supplier_service AS t
+  ${upserts(s, "", [{ t: "monthly_income_by_address_supplier_service", keys: ["address", "supplier_id", "service_id", "role", "family"], count: "contribution_count", rules: [], sql: `INSERT INTO ${s}.monthly_income_by_address_supplier_service AS t
   SELECT date_trunc('month', d)::date, address, supplier_id, service_id, role, family, sg * sum(amount_upokt), sg * sum(transfer_count), sg * sum(contribution_count)
   FROM _inc WHERE supplier_id <> '' AND service_id <> '' GROUP BY address, supplier_id, service_id, role, family
   ON CONFLICT (address, month, supplier_id, service_id, role, family) DO UPDATE
     SET amount_upokt = t.amount_upokt + excluded.amount_upokt, transfer_count = t.transfer_count + excluded.transfer_count, contribution_count = t.contribution_count + excluded.contribution_count` }])}
 
-  ${upserts(s, "", [{ t: "daily_claims_by_application_service", keys: ["application_id", "service_id"], count: "claim_count", rules: APP_CLAIMS, sql: `INSERT INTO ${s}.daily_claims_by_application_service AS t
+  ${upserts(s, "", [{ t: "daily_claims_by_application_service", keys: ["application_id", "service_id"], count: "claim_count", rules: [], sql: `INSERT INTO ${s}.daily_claims_by_application_service AS t
   SELECT d, application_id, service_id, sg * count(*), sg * sum(claimed_upokt), sg * sum(settled_upokt), sg * sum(relay_minted_upokt),
          sg * sum(overservicing_loss_upokt), sg * sum(mint_ratio_unminted_upokt), sg * sum(global_minted_upokt),
          sg * sum(relays), sg * sum(estimated_relays), sg * sum(claimed_compute_units), sg * sum(estimated_compute_units),
@@ -489,7 +489,7 @@ BEGIN
     self_delegation_upokt = t.self_delegation_upokt + excluded.self_delegation_upokt, to_delegators_upokt = t.to_delegators_upokt + excluded.to_delegators_upokt,
     commission_na_count = t.commission_na_count + excluded.commission_na_count` }])}
 
-  ${upserts(s, "", [{ t: "daily_claims_paid_by_address_service", keys: ["address", "service_id"], count: "claim_count", rules: PAID, sql: `INSERT INTO ${s}.daily_claims_paid_by_address_service AS t
+  ${upserts(s, "", [{ t: "daily_claims_paid_by_address_service", keys: ["address", "service_id"], count: "claim_count", rules: [], sql: `INSERT INTO ${s}.daily_claims_paid_by_address_service AS t
   SELECT d, address, service_id, sg * claim_count, sg * settled_upokt, sg * relays, sg * estimated_relays,
          sg * claimed_compute_units, sg * estimated_compute_units
   FROM _paid
