@@ -135,24 +135,15 @@ function monthFills(s: string): MonthFill[] {
   ];
 }
 
-// Sets the bounds of the rows whose bounds differ from the group's. Joined with the period's rows (period: the rollup's
-// rows of the unit's day or month, read once; the unit runs with nested loops off, so a hash join reads each side once:
-// a nested loop could re-read the period for every group under stale statistics, as the drift check did before 239b791).
-// keysOnly: the rows found by key over the primary key, for monthly_income_by_address_supplier_service, which has no
-// month index and whose primary key is its only index.
-function setBounds(s: string, t: string, keys: string[], group: string, period: string, keysOnly = false) {
-  const match = keys.map((k) => `r.${k} = x.${k}`).join(" AND ");
-  if (keysOnly)
-    {return `UPDATE ${s}.${t} t SET first_height = x.lo, last_height = x.hi
-    FROM (SELECT x.lo, x.hi, r.tid FROM (${group}) x
-          CROSS JOIN LATERAL (SELECT r.ctid tid, r.first_height f, r.last_height l FROM ${s}.${t} r
-                              WHERE ${match} AND r.${period} LIMIT 1) r
-          WHERE r.f IS DISTINCT FROM x.lo OR r.l IS DISTINCT FROM x.hi) x
-    WHERE t.ctid = x.tid`;}
-  return `UPDATE ${s}.${t} t SET first_height = x.lo, last_height = x.hi
-    FROM (SELECT x.lo, x.hi, r.ctid tid FROM (${group}) x JOIN ${s}.${t} r ON ${match}
-          WHERE r.${period} AND (r.first_height IS DISTINCT FROM x.lo OR r.last_height IS DISTINCT FROM x.hi)) x
-    WHERE t.ctid = x.tid`;
+// Sets the bounds of the rows whose bounds differ from the group's: the rollup's rows of the unit's period (period, a
+// predicate on t) matched by key with the group. The unit runs with nested loops off, so a hash join reads the period's
+// rows once through the period's index (a nested loop could re-read the period for every group under stale statistics,
+// as the drift check did before 239b791). The target is read only through that predicate: joined back by ctid, a hash
+// join would scan the whole table instead (EXPLAIN on PG 17, .local em5/explain_f1.sql).
+function setBounds(s: string, t: string, keys: string[], group: string, period: string) {
+  const match = keys.map((k) => `t.${k} = x.${k}`).join(" AND ");
+  return `UPDATE ${s}.${t} t SET first_height = x.lo, last_height = x.hi FROM (${group}) x
+    WHERE ${match} AND ${period} AND (t.first_height IS DISTINCT FROM x.lo OR t.last_height IS DISTINCT FROM x.hi)`;
 }
 
 // The DDL: the unit function, the replica lag reader, the throttle and the driver.
@@ -168,15 +159,22 @@ export function createRollupBoundsFillFn(s: string, writerLock: string): string 
       f.keys,
       f.group,
       f.t.startsWith("hourly_")
-        ? "hour >= (p_period::timestamp AT TIME ZONE 'UTC') AND r.hour < ((p_period + 1)::timestamp AT TIME ZONE 'UTC')"
-        : "day = p_period"
+        ? "t.hour >= (p_period::timestamp AT TIME ZONE 'UTC') AND t.hour < ((p_period + 1)::timestamp AT TIME ZONE 'UTC')"
+        : "t.day = p_period"
     )};`
     )
     .join("\n");
+  // monthly_income_by_address_supplier_service has no month index (its primary key, its only index, leads with the
+  // address): its rows are probed by key over the primary key, a nested loop forced for that one statement.
   const monthUnit = months
-    .map(
-      (f) => `  ELSIF p_unit = '${f.t}' THEN
-    ${setBounds(s, f.t, f.keys, f.group, "month = m", f.t === "monthly_income_by_address_supplier_service")};`
+    .map((f) =>
+      f.t === "monthly_income_by_address_supplier_service"
+        ? `  ELSIF p_unit = '${f.t}' THEN
+    PERFORM set_config('enable_nestloop', 'on', true), set_config('enable_hashjoin', 'off', true),
+            set_config('enable_mergejoin', 'off', true);
+    ${setBounds(s, f.t, f.keys, f.group, "t.month = m")};`
+        : `  ELSIF p_unit = '${f.t}' THEN
+    ${setBounds(s, f.t, f.keys, f.group, f.bySuppliers ? "t.month = m AND t.supplier_id = ANY(sups)" : "t.month = m")};`
     )
     .join("\n");
   const sqlList = (xs: string[]) => `ARRAY[${xs.map((x) => `'${x}'`).join(", ")}]::text[]`;
@@ -204,6 +202,7 @@ END $$;
 CREATE OR REPLACE FUNCTION ${s}._fill_rollup_bounds_unit(p_unit text, p_period date, p_suppliers text[] DEFAULT NULL)
 RETURNS bigint LANGUAGE plpgsql SET plan_cache_mode = force_custom_plan SET enable_nestloop = off AS $$
 DECLARE n bigint; dlo bigint; dhi bigint; mlo bigint; mhi bigint; sups text[] := p_suppliers;
+  v_hashjoin text := current_setting('enable_hashjoin'); v_mergejoin text := current_setting('enable_mergejoin');
   m date := date_trunc('month', p_period::timestamp)::date; m2 date := (date_trunc('month', p_period::timestamp) + interval '1 month')::date;
 BEGIN
   PERFORM ${s}._writer_lock();
@@ -215,12 +214,14 @@ ${monthUnit}
     RAISE EXCEPTION 'fill_rollup_bounds: no unit %', p_unit;
   END IF;
   GET DIAGNOSTICS n = ROW_COUNT;
+  PERFORM set_config('enable_hashjoin', v_hashjoin, true), set_config('enable_mergejoin', v_mergejoin, true);
   RETURN n;
 END $$;
 
 -- How far behind the primary its replicas replay, read live (pg_stat_get_wal_senders, not the per-transaction snapshot of
--- pg_stat_activity): senders, how many of them show a replay position (a role without pg_monitor sees NULL), the
--- largest replay_lag in seconds and the largest distance in bytes from the current WAL position. A replica that has
+-- pg_stat_activity), a base backup's sender left out (it has no replay position): senders, how many of them show a replay
+-- position (a role without pg_monitor sees NULL), the largest replay_lag in seconds and the largest distance in bytes
+-- from the current WAL position. A replica that has
 -- replayed everything counts 0 s: replay_lag keeps its last measure for a while once the WAL goes quiet (measured on a
 -- local delayed replica: 4.0 s shown for ~10 s with 0 bytes left).
 CREATE OR REPLACE FUNCTION ${s}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric, OUT lag_bytes numeric)
@@ -228,7 +229,7 @@ LANGUAGE sql VOLATILE AS $$
   SELECT count(*)::int, count(w.replay_lsn)::int,
          coalesce(max(CASE WHEN w.replay_lsn >= pg_current_wal_lsn() THEN 0 ELSE extract(epoch FROM w.replay_lag) END), 0),
          coalesce(max(pg_wal_lsn_diff(pg_current_wal_lsn(), w.replay_lsn)), 0)
-  FROM pg_stat_get_wal_senders() w
+  FROM pg_stat_get_wal_senders() w WHERE w.state <> 'backup'
 $$;
 
 -- Waits, one second at a time and committing between them (no snapshot held while waiting), while a replica is more than
@@ -272,12 +273,16 @@ CREATE OR REPLACE PROCEDURE ${s}.fill_rollup_bounds(max_lag_seconds numeric DEFA
   pause_ms integer DEFAULT 0, max_wal_bytes_per_minute numeric DEFAULT NULL, p_months integer DEFAULT NULL,
   suppliers_per_unit integer DEFAULT 200)
 LANGUAGE plpgsql AS $$
-DECLARE m date; d date; u text; n bigint; t0 timestamptz; done integer := 0; sups text[]; k integer;
+DECLARE m date; d date; u text; n bigint; t0 timestamptz; done integer := 0; sups text[]; k integer; hs bigint[]; left_n bigint;
   ws timestamptz := clock_timestamp(); wl pg_lsn := pg_current_wal_lsn(); waited numeric := 0; r record;
 BEGIN
   FOR m IN SELECT DISTINCT date_trunc('month', sb.day::timestamp)::date FROM ${s}.settlement_blocks sb WHERE NOT sb.bounds_rollup
            ORDER BY 1 DESC LOOP
     EXIT WHEN p_months IS NOT NULL AND done >= p_months;
+    -- the heights this run fills: only these are marked at the end. A height that appears unmarked meanwhile was written
+    -- by an image without the bounds (its rows' bounds not widened), so it is left unmarked and the month is redone later.
+    hs := ARRAY(SELECT sb.height FROM ${s}.settlement_blocks sb
+                WHERE sb.day >= m AND sb.day < (m + interval '1 month')::date AND NOT sb.bounds_rollup);
     -- the days, newest first; each (rollup, day) once, also across runs
     FOR d IN SELECT DISTINCT sb.day FROM ${s}.settlement_blocks sb
              WHERE sb.day >= m AND sb.day < (m + interval '1 month')::date ORDER BY 1 DESC LOOP
@@ -318,12 +323,17 @@ BEGIN
     END LOOP;
     -- the month's heights: their bounds are held
     PERFORM ${s}._writer_lock();
-    UPDATE ${s}.settlement_blocks SET bounds_rollup = true
-    WHERE day >= m AND day < (m + interval '1 month')::date AND NOT bounds_rollup;
+    UPDATE ${s}.settlement_blocks SET bounds_rollup = true WHERE height = ANY(hs) AND NOT bounds_rollup;
     GET DIAGNOSTICS n = ROW_COUNT;
+    SELECT count(*) INTO left_n FROM ${s}.settlement_blocks
+    WHERE day >= m AND day < (m + interval '1 month')::date AND NOT bounds_rollup;
     DELETE FROM ${s}.rollup_bounds_fill WHERE month = m;
     COMMIT;
     RAISE NOTICE 'fill_rollup_bounds: % done, % heights marked', to_char(m, 'YYYY-MM'), n;
+    IF left_n > 0 THEN
+      RAISE WARNING 'fill_rollup_bounds: % % heights left unmarked, written during the fill by an image without the bounds; run the fill again once every writer runs this image',
+        to_char(m, 'YYYY-MM'), left_n;
+    END IF;
     done := done + 1;
   END LOOP;
 END $$;

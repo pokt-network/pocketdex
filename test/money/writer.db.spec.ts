@@ -1146,6 +1146,41 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("fill_rollup_bounds marks only the heights it found unmarked when it took the month, not one an image without the bounds wrote meanwhile", async () => {
+    const notices: string[] = [];
+    const onNotice = (m: { message: string }) => notices.push(m.message);
+    (c as unknown as { on(e: string, f: (m: { message: string }) => void): void }).on("notice", onNotice);
+    const last = (
+      await c.query(`SELECT max(height)::text h, date_trunc('month', max(day))::date::text m FROM ${S}.settlement_blocks`)
+    ).rows[0] as { h: string; m: string };
+    const month = `day >= '${last.m}'::date AND day < ('${last.m}'::date + interval '1 month')`;
+    try {
+      // the month's heights unmarked, but its last one, which the fake replica read below unmarks once the run has
+      // taken the month: as an older image writing that height during the fill would leave it
+      await c.query(`UPDATE ${S}.settlement_blocks SET bounds_rollup = (height = $1) WHERE ${month}`, [last.h]);
+      const heights = Number((await c.query(`SELECT count(*) n FROM ${S}.settlement_blocks WHERE ${month}`)).rows[0].n);
+      assert.ok(heights >= 2, `the month has ${heights} heights`);
+      await c.query(`CREATE OR REPLACE FUNCTION ${S}._replica_lag(OUT senders int, OUT readable int, OUT lag_seconds numeric,
+                       OUT lag_bytes numeric) LANGUAGE sql VOLATILE AS $f$
+                       UPDATE ${S}.settlement_blocks SET bounds_rollup = false WHERE height = ${last.h} AND bounds_rollup;
+                       SELECT 1, 1, 0::numeric, 0::numeric $f$`);
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      const unmarked = (await c.query(`SELECT array_agg(height::text) h FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0]
+        .h as unknown as string[];
+      assert.deepEqual(unmarked, [last.h]);
+      assert.ok(notices.some((n) => n.includes(`${heights - 1} heights marked`)), notices.join("\n"));
+      assert.ok(notices.some((n) => n.includes("1 heights left unmarked, written during the fill")), notices.join("\n"));
+      // once every writer keeps the bounds, the next run marks it
+      await c.query(createSettlementWriterFn(S));
+      await c.query(`CALL ${S}.fill_rollup_bounds()`);
+      assert.equal((await c.query(`SELECT count(*)::int n FROM ${S}.settlement_blocks WHERE NOT bounds_rollup`)).rows[0].n, 0);
+      await boundsHold("marked on the next run");
+    } finally {
+      (c as unknown as { removeListener(e: string, f: unknown): void }).removeListener("notice", onNotice);
+      await c.query(createSettlementWriterFn(S));
+    }
+  });
+
   it("subtracting a height raises on each rule of each rollup row it touched, naming the rollup, the key and the rule, and on no other row", async () => {
     // the rules of the check: any column of the rollup (but its key, period and bounds, read here from the catalog) below 0, the
     // invariants between columns listed below, and a row at 0 contributions with any other column not at 0

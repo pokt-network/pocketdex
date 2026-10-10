@@ -426,6 +426,8 @@ ALTER TABLE ${s}.monthly_claims_by_supplier_service SET (fillfactor = 90, autova
 -- height or fill_rollup_bounds (bounds.ts) writes its month; settlement_blocks.bounds_rollup says which heights they hold.
 -- Altered only when a column is missing: ALTER TABLE takes its ACCESS EXCLUSIVE lock even when IF NOT EXISTS then
 -- changes nothing, which every start would queue behind the readers of these tables.
+-- The upserts (writer.ts) insert by position, ending in h, h for these two: a rollup column added later goes in an ALTER
+-- after this block, and after h, h in its upsert, so existing and new databases keep one column order.
 DO $$
 DECLARE t text;
 BEGIN
