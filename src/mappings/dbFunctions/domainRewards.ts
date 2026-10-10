@@ -225,6 +225,11 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
       ON ${dbSchema}.event_claim_settleds (session_id)`,
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_msg_submit_proofs_session_id
       ON ${dbSchema}.msg_submit_proofs (session_id)`,
+    // Claims settled looked up by service and session window, paged by id (PostGraphile `serviceId` + `sessionEndHeight`
+    // range): with no index on them, each page walked the id index over the whole table (~10 s, 3.4M blocks read,
+    // mainnet replica 2026-10-10).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_claim_settleds_service_session_end
+      ON ${dbSchema}.event_claim_settleds (service_id, session_end_height)`,
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_rev_share
       ON ${dbSchema}.supplier_service_configs USING GIN (rev_share jsonb_path_ops)
       WHERE upper_inf(_block_range)`,
