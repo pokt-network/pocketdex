@@ -114,6 +114,10 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   // get_supply_flows, which pass cv to _income / _supply_flows; blocks for the functions over the indexer's own
   // tables). Without a bucket a row's bucket_start is the requested range_start (covered_from with an open start). The rows then carry
   // cv.covered_from, cv.covered_to and cv.gaps, and every fill keeps to cv.covered.
+  // the application unbonding events keep the proto's number; the names are the Application entity's
+  // (applications.ts getAppUnbondingReasonFromSDK)
+  const appReason =
+    "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MINIMUM_STAKE' WHEN 2 THEN 'MIGRATION' ELSE m.reason::text END";
   const covered = (span: "settled" | "blocks" | null, blocks = false) =>
     [
       "  -- what is not written is not read: the covered part of the range only (_coverage)",
@@ -461,7 +465,11 @@ END $$;
 -- repair) or when covered_to advances with the blocks. No row (null in GraphQL) until the first height is written.
 CREATE OR REPLACE FUNCTION ${s}.get_last_settlement(OUT height bigint, OUT block_time timestamptz)
 LANGUAGE sql STABLE AS $$
-  SELECT sb.height, sb.block_time FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1
+  -- not past money_progress, as the catalog: a rewound money step leaves its rows above the progress until it
+  -- rewrites them
+  SELECT sb.height, sb.block_time FROM ${s}.settlement_blocks sb
+  WHERE sb.height <= (SELECT mp.height FROM ${s}.money_progress mp)
+  ORDER BY sb.height DESC LIMIT 1
 $$;
 
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct
@@ -861,7 +869,7 @@ ${covered(null, true)}
   RETURN QUERY
   SELECT d.block_id::bigint, bl.timestamp AT TIME ZONE 'UTC', d.service_id, d.prev_num_relays_ema, d.new_num_relays_ema,
          d.prev_target_hash_hex_encoded, d.new_target_hash_hex_encoded, cv.covered_from, cv.covered_to, cv.gaps
-  FROM unnest(services) u(id) CROSS JOIN LATERAL (
+  FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
     SELECT e.block_id, e.service_id, e.prev_num_relays_ema, e.new_num_relays_ema, e.prev_target_hash_hex_encoded,
            e.new_target_hash_hex_encoded
     FROM ${s}.event_relay_mining_difficulty_updateds e
@@ -937,7 +945,8 @@ END $$;
 -- services, each one's newest (height, application) from settlement_claims_by_application_service, then those
 -- applications' claims, 1.5 ms (there is no claim index by service). The OFFSET 0 keeps the primary key probe: with
 -- the fleet filter pushed in, the planner probed (supplier_id, height) once per supplier per height (120 ms a height).
--- Expired claims: their small table (617k rows) by supplier index for a short list, else walked newest first.
+-- Expired claims: their small table (617k rows) by supplier index for a short list, else walked newest first (the
+-- whole table when nothing matches: 338 ms).
 CREATE OR REPLACE FUNCTION ${s}.get_claims(suppliers text[], range_start timestamptz, range_end timestamptz,
   owners text[] DEFAULT NULL, operators text[] DEFAULT NULL, applications text[] DEFAULT NULL,
   services text[] DEFAULT NULL, statuses text[] DEFAULT NULL, row_limit integer DEFAULT 100,
@@ -977,7 +986,7 @@ ${covered(null)}
   RETURN QUERY
   WITH k(height, event_idx) AS (
     SELECT q.height, q.event_idx FROM (
-      SELECT c.height, c.event_idx FROM unnest(ids) u(id) CROSS JOIN LATERAL (
+      SELECT c.height, c.event_idx FROM (SELECT DISTINCT unnest(ids) id) u CROSS JOIN LATERAL (
         SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
         WHERE c.supplier_id = u.id AND c.height BETWEEN lo AND hi AND (c.height, c.event_idx) < (bh, be)
           AND c.block_time >= range_start AND c.block_time < range_end
@@ -985,7 +994,7 @@ ${covered(null)}
         ORDER BY c.height DESC, c.event_idx DESC LIMIT row_limit) c
       WHERE path = 'suppliers'
       UNION ALL
-      SELECT c.height, c.event_idx FROM unnest(applications) u(id) CROSS JOIN LATERAL (
+      SELECT c.height, c.event_idx FROM (SELECT DISTINCT unnest(applications) id) u CROSS JOIN LATERAL (
         SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
         WHERE c.application_id = u.id AND c.height BETWEEN lo AND hi AND (c.height, c.event_idx) < (bh, be)
           AND c.block_time >= range_start AND c.block_time < range_end
@@ -993,11 +1002,16 @@ ${covered(null)}
         ORDER BY c.height DESC, c.event_idx DESC LIMIT row_limit) c
       WHERE path = 'applications'
       UNION ALL
-      SELECT c.height, c.event_idx FROM unnest(services) u(id) CROSS JOIN LATERAL (
+      SELECT c.height, c.event_idx FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
         SELECT c.height, c.event_idx
+        -- every (height, application) of the service at its newest row_limit + 1 heights: each height has a claim of the
+        -- service, so row_limit of them below the keyset's height hold at least row_limit claims, whatever the keyset
+        -- leaves at its own height
         FROM (SELECT a.height, a.application_id FROM ${s}.settlement_claims_by_application_service a
-              WHERE a.service_id = u.id AND a.height BETWEEN lo AND hi AND a.block_time >= range_start
-                AND a.block_time < range_end ORDER BY a.height DESC LIMIT row_limit) a
+              WHERE a.service_id = u.id AND a.height IN (
+                SELECT DISTINCT a2.height FROM ${s}.settlement_claims_by_application_service a2
+                WHERE a2.service_id = u.id AND a2.height BETWEEN lo AND hi AND a2.block_time >= range_start
+                  AND a2.block_time < range_end ORDER BY a2.height DESC LIMIT row_limit + 1)) a
         CROSS JOIN LATERAL (SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
                             WHERE c.application_id = a.application_id AND c.height = a.height AND c.service_id = u.id
                               AND (c.height, c.event_idx) < (bh, be)) c
@@ -1182,14 +1196,14 @@ ${covered(null, true)}
        AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
      ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
     UNION ALL
-    (SELECT m.block_id, m.application_id, 'unbonding_begin', m.id, NULL, NULL, NULL, m.reason::text,
+    (SELECT m.block_id, m.application_id, 'unbonding_begin', m.id, NULL, NULL, NULL, ${appReason},
             m.unstaking_end_height, m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
      FROM ${s}.event_application_unbonding_begins m
      WHERE kind = 'application' AND (events IS NULL OR 'unbonding_begin' = ANY(events)) AND m.application_id = ANY(ids)
        AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
      ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
     UNION ALL
-    (SELECT m.block_id, m.application_id, 'unbonding_end', m.id, NULL, NULL, NULL, m.reason::text,
+    (SELECT m.block_id, m.application_id, 'unbonding_end', m.id, NULL, NULL, NULL, ${appReason},
             m.unstaking_end_height, m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
      FROM ${s}.event_application_unbonding_ends m
      WHERE kind = 'application' AND (events IS NULL OR 'unbonding_end' = ANY(events)) AND m.application_id = ANY(ids)

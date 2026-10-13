@@ -1455,6 +1455,18 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.deepEqual(got.rows, want.rows);
     const d = await c.query(`SELECT obj_description('${S}.get_last_settlement()'::regprocedure, 'pg_proc') d`);
     assert.match(String(d.rows[0].d), /^The last settlement the money tables hold/);
+    // a rewound money step leaves its rows above the progress: they are not the last settlement until rewritten
+    await c.query("BEGIN");
+    try {
+      const below = (
+        await c.query(`SELECT height::text h, block_time FROM ${S}.settlement_blocks ORDER BY height DESC OFFSET 1 LIMIT 1`)
+      ).rows[0];
+      await c.query(`UPDATE ${S}.money_progress SET height = $1`, [below.h]);
+      const got2 = await c.query(`SELECT height::text, block_time FROM ${S}.get_last_settlement()`);
+      assert.deepEqual(got2.rows, [{ height: below.h, block_time: below.block_time }]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
   });
 
   it("get_supplier_fleet, get_service_summary and get_application_fleet read the current versions, per actor or as one fleet row", async () => {
@@ -1594,6 +1606,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     );
     assert.equal(d.rows.length, 1);
     assert.match(String(d.rows[0].d), /^@simpleCollections only\nSupplier fleet now: [\s\S]*\nColumns: TABLE\(supplier_id text, /);
+    // the functions that page by keyset say so, and not first / offset
+    const k = await c.query(`SELECT obj_description('${S}.get_claims'::regproc, 'pg_proc') d`);
+    assert.match(String(k.rows[0].d), /page with the keys of the last row in before_\*, not with first \/ offset/);
   });
 
   it("get_claims lists settled and expired claims newest first through each index walk, and pages by keyset", async () => {
@@ -1679,7 +1694,26 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         }
         assert.ok(all.length > 3, f);
         assert.deepEqual([f, paged.slice(0, all.length)], [f, all]);
+        // two rows a page, over the first 40: a page boundary inside a height, where several applications settled
+        const small: string[] = [];
+        let p2 = await got(`${f}, row_limit => 2`);
+        small.push(...p2);
+        while (p2.length === 2 && small.length < 40) {
+          const [, height, eventIdx] = p2[1].split(" ");
+          p2 = await got(`${f}, row_limit => 2, before_height => ${height}, before_event_idx => ${eventIdx}`);
+          small.push(...p2);
+        }
+        assert.deepEqual([f, small.slice(0, 40)], [f, all.slice(0, 40)]);
       }
+      // an id given twice is one id
+      assert.deepEqual(
+        await got(`ARRAY['${busy}', '${busy}'], NULL, NULL, row_limit => 1000`),
+        await got(`ARRAY['${busy}'], NULL, NULL, row_limit => 1000`)
+      );
+      assert.deepEqual(
+        await got(`NULL, NULL, NULL, services => ARRAY['${one.service_id}', '${one.service_id}'], row_limit => 1000`),
+        await got(`NULL, NULL, NULL, services => ARRAY['${one.service_id}'], row_limit => 1000`)
+      );
     } finally {
       await c.query("ROLLBACK");
     }
@@ -1751,7 +1785,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["'supplier', NULL, NULL, NULL, owners => ARRAY['own-a']", s1],
         ["'supplier', ARRAY['s1', 's2'], NULL, NULL, events => ARRAY['stake']", ["200 s1 stake ms2 1500 - -", "150 s2 stake ms3 900 - -", "100 s1 stake ms1 1000 - -"]],
         ["'supplier', ARRAY['s1'], '2026-03-01T04:00:00Z', '2026-03-01T05:00:00Z'", ["290 s1 unstake mu1 - - -", "250 s1 slash sl1 1490 - 10"]],
-        ["'application', ARRAY['a1'], NULL, NULL", ["130 a1 unbonding_end ae1 - 1 -", "120 a1 unbonding_begin ab1 - 1 -", "110 a1 stake ma1 500 - -"]],
+        // the application events keep the proto number (1: below the minimum stake); the rows name it as the entity does
+        ["'application', ARRAY['a1'], NULL, NULL", ["130 a1 unbonding_end ae1 - BELOW_MINIMUM_STAKE -", "120 a1 unbonding_begin ab1 - BELOW_MINIMUM_STAKE -", "110 a1 stake ma1 500 - -"]],
         ["'gateway', ARRAY['g1'], NULL, NULL", ["170 g1 unbonding_begin gb1 - - -", "160 g1 unstake mgu1 - - -", "140 g1 stake mg1 700 - -"]],
         ["'gateway', ARRAY['nobody'], NULL, NULL", []],
       ] as const)
@@ -2436,7 +2471,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       [S, catalog.map((n) => n + "_json")]
     );
     assert.deepEqual(twins.rows.map((r) => r.proname), catalog.map((n) => n + "_json").sort());
-    for (const r of twins.rows) assert.ok(/no row limit/.test(String(r.tag)) && !/@omit/.test(String(r.tag)), String(r.proname));
+    // the twins of the keyset functions hold one page (row_limit), the others every row
+    const keyset = ["get_claims_json", "get_created_claims_json", "get_actor_lifecycle_json", "get_relay_mining_difficulty_json"];
+    for (const r of twins.rows) {
+      const limit = keyset.includes(String(r.proname)) ? /at most row_limit/ : /no row limit/;
+      assert.ok(limit.test(String(r.tag)) && !/@omit/.test(String(r.tag)), String(r.proname));
+    }
     for (const n of ["_buckets", "_income"]) assert.deepEqual([n, tags[n]], [n, "@omit"]);
     // nothing else is published, set-returning or not: every other function is hidden, a writer (published as a
     // mutation) included

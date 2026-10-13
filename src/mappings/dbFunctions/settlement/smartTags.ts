@@ -199,6 +199,12 @@ const COMMON = `'Arguments: range_start, range_end = the range [start, end), tim
 const ROWS_NOTE = `'Rows newest first (then by the text columns), paged by GraphQL (first / offset) up to the query limit (1000); for larger answers use the _json variant. Each row carries covered_from, covered_to and covered_gaps: the part of the range the answer covers and the settlement gaps inside, as the range of the _json variant. An answer with no rows carries none of it: to tell a range that is not covered from one where nothing happened, call the _json variant.'`;
 const JSON_NOTE = `'Returns {range, data}. data = every row of the function of the same name as one JSON array (without covered_from / covered_to / covered_gaps), in its row order, in one call with no row limit: for answers above 1000 rows. Keys are the snake_case column names; numbers (amounts, counts) are JSON strings, as in the list variant, so no client loses precision. range = {requested_from, requested_to, covered_from, covered_to, gaps: [{from, to}], end_inclusive: false}: covered_from is the block at money_progress.from_height (where the money tables start: the first height the money step of the indexer processed, or lower where the history job has walked; the first indexed block for the functions over indexer tables), covered_to the block at money_progress.height (the last height the money step processed; it does not move while a POCKETDEX_MONEY_FROM_HEIGHT override skips heights) + 1 µs, both clipped to the range, so [covered_from, covered_to) is half-open like the range (end_inclusive false); gaps the settlement heights not written (settlement_gaps) that overlap the range, as the half-open time between the covered heights around them: they read as nothing, and with fill_empty_buckets only buckets that intersect what is covered get a zero row. covered_from and covered_to are null when nothing in the range is covered, and data is then []. The data is read only inside [covered_from, covered_to).'`;
 
+// The catalog functions that list rows one by one: newest first by height, at most row_limit a call, paged by a keyset.
+const KEYSET_FUNCTIONS = ["get_claims", "get_created_claims", "get_actor_lifecycle", "get_relay_mining_difficulty"];
+const KEYSET_NOTE = `'Rows newest first by height, then by event_idx, id or service_id (the key named in before_*), at most row_limit (default 100, up to 1000) per call: page with the keys of the last row in before_*, not with first / offset. Each row carries covered_from, covered_to and covered_gaps: the part of the range the answer covers and the settlement gaps inside, as the range of the _json variant.'`;
+const KEYSET_JSON_NOTE = `'Returns {range, data}: data = the rows of the function of the same name (at most row_limit; page with before_*) as one JSON array without covered_from / covered_to / covered_gaps, numbers as JSON strings; range = {requested_from, requested_to, covered_from, covered_to, gaps: [{from, to}], end_inclusive: false}, the part of the range the data covers.'`;
+const KEYSET_SQL = `ARRAY[${KEYSET_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
+
 const LAST_SETTLEMENT = `'The last settlement the money tables hold: the highest height they wrote (a height with settlement events, which may have no settled claim) and its block time; null before the first one. It moves when a new settlement is written: poll it (one index probe) and refetch recent catalog data when it moves. It does not move when older heights are rewritten (a history fill or a gap repair), nor with covered_to, which follows the blocks.'`;
 
 // The published functions over the current state of the entity tables, and get_supplier_domains (whose rows are the
@@ -251,22 +257,24 @@ BEGIN
 END $$;
 -- every overload of each helper, whatever its signature
 DO $$
-DECLARE f regprocedure; what text;
+DECLARE f regprocedure; what text; nm text;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            WHERE n.nspname = '${s}' AND p.prokind = 'f' AND p.proname IN (${functions}) LOOP
     EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@omit');
   END LOOP;
-  FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  FOR f, what, nm IN SELECT p.oid::regprocedure, d.what, d.name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            JOIN (VALUES ${describe}) d(name, what) ON d.name = p.proname
            WHERE n.nspname = '${s}' AND p.prokind = 'f' AND p.proretset LOOP
-    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@simpleCollections only' || E'\n' || what || ' ' || ${ROWS_NOTE}
+    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@simpleCollections only' || E'\n' || what || ' '
+      || CASE WHEN nm = ANY(${KEYSET_SQL}) THEN ${KEYSET_NOTE} ELSE ${ROWS_NOTE} END
       || E'\n' || ${COMMON} || E'\nColumns: ' || pg_get_function_result(f));
   END LOOP;
-  FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  FOR f, what, nm IN SELECT p.oid::regprocedure, d.what, d.name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            JOIN (VALUES ${describe}) d(name, what) ON d.name || '_json' = p.proname
            WHERE n.nspname = '${s}' AND p.prokind = 'f' LOOP
-    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, what || ' ' || ${JSON_NOTE} || E'\n' || ${COMMON}
+    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, what || ' '
+      || CASE WHEN nm = ANY(${KEYSET_SQL}) THEN ${KEYSET_JSON_NOTE} ELSE ${JSON_NOTE} END || E'\n' || ${COMMON}
       || E'\nEach element has the columns of ' || replace(f::text, '_json(', '(') || '.');
   END LOOP;
   FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
