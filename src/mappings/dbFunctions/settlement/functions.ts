@@ -439,6 +439,14 @@ BEGIN
   END IF;
 END $$;
 
+-- The last settlement the money tables hold: its height and block time (one probe of the primary key). Every catalog
+-- function reads settlements only, so its data changes only when this height does: a client polls this and refetches
+-- the rest when it moves. Both NULL until the first settlement is written.
+CREATE OR REPLACE FUNCTION ${s}.get_last_settlement(OUT height bigint, OUT block_time timestamptz)
+LANGUAGE sql STABLE AS $$
+  SELECT sb.height, sb.block_time FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1
+$$;
+
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct
 -- event_claim_settleds.block_id) that settlement_blocks lacks, and the settlement_gaps rows in the range
 -- ('from-to'). The distinct block ids come from a loose index scan: one index probe per settlement height,

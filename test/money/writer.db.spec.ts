@@ -1436,6 +1436,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("get_last_settlement is the highest written settlement height and its block time, and is described for GraphQL", async () => {
+    const want = await c.query(`SELECT height::text, block_time FROM ${S}.settlement_blocks ORDER BY height DESC LIMIT 1`);
+    assert.equal(want.rows.length, 1, "the fixtures above wrote settlements");
+    const got = await c.query(`SELECT height::text, block_time FROM ${S}.get_last_settlement()`);
+    assert.deepEqual(got.rows, want.rows);
+    const d = await c.query(`SELECT obj_description('${S}.get_last_settlement()'::regprocedure, 'pg_proc') d`);
+    assert.match(String(d.rows[0].d), /^The last settlement the money tables hold/);
+  });
+
   it("with a bucket, every bucket up to the last settlement comes back for every series, zero where nothing settled", async () => {
     // both fixtures settle at 2026-09-01 12:00 UTC: 11:00-14:00 by hour lists 11:00 (zero) and 12:00; 13:00 is after
     // the last written settlement, so it is not indexed yet and is left out rather than reported as zero
@@ -1944,9 +1953,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         [S]
       )
     ).rows.map((r) => String(r.proname));
+    // ...but get_last_settlement, published on purpose: one row, not set-returning, so it has no list or _json twin
     assert.deepEqual(
       shown.filter((n) => !catalog.includes(n.replace(/_json$/, "")) && !n.startsWith("legacy_")),
-      []
+      ["get_last_settlement"]
     );
     const vrd = await c.query(
       `SELECT count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = '_vrd_range_start'`,
