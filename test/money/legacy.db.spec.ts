@@ -40,6 +40,7 @@ import { getBurnBreakdownBetweenDatesFn } from "../../src/mappings/dbFunctions/s
 import { addDelegatorValidator, De2Validator } from "../../src/mappings/money/de2";
 import { buildSettlementPayload } from "../../src/mappings/money/payload";
 import { eraAtHeight } from "../../src/mappings/utils/params_history";
+import { entityStubsSql } from "./stubs";
 
 interface PgClient {
   connect(): Promise<void>;
@@ -946,8 +947,18 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       ["get_app_auto_unstakes", "NULL, $1, $2"],
       ["get_supplier_proofs", "NULL, $1, $2"],
       ["get_param_history", "NULL, NULL, $1, $2"],
+      ["get_claims", "NULL, $1, $2, row_limit => 1000"],
+      ["get_actor_lifecycle", "'supplier', ARRAY['sup-l'], $1, $2"],
+      ["get_block_stats", "$1, $2"],
+      ["get_relay_mining_difficulty", "ARRAY['svc-d'], $1, $2"],
+      ["get_created_claims", "ARRAY['sup-l'], $1, $2"],
     ];
-    const ON_BLOCKS = ["get_app_auto_unstakes", "get_param_history"];
+    const ON_BLOCKS = [
+      "get_app_auto_unstakes", "get_param_history", "get_actor_lifecycle", "get_block_stats", "get_relay_mining_difficulty",
+      "get_created_claims",
+    ];
+    // the functions that list rows one by one have no bucket_start
+    const NO_BUCKET = ["get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims"];
     assert.deepEqual(CALLS.map(([f]) => f).sort(), [...CATALOG_FUNCTIONS].sort());
     // and each starts from _coverage (functions.ts covered()): a new one cannot skip it
     const bodies = await c.query(
@@ -1002,6 +1013,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         CREATE TABLE ${S}.event_application_unbonding_begins (application_id text, reason int, block_id numeric);
         INSERT INTO ${S}.msg_submit_proofs SELECT supplier_id, service_id, height FROM ${S}.claim_settlements;
         INSERT INTO ${S}.event_application_unbonding_begins SELECT application_id, 1, height FROM ${S}.claim_settlements;`);
+      await c.query(entityStubsSql(S, `SELECT DISTINCT height FROM ${S}.claim_settlements`));
       // the whole history is written (the first written settlement is the chain's first): the answers as they were
       const complete: Record<string, string[]> = {};
       for (const [fn, args] of CALLS) {
@@ -1023,7 +1035,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         const partial = await run(fn, args, "2026-08-31T00:00:00Z", "2026-09-03T00:00:00Z");
         if (fn !== "money_coverage" && !ON_BLOCKS.includes(fn)) {
           assert.deepEqual(partial.rows, covered.rows, fn);
-          assert.deepEqual(partial.starts, [T("2026-08-31T00:00:00Z")], fn);
+          if (!NO_BUCKET.includes(fn)) assert.deepEqual(partial.starts, [T("2026-08-31T00:00:00Z")], fn);
         }
         assert.deepEqual([partial.range.requested_from, partial.range.covered_from], [T("2026-08-31T00:00:00Z"), first], fn);
         // a range that ends before it: no rows, and nothing covered (null bounds)
@@ -1035,7 +1047,8 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         assert.deepEqual(open.range, { requested_from: null, requested_to: null, covered_from: first, covered_to: head,
           gaps: ON_BLOCKS.includes(fn) ? [] : [[null, first]], end_inclusive: false }, fn);
         // an open start: a row without a bucket reports covered_from as its bucket_start
-        if (fn !== "money_coverage") assert.ok(open.starts.every((x) => x === first), `${fn}: ${JSON.stringify(open.starts)}`);
+        if (fn !== "money_coverage" && !NO_BUCKET.includes(fn))
+          assert.ok(open.starts.every((x) => x === first), `${fn}: ${JSON.stringify(open.starts)}`);
       }
       // a settlement gap inside the range (heights not written, between 1 Sep 23:30 and 2 Sep 00:00): listed, and the
       // data is what is written around it
@@ -1327,7 +1340,10 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
          AND position('_range_json(range_start, range_end, true)' in p.prosrc) > 0 ORDER BY 1`,
       [S]
     );
-    assert.deepEqual(twins.rows.map((r) => r.proname), ["get_app_auto_unstakes_json", "get_param_history_json"]);
+    assert.deepEqual(twins.rows.map((r) => r.proname), [
+      "get_actor_lifecycle_json", "get_app_auto_unstakes_json", "get_block_stats_json", "get_created_claims_json",
+      "get_param_history_json", "get_relay_mining_difficulty_json",
+    ]);
     // an earlier build's overloads (installed here by hand) are dropped by the next start, and the calls stay unambiguous
     await c.query(`
       CREATE FUNCTION ${S}._income(addresses text[], range_start timestamptz, range_end timestamptz, bucket text,

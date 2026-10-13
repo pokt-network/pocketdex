@@ -158,9 +158,9 @@ const DESCRIPTIONS: Record<string, string> = {
   money_coverage:
     "Coverage: the settlement heights written in the range, the heights the chain settled there that are missing, and the recorded gaps.",
   get_application_spend:
-    "Application spend: what applications paid (burned_upokt), overserviced work they did not pay, reimbursements, relays, compute units and claims; by_service, by_supplier, by_application.",
+    "Application spend: what applications paid (burned_upokt), overserviced work they did not pay, reimbursements, relays, compute units, claims and the first and last settlement height of those claims (NULL where not known yet); by_service, by_supplier, by_application.",
   get_gateway_spend:
-    "Gateway spend: what the applications delegated to each gateway spent, by the delegation in force at each settlement height; by_application, by_service, by_gateway.",
+    "Gateway spend: what the applications delegated to each gateway spent, by the delegation in force at each settlement height, with the first and last settlement height of those claims (NULL where not known yet); by_application, by_service, by_gateway.",
   get_supplier_earnings:
     "Supplier earnings: claimed and settled upokt, overservicing loss, relays, compute units, settled claims (with and without a proof) and the first and last settlement height of those claims (NULL where not known yet); suppliers NULL = every supplier, or owners = the suppliers they own now, or operators = the Staked suppliers whose service configs share revenue with them now; by_service, by_application, by_supplier.",
   get_supplier_distribution:
@@ -181,6 +181,16 @@ const DESCRIPTIONS: Record<string, string> = {
     "Applications the chain unstaked because their stake fell below the minimum; applications NULL = every application.",
   get_supplier_proofs:
     "Supplier proofs: claims settled with and without a proof, proofs submitted, validated and invalid (by reason), each counted in the block of its own event; suppliers NULL = every supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now) in place of suppliers.",
+  get_claims:
+    "Claims one by one, newest first (by height, then event_idx): settled ones with their amounts, relays, compute units and whether a proof backed them, and expired ones with their expiration_reason (PROOF_MISSING, PROOF_INVALID; NULL amounts that only a settlement has). statuses = settled, expired (NULL = both). Filters, combined: suppliers (up to 200) or owners = the suppliers they own now or operators = the Staked suppliers whose service configs share revenue with them now (none = every supplier); applications and services (up to 200 each). row_limit (default 100, at most 1000) rows per call; for the next page pass the last row's height and event_idx as before_height and before_event_idx. supplier_owner_id is the owner the settlement recorded (NULL for expired claims and where the event did not carry it).",
+  get_actor_lifecycle:
+    "Stake history of suppliers, applications or gateways, one row per event, newest first (by height, then id): stake (stake_upokt, owner_id for suppliers) and unstake messages with their transaction_id, unbonding_begin and unbonding_end (reason, unbonding_end_height, session_end_height), and for suppliers each slash (service, application, session, penalty_upokt, previous_stake_upokt, stake_upokt after it, proof_validation_status). kind = supplier, application or gateway; addresses = those actors (up to 200), or for suppliers owners = the suppliers they own now or operators = the Staked suppliers whose service configs share revenue with them now; one list is required. events = stake, unstake, unbonding_begin, unbonding_end, slash (NULL = all). row_limit (default 100, at most 1000) rows per call; for the next page pass the last row's height and id as before_height and before_id. Covers the indexed blocks.",
+  get_block_stats:
+    "Block statistics per bucket: blocks and the first and last height, transactions (total, successful, failed), relays and compute units (claimed and estimated) as the indexer reports them per block, the time between blocks in milliseconds (average, minimum, maximum) and the average block size in bytes. Covers the indexed blocks; NULL range = the whole chain.",
+  get_relay_mining_difficulty:
+    "Relay mining difficulty history of the services listed (up to 200): each update newest first (by height, then service_id), with the relays EMA and the target hash before and after it. The current difficulty of a service is its newest row (row_limit 1 with that one service). row_limit (default 100, at most 1000) rows per call; for the next page pass the last row's height and service_id as before_height and before_service_id. Covers the indexed blocks.",
+  get_created_claims:
+    "Claims created (MsgCreateClaim) by up to 20 suppliers, newest first (by height, then id), whether or not they settled yet: application, service, session_id, session_end_height, relays, compute units and claimed_upokt as claimed, and the transaction_id. For settled and expired claims use get_claims. row_limit (default 100, at most 1000) rows per call; for the next page pass the last row's height and id as before_height and before_id. Covers the indexed blocks.",
   get_param_history:
     "Governance parameter history: each version whose value differs from the previous one, with previous_value; namespaces / keys NULL = all.",
 };
@@ -191,12 +201,33 @@ const JSON_NOTE = `'Returns {range, data}. data = every row of the function of t
 
 const LAST_SETTLEMENT = `'The last settlement the money tables hold: the highest height they wrote (a height with settlement events, which may have no settled claim) and its block time; null before the first one. It moves when a new settlement is written: poll it (one index probe) and refetch recent catalog data when it moves. It does not move when older heights are rewritten (a history fill or a gap repair), nor with covered_to, which follows the blocks.'`;
 
+// The published functions over the current state of the entity tables, and get_supplier_domains (whose rows are the
+// domain rewards' own days, outside the money coverage): a plain list each, with no _json twin. Their GraphQL
+// description: what + STATE_ROWS_NOTE + the columns.
+const STATE_DESCRIPTIONS: Record<string, string> = {
+  get_supplier_fleet:
+    "Supplier fleet now: the current version of the suppliers of one list (suppliers, up to 200; owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with them now; domains = the suppliers with a live service config with an endpoint on one of them), or of every supplier when none is given. services keeps those with a live config for one of them (combined with the list). stake_statuses keeps those statuses (Staked, Unstaking, Unstaked; NULL = all). by_supplier (default true) = one row per supplier: owner_id, stake_status, stake_upokt and service_count (the services it has a live config for), largest stake first; false = one row for the whole fleet (supplier_id and stake_status say all; owner_id and service_count are NULL): stake_upokt summed and supplier_count, zeros when the fleet is empty.",
+  get_service_summary:
+    "Services now: per service, the suppliers with a live service config for it and how many of them are Staked, and the applications with a live service row for it and how many are Staked. services = those (up to 200); NULL = every service with a supplier config or an application.",
+  get_application_fleet:
+    "Applications now: the current version of the applications listed (up to 200), kept to those with a live service row for one of services and to those delegating to one of gateways now (all combined; none = every application), and to stake_statuses (Staked, Unstaking, Unstaked; NULL = all). by_application (default true) = one row per application: stake_status, stake_upokt, service_count and gateway_count (its services and gateways now), largest stake first; false = one row for all (application_id and stake_status say all; the counts are NULL): stake_upokt summed and application_count.",
+  get_supplier_domains:
+    "Supplier domains (the root domains of the endpoints suppliers stake with) ranked by what their suppliers claimed: claimed_upokt, relays and compute units summed over the UTC days that start inside [range_start, range_end) (NULL = every day; first_day and last_day = the days found), with staked_suppliers = the Staked suppliers that have a live service config on the domain now and staked_upokt = their stake. top = the first N domains (NULL = all).",
+  get_morse_claim_summary:
+    "Morse migration now: the Morse accounts imported for claiming on Shannon, one row for the claimed ones and one for the unclaimed: accounts, and the sums of their liquid balance (unstaked_balance_upokt) and of the supplier and application stakes they carry. The accounts one by one: morseClaimableAccounts.",
+};
+export const STATE_FUNCTIONS = Object.keys(STATE_DESCRIPTIONS);
+const STATE_ROWS_NOTE = `'Rows paged by GraphQL (first / offset) up to the query limit (1000); page in this order for longer answers. Amounts in upokt.'`;
+
 export function createSettlementSmartTagsFn(dbSchema: string): string {
   const s = dbSchema;
   // a missing table fails the start: a typo or a renamed table must not stay exposed in GraphQL
   const tables = OMITTED_TABLES.map((t) => `COMMENT ON TABLE ${s}.${t} IS E'@omit';`).join("\n");
   const functions = OMITTED_FUNCTIONS.map((f) => `'${f}'`).join(", ");
   const describe = Object.entries(DESCRIPTIONS)
+    .map(([name, what]) => `('${name}', '${what.replace(/'/g, "''")}')`)
+    .join(", ");
+  const state = Object.entries(STATE_DESCRIPTIONS)
     .map(([name, what]) => `('${name}', '${what.replace(/'/g, "''")}')`)
     .join(", ");
   const unused = UNUSED_ENTITY_TABLES.map((t) => `'${t}'`).join(", ");
@@ -237,6 +268,12 @@ BEGIN
            WHERE n.nspname = '${s}' AND p.prokind = 'f' LOOP
     EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, what || ' ' || ${JSON_NOTE} || E'\n' || ${COMMON}
       || E'\nEach element has the columns of ' || replace(f::text, '_json(', '(') || '.');
+  END LOOP;
+  FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           JOIN (VALUES ${state}) d(name, what) ON d.name = p.proname
+           WHERE n.nspname = '${s}' AND p.prokind = 'f' AND p.proretset LOOP
+    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@simpleCollections only' || E'\n' || what || ' ' || ${STATE_ROWS_NOTE}
+      || E'\nColumns: ' || pg_get_function_result(f));
   END LOOP;
   FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            JOIN (VALUES ${legacy}) d(name, what) ON d.name = p.proname

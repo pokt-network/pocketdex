@@ -16,6 +16,7 @@ import {
   refreshDomainServiceDailyRewardsFn,
 } from "./domainRewards";
 import { addEntityColumnsFn } from "./entityColumns";
+import { createEntityDescriptionsFn } from "./entityDescriptions";
 import { createModToAcctTransfersTableFn, createModToAcctTransfersSummarizedTableFn } from "./modToAcctTransfers";
 import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
 import { getComputeUnitsToTokensMultiplierEvolutionFn } from "./params";
@@ -150,6 +151,8 @@ export async function createDbFunctions(): Promise<void> {
     createSettlementFunctionsFn,
     // after the objects it tags; hides tables and helpers from the GraphQL API
     createSettlementSmartTagsFn,
+    // the GraphQL descriptions of the exposed entity tables, after their smart tags
+    createEntityDescriptionsFn,
   )
   // CONCURRENT indexes must run outside any transaction, one query each
   await createIndexesConcurrently(getPerformanceIndexSqls(schema))

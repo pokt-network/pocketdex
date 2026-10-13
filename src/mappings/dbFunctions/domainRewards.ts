@@ -192,6 +192,11 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_suppliers_live_id
       ON ${dbSchema}.suppliers (id) INCLUDE (stake_status, stake_amount)
       WHERE upper_inf(_block_range)`,
+    // get_service_summary and get_supplier_fleet(services): the live configs of a service. Without it the summary of
+    // every service seq-scanned all 9.6M config versions for the 157k live ones (1.8 s, mainnet replica 2026-10-13).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_service
+      ON ${dbSchema}.supplier_service_configs (service_id, supplier_id)
+      WHERE upper_inf(_block_range)`,
     // Indexes for the domain_service_daily_rewards summary table.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dsdr_domain_day
       ON ${dbSchema}.domain_service_daily_rewards (domain, day)`,
