@@ -57,6 +57,9 @@ which will have the admin email and password at top-left of it.
 
 Navigate to http://localhost:3000 or the port you specified in .env.development at `SUBQUERY_GRAPHQL_ENGINE_PORT` var.
 
+The public schema is being closed to plain entity lists and documented functions: see
+[docs/graphql-migration.md](docs/graphql-migration.md) for what replaces relations, aggregates and the hidden tables.
+
 <details>
   <summary>Click to expand sample query</summary>
 
