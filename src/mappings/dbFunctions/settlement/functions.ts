@@ -439,9 +439,10 @@ BEGIN
   END IF;
 END $$;
 
--- The last settlement the money tables hold: its height and block time (one probe of the primary key). Every catalog
--- function reads settlements only, so its data changes only when this height does: a client polls this and refetches
--- the rest when it moves. Both NULL until the first settlement is written.
+-- The highest height the money tables wrote (settlement_blocks: a height with settlement events, which may have no settled claim) and its block time,
+-- one probe of the primary key. It moves when a new settlement is written, so a client can poll it and refetch the
+-- recent data it shows only when it moves. It does not move when older heights are rewritten (a history fill or a gap
+-- repair) or when covered_to advances with the blocks. No row (null in GraphQL) until the first height is written.
 CREATE OR REPLACE FUNCTION ${s}.get_last_settlement(OUT height bigint, OUT block_time timestamptz)
 LANGUAGE sql STABLE AS $$
   SELECT sb.height, sb.block_time FROM ${s}.settlement_blocks sb ORDER BY sb.height DESC LIMIT 1
