@@ -2150,6 +2150,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const all = ["250 t3-0 s2 x4 3", "200 t2-1 s1 x3 2", "200 t2-0 s1 x2 1", "100 t1-0 s1 x1 5"];
       assert.deepEqual(await got("ARRAY['s1', 's2', 's1'], NULL, NULL"), all);
       assert.deepEqual(await got("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), all.slice(1, 3));
+      // the sessions ending at or after a height: 190 keeps x2, x3 and x4, and pages the same way
+      assert.deepEqual(await got("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), all.slice(0, 3));
+      assert.deepEqual(
+        await got("ARRAY['s1', 's2'], NULL, NULL, row_limit => 1, before_height => 200, before_id => 't2-1', from_session_end_height => 190"),
+        [all[2]]
+      );
       const paged: string[] = [];
       let page = await got("ARRAY['s1', 's2'], NULL, NULL, row_limit => 1");
       paged.push(...page);

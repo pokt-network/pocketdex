@@ -497,6 +497,17 @@ BEGIN
   END LOOP;
 END $$;
 
+-- from_session_end_height came last to get_created_claims: likewise.
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           JOIN (VALUES ('get_created_claims', 'from_session_end_height')) n(name, arg) ON n.name = p.proname
+           WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
 -- A rollup column added later (claims_with_proof v2, commission_na_count v2, the monthly triple v3, replayed_count v4)
 -- holds its default on days written before, until rebuild_rollups recomputes them: reading those days would undercount
 -- without any error. Every read of rollup days [d1, d2] raises instead when a settlement of those days carries an older
@@ -1333,9 +1344,11 @@ END $$;
 -- cannot list, for a supplier's own monitor (the sessions it claimed, the last claim it made). msg_create_claims has
 -- only GiST indexes (54 GB, 46M rows on mainnet): each supplier's claims are a bitmap of all of them, ~130 ms for the
 -- busiest one (mainnet replica, 2026-10-13), hence the cap. Keyset paging on (height, id), like get_claims. Covers the
--- indexed blocks.
+-- indexed blocks. from_session_end_height keeps the claims of sessions ending at or after it (a monitor that knows the
+-- sessions it already saw); a filter on the same bitmap.
 CREATE OR REPLACE FUNCTION ${s}.get_created_claims(suppliers text[], range_start timestamptz, range_end timestamptz,
-  row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
+  row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL, before_id text DEFAULT NULL,
+  from_session_end_height bigint DEFAULT NULL)
 RETURNS TABLE(height bigint, block_time timestamptz, id text, supplier_id text, application_id text, service_id text,
   session_id text, session_end_height bigint, relays numeric, estimated_relays numeric, claimed_compute_units numeric,
   estimated_compute_units numeric, claimed_upokt numeric, transaction_id text, covered_from timestamptz,
@@ -1365,6 +1378,7 @@ ${covered(null, true)}
     SELECT m.* FROM ${s}.msg_create_claims m
     WHERE m.supplier_id = u.sid AND m.block_id BETWEEN rg.lo AND rg.hi
       AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
+      AND (from_session_end_height IS NULL OR m.session_end_height >= from_session_end_height)
     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit) m
   JOIN ${s}.blocks bl ON bl.id = m.block_id
   ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit;
