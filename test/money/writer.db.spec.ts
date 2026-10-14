@@ -1654,7 +1654,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         CREATE TABLE ${S}.msg_undelegate_from_gateways (LIKE ${S}.msg_delegate_to_gateways);
         INSERT INTO ${S}.msg_delegate_to_gateways VALUES ('d1', 'a1', 'g1', 10), ('d2', 'a2', 'g1', 20), ('d3', 'a2', 'g2', 40),
           ('d4', 'a3', 'g1', 45), ('d5', 'a3', 'g1', 46);
-        INSERT INTO ${S}.msg_undelegate_from_gateways VALUES ('u1', 'a2', 'g1', 40);`);
+        INSERT INTO ${S}.msg_undelegate_from_gateways VALUES ('u1', 'a2', 'g1', 40);
+        CREATE TABLE ${S}._metadata (key varchar, value jsonb);
+        INSERT INTO ${S}._metadata VALUES ('lastProcessedHeight', '100'), ('targetHeight', '101');`);
       const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
       const fleet = (args: string) =>
         rows(`SELECT gateway_id, stake_status, stake_upokt::text, delegated_applications::text, delegations_ever::text,
@@ -1690,6 +1692,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       }
       assert.deepEqual(paged, now);
       assert.deepEqual(await delegations("ARRAY['g1', 'g2', 'g3'], after_gateway_id => 'g2'"), [now[3]]);
+      // the height read: lastProcessedHeight without at_height, else at_height; NULL at_height reads that height
+      const heights = async (args: string) =>
+        (await c.query(`SELECT DISTINCT height::text h FROM ${S}.get_gateway_delegations(${args})`)).rows.map((r) => r.h);
+      assert.deepEqual(await heights("ARRAY['g1', 'g2']"), ["100"]);
+      assert.deepEqual(await heights("ARRAY['g1', 'g2'], at_height => 30"), ["30"]);
+      await c.query(`UPDATE ${S}._metadata SET value = '45' WHERE key = 'lastProcessedHeight'`);
+      assert.deepEqual(await delegations("ARRAY['g2']"), ["g2 70 Staked a2 30 Staked svc-z"]);
       for (const [fn, args, err] of [
         ["get_gateway_delegations", "NULL", /gateways must have between 1 and 200 elements/],
         ["get_gateway_delegations", "ARRAY['g1'], row_limit => 1001", /row_limit must be between 1 and 1000/],

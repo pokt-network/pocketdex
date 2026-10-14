@@ -519,6 +519,7 @@ BEGIN
                       , ('get_height_at', 'beyond_tip')
                       , ('get_supplier_fleet', 'after_supplier_id')
                       , ('get_claims', 'current_owner_id')
+                      , ('get_gateway_delegations', 'height')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -1183,7 +1184,8 @@ BEGIN
   ORDER BY 3 DESC, 1;
 END $$;
 
--- Gateways and the applications delegating to them at a height (at_height NULL = now): each gateway's stake and status,
+-- Gateways and the applications delegating to them at a height (at_height NULL = the last height the indexer processed,
+-- _metadata.lastProcessedHeight; every row carries the height read): each gateway's stake and status,
 -- and each delegated application's stake, status and services, all as of that height (the version of each row whose
 -- _block_range holds it). One row per (gateway, application); a gateway with no delegation at the height has one row
 -- with NULL application columns, and a gateway with no version at the height (not staked yet) none. Keyset paging on
@@ -1195,7 +1197,7 @@ END $$;
 CREATE OR REPLACE FUNCTION ${s}.get_gateway_delegations(gateways text[], at_height bigint DEFAULT NULL,
   row_limit integer DEFAULT 1000, after_gateway_id text DEFAULT NULL, after_application_id text DEFAULT NULL)
 RETURNS TABLE(gateway_id text, gateway_stake_upokt numeric, gateway_stake_status text, application_id text,
-  stake_upokt numeric, stake_status text, service_ids text[])
+  stake_upokt numeric, stake_status text, service_ids text[], height bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE h bigint;
 BEGIN
@@ -1209,13 +1211,21 @@ BEGIN
   IF at_height < 1 THEN
     RAISE EXCEPTION 'at_height must be a block height (has %)', at_height;
   END IF;
-  h := coalesce(at_height, 9223372036854775807);
+  -- now = the last height the indexer finished (_metadata.lastProcessedHeight, a jsonb number), not the live rows: a
+  -- block being written is not read, and the caller gets the height to pass on later pages
+  h := at_height;
+  IF h IS NULL THEN
+    SELECT (m.value #>> '{}')::bigint INTO h FROM ${s}._metadata m WHERE m.key = 'lastProcessedHeight';
+  END IF;
+  IF h IS NULL THEN
+    RAISE EXCEPTION 'no lastProcessedHeight in _metadata: pass at_height';
+  END IF;
   RETURN QUERY
   SELECT g.id, g.stake_amount::numeric, g.stake_status::text, d.application_id, a.stake_amount::numeric,
          a.stake_status::text,
          CASE WHEN d.application_id IS NOT NULL THEN ARRAY(
            SELECT DISTINCT sv.service_id FROM ${s}.application_services sv
-           WHERE sv.application_id = d.application_id AND sv._block_range @> h ORDER BY 1) END
+           WHERE sv.application_id = d.application_id AND sv._block_range @> h ORDER BY 1) END, h
   FROM ${s}.gateways g
   LEFT JOIN ${s}.application_gateways d ON d.gateway_id = g.id AND d._block_range @> h
   LEFT JOIN LATERAL (
