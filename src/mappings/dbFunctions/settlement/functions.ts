@@ -269,6 +269,17 @@ const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: str
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
+  // The newest live version of a supplier (alias a, of suppliers) or of a service config (of supplier_service_configs):
+  // during a restake the indexer can leave two live rows of one for a moment (.local partial-block findings, 2026-10-14),
+  // so a function that lists or sums live rows keeps the one no later live row supersedes. A probe per row through
+  // idx_suppliers_live_id / idx_ssc_live_supplier_service.
+  const newestSupplier = (a: string) =>
+    `NOT EXISTS (SELECT 1 FROM ${s}.suppliers s2 WHERE s2.id = ${a}.id AND upper_inf(s2._block_range)
+                 AND lower(s2._block_range) > lower(${a}._block_range))`;
+  const newestConfig = (a: string) =>
+    `NOT EXISTS (SELECT 1 FROM ${s}.supplier_service_configs c2 WHERE c2.supplier_id = ${a}.supplier_id
+                 AND c2.service_id = ${a}.service_id AND upper_inf(c2._block_range)
+                 AND lower(c2._block_range) > lower(${a}._block_range))`;
   // the reshaped helpers as SQL VALUES (name, signature or NULL): the DDL drops their other overloads
   const helperValues = Object.entries(HELPER_SIGNATURES)
     .map(([name, args]) => `('${name}', ${args === null ? "NULL" : `'${args}'`})`)
@@ -900,7 +911,7 @@ BEGIN
           JOIN ${s}.supplier_service_configs ssc
             ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a)) AND upper_inf(ssc._block_range)) m
     WHERE EXISTS (SELECT 1 FROM ${s}.suppliers su WHERE su.id = m.supplier_id AND su.stake_status = 'Staked'
-                    AND su._block_range @> 9223372036854775807::bigint)
+                    AND su._block_range @> 9223372036854775807::bigint AND ${newestSupplier("su")})
     ORDER BY m.supplier_id);
 END $$;
 
@@ -931,7 +942,8 @@ BEGIN
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     RETURN ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su
-                 WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
+                 WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint
+                   AND ${newestSupplier("su")});
   END IF;
   IF operators IS NOT NULL THEN
     PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
@@ -1019,7 +1031,7 @@ BEGIN
     SELECT c.service_id, count(DISTINCT c.supplier_id) FILTER (WHERE su.stake_status::text = 'Staked') staked,
            count(DISTINCT c.supplier_id) n
     FROM ${s}.supplier_service_configs c
-    LEFT JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range)
+    LEFT JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND ${newestSupplier("su")}
     WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services))
     GROUP BY 1
   ), ac AS (
@@ -1234,6 +1246,7 @@ BEGIN
   ), st AS (
     SELECT m.domain, count(*) n, sum(su.stake_amount) stake
     FROM m JOIN ${s}.suppliers su ON su.id = m.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+      AND ${newestSupplier("su")}
     GROUP BY 1
   )
   SELECT g.domain, g.claimed, g.relays, g.est_relays, g.cu, g.est_cu, g.d1, g.d2, coalesce(st.n, 0),
@@ -1265,7 +1278,8 @@ BEGIN
          c.activated_at_id::bigint
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
-  WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services))
+    AND ${newestSupplier("su")}
+  WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services)) AND ${newestConfig("c")}
     -- the plain bound lets the index range start at the key; with the row comparison alone the planner walked the
     -- suppliers from the first one (1.2 s for a middle page on mainnet; 26 ms with it, 2026-10-14)
     AND (after_supplier_id IS NULL OR c.supplier_id >= after_supplier_id)
