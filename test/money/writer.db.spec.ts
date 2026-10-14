@@ -1502,6 +1502,41 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.match(String(d.rows[0].d), /^The last indexed block at or before at_time/);
   });
 
+  it("get_active_accounts counts the live upokt balances updated since each time", async () => {
+    await c.query("BEGIN");
+    try {
+      // blocks 1 (2026-01-01) and 999999999 (2026-09-01 12:00); acc-a updated at the last block, acc-b at the first, acc-c's
+      // live row is another denom, acc-d's update at the last block is a closed version
+      await c.query(`
+        CREATE TABLE ${S}.balances (account_id text, denom text, last_updated_block_id numeric, _block_range int8range);
+        INSERT INTO ${S}.balances VALUES ('acc-a', 'upokt', 999999999, int8range(999999999, NULL)),
+          ('acc-a', 'upokt', 1, int8range(1, 999999999)), ('acc-b', 'upokt', 1, int8range(1, NULL)),
+          ('acc-c', 'mact', 999999999, int8range(999999999, NULL)), ('acc-d', 'upokt', 999999999, int8range(999999999, 999999999 + 1)),
+          ('acc-d', 'upokt', 1, int8range(1, 2));`);
+      const { rows } = await c.query(
+        `SELECT since_time AT TIME ZONE 'UTC' t, height::text, beyond_tip, accounts::text FROM ${S}.get_active_accounts($1::timestamptz[])`,
+        [["2026-06-01T00:00:00Z", "2025-01-01T00:00:00Z", "2026-09-01T12:00:00Z", "2026-09-02T00:00:00Z", "2026-06-01T00:00:00Z"]]
+      );
+      assert.deepEqual(
+        rows.map((r) => [new Date(String(r.t) + "Z").toISOString(), r.height, r.beyond_tip, r.accounts]),
+        [
+          ["2025-01-01T00:00:00.000Z", null, false, "2"],
+          ["2026-06-01T00:00:00.000Z", "1", false, "1"],
+          // at the last block's time: that block counts (the newest block before it is 1)
+          ["2026-09-01T12:00:00.000Z", "1", false, "1"],
+          ["2026-09-02T00:00:00.000Z", "999999999", true, null],
+        ]
+      );
+      for (const arg of ["ARRAY[]::timestamptz[]", "ARRAY[NULL]::timestamptz[]"]) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_active_accounts(${arg})`), /since_times must have between 1 and 20 times/);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("get_block_supplies gives the supply of each denomination at a block", async () => {
     await c.query("BEGIN");
     try {

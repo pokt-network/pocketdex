@@ -237,6 +237,8 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
     "The Staked suppliers now (stake_statuses: those statuses, default Staked), one row each: owner_id, operator_id, stake_upokt, and the service_ids and endpoint root domains of their live service configs (empty arrays when they have none; a supplier in another status with no live config gets the configs closed at its last closing, which can take seconds a page). Ordered by supplier_id; for the next page pass the last row's supplier_id as after_supplier_id. For a fleet by stake, with filters, use get_supplier_fleet.",
   get_block_supplies:
     "Supply at a block: one row per denomination with its amount in that denomination's own base unit (upokt for upokt, mact for mact; not converted), as the indexer recorded it for that height; no row for a height it has no supply for.",
+  get_active_accounts:
+    "Accounts active since each time of since_times (up to 20, timestamptz with an explicit zone): accounts = the live upokt balances last updated in a block at or after the time (null when beyond_tip: no indexed block that late yet); height = the newest block before the time (an account counts when its last update is above it).",
   get_morse_claim_summary:
     "Morse migration now: the Morse accounts imported for claiming on Shannon, one row for the claimed ones and one for the unclaimed: accounts, and the sums of their liquid balance (unstaked_balance_upokt) and of the supplier and application stakes they carry. The accounts one by one: morseClaimableAccounts.",
 };

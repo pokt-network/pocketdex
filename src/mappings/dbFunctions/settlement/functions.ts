@@ -703,6 +703,36 @@ BEGIN
   END IF;
 END $$;
 
+-- Accounts active since each of since_times (up to 20): live upokt balances whose last update is in a block at or after
+-- the time, as pnf-explorer's /accounts counted them (newest block before the time, then last_updated_block_id above
+-- it). height = that newest block before the time (NULL before the first one); beyond_tip = no indexed block at or
+-- after the time yet, and accounts is then NULL (not known). One pass over the live rows (16,868 on mainnet,
+-- 2026-10-14) through balances_block_range_upper_idx: ~0.05-0.15 s for three times, where a count per time over
+-- idx_balances_block_id read every version since then (3.7 s for 90 days).
+CREATE OR REPLACE FUNCTION ${s}.get_active_accounts(since_times timestamptz[])
+RETURNS TABLE(since_time timestamptz, height bigint, beyond_tip boolean, accounts bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF since_times IS NULL OR cardinality(since_times) < 1 OR cardinality(since_times) > 20 OR array_position(since_times, NULL) IS NOT NULL THEN
+    RAISE EXCEPTION 'since_times must have between 1 and 20 times, none NULL (has %)', coalesce(cardinality(since_times), 0);
+  END IF;
+  RETURN QUERY
+  WITH t AS (
+    SELECT DISTINCT u.ts FROM unnest(since_times) u(ts)
+  ), h AS (
+    SELECT t.ts, (SELECT bl.id FROM ${s}.blocks bl WHERE bl.timestamp < (t.ts AT TIME ZONE 'UTC')
+                  ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1) hh,
+           NOT EXISTS (SELECT 1 FROM ${s}.blocks bl WHERE bl.timestamp >= (t.ts AT TIME ZONE 'UTC')) beyond
+    FROM t
+  ), b AS MATERIALIZED (
+    SELECT bal.last_updated_block_id lu FROM ${s}.balances bal
+    WHERE upper(bal._block_range) IS NULL AND upper_inf(bal._block_range) AND bal.denom = 'upokt'
+  )
+  SELECT h.ts, h.hh::bigint, h.beyond,
+         CASE WHEN NOT h.beyond THEN (SELECT count(*) FROM b WHERE b.lu > coalesce(h.hh, -1)) END
+  FROM h ORDER BY 1;
+END $$;
+
 -- The supply of each denomination at a block (the indexer's block_supplies rows of that height and their supplies):
 -- what a block page read in two requests, block_supplies then supplies by id. Two index probes (0.2 ms on mainnet,
 -- 2026-10-14); no row for a height the indexer has no supply for.
