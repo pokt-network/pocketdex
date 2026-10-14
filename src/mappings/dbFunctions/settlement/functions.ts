@@ -1324,7 +1324,7 @@ BEGIN
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
   RETURN QUERY
   SELECT c.supplier_id, c.service_id, su.owner_id, su.stake_amount,
-         ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.domains) = 'array' THEN c.domains ELSE '[]'::jsonb END)),
+         ARRAY(SELECT e.x FROM ${configDomains("c")} e(x)),
          c.activated_at_id::bigint
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
@@ -1339,8 +1339,8 @@ END $$;
 
 -- The live service configs of the Staked suppliers counted per (endpoint root domain, service): configs = the configs
 -- that list the domain (once per config, whatever it repeats), as get_staked_supplier_services gives their domains;
--- a config with no domain is in no row. total_configs and total_suppliers, the same on every row, are all those configs
--- and their distinct suppliers, for a client to check it read everything. 472 groups over 160,488 configs on mainnet
+-- a config with no domain is in no row. total_configs and total_suppliers, the same on every row of the first page
+-- (NULL on the next ones), are all those configs and their distinct suppliers, for a client to check it read everything. 472 groups over 160,488 configs on mainnet
 -- (2026-10-14; no config repeats a domain): the groups take ~0.2 s and the totals ~0.12 s through
 -- idx_suppliers_live_id and idx_ssc_live_supplier_service. Keyset paging on (domain, service_id).
 CREATE OR REPLACE FUNCTION ${s}.get_staked_domain_services(row_limit integer DEFAULT 1000, after_domain text DEFAULT NULL,
@@ -1355,16 +1355,19 @@ BEGIN
   IF (after_domain IS NULL) <> (after_service_id IS NULL) THEN
     RAISE EXCEPTION 'pass both after_domain and after_service_id (the last row of the previous page), or neither';
   END IF;
-  SELECT count(*), count(DISTINCT c.supplier_id) INTO n_configs, n_suppliers
-  FROM ${s}.supplier_service_configs c
-  JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
-  WHERE upper_inf(c._block_range);
+  -- the totals on the first page only (a pass over every config: ~0.35 s on mainnet)
+  IF after_domain IS NULL THEN
+    SELECT count(*), count(DISTINCT c.supplier_id) INTO n_configs, n_suppliers
+    FROM ${s}.supplier_service_configs c
+    JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+    WHERE upper_inf(c._block_range);
+  END IF;
   RETURN QUERY
   SELECT d.x, c.service_id, count(*)::bigint, n_configs, n_suppliers
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
   CROSS JOIN LATERAL (
-    SELECT DISTINCT e.x FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.domains) = 'array' THEN c.domains ELSE '[]'::jsonb END) e(x)
+    SELECT DISTINCT e.x FROM ${configDomains("c")} e(x)
   ) d
   WHERE upper_inf(c._block_range)
     AND (after_domain IS NULL OR d.x >= after_domain)
@@ -1377,8 +1380,8 @@ END $$;
 -- The Staked suppliers now, one row each in supplier_id order: owner, operator, stake, and the services and endpoint
 -- root domains of their live configs (empty arrays without one): the suppliers { serviceConfigs } walk consumers made.
 -- Keyset paging on supplier_id: a stable key, so a walk neither skips nor repeats a supplier whose stake changes
--- meanwhile. A page of 1000 takes ~0.16 s on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id
--- and idx_ssc_live_supplier_service.
+-- meanwhile. A page of 1000 takes 31-50 ms on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id,
+-- idx_ssc_live_supplier_service and idx_ssc_live_supplier_domains.
 CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers(row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL)
 RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1387,6 +1390,8 @@ BEGIN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_supplier_id', row_limit;
   END IF;
   RETURN QUERY
+  -- two array subqueries, each index-only: service_id from idx_ssc_live_supplier_service, domains from
+  -- idx_ssc_live_supplier_domains; one subquery for both reads the heap and took 0.35-0.44 s a page, against 31-50 ms
   SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
          ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c
                WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1),
@@ -1558,20 +1563,26 @@ ${covered(null)}
        AND (applications IS NULL OR e.application_id = ANY(applications)) AND (services IS NULL OR e.service_id = ANY(services))
      ORDER BY e.height DESC, e.event_idx DESC LIMIT row_limit)
   )
-  SELECT r.* FROM (
-    SELECT 'settled'::text, c.height, c.event_idx, c.block_time, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id,
-           c.service_id, c.session_id, c.session_end, c.relays, c.estimated_relays, c.claimed_compute_units,
-           c.estimated_compute_units, c.claimed_upokt, c.settled_upokt, c.relay_minted_upokt, c.global_minted_upokt,
-           c.overservicing_loss_upokt, c.settled_with_proof, NULL::text, ${currentOwner("c")}, cv.covered_from, cv.covered_to,
-           cv.gaps
-    FROM k JOIN ${s}.claim_settlements c ON c.height = k.height AND c.event_idx = k.event_idx
-    UNION ALL
-    SELECT 'expired', e.height, e.event_idx, sb.block_time, e.supplier_id, NULL, e.application_id, e.service_id, NULL,
-           e.session_end, e.relays, e.estimated_relays, e.claimed_compute_units, e.estimated_compute_units,
-           e.claimed_upokt, NULL, NULL, NULL, NULL, NULL, e.reason, ${currentOwner("e")}, cv.covered_from, cv.covered_to, cv.gaps
-    FROM x JOIN ${s}.claim_expirations e ON e.height = x.height AND e.event_idx = x.event_idx
-    JOIN ${s}.settlement_blocks sb ON sb.height = e.height
-  ) r ORDER BY 2 DESC, 3 DESC LIMIT row_limit;
+  -- the current owner of the rows of the page only, after the order and limit
+  SELECT l.a1, l.a2, l.a3, l.a4, l.supplier_id, l.a6, l.a7, l.a8, l.a9, l.a10, l.a11, l.a12, l.a13, l.a14, l.a15, l.a16,
+         l.a17, l.a18, l.a19, l.a20, l.a21, ${currentOwner("l")}, cv.covered_from, cv.covered_to, cv.gaps
+  FROM (
+    SELECT r.* FROM (
+      SELECT 'settled'::text, c.height, c.event_idx, c.block_time, c.supplier_id, nullif(c.supplier_owner_id, ''),
+             c.application_id, c.service_id, c.session_id, c.session_end, c.relays, c.estimated_relays, c.claimed_compute_units,
+             c.estimated_compute_units, c.claimed_upokt, c.settled_upokt, c.relay_minted_upokt, c.global_minted_upokt,
+             c.overservicing_loss_upokt, c.settled_with_proof, NULL::text
+      FROM k JOIN ${s}.claim_settlements c ON c.height = k.height AND c.event_idx = k.event_idx
+      UNION ALL
+      SELECT 'expired', e.height, e.event_idx, sb.block_time, e.supplier_id, NULL, e.application_id, e.service_id, NULL,
+             e.session_end, e.relays, e.estimated_relays, e.claimed_compute_units, e.estimated_compute_units,
+             e.claimed_upokt, NULL, NULL, NULL, NULL, NULL, e.reason
+      FROM x JOIN ${s}.claim_expirations e ON e.height = x.height AND e.event_idx = x.event_idx
+      JOIN ${s}.settlement_blocks sb ON sb.height = e.height
+    ) r(a1, a2, a3, a4, supplier_id, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21)
+    ORDER BY 2 DESC, 3 DESC LIMIT row_limit
+  ) l
+  ORDER BY l.a2 DESC, l.a3 DESC;
 END $$;
 
 -- Claims created (MsgCreateClaim) by up to 20 suppliers, newest first, before they settle or expire: what get_claims
@@ -1894,10 +1905,10 @@ ${covered("settled")}
   WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)) AND coalesce(r.application_id, chr(1)) = coalesce(k.application_id, chr(1)))
   ), gw AS (
-    -- by_application: each application's gateways now (application_gateways is small: 411 rows on mainnet, 2026-10-14)
+    -- by_application: every application's gateways now (application_gateways is small: 411 rows on mainnet,
+    -- 2026-10-14); independent of q, so q is read once and not materialized
     SELECT g.application_id, array_agg(DISTINCT g.gateway_id ORDER BY g.gateway_id) ids FROM ${s}.application_gateways g
     WHERE by_application AND g._block_range @> 9223372036854775807::bigint
-      AND g.application_id IN (SELECT DISTINCT q.application_id FROM q)
     GROUP BY 1
   )
   SELECT q.*, CASE WHEN by_application THEN coalesce(gw.ids, '{}'::text[]) END, cv.covered_from, cv.covered_to, cv.gaps

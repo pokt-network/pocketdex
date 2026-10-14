@@ -232,16 +232,19 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
   get_staked_supplier_services:
     "Live service configs of the Staked suppliers now, one row per (supplier, service): the supplier's owner_id and stake_upokt, the service, the endpoint root domains of that config, and activated_at_height (the height from which the chain serves the config; a config waiting for its session start has a height above the current block). services keeps those services (up to 200; NULL = all). Ordered by supplier_id, then service_id; for the next page pass the last row's supplier_id and service_id as after_supplier_id and after_service_id.",
   get_staked_domain_services:
-    "Live service configs of the Staked suppliers now, counted per (endpoint root domain, service): configs = the configs whose endpoints are on the domain (each config once, as get_staked_supplier_services gives its domains; a config with no domain is in no row). total_configs and total_suppliers repeat on every row: every live config of the Staked suppliers and their distinct suppliers, to check a read is complete. Ordered by domain, then service_id; for the next page pass the last row's domain and service_id as after_domain and after_service_id.",
+    "Live service configs of the Staked suppliers now, counted per (endpoint root domain, service): configs = the configs whose endpoints are on the domain (each config once, as get_staked_supplier_services gives its domains; a config with no domain is in no row). total_configs and total_suppliers repeat on every row of the first page (NULL on the next ones): every live config of the Staked suppliers and their distinct suppliers, to check a read is complete. Ordered by domain, then service_id; for the next page pass the last row's domain and service_id as after_domain and after_service_id.",
   get_staked_suppliers:
     "The Staked suppliers now, one row each: owner_id, operator_id, stake_upokt, and the service_ids and endpoint root domains of their live service configs (empty arrays when they have none). Ordered by supplier_id; for the next page pass the last row's supplier_id as after_supplier_id. For a fleet by stake, with filters, use get_supplier_fleet.",
   get_block_supplies:
-    "Supply at a block: one row per denomination with its amount (in that denomination's base unit, upokt for POKT), as the indexer recorded it for that height; no row for a height it has no supply for.",
+    "Supply at a block: one row per denomination with its amount in that denomination's own base unit (upokt for upokt, mact for mact; not converted), as the indexer recorded it for that height; no row for a height it has no supply for.",
   get_morse_claim_summary:
     "Morse migration now: the Morse accounts imported for claiming on Shannon, one row for the claimed ones and one for the unclaimed: accounts, and the sums of their liquid balance (unstaked_balance_upokt) and of the supplier and application stakes they carry. The accounts one by one: morseClaimableAccounts.",
 };
 export const STATE_FUNCTIONS = Object.keys(STATE_DESCRIPTIONS);
 const STATE_ROWS_NOTE = `'Rows paged by GraphQL (first / offset) up to the query limit (1000); page in this order for longer answers. Amounts in upokt.'`;
+// get_block_supplies gives each denomination's amount in its own base unit: the rows note without the unit
+const STATE_UNIT_FREE = ["get_block_supplies"];
+const STATE_ROWS_NOTE_NO_UNIT = `'Rows paged by GraphQL (first / offset) up to the query limit (1000); page in this order for longer answers.'`;
 // the state functions that page by keyset only (an input argument named after_*, and row_limit 1000 by default;
 // get_supplier_fleet, whose row_limit defaults to every row, says how it pages in its own description)
 const STATE_KEYSET_NOTE = `'At most row_limit rows (default 1000, up to 1000) per call, in the order of the after_* keys: for the next page pass the last row''s keys as after_*, until a page comes back short; not first / offset. Amounts in upokt.'`;
@@ -305,6 +308,7 @@ BEGIN
       || CASE WHEN EXISTS (SELECT 1 FROM pg_proc p2, unnest(p2.proargnames[1:p2.pronargs]) a
                            WHERE p2.oid = f AND a LIKE 'after\_%')
                      AND pg_get_function_arguments(f) LIKE '%row_limit integer DEFAULT 1000%' THEN ${STATE_KEYSET_NOTE}
+                WHEN (SELECT p3.proname FROM pg_proc p3 WHERE p3.oid = f) = ANY(ARRAY[${STATE_UNIT_FREE.map((n) => `'${n}'`).join(", ")}]) THEN ${STATE_ROWS_NOTE_NO_UNIT}
                 ELSE ${STATE_ROWS_NOTE} END
       || E'\nColumns: ' || pg_get_function_result(f));
   END LOOP;

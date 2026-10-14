@@ -1517,6 +1517,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(await at("11"), ["mact 7", "upokt 1005"]);
       assert.deepEqual(await at("10"), ["mact 7", "upokt 1000"]);
       assert.deepEqual(await at("12"), []);
+      // each denomination in its own unit: not the upokt note of the other state functions
+      const d = await c.query(`SELECT obj_description('${S}.get_block_supplies(bigint)'::regprocedure, 'pg_proc') d`);
+      assert.match(String(d.rows[0].d), /^@simpleCollections only\nSupply at a block/);
+      assert.doesNotMatch(String(d.rows[0].d), /Amounts in upokt/);
       await c.query("SAVEPOINT e");
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_block_supplies(NULL)`), /height is required/);
       await c.query("ROLLBACK TO SAVEPOINT e");
@@ -1589,7 +1593,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         gpage = await groups(`row_limit => 1, after_domain => '${dom}', after_service_id => '${svc}'`);
         pagedGroups.push(...gpage);
       }
-      assert.deepEqual(pagedGroups, want);
+      // the totals on the first page only
+      assert.deepEqual(pagedGroups, [want[0], ...want.slice(1).map((w) => w.split(" ").slice(0, 3).join(" "))]);
       for (const [args, err] of [
         ["row_limit => 1001", /row_limit must be between 1 and 1000/],
         ["after_domain => 'a.net'", /pass both after_domain and after_service_id/],
