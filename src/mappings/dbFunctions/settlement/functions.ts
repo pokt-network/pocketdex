@@ -497,14 +497,15 @@ BEGIN
   END LOOP;
 END $$;
 
--- services came last to get_supplier_earnings and from_session_end_height to get_created_claims, and the relay mining
+-- services came last to get_supplier_earnings and from_session_end_height to get_created_claims(_count), and the relay mining
 -- difficulty columns to the rows of get_service_summary (CREATE OR REPLACE cannot change the columns): likewise.
 DO $$
 DECLARE f regprocedure;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            JOIN (VALUES ('get_supplier_earnings', 'services'), ('get_created_claims', 'from_session_end_height'),
-                        ('get_service_summary', 'num_relays_ema')) n(name, arg) ON n.name = p.proname
+                        ('get_service_summary', 'num_relays_ema'),
+                        ('get_created_claims_count', 'from_session_end_height')) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
@@ -1287,7 +1288,7 @@ END $$;
 -- the range). msg_create_claims has only GiST indexes: the busiest mainnet supplier's 30 days in 830 ms on the replica
 -- (2026-10-14), hence the cap.
 CREATE OR REPLACE FUNCTION ${s}.get_created_claims_count(suppliers text[], range_start timestamptz,
-  range_end timestamptz)
+  range_end timestamptz, from_session_end_height bigint DEFAULT NULL)
 RETURNS TABLE(supplier_id text, claims bigint, first_height bigint, last_height bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record;
@@ -1297,12 +1298,15 @@ BEGIN
   END IF;
   PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
   rg := ${s}._block_heights(range_start, range_end);
+  -- as get_created_claims: the claims of sessions ending at or after it, read from that height
+  rg.lo := CASE WHEN rg.lo IS NOT NULL THEN greatest(rg.lo, from_session_end_height) END;
   RETURN QUERY
   SELECT u.sid, coalesce(c.n, 0)::bigint, c.lo::bigint, c.hi::bigint
   FROM (SELECT DISTINCT unnest(suppliers) sid) u
   LEFT JOIN LATERAL (
     SELECT count(*) n, min(m.block_id) lo, max(m.block_id) hi FROM ${s}.msg_create_claims m
     WHERE m.supplier_id = u.sid AND m.block_id BETWEEN rg.lo AND rg.hi
+      AND (from_session_end_height IS NULL OR m.session_end_height >= from_session_end_height)
   ) c ON true
   ORDER BY 1;
 END $$;
@@ -1457,7 +1461,9 @@ END $$;
 -- only GiST indexes (54 GB, 46M rows on mainnet): each supplier's claims are a bitmap of all of them, ~130 ms for the
 -- busiest one (mainnet replica, 2026-10-13), hence the cap. Keyset paging on (height, id), like get_claims. Covers the
 -- indexed blocks. from_session_end_height keeps the claims of sessions ending at or after it (a monitor that knows the
--- sessions it already saw); a filter on the same bitmap.
+-- sessions it already saw), and starts the read at that height. Same claims with and without that bound for the 3 most
+-- active suppliers on mainnet (2026-10-14); a page took 0.19 s with it and 0.16 s without (warm): the bound joins the
+-- GiST on block_id to the one on supplier_id, so it does not make a recent read faster.
 CREATE OR REPLACE FUNCTION ${s}.get_created_claims(suppliers text[], range_start timestamptz, range_end timestamptz,
   row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL, before_id text DEFAULT NULL,
   from_session_end_height bigint DEFAULT NULL)
@@ -1480,6 +1486,9 @@ BEGIN
   END IF;
 ${covered(null, true)}
   rg := ${s}._block_heights(range_start, range_end);
+  -- a claim lands after its session ends (the claim window opens at session end + offset + 1, poktroll
+  -- shared GetClaimWindowOpenHeight): no claim of those sessions is in an earlier block
+  rg.lo := CASE WHEN rg.lo IS NOT NULL THEN greatest(rg.lo, from_session_end_height) END;
   IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
   bh := coalesce(before_height, 9223372036854775807);
   RETURN QUERY

@@ -2270,6 +2270,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ).rows.map((r) => String(r.k));
       assert.deepEqual(await count("ARRAY['s2', 's1', 'nobody', 's1'], NULL, NULL"), ["nobody 0", "s1 3 100 200", "s2 1 250 250"]);
       assert.deepEqual(await count("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), ["s1 2 200 200"]);
+      // the claims of sessions ending at or after 190, as the list gives them; a range past the last block counts none
+      assert.deepEqual(await count("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), ["s1 2 200 200", "s2 1 250 250"]);
+      assert.deepEqual(await count("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), ["s1 0"]);
+      assert.deepEqual(await got("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), []);
       const many = Array.from({ length: 21 }, (_, i) => `'s${i}'`).join(", ");
       for (const fn of ["get_created_claims", "get_created_claims_count"]) {
         await c.query("SAVEPOINT e");
