@@ -2092,7 +2092,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     try {
       // 120 blocks a minute apart from 1 Mar 2026 10:30, two hours; the report columns as the indexer fills them
       await c.query(`
-        ALTER TABLE ${S}.blocks ADD COLUMN size int, ADD COLUMN time_to_block numeric, ADD COLUMN total_txs int,
+        ALTER TABLE ${S}.blocks ADD COLUMN size int, ADD COLUMN time_to_block bigint, ADD COLUMN total_txs int,
           ADD COLUMN successful_txs int, ADD COLUMN failed_txs int, ADD COLUMN total_relays numeric,
           ADD COLUMN total_estimated_relays numeric, ADD COLUMN total_computed_units numeric,
           ADD COLUMN total_estimated_computed_units numeric;
