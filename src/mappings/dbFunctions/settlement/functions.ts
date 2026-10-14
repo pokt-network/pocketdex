@@ -497,12 +497,13 @@ BEGIN
   END LOOP;
 END $$;
 
--- from_session_end_height came last to get_created_claims: likewise.
+-- services came last to get_supplier_earnings and from_session_end_height to get_created_claims: likewise.
 DO $$
 DECLARE f regprocedure;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
-           JOIN (VALUES ('get_created_claims', 'from_session_end_height')) n(name, arg) ON n.name = p.proname
+           JOIN (VALUES ('get_supplier_earnings', 'services'), ('get_created_claims', 'from_session_end_height'))
+             n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
@@ -1540,10 +1541,12 @@ END $$;
 -- inside the rollup days comes from monthly_claims_by_supplier_service when that rollup holds every settlement of the month
 -- (settlement_blocks.monthly_claims_rollup) and the month has none outside those days; the other days from
 -- daily_claims_by_supplier_application_service. An owner of 1037 suppliers by service over its whole history read 3.07M
--- daily rows there (mainnet, 2026-10-09), and has 253k monthly ones.
+-- daily rows there (mainnet, 2026-10-09), and has 253k monthly ones. services (up to 200) keeps those services' claims,
+-- read from the same per-service sources as by_service (also without it, which then sums them as 'all').
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL,
+  services text[] DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, application_id text,
   claimed_upokt numeric, settled_upokt numeric, overservicing_loss_upokt numeric,
   relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, settled_claims bigint,
@@ -1556,6 +1559,7 @@ BEGIN
   -- NULL (no suppliers, owners or operators): every supplier
   suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
   all_suppliers := suppliers IS NULL;
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
   -- the rollup days, and their months, with a height whose first_height / last_height the rollups may not hold
@@ -1563,7 +1567,7 @@ ${covered("settled")}
   nb := ARRAY(SELECT DISTINCT sb.day FROM ${s}.settlement_blocks sb WHERE NOT sb.bounds_rollup AND sb.day BETWEEN rg.d1 AND rg.d2);
   nbm := ARRAY(SELECT DISTINCT date_trunc('month', u::timestamp)::date FROM unnest(nb) u);
   -- the months read from monthly_claims_by_supplier_service (mm), and the rollup days left to the daily rollup (dd)
-  use_month := by_service AND NOT by_application AND coalesce(bucket, 'month') IN ('month', 'year') AND rg.d1 <= rg.d2;
+  use_month := (by_service OR services IS NOT NULL) AND NOT by_application AND coalesce(bucket, 'month') IN ('month', 'year') AND rg.d1 <= rg.d2;
   IF use_month THEN
     mm := ARRAY(SELECT m::date FROM generate_series(date_trunc('month', rg.d1::timestamp), date_trunc('month', rg.d2::timestamp), interval '1 month') m
                 WHERE NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks sb
@@ -1581,21 +1585,22 @@ ${covered("settled")}
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof, first_settled_height, last_settled_height) AS (
   WITH r AS (
-    -- without a breakdown the smaller daily_claims_by_supplier is enough (25x fewer rows over every supplier)
+    -- without a breakdown the smaller daily_claims_by_supplier is enough (25x fewer rows over every supplier); services
+    -- reads the per-service sources, as by_service does, and sums them as 'all' without it
     SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id, ''::text service_id, ''::text application_id, d.claimed_upokt,
            d.settled_upokt, d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
            d.claim_count claims, d.claims_with_proof with_proof,
            CASE WHEN d.day <> ALL(nb) THEN d.first_height END fh, CASE WHEN d.day <> ALL(nb) THEN d.last_height END lh
     FROM ${s}.daily_claims_by_supplier d
-    WHERE NOT (by_service OR by_application) AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rg.d1 AND rg.d2
+    WHERE NOT (by_service OR by_application OR services IS NOT NULL) AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, d.application_id, d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
            d.claim_count, d.claims_with_proof,
            CASE WHEN d.day <> ALL(nb) THEN d.first_height END, CASE WHEN d.day <> ALL(nb) THEN d.last_height END
     FROM ${s}.daily_claims_by_supplier_application_service d
-    WHERE (by_service OR by_application) AND NOT use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers))
-      AND d.day BETWEEN rg.d1 AND rg.d2
+    WHERE (by_service OR by_application OR services IS NOT NULL) AND NOT use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers))
+      AND d.day BETWEEN rg.d1 AND rg.d2 AND (services IS NULL OR d.service_id = ANY(services))
     UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
@@ -1603,6 +1608,7 @@ ${covered("settled")}
            CASE WHEN d.day <> ALL(nb) THEN d.first_height END, CASE WHEN d.day <> ALL(nb) THEN d.last_height END
     FROM ${s}.daily_claims_by_supplier_application_service d
     WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.day = ANY(dd)
+      AND (services IS NULL OR d.service_id = ANY(services))
     UNION ALL
     SELECT d.month::timestamp AT TIME ZONE 'UTC', d.supplier_id, d.service_id, '', d.claimed_upokt, d.settled_upokt,
            d.overservicing_loss_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
@@ -1610,12 +1616,14 @@ ${covered("settled")}
            CASE WHEN d.month <> ALL(nbm) THEN d.first_height END, CASE WHEN d.month <> ALL(nbm) THEN d.last_height END
     FROM ${s}.monthly_claims_by_supplier_service d
     WHERE use_month AND (all_suppliers OR d.supplier_id = ANY(suppliers)) AND d.month = ANY(mm)
+      AND (services IS NULL OR d.service_id = ANY(services))
     UNION ALL
     SELECT c.block_time, c.supplier_id, c.service_id, c.application_id, c.claimed_upokt, c.settled_upokt,
            c.overservicing_loss_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, 1::bigint,
            c.settled_with_proof::int::bigint, c.height, c.height
     FROM ${s}.claim_settlements c
     WHERE (all_suppliers OR c.supplier_id = ANY(suppliers)) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
+      AND (services IS NULL OR c.service_id = ANY(services))
   )
   SELECT ${s}._bucket(bucket, r.block_time, sp.f), ${s}._bucket_end(bucket, r.block_time, sp.t), CASE WHEN by_supplier THEN r.supplier_id ELSE 'all' END,
          CASE WHEN by_service THEN r.service_id ELSE 'all' END, CASE WHEN by_application THEN r.application_id ELSE 'all' END,

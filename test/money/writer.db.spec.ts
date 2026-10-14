@@ -2771,6 +2771,45 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.equal(vrd.rows[0].n, 0);
   });
 
+  it("get_supplier_earnings keeps the claims of services, with and without by_service, from every source", async () => {
+    // the supplier and service with the most claims, among others of the supplier
+    const top = (
+      await c.query(`SELECT supplier_id, service_id FROM ${S}.claim_settlements
+                     WHERE supplier_id IN (SELECT supplier_id FROM ${S}.claim_settlements GROUP BY 1 HAVING count(DISTINCT service_id) > 1)
+                     GROUP BY 1, 2 ORDER BY count(*) DESC, 1, 2 LIMIT 1`)
+    ).rows[0];
+    assert.ok(top, "the fixtures hold a supplier with more than one service");
+    const cols = `bucket_start, claimed_upokt::text, settled_upokt::text, relays::text, compute_units::text, settled_claims::text,
+                  settled_claims_with_proof::text, first_settled_height::text, last_settled_height::text`;
+    for (const [from, to, bucket] of [
+      [null, null, "NULL"], // whole months: monthly_claims_by_supplier_service
+      [null, null, "'month'"],
+      ["2026-09-01T00:00:00Z", "2026-09-04T00:00:00Z", "'day'"], // rollup days: daily_claims_by_supplier_application_service
+      ["2026-09-01T11:00:00Z", "2026-09-01T13:00:00Z", "NULL"], // inside one day: claim_settlements
+    ]) {
+      const label = `${from} ${to} ${bucket}`;
+      const by = await c.query(
+        `SELECT ${cols} FROM ${S}.get_supplier_earnings(ARRAY[$1], $2, $3, ${bucket}, by_service => true) WHERE service_id = $4 ORDER BY 1`,
+        [top.supplier_id, from, to, top.service_id]
+      );
+      assert.ok(by.rows.length > 0, label);
+      const kept = await c.query(
+        `SELECT ${cols} FROM ${S}.get_supplier_earnings(ARRAY[$1], $2, $3, ${bucket}, services => ARRAY[$4]) ORDER BY 1`,
+        [top.supplier_id, from, to, top.service_id]
+      );
+      assert.deepEqual(kept.rows, by.rows, label);
+      const keptBy = await c.query(
+        `SELECT DISTINCT service_id FROM ${S}.get_supplier_earnings(ARRAY[$1], $2, $3, ${bucket}, by_service => true, services => ARRAY[$4])`,
+        [top.supplier_id, from, to, top.service_id]
+      );
+      assert.deepEqual(keptBy.rows, [{ service_id: top.service_id }], label);
+    }
+    await assert.rejects(
+      c.query(`SELECT * FROM ${S}.get_supplier_earnings(NULL, NULL, NULL, services => ARRAY[]::text[])`),
+      /services must have between 1 and 200 elements/
+    );
+  });
+
   it("get_supplier_earnings counts settled claims with and without a proof, from the rollup and from the base", async () => {
     const want = (
       await c.query(`SELECT supplier_id, count(*)::text n, count(*) FILTER (WHERE settled_with_proof)::text p
