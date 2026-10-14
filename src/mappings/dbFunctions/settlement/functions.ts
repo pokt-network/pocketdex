@@ -1288,6 +1288,75 @@ BEGIN
   LIMIT row_limit;
 END $$;
 
+-- The live service configs of the Staked suppliers counted per (endpoint root domain, service): configs = the configs
+-- that list the domain (once per config, whatever it repeats), as get_staked_supplier_services gives their domains;
+-- a config with no domain is in no row. total_configs and total_suppliers, the same on every row, are all those configs
+-- and their distinct suppliers, for a client to check it read everything. 472 groups over 160,488 configs on mainnet
+-- (2026-10-14; no config repeats a domain): the groups take ~0.2 s and the totals ~0.12 s through
+-- idx_suppliers_live_id and idx_ssc_live_supplier_service. Keyset paging on (domain, service_id).
+CREATE OR REPLACE FUNCTION ${s}.get_staked_domain_services(row_limit integer DEFAULT 1000, after_domain text DEFAULT NULL,
+  after_service_id text DEFAULT NULL)
+RETURNS TABLE(domain text, service_id text, configs bigint, total_configs bigint, total_suppliers bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE n_configs bigint; n_suppliers bigint;
+BEGIN
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_domain / after_service_id', row_limit;
+  END IF;
+  IF (after_domain IS NULL) <> (after_service_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both after_domain and after_service_id (the last row of the previous page), or neither';
+  END IF;
+  SELECT count(*), count(DISTINCT c.supplier_id) INTO n_configs, n_suppliers
+  FROM ${s}.supplier_service_configs c
+  JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+    AND ${newestSupplier("su")}
+  WHERE upper_inf(c._block_range) AND ${newestConfig("c")};
+  RETURN QUERY
+  SELECT d.x, c.service_id, count(*)::bigint, n_configs, n_suppliers
+  FROM ${s}.supplier_service_configs c
+  JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+    AND ${newestSupplier("su")}
+  CROSS JOIN LATERAL (
+    SELECT DISTINCT e.x FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.domains) = 'array' THEN c.domains ELSE '[]'::jsonb END) e(x)
+  ) d
+  WHERE upper_inf(c._block_range) AND ${newestConfig("c")}
+    AND (after_domain IS NULL OR d.x >= after_domain)
+    AND (after_domain IS NULL OR (d.x, c.service_id) > (after_domain, after_service_id))
+  GROUP BY 1, 2
+  ORDER BY 1, 2
+  LIMIT row_limit;
+END $$;
+
+-- The Staked suppliers now, one row each in supplier_id order: owner, operator, stake, and the services and endpoint
+-- root domains of their live configs (empty arrays without one): the suppliers { serviceConfigs } walk consumers made.
+-- Keyset paging on supplier_id: a stable key, so a walk neither skips nor repeats a supplier whose stake changes
+-- meanwhile. A page of 1000 takes ~0.16 s on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id
+-- and idx_ssc_live_supplier_service; the newest live version of each supplier and config only.
+CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers(row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL)
+RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[])
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_supplier_id', row_limit;
+  END IF;
+  RETURN QUERY
+  SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
+         ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c
+               WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1),
+         -- the newest live config of each service (DISTINCT ON over the supplier's ~35: 0.16 s a page; the anti-join
+         -- of newestConfig per supplier took 0.45-0.9 s)
+         ARRAY(SELECT DISTINCT e.x
+               FROM (SELECT DISTINCT ON (c.service_id) c.domains FROM ${s}.supplier_service_configs c
+                     WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY c.service_id, lower(c._block_range) DESC) c,
+                 jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.domains) = 'array' THEN c.domains ELSE '[]'::jsonb END) e(x)
+               ORDER BY 1)
+  FROM ${s}.suppliers su
+  WHERE upper_inf(su._block_range) AND su.stake_status::text = 'Staked' AND ${newestSupplier("su")}
+    AND (after_supplier_id IS NULL OR su.id > after_supplier_id)
+  ORDER BY su.id
+  LIMIT row_limit;
+END $$;
+
 -- Created claims (MsgCreateClaim) counted per supplier, for up to 20 suppliers, in [range_start, range_end): what
 -- msgCreateClaims { totalCount } answered, which get_created_claims can only list row by row. One row per requested
 -- supplier, 0 when it made none, with the first and last height counted. Covers the indexed blocks (_block_heights of

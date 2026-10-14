@@ -1544,6 +1544,63 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_supplier_services(${args})`), err);
         await c.query("ROLLBACK TO SAVEPOINT e");
       }
+      // per (domain, service): each config once per distinct domain (s3's svc-y repeats a.net), none for no domain, the
+      // same counts as get_staked_supplier_services regrouped, and the totals on every row
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s3', 'svc-y', '["a.net", "a.net"]', 8, int8range(1, NULL))`);
+      const groups = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', domain, service_id, configs, total_configs, total_suppliers) k
+                         FROM ${S}.get_staked_domain_services(${args})`)
+        ).rows.map((r) => String(r.k));
+      const want = ["a.net svc-x 1 4 2", "a.net svc-y 2 4 2", "b.io svc-y 1 4 2"];
+      assert.deepEqual(await groups(""), want);
+      const regrouped = await c.query(`SELECT concat_ws(' ', d, service_id, count(*)) k FROM (
+          SELECT DISTINCT r.supplier_id, r.service_id, d FROM ${S}.get_staked_supplier_services() r, unnest(r.domains) d) x
+        GROUP BY d, service_id ORDER BY d, service_id`);
+      assert.deepEqual(regrouped.rows.map((r) => `${r.k} 4 2`), want);
+      const pagedGroups: string[] = [];
+      let gpage = await groups("row_limit => 1");
+      pagedGroups.push(...gpage);
+      while (gpage.length === 1) {
+        const [dom, svc] = gpage[0].split(" ");
+        gpage = await groups(`row_limit => 1, after_domain => '${dom}', after_service_id => '${svc}'`);
+        pagedGroups.push(...gpage);
+      }
+      assert.deepEqual(pagedGroups, want);
+      for (const [args, err] of [
+        ["row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["after_domain => 'a.net'", /pass both after_domain and after_service_id/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_domain_services(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+      // the Staked suppliers one by one, s5 with no live config (empty arrays), s2 Unstaked left out
+      await c.query(`
+        ALTER TABLE ${S}.suppliers ADD COLUMN operator_id text;
+        UPDATE ${S}.suppliers SET operator_id = 'op-' || id;
+        INSERT INTO ${S}.suppliers VALUES ('s5', 'own-c', 'Staked', 70, int8range(1, NULL), 'op-s5');`);
+      const staked = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', supplier_id, owner_id, operator_id, stake_upokt, array_to_string(service_ids, ','),
+                           array_to_string(domains, ','), cardinality(service_ids), cardinality(domains)) k
+                         FROM ${S}.get_staked_suppliers(${args})`)
+        ).rows.map((r) => String(r.k));
+      const sup = ["s1 own-a op-s1 300 svc-x,svc-y a.net,b.io 2 2", "s3 own-b op-s3 500 svc-x,svc-y a.net 2 1", "s5 own-c op-s5 70   0 0"];
+      assert.deepEqual(await staked(""), sup);
+      assert.deepEqual(await staked("row_limit => 2, after_supplier_id => 's1'"), sup.slice(1));
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(row_limit => 0)`), /row_limit must be between 1 and 1000/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
+      // a restake left two live versions for a moment: s1's newer one is Unstaked, s3's svc-x config has a newer one on
+      // z.io; every function reads the newer versions only
+      await c.query("SAVEPOINT dup");
+      await c.query(`INSERT INTO ${S}.suppliers VALUES ('s1', 'own-a', 'Unstaked', 0, int8range(9, NULL), 'op-s1');
+        INSERT INTO ${S}.supplier_service_configs VALUES ('s3', 'svc-x', '["z.io"]', 9, int8range(9, NULL));`);
+      assert.deepEqual(await got(""), ["s3 svc-x own-b 500 z.io 9", "s3 svc-y own-b 500 a.net,a.net 8"]);
+      assert.deepEqual(await groups(""), ["a.net svc-y 1 2 1", "z.io svc-x 1 2 1"]);
+      assert.deepEqual(await staked(""), ["s3 own-b op-s3 500 svc-x,svc-y a.net,z.io 2 2", "s5 own-c op-s5 70   0 0"]);
+      await c.query("ROLLBACK TO SAVEPOINT dup");
     } finally {
       await c.query("ROLLBACK");
     }
