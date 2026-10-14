@@ -967,8 +967,9 @@ END $$;
 -- The suppliers that shared revenue with the addresses at any time: any version of a service config, live or closed,
 -- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). SubQuery's GIN on rev_share
 -- (jsonb_ops) serves the containment, but every stake writes a new version of the configs it lists, so a large operator
--- matches ~980k versions read from the heap: 12 s for the 7 largest operators on mainnet (2026-10-14). Unused today;
--- a config-history table kept by the indexer is to replace it.
+-- matches ~980k versions read from the heap: slow, ~12 s for the 7 largest operators on mainnet (2026-10-14). Used by
+-- operator_scope ever in get_supplier_fleet, get_claims, get_actor_lifecycle and get_supplier_penalties; a
+-- config-history table kept by the indexer is to replace it.
 CREATE OR REPLACE FUNCTION ${s}._operator_suppliers_ever(addresses text[]) RETURNS text[]
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
