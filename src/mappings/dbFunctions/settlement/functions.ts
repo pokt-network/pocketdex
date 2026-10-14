@@ -707,6 +707,21 @@ BEGIN
   END IF;
 END $$;
 
+-- The supply of each denomination at a block (the indexer's block_supplies rows of that height and their supplies):
+-- what a block page read in two requests, block_supplies then supplies by id. Two index probes (0.2 ms on mainnet,
+-- 2026-10-14); no row for a height the indexer has no supply for.
+CREATE OR REPLACE FUNCTION ${s}.get_block_supplies(height bigint)
+RETURNS TABLE(denom text, amount numeric)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF height IS NULL THEN RAISE EXCEPTION 'height is required'; END IF;
+  RETURN QUERY
+  SELECT sp.denom::text, sp.amount::numeric FROM ${s}.block_supplies bs
+  JOIN ${s}.supplies sp ON sp.id = bs.supply_id AND upper_inf(sp._block_range)
+  WHERE bs.block_id = get_block_supplies.height AND upper_inf(bs._block_range)
+  ORDER BY 1;
+END $$;
+
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct
 -- event_claim_settleds.block_id) that settlement_blocks lacks, and the settlement_gaps rows in the range
 -- ('from-to'). The distinct block ids come from a loose index scan: one index probe per settlement height,

@@ -1502,6 +1502,29 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.match(String(d.rows[0].d), /^The last indexed block at or before at_time/);
   });
 
+  it("get_block_supplies gives the supply of each denomination at a block", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`
+        CREATE TABLE ${S}.block_supplies (block_id numeric, supply_id text, _block_range int8range);
+        CREATE TABLE ${S}.supplies (id text, denom text, amount numeric, _block_range int8range);
+        INSERT INTO ${S}.block_supplies VALUES (10, 'upokt@10', int8range(10, NULL)), (10, 'mact@1', int8range(10, NULL)),
+          (11, 'upokt@11', int8range(11, NULL)), (11, 'mact@1', int8range(11, NULL));
+        INSERT INTO ${S}.supplies VALUES ('upokt@10', 'upokt', 1000, int8range(10, NULL)), ('upokt@11', 'upokt', 1005, int8range(11, NULL)),
+          ('mact@1', 'mact', 7, int8range(1, NULL));`);
+      const at = async (h: string) =>
+        (await c.query(`SELECT denom || ' ' || amount k FROM ${S}.get_block_supplies(${h})`)).rows.map((r) => r.k);
+      assert.deepEqual(await at("11"), ["mact 7", "upokt 1005"]);
+      assert.deepEqual(await at("10"), ["mact 7", "upokt 1000"]);
+      assert.deepEqual(await at("12"), []);
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_block_supplies(NULL)`), /height is required/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("get_staked_supplier_services lists the live configs of Staked suppliers and pages by keyset", async () => {
     await c.query("BEGIN");
     try {

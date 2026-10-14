@@ -235,6 +235,8 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
     "Live service configs of the Staked suppliers now, counted per (endpoint root domain, service): configs = the configs whose endpoints are on the domain (each config once, as get_staked_supplier_services gives its domains; a config with no domain is in no row). total_configs and total_suppliers repeat on every row: every live config of the Staked suppliers and their distinct suppliers, to check a read is complete. Ordered by domain, then service_id; for the next page pass the last row's domain and service_id as after_domain and after_service_id.",
   get_staked_suppliers:
     "The Staked suppliers now, one row each: owner_id, operator_id, stake_upokt, and the service_ids and endpoint root domains of their live service configs (empty arrays when they have none). Ordered by supplier_id; for the next page pass the last row's supplier_id as after_supplier_id. For a fleet by stake, with filters, use get_supplier_fleet.",
+  get_block_supplies:
+    "Supply at a block: one row per denomination with its amount (in that denomination's base unit, upokt for POKT), as the indexer recorded it for that height; no row for a height it has no supply for.",
   get_morse_claim_summary:
     "Morse migration now: the Morse accounts imported for claiming on Shannon, one row for the claimed ones and one for the unclaimed: accounts, and the sums of their liquid balance (unstaked_balance_upokt) and of the supplier and application stakes they carry. The accounts one by one: morseClaimableAccounts.",
 };
