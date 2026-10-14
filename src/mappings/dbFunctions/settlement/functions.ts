@@ -1112,6 +1112,32 @@ BEGIN
   ORDER BY 2 DESC, 1;
 END $$;
 
+-- Created claims (MsgCreateClaim) counted per supplier, for up to 20 suppliers, in [range_start, range_end): what
+-- msgCreateClaims { totalCount } answered, which get_created_claims can only list row by row. One row per requested
+-- supplier, 0 when it made none, with the first and last height counted. Covers the indexed blocks (_block_heights of
+-- the range). msg_create_claims has only GiST indexes: the busiest mainnet supplier's 30 days in 830 ms on the replica
+-- (2026-10-14), hence the cap.
+CREATE OR REPLACE FUNCTION ${s}.get_created_claims_count(suppliers text[], range_start timestamptz,
+  range_end timestamptz)
+RETURNS TABLE(supplier_id text, claims bigint, first_height bigint, last_height bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE rg record;
+BEGIN
+  IF suppliers IS NULL OR cardinality(suppliers) < 1 OR cardinality(suppliers) > 20 THEN
+    RAISE EXCEPTION 'suppliers must have between 1 and 20 elements (has %)', coalesce(cardinality(suppliers), 0);
+  END IF;
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
+  rg := ${s}._block_heights(range_start, range_end);
+  RETURN QUERY
+  SELECT u.sid, coalesce(c.n, 0)::bigint, c.lo::bigint, c.hi::bigint
+  FROM (SELECT DISTINCT unnest(suppliers) sid) u
+  LEFT JOIN LATERAL (
+    SELECT count(*) n, min(m.block_id) lo, max(m.block_id) hi FROM ${s}.msg_create_claims m
+    WHERE m.supplier_id = u.sid AND m.block_id BETWEEN rg.lo AND rg.hi
+  ) c ON true
+  ORDER BY 1;
+END $$;
+
 -- The Morse accounts the Shannon migration imported, claimed or not: how many and what they hold (liquid balance, and
 -- the supplier and application stakes to restake). Current versions of morse_claimable_accounts (57,762, 53 MB on
 -- mainnet, 2026-10-13); the accounts themselves stay a GraphQL list. PL/pgSQL, like _operator_suppliers.

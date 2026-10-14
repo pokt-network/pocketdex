@@ -2080,8 +2080,19 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         paged.push(...page);
       }
       assert.deepEqual(paged, all);
+      // the count of the same claims, per requested supplier, 0 for one that made none
+      const count = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', supplier_id, claims, first_height, last_height) k FROM ${S}.get_created_claims_count(${args})`)
+        ).rows.map((r) => String(r.k));
+      assert.deepEqual(await count("ARRAY['s2', 's1', 'nobody', 's1'], NULL, NULL"), ["nobody 0", "s1 3 100 200", "s2 1 250 250"]);
+      assert.deepEqual(await count("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), ["s1 2 200 200"]);
       const many = Array.from({ length: 21 }, (_, i) => `'s${i}'`).join(", ");
-      await assert.rejects(c.query(`SELECT * FROM ${S}.get_created_claims(ARRAY[${many}], NULL, NULL)`), /between 1 and 20 elements/);
+      for (const fn of ["get_created_claims", "get_created_claims_count"]) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(ARRAY[${many}], NULL, NULL)`), /between 1 and 20 elements/, fn);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
     } finally {
       await c.query("ROLLBACK");
     }
