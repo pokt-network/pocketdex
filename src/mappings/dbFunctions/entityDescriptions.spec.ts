@@ -32,7 +32,7 @@ for (const e of entities) {
 
 describe("entity descriptions", () => {
   it("describe every stored column of each described entity, and nothing else", () => {
-    assert.equal(Object.keys(ENTITY_DESCRIPTIONS).length, 17);
+    assert.equal(Object.keys(ENTITY_DESCRIPTIONS).length, 21);
     for (const [table, d] of Object.entries(ENTITY_DESCRIPTIONS)) {
       const entity = tableOf[table];
       assert.ok(entity, `${table} is no entity table`);

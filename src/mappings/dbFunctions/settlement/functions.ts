@@ -99,6 +99,7 @@ export const CATALOG_FUNCTIONS = [
   "get_block_stats",
   "get_relay_mining_difficulty",
   "get_created_claims",
+  "get_morse_claims",
 ];
 const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
 
@@ -118,7 +119,7 @@ const appReason =
   "WHEN -1 THEN 'UNRECOGNIZED' ELSE m.reason::text END";
 
 // get_actor_lifecycle reads one table per (kind, event): the columns each fills, by name (the others are NULL), with
-// the same actor filter, height range and keyset in every branch.
+// the same actor filter, height range and keyset in every branch. LIFECYCLE_EVENTS lists the events it takes.
 const LIFECYCLE_COLUMNS: Record<string, string> = {
   transaction_id: "text",
   stake_upokt: "numeric",
@@ -132,8 +133,10 @@ const LIFECYCLE_COLUMNS: Record<string, string> = {
   penalty_upokt: "numeric",
   previous_stake_upokt: "numeric",
   proof_validation_status: "text",
+  gateway_id: "text",
 };
 const unbonding = { unbonding_end_height: "m.unbonding_end_height", session_end_height: "m.session_end_height" };
+const delegation = { transaction_id: "m.transaction_id", application_id: "m.application_id", gateway_id: "m.gateway_id" };
 const appUnbonding = { reason: appReason, unbonding_end_height: "m.unstaking_end_height", session_end_height: "m.session_end_height" };
 const LIFECYCLE_BRANCHES: { kind: string; event: string; table: string; actor: string; cols: Record<string, string> }[] = [
   { kind: "supplier", event: "stake", table: "msg_stake_suppliers", actor: "supplier_id",
@@ -158,7 +161,56 @@ const LIFECYCLE_BRANCHES: { kind: string; event: string; table: string; actor: s
   { kind: "gateway", event: "unbonding_begin", table: "event_gateway_unbonding_begins", actor: "gateway_id",
     cols: { transaction_id: "m.transaction_id", ...unbonding } },
   { kind: "gateway", event: "unbonding_end", table: "event_gateway_unbonding_ends", actor: "gateway_id", cols: unbonding },
+  // a delegation is an event of both actors: the application's row names the gateway, the gateway's the application
+  ...(["application", "gateway"] as const).flatMap((kind) => [
+    { kind, event: "delegate", table: "msg_delegate_to_gateways", actor: `${kind}_id`, cols: delegation },
+    { kind, event: "undelegate", table: "msg_undelegate_from_gateways", actor: `${kind}_id`, cols: delegation },
+  ]),
 ];
+// get_morse_claims reads one table per kind of Morse claim, the same way: the columns each fills, by name.
+const MORSE_COLUMNS: Record<string, string> = {
+  transaction_id: "text",
+  morse_src_address: "text",
+  shannon_dest_address: "text",
+  shannon_operator_address: "text",
+  shannon_signing_address: "text",
+  morse_node_address: "text",
+  balance_upokt: "numeric",
+  stake_upokt: "numeric",
+  claim_signer_type: "text",
+  is_admin: "boolean",
+};
+const morseClaim = {
+  transaction_id: "m.transaction_id",
+  morse_src_address: "m.morse_src_address",
+  shannon_signing_address: "m.shannon_signing_address",
+  balance_upokt: "m.balance_amount",
+};
+// shannon: the columns shannon_addresses matches
+const MORSE_BRANCHES: { kind: string; table: string; shannon: string[]; cols: Record<string, string> }[] = [
+  { kind: "account", table: "msg_claim_morse_accounts", shannon: ["shannon_dest_address"],
+    cols: { ...morseClaim, shannon_dest_address: "m.shannon_dest_address" } },
+  { kind: "application", table: "msg_claim_morse_applications", shannon: ["shannon_dest_address"],
+    cols: { ...morseClaim, shannon_dest_address: "m.shannon_dest_address", stake_upokt: "m.stake_amount" } },
+  { kind: "supplier", table: "msg_claim_morse_suppliers", shannon: ["shannon_owner_address", "shannon_operator_address"],
+    cols: { ...morseClaim, shannon_dest_address: "m.shannon_owner_address", shannon_operator_address: "m.shannon_operator_address",
+      morse_node_address: "m.morse_node_address", stake_upokt: "m.stake_amount", claim_signer_type: "m.claim_signer_type::text" } },
+  { kind: "recover", table: "msg_recover_morse_accounts", shannon: ["shannon_dest_address_id"],
+    cols: { transaction_id: "m.transaction_id", morse_src_address: "m.morse_src_address",
+      shannon_dest_address: "m.shannon_dest_address_id", balance_upokt: "m.recovered_balance_amount", is_admin: "m.is_admin" } },
+];
+const morseBranches = (s: string) =>
+  MORSE_BRANCHES.map(
+    (b) => `    (SELECT m.block_id, '${b.kind}', m.id,
+            ${Object.entries(MORSE_COLUMNS).map(([c, type]) => b.cols[c] ?? `NULL::${type}`).join(", ")}
+     FROM ${s}.${b.table} m
+     WHERE (kinds IS NULL OR '${b.kind}' = ANY(kinds)) AND (morse_addresses IS NULL OR m.morse_src_address = ANY(morse_addresses))
+       AND (shannon_addresses IS NULL OR ${b.shannon.map((c) => `m.${c} = ANY(shannon_addresses)`).join(" OR ")})
+       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
+     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)`
+  ).join("\n    UNION ALL\n");
+
+const LIFECYCLE_EVENTS = [...new Set(LIFECYCLE_BRANCHES.map((b) => b.event))];
 const lifecycleBranches = (s: string) =>
   LIFECYCLE_BRANCHES.map(
     (b) => `    (SELECT m.block_id, m.${b.actor}, '${b.event}', m.id,
@@ -1201,8 +1253,9 @@ ${covered(null, true)}
   ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit;
 END $$;
 
--- An actor's stake history, one row per event, newest first: stake and unstake messages, unbonding begin and end, and
--- for suppliers the slashes (penalty, stake before and after, proof status). Reads the indexer's own message and event
+-- An actor's stake history, one row per event, newest first: stake and unstake messages, unbonding begin and end,
+-- for suppliers the slashes (penalty, stake before and after, proof status), and for applications and gateways the
+-- delegations of one to the other (delegate, undelegate). Reads the indexer's own message and event
 -- tables, so it covers the indexed blocks. kind = supplier (suppliers, owners or operators, through _supplier_ids),
 -- application or gateway (addresses, up to 200); one list is required: the tables have no block-ordered index (their
 -- block_id indexes are GiST), so a network-wide newest-first read would sort them whole. Keyset paging like get_claims,
@@ -1214,7 +1267,7 @@ CREATE OR REPLACE FUNCTION ${s}.get_actor_lifecycle(kind text, addresses text[],
 RETURNS TABLE(height bigint, block_time timestamptz, actor_id text, event text, id text, transaction_id text,
   stake_upokt numeric, owner_id text, reason text, unbonding_end_height bigint, session_end_height bigint,
   service_id text, application_id text, session_id text, penalty_upokt numeric, previous_stake_upokt numeric,
-  proof_validation_status text, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+  proof_validation_status text, gateway_id text, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE cv record; rg record; ids text[]; bh numeric;
 BEGIN
@@ -1224,8 +1277,8 @@ BEGIN
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
   END IF;
-  IF events IS NOT NULL AND NOT events <@ ARRAY['stake', 'unstake', 'unbonding_begin', 'unbonding_end', 'slash'] THEN
-    RAISE EXCEPTION 'events takes stake, unstake, unbonding_begin, unbonding_end and slash (has %)', events;
+  IF events IS NOT NULL AND NOT events <@ ARRAY[${LIFECYCLE_EVENTS.map((e) => `'${e}'`).join(", ")}] THEN
+    RAISE EXCEPTION 'events takes ${LIFECYCLE_EVENTS.join(", ")} (has %)', events;
   END IF;
   IF (before_height IS NULL) <> (before_id IS NULL) THEN
     RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
@@ -1252,15 +1305,66 @@ ${covered(null, true)}
   RETURN QUERY
   WITH e(height, actor_id, event, id, transaction_id, stake_upokt, owner_id, reason, unbonding_end_height,
          session_end_height, service_id, application_id, session_id, penalty_upokt, previous_stake_upokt,
-         proof_validation_status) AS (
+         proof_validation_status, gateway_id) AS (
 ${lifecycleBranches(s)}
   )
   SELECT e.height::bigint, bl.timestamp AT TIME ZONE 'UTC', e.actor_id, e.event, e.id, e.transaction_id, e.stake_upokt,
          e.owner_id, e.reason, e.unbonding_end_height::bigint, e.session_end_height::bigint, e.service_id,
          e.application_id, e.session_id, e.penalty_upokt, e.previous_stake_upokt, e.proof_validation_status,
-         cv.covered_from, cv.covered_to, cv.gaps
+         e.gateway_id, cv.covered_from, cv.covered_to, cv.gaps
   FROM e JOIN ${s}.blocks bl ON bl.id = e.height
   ORDER BY e.height DESC, e.id DESC LIMIT row_limit;
+END $$;
+
+-- Morse claims one by one, newest first: an account's balance (account), an application's or a supplier's stake and
+-- balance (application, supplier: its owner as shannon_dest_address, its operator, the services it claimed), and the
+-- authority's recoveries (recover). Filters, combined: morse_addresses (up to 200, lowercase hex as in morse_claimable_accounts),
+-- shannon_addresses (up to 200: the destination; for a supplier its owner or operator), kinds (NULL = all). The four
+-- message tables are small (8.8k supplier claims, 1.6k account claims, 0.6k recoveries on mainnet, 2026-10-14), so a
+-- read with no list sorts them whole. Keyset paging on (height, id), like get_actor_lifecycle. Covers the indexed
+-- blocks. The accounts that can be claimed are the morseClaimableAccounts list, and get_morse_claim_summary sums them.
+CREATE OR REPLACE FUNCTION ${s}.get_morse_claims(morse_addresses text[], shannon_addresses text[],
+  range_start timestamptz, range_end timestamptz, kinds text[] DEFAULT NULL, row_limit integer DEFAULT 100,
+  before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
+RETURNS TABLE(height bigint, block_time timestamptz, kind text, id text, transaction_id text, morse_src_address text,
+  shannon_dest_address text, shannon_operator_address text, shannon_signing_address text, morse_node_address text,
+  balance_upokt numeric, stake_upokt numeric, service_ids text[], claim_signer_type text, is_admin boolean,
+  covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; rg record; bh numeric;
+BEGIN
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
+  IF morse_addresses IS NOT NULL THEN PERFORM ${s}._validate(morse_addresses, 'morse_addresses', NULL, NULL, NULL); END IF;
+  IF shannon_addresses IS NOT NULL THEN PERFORM ${s}._validate(shannon_addresses, 'shannon_addresses', NULL, NULL, NULL); END IF;
+  IF kinds IS NOT NULL AND NOT kinds <@ ARRAY[${MORSE_BRANCHES.map((b) => `'${b.kind}'`).join(", ")}] THEN
+    RAISE EXCEPTION 'kinds takes ${MORSE_BRANCHES.map((b) => b.kind).join(", ")} (has %)', kinds;
+  END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
+  END IF;
+  IF (before_height IS NULL) <> (before_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
+  END IF;
+${covered(null, true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  bh := coalesce(before_height, 9223372036854775807);
+  RETURN QUERY
+  WITH c(height, kind, id, ${Object.keys(MORSE_COLUMNS).join(", ")}) AS (
+${morseBranches(s)}
+  )
+  SELECT c.height::bigint, bl.timestamp AT TIME ZONE 'UTC', c.kind, c.id, c.transaction_id, c.morse_src_address,
+         c.shannon_dest_address, c.shannon_operator_address, c.shannon_signing_address, c.morse_node_address,
+         c.balance_upokt, c.stake_upokt,
+         CASE c.kind
+           WHEN 'supplier' THEN ARRAY(SELECT DISTINCT sv.service_id FROM ${s}.msg_claim_morse_supplier_services sv
+                                      WHERE sv.claim_msg_id = c.id ORDER BY 1)
+           WHEN 'application' THEN ARRAY(SELECT DISTINCT sv.service_id FROM ${s}.msg_claim_morse_application_services sv
+                                         WHERE sv.claim_msg_id = c.id ORDER BY 1)
+         END,
+         c.claim_signer_type, c.is_admin, cv.covered_from, cv.covered_to, cv.gaps
+  FROM c JOIN ${s}.blocks bl ON bl.id = c.height
+  ORDER BY c.height DESC, c.id DESC LIMIT row_limit;
 END $$;
 
 -- Block statistics per bucket from the blocks' own report columns (the indexer fills them per block): blocks, the

@@ -274,6 +274,47 @@ export const ENTITY_DESCRIPTIONS: Record<string, { table: string; columns: Recor
       application_stake_denom: "Denom of application_stake_amount; empty string when the account had no application stake.",
     },
   },
+  delegations: {
+    table: `One row per delegation (validator, delegator), as the chain's staking module holds it: the indexer reconciles them with the chain when a validator's delegator shares change and closes the row of a delegation that ended. ${HISTORY}`,
+    columns: {
+      id: "validator_operator-delegator.",
+      validator_operator: "Operator address of the validator (poktvaloper...).",
+      delegator: "Address of the delegating account.",
+      shares: "Delegator shares as the chain's LegacyDec atomics (the shares times 10^18), a string.",
+    },
+  },
+  module_accounts: {
+    table: "The chain's module accounts as of genesis, one row per address (read once at the genesis height, not updated after); their balances are in balances.",
+    columns: {
+      id: "Module account address.",
+      name: "Module name (bank, application, bonded_tokens_pool, ...).",
+      account_number: "Account number at genesis.",
+      sequence: "Sequence at genesis.",
+      permissions: "Module permissions at genesis (minter, burner, staking), a JSON array.",
+    },
+  },
+  authzs: {
+    table: `One row per authz grant (granter, message type, grantee), from the grant message or, for a grant made outside a transaction, the grant event; a later grant of the same key replaces it. Revocations are not indexed: a revoked grant keeps its row. ${HISTORY}`,
+    columns: {
+      id: "granter:message type (without the leading slash)-grantee.",
+      granter_id: "Granter address (Account id).",
+      grantee_id: "Grantee address (Account id).",
+      type: "Authorization type URL (/cosmos.authz.v1beta1.GenericAuthorization, ...); cosmos.authz.v1beta1.EventGrant when the grant came from an event, whose authorization the indexer does not see.",
+      msg: "Type URL of the message the grant authorizes.",
+      expiration: "When the grant expires, UTC; null when it has none or came from an event.",
+      event_id: "Id of the grant event (Event id).",
+      block_id: "Height of the grant (Block id).",
+    },
+  },
+  block_metadata: {
+    table: "One row per indexed block, keyed by height: its CometBFT block id, header and last commit as JSON, as the indexer received them.",
+    columns: {
+      id: "Block height.",
+      block_id: "The block's CometBFT BlockID: hash and part set header (parts), JSON.",
+      header: "The block's CometBFT header, JSON.",
+      last_commit: "The block's last commit (the signatures of the previous block), JSON.",
+    },
+  },
 };
 
 // Tables or columns missing from the database are skipped (a schema migration can still be pending), and so are the

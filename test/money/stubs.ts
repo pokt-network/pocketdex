@@ -1,5 +1,5 @@
 // The entity tables the newer catalog functions read (get_actor_lifecycle, get_relay_mining_difficulty,
-// get_created_claims, get_block_stats), reduced to their columns, with one row per height that the heights query
+// get_created_claims, get_block_stats, get_morse_claims), reduced to their columns, with one row per height that the heights query
 // returns (each height needs its blocks row): supplier sup-l, application app-l, service svc-d; and the blocks' report
 // columns. Run inside the test's transaction.
 export const entityStubsSql = (S: string, heights: string): string => `
@@ -31,6 +31,19 @@ export const entityStubsSql = (S: string, heights: string): string => `
         session_end_height numeric, block_id numeric);
       CREATE TABLE ${S}.event_relay_mining_difficulty_updateds (service_id text, prev_target_hash_hex_encoded text,
         new_target_hash_hex_encoded text, prev_num_relays_ema numeric, new_num_relays_ema numeric, block_id numeric);
+      CREATE TABLE ${S}.msg_delegate_to_gateways (id text, application_id text, gateway_id text, block_id numeric, transaction_id text);
+      CREATE TABLE ${S}.msg_undelegate_from_gateways (LIKE ${S}.msg_delegate_to_gateways);
+      CREATE TABLE ${S}.msg_claim_morse_accounts (id text, shannon_signing_address text, shannon_dest_address text,
+        morse_src_address text, balance_amount numeric, block_id numeric, transaction_id text);
+      CREATE TABLE ${S}.msg_claim_morse_applications (id text, shannon_signing_address text, shannon_dest_address text,
+        morse_src_address text, stake_amount numeric, balance_amount numeric, block_id numeric, transaction_id text);
+      CREATE TABLE ${S}.msg_claim_morse_application_services (id text, claim_msg_id text, service_id text);
+      CREATE TABLE ${S}.msg_claim_morse_suppliers (id text, shannon_signing_address text, shannon_owner_address text,
+        shannon_operator_address text, morse_src_address text, morse_node_address text, claim_signer_type text,
+        stake_amount numeric, balance_amount numeric, block_id numeric, transaction_id text);
+      CREATE TABLE ${S}.msg_claim_morse_supplier_services (id text, claim_msg_id text, service_id text);
+      CREATE TABLE ${S}.msg_recover_morse_accounts (id text, shannon_dest_address_id text, morse_src_address text,
+        recovered_balance_amount numeric, is_admin boolean, block_id numeric, transaction_id text);
       CREATE TABLE ${S}.msg_create_claims (id text, supplier_id text, application_id text, service_id text, session_id text,
         session_end_height numeric, num_relays numeric, num_estimated_relays numeric, num_claimed_computed_units numeric,
         num_estimated_computed_units numeric, claimed_amount numeric, transaction_id text, block_id numeric);
@@ -41,4 +54,6 @@ export const entityStubsSql = (S: string, heights: string): string => `
       INSERT INTO ${S}.event_relay_mining_difficulty_updateds SELECT 'svc-d', 'ff', 'fe', 10, 20, b.id
         FROM (${heights}) b(id);
       INSERT INTO ${S}.msg_create_claims SELECT 'mc' || b.id, 'sup-l', 'app-l', 'svc-d', 'sess' || b.id, b.id, 5, 6, 7, 8, 9,
-        'tx' || b.id, b.id FROM (${heights}) b(id);`;
+        'tx' || b.id, b.id FROM (${heights}) b(id);
+      INSERT INTO ${S}.msg_claim_morse_accounts SELECT 'mm' || b.id, 'pokt-sign', 'pokt-dest', 'MORSE' || b.id, 100, b.id,
+        'tx' || b.id FROM (${heights}) b(id);`;

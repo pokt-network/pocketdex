@@ -1624,7 +1624,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
        ORDER BY 1`,
       [S]
     );
-    assert.deepEqual(k.rows.map((r) => r.proname), ["get_actor_lifecycle", "get_claims", "get_created_claims", "get_relay_mining_difficulty"]);
+    assert.deepEqual(k.rows.map((r) => r.proname), [
+      "get_actor_lifecycle", "get_claims", "get_created_claims", "get_morse_claims", "get_relay_mining_difficulty",
+    ]);
   });
 
   it("get_claims lists settled and expired claims newest first through each index walk, and pages by keyset", async () => {
@@ -1773,6 +1775,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           block_id numeric, transaction_id text);
         CREATE TABLE ${S}.event_gateway_unbonding_ends (id text, gateway_id text, unbonding_end_height numeric, session_end_height numeric,
           block_id numeric);
+        CREATE TABLE ${S}.msg_delegate_to_gateways (id text, application_id text, gateway_id text, block_id numeric, transaction_id text);
+        CREATE TABLE ${S}.msg_undelegate_from_gateways (LIKE ${S}.msg_delegate_to_gateways);
+        INSERT INTO ${S}.msg_delegate_to_gateways VALUES ('dg1', 'a1', 'g1', 180, 'tx8');
+        INSERT INTO ${S}.msg_undelegate_from_gateways VALUES ('ug1', 'a1', 'g1', 190, 'tx9');
         INSERT INTO ${S}.msg_stake_suppliers VALUES ('ms1', 's1', 'own-a', 1000, 100, 'tx1'), ('ms2', 's1', 'own-a', 1500, 200, 'tx2'),
           ('ms3', 's2', 'own-b', 900, 150, 'tx3');
         INSERT INTO ${S}.event_supplier_slasheds VALUES ('sl1', 's1', 'a1', 'svc', 'sess1', 240, 'PENDING_VALIDATION', 10, 1500, 1490, 250);
@@ -1814,12 +1820,19 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["'supplier', ARRAY['s1'], '2026-03-01T04:00:00Z', '2026-03-01T05:00:00Z'", ["290 s1 unstake mu1 - - -", "250 s1 slash sl1 1490 - 10"]],
         // the application events keep the proto number (0 elective, 1 below the minimum stake, 2 migration); the rows name
         // it as the Application entity does; -1, stored for an end reason the indexer did not recognize, is UNRECOGNIZED
-        ["'application', ARRAY['a1'], NULL, NULL", ["130 a1 unbonding_end ae1 - BELOW_MINIMUM_STAKE -", "120 a1 unbonding_begin ab1 - BELOW_MINIMUM_STAKE -", "110 a1 stake ma1 500 - -"]],
+        ["'application', ARRAY['a1'], NULL, NULL", [
+          "190 a1 undelegate ug1 - - -", "180 a1 delegate dg1 - - -",
+          "130 a1 unbonding_end ae1 - BELOW_MINIMUM_STAKE -", "120 a1 unbonding_begin ab1 - BELOW_MINIMUM_STAKE -", "110 a1 stake ma1 500 - -",
+        ]],
         ["'application', ARRAY['a2', 'a3'], NULL, NULL", [
           "180 a3 unbonding_end ae3 - UNRECOGNIZED -", "170 a2 unbonding_end ae2 - ELECTIVE -",
           "150 a3 unbonding_begin ab3 - MIGRATION -", "140 a2 unbonding_begin ab2 - ELECTIVE -",
         ]],
-        ["'gateway', ARRAY['g1'], NULL, NULL", ["170 g1 unbonding_begin gb1 - - -", "160 g1 unstake mgu1 - - -", "140 g1 stake mg1 700 - -"]],
+        ["'gateway', ARRAY['g1'], NULL, NULL", [
+          "190 g1 undelegate ug1 - - -", "180 g1 delegate dg1 - - -",
+          "170 g1 unbonding_begin gb1 - - -", "160 g1 unstake mgu1 - - -", "140 g1 stake mg1 700 - -",
+        ]],
+        ["'gateway', ARRAY['g1'], NULL, NULL, events => ARRAY['delegate', 'undelegate']", ["190 g1 undelegate ug1 - - -", "180 g1 delegate dg1 - - -"]],
         ["'gateway', ARRAY['nobody'], NULL, NULL", []],
       ] as const)
         assert.deepEqual([args, await got(args)], [args, want]);
@@ -1834,6 +1847,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       }
       assert.deepEqual(paged, s1);
       const t = (await c.query(`SELECT block_time, transaction_id FROM ${S}.get_actor_lifecycle('supplier', ARRAY['s1'], NULL, NULL, events => ARRAY['unstake'])`)).rows;
+      // each side of a delegation names the other
+      const dg = (await c.query(`SELECT actor_id, application_id, gateway_id, transaction_id FROM ${S}.get_actor_lifecycle('application', ARRAY['a1'], NULL, NULL, events => ARRAY['delegate'])`)).rows;
+      assert.deepEqual(dg, [{ actor_id: "a1", application_id: "a1", gateway_id: "g1", transaction_id: "tx8" }]);
       assert.deepEqual(t, [{ block_time: new Date("2026-03-01T04:50:00Z"), transaction_id: "tx4" }]);
       for (const [args, err] of [
         ["'validator', ARRAY['v1'], NULL, NULL", /kind is supplier, application or gateway/],
@@ -1847,6 +1863,71 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ] as const) {
         await c.query("SAVEPOINT e");
         await assert.rejects(c.query(`SELECT * FROM ${S}.get_actor_lifecycle(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_morse_claims lists each kind of Morse claim newest first, with its services, and pages by keyset", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`
+        INSERT INTO ${S}.blocks SELECT g, '2026-03-01'::timestamp + g * interval '1 minute' FROM generate_series(100, 400, 10) g;
+        CREATE TABLE ${S}.msg_claim_morse_accounts (id text, shannon_signing_address text, shannon_dest_address text,
+          morse_src_address text, balance_amount numeric, block_id numeric, transaction_id text);
+        CREATE TABLE ${S}.msg_claim_morse_applications (id text, shannon_signing_address text, shannon_dest_address text,
+          morse_src_address text, stake_amount numeric, balance_amount numeric, block_id numeric, transaction_id text);
+        CREATE TABLE ${S}.msg_claim_morse_application_services (id text, claim_msg_id text, service_id text);
+        CREATE TABLE ${S}.msg_claim_morse_suppliers (id text, shannon_signing_address text, shannon_owner_address text,
+          shannon_operator_address text, morse_src_address text, morse_node_address text, claim_signer_type text,
+          stake_amount numeric, balance_amount numeric, block_id numeric, transaction_id text);
+        CREATE TABLE ${S}.msg_claim_morse_supplier_services (id text, claim_msg_id text, service_id text);
+        CREATE TABLE ${S}.msg_recover_morse_accounts (id text, shannon_dest_address_id text, morse_src_address text,
+          recovered_balance_amount numeric, is_admin boolean, block_id numeric, transaction_id text);
+        INSERT INTO ${S}.msg_claim_morse_accounts VALUES ('acc1', 'sign1', 'dest1', 'M1', 100, 100, 'tx1');
+        INSERT INTO ${S}.msg_claim_morse_applications VALUES ('app1', 'sign2', 'dest2', 'M2', 500, 7, 200, 'tx2');
+        INSERT INTO ${S}.msg_claim_morse_application_services VALUES ('as1', 'app1', 'svc-b'), ('as2', 'app1', 'svc-a');
+        INSERT INTO ${S}.msg_claim_morse_suppliers VALUES ('sup1', 'sign3', 'own3', 'op3', 'M3', 'NODE3', 'CLAIM_SIGNER_TYPE_OPERATOR', 900, 9, 300, 'tx3');
+        INSERT INTO ${S}.msg_claim_morse_supplier_services VALUES ('ss1', 'sup1', 'svc-a'), ('ss2', 'sup1', 'svc-a');
+        INSERT INTO ${S}.msg_recover_morse_accounts VALUES ('rec1', 'dest1', 'M4', 40, true, 300, 'tx4');`);
+      const got = async (args: string) =>
+        (
+          await c.query(
+            `SELECT height || ' ' || kind || ' ' || id || ' ' || morse_src_address || ' ' || coalesce(shannon_dest_address, '-') || ' '
+                    || coalesce(shannon_operator_address, '-') || ' ' || coalesce(balance_upokt::text, '-') || ' '
+                    || coalesce(stake_upokt::text, '-') || ' ' || coalesce(array_to_string(service_ids, ','), '-') || ' '
+                    || coalesce(claim_signer_type, '-') || ' ' || coalesce(is_admin::text, '-') k
+             FROM ${S}.get_morse_claims(${args})`
+          )
+        ).rows.map((r) => String(r.k));
+      const all = [
+        "300 supplier sup1 M3 own3 op3 9 900 svc-a CLAIM_SIGNER_TYPE_OPERATOR -",
+        "300 recover rec1 M4 dest1 - 40 - - - true",
+        "200 application app1 M2 dest2 - 7 500 svc-a,svc-b - -",
+        "100 account acc1 M1 dest1 - 100 - - - -",
+      ];
+      for (const [args, want] of [
+        ["NULL, NULL, NULL, NULL", all],
+        ["ARRAY['M2', 'M4'], NULL, NULL, NULL", [all[1], all[2]]],
+        ["NULL, ARRAY['dest1'], NULL, NULL", [all[1], all[3]]],
+        ["NULL, ARRAY['op3'], NULL, NULL", [all[0]]],
+        ["NULL, ARRAY['dest1'], NULL, NULL, kinds => ARRAY['account']", [all[3]]],
+        ["NULL, NULL, '2026-03-01T03:00:00Z', '2026-03-01T04:00:00Z'", [all[2]]],
+        ["NULL, NULL, NULL, NULL, row_limit => 1, before_height => 300, before_id => 'sup1'", [all[1]]],
+        ["NULL, NULL, NULL, NULL, row_limit => 2, before_height => 300, before_id => 'rec1'", [all[2], all[3]]],
+        ["ARRAY['nobody'], NULL, NULL, NULL", []],
+      ] as const)
+        assert.deepEqual([args, await got(args)], [args, want]);
+      for (const [args, err] of [
+        ["NULL, NULL, NULL, NULL, kinds => ARRAY['validator']", /kinds takes account, application, supplier, recover/],
+        ["ARRAY[]::text[], NULL, NULL, NULL", /morse_addresses must have between 1 and 200 elements/],
+        ["NULL, NULL, NULL, NULL, before_height => 5", /pass both before_height and before_id/],
+        ["NULL, NULL, NULL, NULL, row_limit => 0", /row_limit must be between 1 and 1000/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_morse_claims(${args})`), err);
         await c.query("ROLLBACK TO SAVEPOINT e");
       }
     } finally {
@@ -2503,7 +2584,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     for (const n of STATE_FUNCTIONS) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     assert.deepEqual(catalog, [
       "get_actor_lifecycle", "get_app_auto_unstakes", "get_application_spend", "get_block_stats", "get_claims",
-      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_param_history",
+      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_param_history",
       "get_relay_mining_difficulty", "get_service_usage", "get_supplier_distribution", "get_supplier_earnings",
       "get_supplier_penalties", "get_supplier_proofs", "get_supply_flows", "get_validator_rewards", "money_coverage",
     ]);
@@ -2517,7 +2598,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     );
     assert.deepEqual(twins.rows.map((r) => r.proname), catalog.map((n) => n + "_json").sort());
     // the twins of the keyset functions hold one page (row_limit), the others every row
-    const keyset = ["get_claims_json", "get_created_claims_json", "get_actor_lifecycle_json", "get_relay_mining_difficulty_json"];
+    const keyset = [
+      "get_claims_json", "get_created_claims_json", "get_actor_lifecycle_json", "get_relay_mining_difficulty_json", "get_morse_claims_json",
+    ];
     for (const r of twins.rows) {
       const limit = keyset.includes(String(r.proname)) ? /at most row_limit/ : /no row limit/;
       assert.ok(limit.test(String(r.tag)) && !/@omit/.test(String(r.tag)), String(r.proname));
@@ -2792,6 +2875,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_block_stats: "NULL, NULL",
         get_relay_mining_difficulty: "ARRAY['svc-d'], NULL, NULL",
         get_created_claims: "ARRAY['sup-l'], NULL, NULL",
+        get_morse_claims: "NULL, NULL, NULL, NULL",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
@@ -2987,11 +3071,14 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_block_stats: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
         get_relay_mining_difficulty: "ARRAY['svc-d'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_created_claims: "ARRAY['sup-l'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_morse_claims: "NULL, NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
       // the functions that list rows one by one order them by height
-      const byHeight = ["get_param_history", "get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims"];
+      const byHeight = [
+        "get_param_history", "get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims",
+      ];
       for (const [fn, args] of Object.entries(calls)) {
         const col = byHeight.includes(fn) ? "height" : fn === "money_coverage" ? "first_height" : "bucket_start";
         // get_service_usage orders by its top rank first: newest first within each service

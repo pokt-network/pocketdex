@@ -952,13 +952,14 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       ["get_block_stats", "$1, $2"],
       ["get_relay_mining_difficulty", "ARRAY['svc-d'], $1, $2"],
       ["get_created_claims", "ARRAY['sup-l'], $1, $2"],
+      ["get_morse_claims", "NULL, NULL, $1, $2"],
     ];
     const ON_BLOCKS = [
       "get_app_auto_unstakes", "get_param_history", "get_actor_lifecycle", "get_block_stats", "get_relay_mining_difficulty",
-      "get_created_claims",
+      "get_created_claims", "get_morse_claims",
     ];
     // the functions that list rows one by one have no bucket_start
-    const NO_BUCKET = ["get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims"];
+    const NO_BUCKET = ["get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims"];
     assert.deepEqual(CALLS.map(([f]) => f).sort(), [...CATALOG_FUNCTIONS].sort());
     // and each starts from _coverage (functions.ts covered()): a new one cannot skip it
     const bodies = await c.query(
@@ -1342,7 +1343,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     );
     assert.deepEqual(twins.rows.map((r) => r.proname), [
       "get_actor_lifecycle_json", "get_app_auto_unstakes_json", "get_block_stats_json", "get_created_claims_json",
-      "get_param_history_json", "get_relay_mining_difficulty_json",
+      "get_morse_claims_json", "get_param_history_json", "get_relay_mining_difficulty_json",
     ]);
     // an earlier build's overloads (installed here by hand) are dropped by the next start, and the calls stay unambiguous
     await c.query(`
