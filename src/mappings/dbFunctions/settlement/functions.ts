@@ -1422,7 +1422,8 @@ END $$;
 -- the time between blocks and the block size. Covers the indexed blocks. The whole chain is one parallel scan of
 -- blocks (963k rows, 188 ms on the mainnet replica, 2026-10-13); a range reads idx_blocks_timestamp_id (24 hours by
 -- hour 6 ms, 92 days by day 214 ms). A block whose previous one is not indexed has time_to_block 0
--- (update_block_took), which is no interval: the average and the minimum leave it out.
+-- (update_block_took), which is no interval: the average and the minimum leave it out. time_to_block is bigint on
+-- mainnet and numeric on beta (measured 2026-10-14), hence the casts.
 CREATE OR REPLACE FUNCTION ${s}.get_block_stats(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, blocks bigint, first_height bigint, last_height bigint,
   total_txs numeric, successful_txs numeric, failed_txs numeric, relays numeric, estimated_relays numeric,
@@ -1440,7 +1441,7 @@ ${covered("blocks", true)}
            count(*)::bigint, min(bl.id)::bigint, max(bl.id)::bigint, sum(bl.total_txs)::numeric,
            sum(bl.successful_txs)::numeric, sum(bl.failed_txs)::numeric, sum(bl.total_relays), sum(bl.total_estimated_relays),
            sum(bl.total_computed_units), sum(bl.total_estimated_computed_units), round(avg(bl.time_to_block) FILTER (WHERE bl.time_to_block > 0), 3),
-           min(bl.time_to_block) FILTER (WHERE bl.time_to_block > 0), max(bl.time_to_block), round(avg(bl.size), 3)
+           min(bl.time_to_block) FILTER (WHERE bl.time_to_block > 0)::numeric, max(bl.time_to_block)::numeric, round(avg(bl.size), 3)
     FROM ${s}.blocks bl
     WHERE bl.timestamp >= range_start AT TIME ZONE 'UTC' AND bl.timestamp < range_end AT TIME ZONE 'UTC'
     GROUP BY 1, 2
