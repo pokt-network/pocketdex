@@ -117,6 +117,74 @@ const appReason =
   `CASE m.reason ${Object.entries(APP_UNBONDING_REASON_NAMES).map(([n, name]) => `WHEN ${n} THEN '${name}'`).join(" ")} ` +
   "WHEN -1 THEN 'UNRECOGNIZED' ELSE m.reason::text END";
 
+// get_actor_lifecycle reads one table per (kind, event): the columns each fills, by name (the others are NULL), with
+// the same actor filter, height range and keyset in every branch.
+const LIFECYCLE_COLUMNS: Record<string, string> = {
+  transaction_id: "text",
+  stake_upokt: "numeric",
+  owner_id: "text",
+  reason: "text",
+  unbonding_end_height: "numeric",
+  session_end_height: "numeric",
+  service_id: "text",
+  application_id: "text",
+  session_id: "text",
+  penalty_upokt: "numeric",
+  previous_stake_upokt: "numeric",
+  proof_validation_status: "text",
+};
+const unbonding = { unbonding_end_height: "m.unbonding_end_height", session_end_height: "m.session_end_height" };
+const appUnbonding = { reason: appReason, unbonding_end_height: "m.unstaking_end_height", session_end_height: "m.session_end_height" };
+const LIFECYCLE_BRANCHES: { kind: string; event: string; table: string; actor: string; cols: Record<string, string> }[] = [
+  { kind: "supplier", event: "stake", table: "msg_stake_suppliers", actor: "supplier_id",
+    cols: { transaction_id: "m.transaction_id", stake_upokt: "m.stake_amount", owner_id: "m.owner_id" } },
+  { kind: "supplier", event: "unstake", table: "msg_unstake_suppliers", actor: "supplier_id", cols: { transaction_id: "m.transaction_id" } },
+  { kind: "supplier", event: "unbonding_begin", table: "event_supplier_unbonding_begins", actor: "supplier_id",
+    cols: { reason: "m.reason::text", ...unbonding } },
+  { kind: "supplier", event: "unbonding_end", table: "event_supplier_unbonding_ends", actor: "supplier_id",
+    cols: { reason: "m.reason::text", ...unbonding } },
+  { kind: "supplier", event: "slash", table: "event_supplier_slasheds", actor: "supplier_id",
+    cols: { stake_upokt: "m.after_stake_amount", session_end_height: "m.session_end_height", service_id: "m.service_id",
+      application_id: "m.application_id", session_id: "m.session_id", penalty_upokt: "m.proof_missing_penalty",
+      previous_stake_upokt: "m.previous_stake_amount", proof_validation_status: "m.proof_validation_status::text" } },
+  { kind: "application", event: "stake", table: "msg_stake_applications", actor: "application_id",
+    cols: { transaction_id: "m.transaction_id", stake_upokt: "m.stake_amount" } },
+  { kind: "application", event: "unstake", table: "msg_unstake_applications", actor: "application_id", cols: { transaction_id: "m.transaction_id" } },
+  { kind: "application", event: "unbonding_begin", table: "event_application_unbonding_begins", actor: "application_id", cols: appUnbonding },
+  { kind: "application", event: "unbonding_end", table: "event_application_unbonding_ends", actor: "application_id", cols: appUnbonding },
+  { kind: "gateway", event: "stake", table: "msg_stake_gateways", actor: "gateway_id",
+    cols: { transaction_id: "m.transaction_id", stake_upokt: "m.stake_amount" } },
+  { kind: "gateway", event: "unstake", table: "msg_unstake_gateways", actor: "gateway_id", cols: { transaction_id: "m.transaction_id" } },
+  { kind: "gateway", event: "unbonding_begin", table: "event_gateway_unbonding_begins", actor: "gateway_id",
+    cols: { transaction_id: "m.transaction_id", ...unbonding } },
+  { kind: "gateway", event: "unbonding_end", table: "event_gateway_unbonding_ends", actor: "gateway_id", cols: unbonding },
+];
+const lifecycleBranches = (s: string) =>
+  LIFECYCLE_BRANCHES.map(
+    (b) => `    (SELECT m.block_id, m.${b.actor}, '${b.event}', m.id,
+            ${Object.entries(LIFECYCLE_COLUMNS).map(([c, type]) => b.cols[c] ?? `NULL::${type}`).join(", ")}
+     FROM ${s}.${b.table} m
+     WHERE kind = '${b.kind}' AND (events IS NULL OR '${b.event}' = ANY(events)) AND m.${b.actor} = ANY(ids)
+       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
+     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)`
+  ).join("\n    UNION ALL\n");
+
+// operator_scope (get_supplier_fleet, get_claims, get_actor_lifecycle): now (default) = operators as _supplier_ids
+// resolves them; ever = every supplier any version of whose service configs shared revenue with them
+// (_operator_suppliers_ever), in any stake status, with all its rows. list = the function's own supplier list argument.
+const OPERATOR_SCOPE_CHECK = `  IF operator_scope IS NULL OR operator_scope NOT IN ('now', 'ever') THEN
+    RAISE EXCEPTION 'operator_scope is now or ever (has %)', operator_scope;
+  END IF;`;
+const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: string, re: string, pad = "  ") =>
+  [
+    `IF operator_scope = 'ever' AND operators IS NOT NULL AND num_nonnulls(${list}, owners) = 0 THEN`,
+    `  PERFORM ${s}._validate(operators, 'operators', ${rs}, ${re}, NULL);`,
+    `  ids := ${s}._operator_suppliers_ever(operators);`,
+    `ELSE`,
+    `  ids := ${s}._supplier_ids(${list}, owners, operators, ${requireOne}, ${rs}, ${re}, NULL);`,
+    `END IF;`,
+  ].map((l) => pad + l).join("\n");
+
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
   // the reshaped helpers as SQL VALUES (name, signature or NULL): the DDL drops their other overloads
@@ -703,6 +771,19 @@ BEGIN
     ORDER BY m.supplier_id);
 END $$;
 
+-- The suppliers that shared revenue with the addresses at any time: any version of a service config, live or closed,
+-- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). SubQuery's GIN on rev_share
+-- (jsonb_ops) serves the containment: the largest operator's 1,995 suppliers (1,055 now) in 1.3 s on mainnet
+-- (2026-10-14).
+CREATE OR REPLACE FUNCTION ${s}._operator_suppliers_ever(addresses text[]) RETURNS text[]
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  RETURN ARRAY(
+    SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
+    JOIN ${s}.supplier_service_configs ssc ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a))
+    ORDER BY 1);
+END $$;
+
 -- The suppliers a supplier function answers for, from its three lists, of which it takes at most one: suppliers as given
 -- (up to 200), owners (the suppliers each owns now, no cap) or operators (_operator_suppliers, no cap). NULL = every
 -- supplier, which p_require_one refuses (get_supplier_distribution needs one of the lists).
@@ -739,7 +820,7 @@ END $$;
 -- idx_suppliers_live_id, idx_ssc_live_domains and idx_ssc_live_rev_share.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_fleet(suppliers text[] DEFAULT NULL, owners text[] DEFAULT NULL,
   operators text[] DEFAULT NULL, domains text[] DEFAULT NULL, services text[] DEFAULT NULL,
-  stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true)
+  stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true, operator_scope text DEFAULT 'now')
 RETURNS TABLE(supplier_id text, owner_id text, stake_status text, stake_upokt numeric, service_count bigint,
   supplier_count bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -748,6 +829,7 @@ BEGIN
   IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
     RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
   END IF;
+${OPERATOR_SCOPE_CHECK}
   IF domains IS NOT NULL THEN
     IF num_nonnulls(suppliers, owners, operators) > 0 THEN
       RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now), operators (the suppliers that share revenue with them now) or domains (the suppliers with a live endpoint on them)';
@@ -756,7 +838,7 @@ BEGIN
     ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
                  WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
   ELSE
-    ids := ${s}._supplier_ids(suppliers, owners, operators, false, NULL, NULL, NULL);
+${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
   END IF;
   IF services IS NOT NULL THEN
     PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
@@ -967,7 +1049,7 @@ END $$;
 CREATE OR REPLACE FUNCTION ${s}.get_claims(suppliers text[], range_start timestamptz, range_end timestamptz,
   owners text[] DEFAULT NULL, operators text[] DEFAULT NULL, applications text[] DEFAULT NULL,
   services text[] DEFAULT NULL, statuses text[] DEFAULT NULL, row_limit integer DEFAULT 100,
-  before_height bigint DEFAULT NULL, before_event_idx integer DEFAULT NULL)
+  before_height bigint DEFAULT NULL, before_event_idx integer DEFAULT NULL, operator_scope text DEFAULT 'now')
 RETURNS TABLE(status text, height bigint, event_idx integer, block_time timestamptz, supplier_id text,
   supplier_owner_id text, application_id text, service_id text, session_id text, session_end_height bigint,
   relays bigint, estimated_relays bigint, claimed_compute_units bigint, estimated_compute_units bigint,
@@ -986,7 +1068,8 @@ BEGIN
   IF (before_height IS NULL) <> (before_event_idx IS NULL) THEN
     RAISE EXCEPTION 'pass both before_height and before_event_idx (the last row of the previous page), or neither';
   END IF;
-  ids := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, NULL);
+${OPERATOR_SCOPE_CHECK}
+${scopedSupplierIds(s, "suppliers", false, "range_start", "range_end")}
   IF applications IS NOT NULL THEN PERFORM ${s}._validate(applications, 'applications', NULL, NULL, NULL); END IF;
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
 ${covered(null)}
@@ -1126,7 +1209,8 @@ END $$;
 -- on (height, id).
 CREATE OR REPLACE FUNCTION ${s}.get_actor_lifecycle(kind text, addresses text[], range_start timestamptz,
   range_end timestamptz, owners text[] DEFAULT NULL, operators text[] DEFAULT NULL, events text[] DEFAULT NULL,
-  row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
+  row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL, before_id text DEFAULT NULL,
+  operator_scope text DEFAULT 'now')
 RETURNS TABLE(height bigint, block_time timestamptz, actor_id text, event text, id text, transaction_id text,
   stake_upokt numeric, owner_id text, reason text, unbonding_end_height bigint, session_end_height bigint,
   service_id text, application_id text, session_id text, penalty_upokt numeric, previous_stake_upokt numeric,
@@ -1146,13 +1230,14 @@ BEGIN
   IF (before_height IS NULL) <> (before_id IS NULL) THEN
     RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
   END IF;
+${OPERATOR_SCOPE_CHECK}
   IF kind = 'supplier' THEN
     -- checked here so the errors name addresses, the argument the caller passed, not _supplier_ids' suppliers
     IF num_nonnulls(addresses, owners, operators) <> 1 THEN
       RAISE EXCEPTION 'pass one of addresses, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
     END IF;
     PERFORM ${s}._validate(addresses, CASE WHEN addresses IS NULL THEN '' ELSE 'addresses' END, range_start, range_end, NULL);
-    ids := ${s}._supplier_ids(addresses, owners, operators, true, range_start, range_end, NULL);
+${scopedSupplierIds(s, "addresses", true, "range_start", "range_end", "    ")}
   ELSE
     IF num_nonnulls(owners, operators) > 0 THEN
       RAISE EXCEPTION 'owners and operators apply to kind supplier';
@@ -1168,97 +1253,7 @@ ${covered(null, true)}
   WITH e(height, actor_id, event, id, transaction_id, stake_upokt, owner_id, reason, unbonding_end_height,
          session_end_height, service_id, application_id, session_id, penalty_upokt, previous_stake_upokt,
          proof_validation_status) AS (
-    (SELECT m.block_id, m.supplier_id, 'stake', m.id, m.transaction_id, m.stake_amount, m.owner_id, NULL::text,
-            NULL::numeric, NULL::numeric, NULL::text, NULL::text, NULL::text, NULL::numeric, NULL::numeric, NULL::text
-     FROM ${s}.msg_stake_suppliers m
-     WHERE kind = 'supplier' AND (events IS NULL OR 'stake' = ANY(events)) AND m.supplier_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.supplier_id, 'unstake', m.id, m.transaction_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL
-     FROM ${s}.msg_unstake_suppliers m
-     WHERE kind = 'supplier' AND (events IS NULL OR 'unstake' = ANY(events)) AND m.supplier_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.supplier_id, 'unbonding_begin', m.id, NULL, NULL, NULL, m.reason::text, m.unbonding_end_height,
-            m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.event_supplier_unbonding_begins m
-     WHERE kind = 'supplier' AND (events IS NULL OR 'unbonding_begin' = ANY(events)) AND m.supplier_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.supplier_id, 'unbonding_end', m.id, NULL, NULL, NULL, m.reason::text, m.unbonding_end_height,
-            m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.event_supplier_unbonding_ends m
-     WHERE kind = 'supplier' AND (events IS NULL OR 'unbonding_end' = ANY(events)) AND m.supplier_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.supplier_id, 'slash', m.id, NULL, m.after_stake_amount, NULL, NULL, NULL, m.session_end_height,
-            m.service_id, m.application_id, m.session_id, m.proof_missing_penalty, m.previous_stake_amount,
-            m.proof_validation_status::text
-     FROM ${s}.event_supplier_slasheds m
-     WHERE kind = 'supplier' AND (events IS NULL OR 'slash' = ANY(events)) AND m.supplier_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.application_id, 'stake', m.id, m.transaction_id, m.stake_amount, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.msg_stake_applications m
-     WHERE kind = 'application' AND (events IS NULL OR 'stake' = ANY(events)) AND m.application_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.application_id, 'unstake', m.id, m.transaction_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL
-     FROM ${s}.msg_unstake_applications m
-     WHERE kind = 'application' AND (events IS NULL OR 'unstake' = ANY(events)) AND m.application_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.application_id, 'unbonding_begin', m.id, NULL, NULL, NULL, ${appReason},
-            m.unstaking_end_height, m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.event_application_unbonding_begins m
-     WHERE kind = 'application' AND (events IS NULL OR 'unbonding_begin' = ANY(events)) AND m.application_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.application_id, 'unbonding_end', m.id, NULL, NULL, NULL, ${appReason},
-            m.unstaking_end_height, m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.event_application_unbonding_ends m
-     WHERE kind = 'application' AND (events IS NULL OR 'unbonding_end' = ANY(events)) AND m.application_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.gateway_id, 'stake', m.id, m.transaction_id, m.stake_amount, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.msg_stake_gateways m
-     WHERE kind = 'gateway' AND (events IS NULL OR 'stake' = ANY(events)) AND m.gateway_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.gateway_id, 'unstake', m.id, m.transaction_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL
-     FROM ${s}.msg_unstake_gateways m
-     WHERE kind = 'gateway' AND (events IS NULL OR 'unstake' = ANY(events)) AND m.gateway_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.gateway_id, 'unbonding_begin', m.id, m.transaction_id, NULL, NULL, NULL,
-            m.unbonding_end_height, m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.event_gateway_unbonding_begins m
-     WHERE kind = 'gateway' AND (events IS NULL OR 'unbonding_begin' = ANY(events)) AND m.gateway_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
-    UNION ALL
-    (SELECT m.block_id, m.gateway_id, 'unbonding_end', m.id, NULL, NULL, NULL, NULL, m.unbonding_end_height,
-            m.session_end_height, NULL, NULL, NULL, NULL, NULL, NULL
-     FROM ${s}.event_gateway_unbonding_ends m
-     WHERE kind = 'gateway' AND (events IS NULL OR 'unbonding_end' = ANY(events)) AND m.gateway_id = ANY(ids)
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)
+${lifecycleBranches(s)}
   )
   SELECT e.height::bigint, bl.timestamp AT TIME ZONE 'UTC', e.actor_id, e.event, e.id, e.transaction_id, e.stake_upokt,
          e.owner_id, e.reason, e.unbonding_end_height::bigint, e.session_end_height::bigint, e.service_id,
@@ -1271,9 +1266,9 @@ END $$;
 -- Block statistics per bucket from the blocks' own report columns (the indexer fills them per block): blocks, the
 -- heights they span, transactions (total, successful, failed), relays and compute units (claimed and estimated), and
 -- the time between blocks and the block size. Covers the indexed blocks. The whole chain is one parallel scan of
--- blocks (963k rows, 188 ms on the mainnet replica, 2026-10-13); a block whose previous one is not indexed has
--- time_to_block 0 (update_block_took), which is no interval: the averages and minimum leave it out. a range reads idx_blocks_timestamp_id (24 hours by
--- hour 6 ms, 92 days by day 214 ms).
+-- blocks (963k rows, 188 ms on the mainnet replica, 2026-10-13); a range reads idx_blocks_timestamp_id (24 hours by
+-- hour 6 ms, 92 days by day 214 ms). A block whose previous one is not indexed has time_to_block 0
+-- (update_block_took), which is no interval: the average and the minimum leave it out.
 CREATE OR REPLACE FUNCTION ${s}.get_block_stats(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, blocks bigint, first_height bigint, last_height bigint,
   total_txs numeric, successful_txs numeric, failed_txs numeric, relays numeric, estimated_relays numeric,

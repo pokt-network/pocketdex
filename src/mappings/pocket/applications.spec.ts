@@ -20,8 +20,13 @@ describe("application unbonding reason names", () => {
       (v): v is number => typeof v === "number" && v >= 0
     );
     assert.deepEqual(reasons, [0, 1, 2]);
-    assert.deepEqual(Object.keys(APP_UNBONDING_REASON_NAMES).map(Number), reasons, "the SQL map names exactly the proto's reasons");
-    for (const r of reasons) assert.equal(APP_UNBONDING_REASON_NAMES[r], getAppUnbondingReasonFromSDK(r), `reason ${r}`);
+    assert.deepEqual(
+      Object.keys(APP_UNBONDING_REASON_NAMES).map(Number),
+      reasons,
+      "the SQL map names exactly the proto's reasons"
+    );
+    for (const r of reasons)
+      assert.equal(APP_UNBONDING_REASON_NAMES[r], getAppUnbondingReasonFromSDK(r), `reason ${r}`);
     assert.throws(() => getAppUnbondingReasonFromSDK(3), /Unknown ApplicationUnbondingReason=3/);
   });
 });

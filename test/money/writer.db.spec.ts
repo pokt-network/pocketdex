@@ -1500,6 +1500,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["owners => ARRAY['own-a']", ["s1 own-a Staked 300 2 1", "s2 own-a Unstaking 100 0 1"]],
         ["owners => ARRAY['own-a'], stake_statuses => ARRAY['Staked'], by_supplier => false", ["all  all 300  1"]],
         ["operators => ARRAY['op-1']", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1"]],
+        // ever: also the suppliers whose configs shared revenue with op-1 before, in any status
+        ["operators => ARRAY['op-1'], operator_scope => 'ever'", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1", "s4 own-b Unstaked 50 0 1"]],
+        ["operators => ARRAY['op-1'], operator_scope => 'ever', stake_statuses => ARRAY['Unstaked']", ["s4 own-b Unstaked 50 0 1"]],
+        ["operators => ARRAY['op-2'], operator_scope => 'ever'", ["s3 own-b Staked 500 1 1"]],
         ["domains => ARRAY['a.net']", ["s1 own-a Staked 300 2 1"]],
         ["domains => ARRAY['b.io'], stake_statuses => ARRAY['Staked'], by_supplier => false", ["all  all 800  2"]],
         ["suppliers => ARRAY['s4', 's3']", ["s3 own-b Staked 500 1 1", "s4 own-b Unstaked 50 0 1"]],
@@ -1593,6 +1597,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       }
       for (const [args, err] of [
         ["owners => ARRAY['own-a'], domains => ARRAY['a.net']", /pass one of suppliers, owners/],
+        ["operators => ARRAY['op-1'], operator_scope => 'past'", /operator_scope is now or ever \(has past\)/],
+        ["operators => ARRAY['op-1'], owners => ARRAY['own-a'], operator_scope => 'ever'", /pass one of suppliers, owners/],
+        ["operators => ARRAY[]::text[], operator_scope => 'ever'", /operators must have between 1 and 200 elements/],
         ["stake_statuses => ARRAY['Bonded']", /stake_statuses takes Staked, Unstaking and Unstaked/],
         ["domains => ARRAY[]::text[]", /domains must have between 1 and 200 elements/],
       ] as const) {
@@ -1662,7 +1669,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
          UNION ALL SELECT 'idle-' || g, 'owner-f', 'Staked', int8range(1, NULL) FROM generate_series(1, 250) g`,
         [sups]
       );
+      await c.query(`CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range)`);
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ($1, 'svc', '[{"address": "op-old"}]', int8range(1, 2))`, [
+        one.supplier_id,
+      ]);
       for (const [args, where, from, to, statuses] of [
+        [`NULL, NULL, NULL, operators => ARRAY['op-old'], operator_scope => 'ever', row_limit => 1000`, `t.supplier_id = '${one.supplier_id}'`, null, null, undefined],
         ["NULL, NULL, NULL, row_limit => 1000", "true", null, null, undefined],
         [`ARRAY['${one.supplier_id}'], NULL, NULL, row_limit => 1000`, `t.supplier_id = '${one.supplier_id}'`, null, null, undefined],
         ["NULL, NULL, NULL, owners => ARRAY['owner-f'], row_limit => 1000", "true", null, null, undefined],
@@ -1774,7 +1786,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         INSERT INTO ${S}.event_application_unbonding_ends VALUES ('ae2', 'a2', 0, 110, 130, 170), ('ae3', 'a3', -1, 110, 130, 180);
         INSERT INTO ${S}.msg_stake_gateways VALUES ('mg1', 'g1', 700, 140, 'tx6');
         INSERT INTO ${S}.msg_unstake_gateways VALUES ('mgu1', 'g1', 160, 'tx7');
-        INSERT INTO ${S}.event_gateway_unbonding_begins VALUES ('gb1', 'g1', 200, 160, 170, 'tx7');`);
+        INSERT INTO ${S}.event_gateway_unbonding_begins VALUES ('gb1', 'g1', 200, 160, 170, 'tx7');
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range);
+        INSERT INTO ${S}.supplier_service_configs VALUES ('s1', 'svc', '[{"address": "op-x"}]', int8range(1, 50));`);
       const got = async (args: string) =>
         (
           await c.query(
@@ -1794,6 +1808,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       for (const [args, want] of [
         ["'supplier', ARRAY['s1'], NULL, NULL", s1],
         ["'supplier', NULL, NULL, NULL, owners => ARRAY['own-a']", s1],
+        ["'supplier', NULL, NULL, NULL, operators => ARRAY['op-x']", []],
+        ["'supplier', NULL, NULL, NULL, operators => ARRAY['op-x'], operator_scope => 'ever'", s1],
         ["'supplier', ARRAY['s1', 's2'], NULL, NULL, events => ARRAY['stake']", ["200 s1 stake ms2 1500 - -", "150 s2 stake ms3 900 - -", "100 s1 stake ms1 1000 - -"]],
         ["'supplier', ARRAY['s1'], '2026-03-01T04:00:00Z', '2026-03-01T05:00:00Z'", ["290 s1 unstake mu1 - - -", "250 s1 slash sl1 1490 - 10"]],
         // the application events keep the proto number (0 elective, 1 below the minimum stake, 2 migration); the rows name
@@ -1825,6 +1841,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["'supplier', NULL, NULL, NULL", /pass one of addresses, owners/],
         ["'supplier', ARRAY['s1'], NULL, NULL, owners => ARRAY['own-a']", /pass one of addresses, owners/],
         ["'supplier', ARRAY[]::text[], NULL, NULL", /addresses must have between 1 and 200 elements/],
+        ["'supplier', ARRAY['s1'], NULL, NULL, operator_scope => 'past'", /operator_scope is now or ever/],
         ["'gateway', NULL, NULL, NULL", /addresses must have between 1 and 200 elements/],
         ["'supplier', ARRAY['s1'], NULL, NULL, before_height => 5", /pass both before_height and before_id/],
       ] as const) {

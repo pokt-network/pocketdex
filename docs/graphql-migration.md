@@ -25,7 +25,7 @@ functions have no `...Json`. Amounts are in upokt. In `...Json` every number is 
 | Today | Use instead |
 |---|---|
 | `suppliers(filter: {ownerId ...}) { totalCount aggregates { sum { stakeAmount } } }` | `getSupplierFleetList(owners: [...], bySupplier: false)` |
-| `suppliers(filter: {serviceConfigs: {some: {revShare: {contains: ...}}}})` | `getSupplierFleetList(operators: [...])`: the Staked suppliers that share revenue with them |
+| `suppliers(filter: {serviceConfigs: {some: {revShare: {contains: ...}}}})` | `getSupplierFleetList(operators: [...])`: the Staked suppliers that share revenue with them now; with `operatorScope: "ever"`, every supplier that ever did, in any status (filter with `stakeStatuses`) |
 | `getSupplierStatsByDomains(pDomains: [...])` | `getSupplierFleetList(domains: [...], stakeStatuses: ["Staked"], bySupplier: false)` (up to 200 domains a call) |
 | `supplierServiceConfigs(filter: {serviceId, supplier: {stakeStatus}})` | `getSupplierFleetList(services: [...], stakeStatuses: ["Staked"])` |
 | `applicationServices(filter: {serviceId, application: {stakeStatus}})`, nested `applicationServices { totalCount }` | `getApplicationFleetList(services: [...])`, its `serviceCount` / `gatewayCount` |
