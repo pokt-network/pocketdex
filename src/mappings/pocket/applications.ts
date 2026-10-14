@@ -994,6 +994,21 @@ export async function handleApplicationUnbondingBeginEvent(
   if (apps.length > 0) await store.bulkCreate("Application", apps);
 }
 
+// The chain deletes an application's gateway delegations and service configs with it (x/application
+// RemoveApplication). The unbonding-end and transfer-end handlers close them; an application the reconcile closes out
+// as Unstaked without them (an end event the indexer missed) must close them too, or its gateways stay delegated, as
+// 57 mainnet rows did whose end events were indexed before the unbonding-end handler closed delegations (dd64251).
+export async function removeApplicationDelegationsAndServices(applicationIds: Array<string>): Promise<void> {
+  const [services, gateways] = await Promise.all([
+    Promise.all(applicationIds.map(fetchAllApplicationServiceByApplicationId)),
+    Promise.all(applicationIds.map(fetchAllApplicationGatewayByApplicationId)),
+  ]);
+  await Promise.all([
+    store.bulkRemove("ApplicationService", services.flat().map(({ id }) => id)),
+    store.bulkRemove("ApplicationGateway", gateways.flat().map(({ id }) => id)),
+  ]);
+}
+
 // reconcileApplications re-syncs every application entity against the chain's
 // authoritative state at the given height via a single paginated query.
 // Same pattern as reconcileValidators — reading final state is exact and avoids
@@ -1006,6 +1021,7 @@ export async function reconcileApplications(height: number): Promise<void> {
 
   const seen = new Set<string>();
   const toUpsert: Array<Application> = [];
+  const closedOut: Array<string> = [];
 
   for (const ca of chainApps) {
     const id = ca.address;
@@ -1050,9 +1066,13 @@ export async function reconcileApplications(height: number): Promise<void> {
     app.stakeStatus = StakeStatus.Unstaked;
     app.stakeAmount = BigInt(0);
     toUpsert.push(app);
+    closedOut.push(app.id);
   }
 
   if (toUpsert.length > 0) {
     await store.bulkCreate("Application", toUpsert);
+  }
+  if (closedOut.length > 0) {
+    await removeApplicationDelegationsAndServices(closedOut);
   }
 }
