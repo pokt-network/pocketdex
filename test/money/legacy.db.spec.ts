@@ -1357,7 +1357,12 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       CREATE FUNCTION ${S}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
         bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false,
         by_supplier boolean DEFAULT true, owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
-        RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';`);
+        RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';
+      -- get_claims from before operator_scope, get_actor_lifecycle from before gateway_id
+      CREATE FUNCTION ${S}.get_claims(suppliers text[], range_start timestamptz, range_end timestamptz)
+        RETURNS TABLE(height bigint) LANGUAGE sql AS 'SELECT 1::bigint';
+      CREATE FUNCTION ${S}.get_actor_lifecycle(kind text, addresses text[], range_start timestamptz, range_end timestamptz,
+        operator_scope text DEFAULT 'now') RETURNS TABLE(height bigint) LANGUAGE sql AS 'SELECT 1::bigint';`);
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
     assert.deepEqual(await oids(), before);
@@ -1366,6 +1371,15 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     ]);
     await c.query(`SELECT * FROM ${S}.get_supplier_earnings($1, '2026-09-01T00:00:00Z', '2026-09-03T00:00:00Z')`, [
       suppliers.slice(0, 200),
+    ]);
+    const overloads = await c.query(
+      `SELECT p.proname, count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace
+         AND p.proname IN ('get_claims', 'get_claims_json', 'get_actor_lifecycle', 'get_actor_lifecycle_json') GROUP BY 1 ORDER BY 1`,
+      [S]
+    );
+    assert.deepEqual(overloads.rows, [
+      { proname: "get_actor_lifecycle", n: 1 }, { proname: "get_actor_lifecycle_json", n: 1 },
+      { proname: "get_claims", n: 1 }, { proname: "get_claims_json", n: 1 },
     ]);
   });
 

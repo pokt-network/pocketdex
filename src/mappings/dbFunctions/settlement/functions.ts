@@ -119,7 +119,7 @@ const appReason =
   "WHEN -1 THEN 'UNRECOGNIZED' ELSE m.reason::text END";
 
 // get_actor_lifecycle reads one table per (kind, event): the columns each fills, by name (the others are NULL), with
-// the same actor filter, height range and keyset in every branch. LIFECYCLE_EVENTS lists the events it takes.
+// the same actor filter, height range and keyset in every branch (keysetBranches).
 const LIFECYCLE_COLUMNS: Record<string, string> = {
   transaction_id: "text",
   stake_upokt: "numeric",
@@ -199,33 +199,62 @@ const MORSE_BRANCHES: { kind: string; table: string; shannon: string[]; cols: Re
     cols: { transaction_id: "m.transaction_id", morse_src_address: "m.morse_src_address",
       shannon_dest_address: "m.shannon_dest_address_id", balance_upokt: "m.recovered_balance_amount", is_admin: "m.is_admin" } },
 ];
+// morse_lc: morse_addresses lowercased, as the indexer stores morse_src_address
 const morseBranches = (s: string) =>
-  MORSE_BRANCHES.map(
-    (b) => `    (SELECT m.block_id, '${b.kind}', m.id,
-            ${Object.entries(MORSE_COLUMNS).map(([c, type]) => b.cols[c] ?? `NULL::${type}`).join(", ")}
-     FROM ${s}.${b.table} m
-     WHERE (kinds IS NULL OR '${b.kind}' = ANY(kinds)) AND (morse_addresses IS NULL OR m.morse_src_address = ANY(morse_addresses))
-       AND (shannon_addresses IS NULL OR ${b.shannon.map((c) => `m.${c} = ANY(shannon_addresses)`).join(" OR ")})
-       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
-     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)`
-  ).join("\n    UNION ALL\n");
+  keysetBranches(
+    s,
+    MORSE_COLUMNS,
+    MORSE_BRANCHES.map((b) => ({
+      table: b.table,
+      head: `'${b.kind}', m.id`,
+      cols: b.cols,
+      filter: `(kinds IS NULL OR '${b.kind}' = ANY(kinds)) AND (morse_lc IS NULL OR m.morse_src_address = ANY(morse_lc))
+       AND (shannon_addresses IS NULL OR ${b.shannon.map((c) => `m.${c} = ANY(shannon_addresses)`).join(" OR ")})`,
+    }))
+  );
 
-const LIFECYCLE_EVENTS = [...new Set(LIFECYCLE_BRANCHES.map((b) => b.event))];
-const lifecycleBranches = (s: string) =>
-  LIFECYCLE_BRANCHES.map(
-    (b) => `    (SELECT m.block_id, m.${b.actor}, '${b.event}', m.id,
-            ${Object.entries(LIFECYCLE_COLUMNS).map(([c, type]) => b.cols[c] ?? `NULL::${type}`).join(", ")}
+// UNION ALL of one newest-first read per table, for get_actor_lifecycle and get_morse_claims: after head, the columns
+// each branch fills by name (NULL::type for the others), its own filter, and the same height range and (height, id)
+// keyset, written once here.
+const keysetBranches = (
+  s: string,
+  columns: Record<string, string>,
+  branches: { table: string; head: string; cols: Record<string, string>; filter: string }[]
+) =>
+  branches
+    .map(
+      (b) => `    (SELECT m.block_id, ${b.head},
+            ${Object.entries(columns).map(([c, type]) => b.cols[c] ?? `NULL::${type}`).join(", ")}
      FROM ${s}.${b.table} m
-     WHERE kind = '${b.kind}' AND (events IS NULL OR '${b.event}' = ANY(events)) AND m.${b.actor} = ANY(ids)
+     WHERE ${b.filter}
        AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
      ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)`
-  ).join("\n    UNION ALL\n");
+    )
+    .join("\n    UNION ALL\n");
+// the events each kind has
+const LIFECYCLE_KIND_EVENTS = ["supplier", "application", "gateway"].map(
+  (kind) => [kind, [...new Set(LIFECYCLE_BRANCHES.filter((b) => b.kind === kind).map((b) => b.event))]] as const
+);
+const lifecycleBranches = (s: string) =>
+  keysetBranches(
+    s,
+    LIFECYCLE_COLUMNS,
+    LIFECYCLE_BRANCHES.map((b) => ({
+      table: b.table,
+      head: `m.${b.actor}, '${b.event}', m.id`,
+      cols: b.cols,
+      filter: `kind = '${b.kind}' AND (events IS NULL OR '${b.event}' = ANY(events)) AND m.${b.actor} = ANY(ids)`,
+    }))
+  );
 
 // operator_scope (get_supplier_fleet, get_claims, get_actor_lifecycle): now (default) = operators as _supplier_ids
 // resolves them; ever = every supplier any version of whose service configs shared revenue with them
 // (_operator_suppliers_ever), in any stake status, with all its rows. list = the function's own supplier list argument.
 const OPERATOR_SCOPE_CHECK = `  IF operator_scope IS NULL OR operator_scope NOT IN ('now', 'ever') THEN
     RAISE EXCEPTION 'operator_scope is now or ever (has %)', operator_scope;
+  END IF;
+  IF operator_scope = 'ever' AND operators IS NULL THEN
+    RAISE EXCEPTION 'operator_scope ever applies to operators';
   END IF;`;
 const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: string, re: string, pad = "  ") =>
   [
@@ -448,6 +477,21 @@ BEGIN
            WHERE p.pronamespace = '${s}'::regnamespace
              AND p.proname IN ('get_supplier_earnings', 'get_supplier_distribution', 'get_supplier_penalties', 'get_supplier_proofs')
              AND NOT ('operators' = ANY(coalesce(p.proargnames, '{}'))) LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
+-- operator_scope came last to get_supplier_fleet, get_claims and get_actor_lifecycle, and gateway_id to the rows of
+-- get_actor_lifecycle: likewise, a database written by an earlier build of them has those dropped first (their _json
+-- twins are rebuilt below).
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           WHERE p.pronamespace = '${s}'::regnamespace
+             AND p.proname IN ('get_supplier_fleet', 'get_claims', 'get_actor_lifecycle')
+             AND (NOT ('operator_scope' = ANY(coalesce(p.proargnames, '{}')))
+                  OR p.proname = 'get_actor_lifecycle' AND NOT ('gateway_id' = ANY(coalesce(p.proargnames, '{}')))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
 END $$;
@@ -1277,9 +1321,11 @@ BEGIN
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
   END IF;
-  IF events IS NOT NULL AND NOT events <@ ARRAY[${LIFECYCLE_EVENTS.map((e) => `'${e}'`).join(", ")}] THEN
-    RAISE EXCEPTION 'events takes ${LIFECYCLE_EVENTS.join(", ")} (has %)', events;
-  END IF;
+${LIFECYCLE_KIND_EVENTS.map(
+    ([k, evs]) => `  IF kind = '${k}' AND events IS NOT NULL AND NOT events <@ ARRAY[${evs.map((e) => `'${e}'`).join(", ")}] THEN
+    RAISE EXCEPTION 'events of kind ${k} are ${evs.join(", ")} (has %)', events;
+  END IF;`
+  ).join("\n")}
   IF (before_height IS NULL) <> (before_id IS NULL) THEN
     RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
   END IF;
@@ -1318,7 +1364,7 @@ END $$;
 
 -- Morse claims one by one, newest first: an account's balance (account), an application's or a supplier's stake and
 -- balance (application, supplier: its owner as shannon_dest_address, its operator, the services it claimed), and the
--- authority's recoveries (recover). Filters, combined: morse_addresses (up to 200, lowercase hex as in morse_claimable_accounts),
+-- authority's recoveries (recover). Filters, combined: morse_addresses (up to 200, hex in any case: the indexer stores it lowercased),
 -- shannon_addresses (up to 200: the destination; for a supplier its owner or operator), kinds (NULL = all). The four
 -- message tables are small (8.8k supplier claims, 1.6k account claims, 0.6k recoveries on mainnet, 2026-10-14), so a
 -- read with no list sorts them whole. Keyset paging on (height, id), like get_actor_lifecycle. Covers the indexed
@@ -1331,10 +1377,13 @@ RETURNS TABLE(height bigint, block_time timestamptz, kind text, id text, transac
   balance_upokt numeric, stake_upokt numeric, service_ids text[], claim_signer_type text, is_admin boolean,
   covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
-DECLARE cv record; rg record; bh numeric;
+DECLARE cv record; rg record; bh numeric; morse_lc text[];
 BEGIN
   PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
-  IF morse_addresses IS NOT NULL THEN PERFORM ${s}._validate(morse_addresses, 'morse_addresses', NULL, NULL, NULL); END IF;
+  IF morse_addresses IS NOT NULL THEN
+    PERFORM ${s}._validate(morse_addresses, 'morse_addresses', NULL, NULL, NULL);
+    morse_lc := ARRAY(SELECT lower(a) FROM unnest(morse_addresses) a);
+  END IF;
   IF shannon_addresses IS NOT NULL THEN PERFORM ${s}._validate(shannon_addresses, 'shannon_addresses', NULL, NULL, NULL); END IF;
   IF kinds IS NOT NULL AND NOT kinds <@ ARRAY[${MORSE_BRANCHES.map((b) => `'${b.kind}'`).join(", ")}] THEN
     RAISE EXCEPTION 'kinds takes ${MORSE_BRANCHES.map((b) => b.kind).join(", ")} (has %)', kinds;

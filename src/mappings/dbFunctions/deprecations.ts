@@ -12,11 +12,13 @@ export const MIGRATION_DOC = "https://github.com/pokt-network/pocketdex/blob/mai
 
 // the GraphQL lists exposed on mainnet (2026-10-14) that go, by table, with their replacement
 export const DEPRECATED_TABLES: Record<string, string> = {
-  event_claim_settleds: "getClaimsList or getClaimsJson; sums in getSupplierEarningsJson, getApplicationSpendJson, getGatewaySpendJson, getServiceUsageJson",
+  event_claim_settleds:
+    "getClaimsList or getClaimsJson; sums in getSupplierEarningsJson, getApplicationSpendJson, getGatewaySpendJson, getServiceUsageJson",
   event_claim_expireds: "getClaimsList or getClaimsJson with statuses [expired]; totals in getSupplierPenaltiesJson",
   msg_create_claims: "getCreatedClaimsList",
   msg_submit_proofs: "getSupplierProofsJson",
-  event_supplier_slasheds: "getActorLifecycleList with kind supplier and events [slash]; totals in getSupplierPenaltiesJson",
+  event_supplier_slasheds:
+    "getActorLifecycleList with kind supplier and events [slash]; totals in getSupplierPenaltiesJson",
   msg_stake_suppliers: "getActorLifecycleList with kind supplier",
   msg_unstake_suppliers: "getActorLifecycleList with kind supplier",
   event_supplier_unbonding_begins: "getActorLifecycleList with kind supplier",
@@ -28,7 +30,8 @@ export const DEPRECATED_TABLES: Record<string, string> = {
   event_gateway_unbonding_begins: "getActorLifecycleList with kind gateway",
   event_gateway_unbonding_ends: "getActorLifecycleList with kind gateway",
   msg_delegate_to_gateways: "getActorLifecycleList with kind application or gateway and events [delegate, undelegate]",
-  msg_undelegate_from_gateways: "getActorLifecycleList with kind application or gateway and events [delegate, undelegate]",
+  msg_undelegate_from_gateways:
+    "getActorLifecycleList with kind application or gateway and events [delegate, undelegate]",
   msg_stake_supplier_services: "supplierServiceConfigs",
   event_relay_mining_difficulty_updateds: "getRelayMiningDifficultyList",
   event_validator_reward_distributions: "getValidatorRewardsJson or getDelegatorIncomeJson",
@@ -45,7 +48,10 @@ const camel = (s: string) => s.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpp
 // get_supplier_stats_by_domains
 export const DEPRECATED_FUNCTIONS: Record<string, string> = {
   ...Object.fromEntries(
-    Object.keys(LEGACY_REPLACES).map((l) => [`get_${l.slice("legacy_".length)}`, `${camel(l)} (same arguments, the old JSON under data)`])
+    Object.keys(LEGACY_REPLACES).map((l) => [
+      `get_${l.slice("legacy_".length)}`,
+      `${camel(l)} (same arguments, the old JSON under data)`,
+    ])
   ),
   get_supplier_stats_by_domains: "getSupplierFleetList with domains, stakeStatuses [Staked] and bySupplier false",
 };
@@ -55,8 +61,9 @@ export const deprecatedTag = (replacement: string): string =>
 export const DEPRECATED_RELATION = `@deprecated Relations will be removed from the schema: query the related entity by its key. See ${MIGRATION_DOC}`;
 
 // Puts the @deprecated line first in each comment (any earlier one replaced), keeps the rest, and writes only the
-// comments that change: each COMMENT locks its object, and this runs on every start. Missing tables and functions are
-// skipped.
+// comments that change: each COMMENT locks its object, and this runs on every start. supply.ts rewrites the comments of
+// get_mint_breakdown_between_dates and get_burn_breakdown_between_dates on every start, so those two are marked again
+// each time, in the same transaction. Missing tables and functions are skipped.
 export function createDeprecationsFn(dbSchema: string): string {
   const s = dbSchema;
   const q = (t: string) => `'${t.replace(/'/g, "''")}'`;

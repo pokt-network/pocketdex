@@ -1599,6 +1599,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       for (const [args, err] of [
         ["owners => ARRAY['own-a'], domains => ARRAY['a.net']", /pass one of suppliers, owners/],
         ["operators => ARRAY['op-1'], operator_scope => 'past'", /operator_scope is now or ever \(has past\)/],
+        ["operator_scope => 'ever'", /operator_scope ever applies to operators/],
         ["operators => ARRAY['op-1'], owners => ARRAY['own-a'], operator_scope => 'ever'", /pass one of suppliers, owners/],
         ["operators => ARRAY[]::text[], operator_scope => 'ever'", /operators must have between 1 and 200 elements/],
         ["stake_statuses => ARRAY['Bonded']", /stake_statuses takes Staked, Unstaking and Unstaked/],
@@ -1859,6 +1860,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["'supplier', ARRAY['s1'], NULL, NULL, owners => ARRAY['own-a']", /pass one of addresses, owners/],
         ["'supplier', ARRAY[]::text[], NULL, NULL", /addresses must have between 1 and 200 elements/],
         ["'supplier', ARRAY['s1'], NULL, NULL, operator_scope => 'past'", /operator_scope is now or ever/],
+        ["'supplier', ARRAY['s1'], NULL, NULL, events => ARRAY['delegate']", /events of kind supplier are stake, unstake, unbonding_begin, unbonding_end, slash/],
+        ["'gateway', ARRAY['g1'], NULL, NULL, events => ARRAY['slash']", /events of kind gateway are stake, unstake, unbonding_begin, unbonding_end, delegate, undelegate/],
+        ["'supplier', ARRAY['s1'], NULL, NULL, operator_scope => 'ever'", /operator_scope ever applies to operators/],
         ["'gateway', NULL, NULL, NULL", /addresses must have between 1 and 200 elements/],
         ["'supplier', ARRAY['s1'], NULL, NULL, before_height => 5", /pass both before_height and before_id/],
       ] as const) {
@@ -1887,12 +1891,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         CREATE TABLE ${S}.msg_claim_morse_supplier_services (id text, claim_msg_id text, service_id text);
         CREATE TABLE ${S}.msg_recover_morse_accounts (id text, shannon_dest_address_id text, morse_src_address text,
           recovered_balance_amount numeric, is_admin boolean, block_id numeric, transaction_id text);
-        INSERT INTO ${S}.msg_claim_morse_accounts VALUES ('acc1', 'sign1', 'dest1', 'M1', 100, 100, 'tx1');
-        INSERT INTO ${S}.msg_claim_morse_applications VALUES ('app1', 'sign2', 'dest2', 'M2', 500, 7, 200, 'tx2');
+        INSERT INTO ${S}.msg_claim_morse_accounts VALUES ('acc1', 'sign1', 'dest1', 'm1', 100, 100, 'tx1');
+        INSERT INTO ${S}.msg_claim_morse_applications VALUES ('app1', 'sign2', 'dest2', 'm2', 500, 7, 200, 'tx2');
         INSERT INTO ${S}.msg_claim_morse_application_services VALUES ('as1', 'app1', 'svc-b'), ('as2', 'app1', 'svc-a');
-        INSERT INTO ${S}.msg_claim_morse_suppliers VALUES ('sup1', 'sign3', 'own3', 'op3', 'M3', 'NODE3', 'CLAIM_SIGNER_TYPE_OPERATOR', 900, 9, 300, 'tx3');
+        INSERT INTO ${S}.msg_claim_morse_suppliers VALUES ('sup1', 'sign3', 'own3', 'op3', 'm3', 'NODE3', 'CLAIM_SIGNER_TYPE_OPERATOR', 900, 9, 300, 'tx3');
         INSERT INTO ${S}.msg_claim_morse_supplier_services VALUES ('ss1', 'sup1', 'svc-a'), ('ss2', 'sup1', 'svc-a');
-        INSERT INTO ${S}.msg_recover_morse_accounts VALUES ('rec1', 'dest1', 'M4', 40, true, 300, 'tx4');`);
+        INSERT INTO ${S}.msg_recover_morse_accounts VALUES ('rec1', 'dest1', 'm4', 40, true, 300, 'tx4');`);
       const got = async (args: string) =>
         (
           await c.query(
@@ -1904,14 +1908,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           )
         ).rows.map((r) => String(r.k));
       const all = [
-        "300 supplier sup1 M3 own3 op3 9 900 svc-a CLAIM_SIGNER_TYPE_OPERATOR -",
-        "300 recover rec1 M4 dest1 - 40 - - - true",
-        "200 application app1 M2 dest2 - 7 500 svc-a,svc-b - -",
-        "100 account acc1 M1 dest1 - 100 - - - -",
+        "300 supplier sup1 m3 own3 op3 9 900 svc-a CLAIM_SIGNER_TYPE_OPERATOR -",
+        "300 recover rec1 m4 dest1 - 40 - - - true",
+        "200 application app1 m2 dest2 - 7 500 svc-a,svc-b - -",
+        "100 account acc1 m1 dest1 - 100 - - - -",
       ];
       for (const [args, want] of [
         ["NULL, NULL, NULL, NULL", all],
-        ["ARRAY['M2', 'M4'], NULL, NULL, NULL", [all[1], all[2]]],
+        // stored lowercased by the indexer, asked in any case
+        ["ARRAY['M2', 'm4'], NULL, NULL, NULL", [all[1], all[2]]],
         ["NULL, ARRAY['dest1'], NULL, NULL", [all[1], all[3]]],
         ["NULL, ARRAY['op3'], NULL, NULL", [all[0]]],
         ["NULL, ARRAY['dest1'], NULL, NULL, kinds => ARRAY['account']", [all[3]]],

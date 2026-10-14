@@ -189,9 +189,11 @@ export async function createDbFunctions(): Promise<void> {
     getTotalSupplyBetweenDatesFn,
     getOverservicedsByDelegatorAddressesAndTimesFn,
     getComputeUnitsToTokensMultiplierEvolutionFn,
+    // the @deprecated marks of the tables and functions above that leave the GraphQL schema (docs/graphql-migration.md):
+    // in the same transaction as the functions that rewrite their own comments (supply.ts), so no start publishes
+    // them unmarked
+    createDeprecationsFn,
   )
-  // the @deprecated marks of the tables and functions above that leave the GraphQL schema (docs/graphql-migration.md)
-  await createFunctions(schema, createDeprecationsFn)
 
   logger.info(`[createDbFunctions] db functions were saved successfully to schema=${schema}.`)
 

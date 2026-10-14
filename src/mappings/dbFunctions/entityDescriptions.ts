@@ -276,25 +276,6 @@ export const ENTITY_DESCRIPTIONS: Record<string, { table: string; columns: Recor
       application_stake_denom: "Denom of application_stake_amount; empty string when the account had no application stake.",
     },
   },
-  delegations: {
-    table: `One row per delegation (validator, delegator), as the chain's staking module holds it: the indexer reconciles them with the chain when a validator's delegator shares change and closes the row of a delegation that ended. ${HISTORY}`,
-    columns: {
-      id: "validator_operator-delegator.",
-      validator_operator: "Operator address of the validator (poktvaloper...).",
-      delegator: "Address of the delegating account.",
-      shares: "Delegator shares as the chain's LegacyDec atomics (the shares times 10^18), a string.",
-    },
-  },
-  module_accounts: {
-    table: "The chain's module accounts as of genesis, one row per address (read once at the genesis height, not updated after); their balances are in balances.",
-    columns: {
-      id: "Module account address.",
-      name: "Module name (bank, application, bonded_tokens_pool, ...).",
-      account_number: "Account number at genesis.",
-      sequence: "Sequence at genesis.",
-      permissions: "Module permissions at genesis (minter, burner, staking), a JSON array.",
-    },
-  },
   authzs: {
     table: `One row per authz grant (granter, message type, grantee), from the grant message or, for a grant made outside a transaction, the grant event; a later grant of the same key replaces it. Revocations are not indexed: a revoked grant keeps its row. ${HISTORY}`,
     columns: {
