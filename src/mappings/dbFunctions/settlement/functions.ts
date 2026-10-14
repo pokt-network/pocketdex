@@ -942,8 +942,7 @@ BEGIN
 END $$;
 
 -- A fleet now: the suppliers of one list (_supplier_ids: suppliers, owners or operators; or domains: the suppliers with
--- a live service config whose endpoints are on one of them, any stake status; suppliers with owners or operators keeps
--- the listed suppliers among theirs, so a client can total part of an operator's fleet in one call), or every supplier when none is given,
+-- a live service config whose endpoints are on one of them, any stake status), or every supplier when none is given,
 -- their current version only, optionally kept to those with a live config for one of services, and to some stake
 -- statuses. by_supplier: one row per supplier (its owner,
 -- status, stake and the services it has a live config for), largest stake first, then by id; false: one row for the whole
@@ -959,7 +958,7 @@ CREATE OR REPLACE FUNCTION ${s}.get_supplier_fleet(suppliers text[] DEFAULT NULL
 RETURNS TABLE(supplier_id text, owner_id text, stake_status text, stake_upokt numeric, service_count bigint,
   supplier_count bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
-DECLARE ids text[]; sids text[]; keep text[];
+DECLARE ids text[]; sids text[];
 BEGIN
   IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
     RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
@@ -973,14 +972,7 @@ ${OPERATOR_SCOPE_CHECK}
     ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
                  WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
   ELSE
-    -- suppliers with owners or operators: the listed suppliers among theirs (an intersection, empty when none is)
-    IF suppliers IS NOT NULL AND num_nonnulls(owners, operators) > 0 THEN
-      PERFORM ${s}._validate(suppliers, 'suppliers', NULL, NULL, NULL);
-      keep := suppliers;
-      suppliers := NULL;
-    END IF;
 ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
-    IF keep IS NOT NULL THEN ids := ARRAY(SELECT unnest(ids) INTERSECT SELECT unnest(keep)); END IF;
   END IF;
   IF services IS NOT NULL THEN
     PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
