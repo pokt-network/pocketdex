@@ -508,16 +508,19 @@ BEGIN
   END LOOP;
 END $$;
 
--- services came last to get_supplier_earnings and from_session_end_height to get_created_claims(_count), and the relay mining
--- difficulty columns to the rows of get_service_summary (CREATE OR REPLACE cannot change the columns): likewise.
+-- Arguments added last, or columns added to the rows (CREATE OR REPLACE cannot change those either), after the ones
+-- above: likewise, a function without its newest one is dropped first. One row per function, newest name last.
 DO $$
 DECLARE f regprocedure;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
-           JOIN (VALUES ('get_supplier_earnings', 'services'), ('get_created_claims', 'from_session_end_height'),
-                        ('get_service_summary', 'num_relays_ema'),
-                        ('get_created_claims_count', 'from_session_end_height'), ('get_height_at', 'beyond_tip'))
-             n(name, arg) ON n.name = p.proname
+           JOIN (VALUES ('get_supplier_earnings', 'services')
+                      , ('get_created_claims', 'from_session_end_height')
+                      , ('get_created_claims_count', 'from_session_end_height')
+                      , ('get_service_summary', 'num_relays_ema')
+                      , ('get_height_at', 'beyond_tip')
+                      , ('get_supplier_fleet', 'after_supplier_id')
+                ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
@@ -964,16 +967,30 @@ END $$;
 -- Replaces the relation filter suppliers(serviceConfigs some revShare contains) with aggregates, and
 -- get_supplier_stats_by_domains (domains, Staked, by_supplier false). Live rows through the partial indexes
 -- idx_suppliers_live_id, idx_ssc_live_domains and idx_ssc_live_rev_share.
+-- max_stake_upokt keeps the stakes below it (a below-minimum list). With services, each row also carries
+-- service_domains: the endpoint root domains of its live configs for those services. A supplier counts once even if
+-- the suppliers table holds two live versions of it for a moment (the newer one): a fleet total once read one
+-- block's restakes twice. row_limit (up to 1000) pages by keyset on (stake_upokt descending, supplier_id) with
+-- after_stake_upokt / after_supplier_id, and counts services for that page only: a page of 100 of the 4,548 Staked
+-- suppliers in 34 ms on mainnet, where every row takes 0.17-0.23 s (2026-10-14). NULL = every row, as before.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_fleet(suppliers text[] DEFAULT NULL, owners text[] DEFAULT NULL,
   operators text[] DEFAULT NULL, domains text[] DEFAULT NULL, services text[] DEFAULT NULL,
-  stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true, operator_scope text DEFAULT 'now')
+  stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true, operator_scope text DEFAULT 'now',
+  max_stake_upokt numeric DEFAULT NULL, row_limit integer DEFAULT NULL, after_stake_upokt numeric DEFAULT NULL,
+  after_supplier_id text DEFAULT NULL)
 RETURNS TABLE(supplier_id text, owner_id text, stake_status text, stake_upokt numeric, service_count bigint,
-  supplier_count bigint)
+  supplier_count bigint, service_domains text[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE ids text[]; sids text[];
 BEGIN
   IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
     RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
+  END IF;
+  IF row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000, or NULL for every row (has %)', row_limit;
+  END IF;
+  IF (after_stake_upokt IS NULL) <> (after_supplier_id IS NULL) OR (after_supplier_id IS NOT NULL AND row_limit IS NULL) THEN
+    RAISE EXCEPTION 'pass both after_stake_upokt and after_supplier_id (the last row of the previous page) with row_limit, or neither';
   END IF;
 ${OPERATOR_SCOPE_CHECK}
   IF domains IS NOT NULL THEN
@@ -993,21 +1010,42 @@ ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
                   WHERE c.service_id = ANY(get_supplier_fleet.services) AND upper_inf(c._block_range));
   END IF;
   RETURN QUERY
-  WITH f AS (
-    SELECT su.id, su.owner_id, su.stake_status::text st, su.stake_amount
+  WITH f0 AS (
+    -- the newest live version of each supplier, before the filters on its status and stake
+    SELECT DISTINCT ON (su.id) su.id, su.owner_id, su.stake_status::text st, su.stake_amount::numeric stake_amount
     FROM ${s}.suppliers su
     WHERE upper_inf(su._block_range) AND (ids IS NULL OR su.id = ANY(ids)) AND (sids IS NULL OR su.id = ANY(sids))
-      AND (stake_statuses IS NULL OR su.stake_status::text = ANY(stake_statuses))
+    ORDER BY su.id, lower(su._block_range) DESC
+  ), f AS (
+    SELECT f0.* FROM f0
+    WHERE (stake_statuses IS NULL OR f0.st = ANY(stake_statuses))
+      AND (max_stake_upokt IS NULL OR f0.stake_amount < max_stake_upokt)
+  ), p AS (
+    -- the rows of this call: every supplier, or one keyset page
+    SELECT f.* FROM f
+    WHERE by_supplier AND (after_supplier_id IS NULL OR f.stake_amount < after_stake_upokt
+                           OR f.stake_amount = after_stake_upokt AND f.id > after_supplier_id)
+    ORDER BY f.stake_amount DESC, f.id LIMIT row_limit
   ), sv AS (
-    SELECT c.supplier_id, c.service_id FROM ${s}.supplier_service_configs c
-    WHERE upper_inf(c._block_range) AND c.supplier_id IN (SELECT f.id FROM f)
+    SELECT c.supplier_id, c.service_id, c.domains, lower(c._block_range) lo FROM ${s}.supplier_service_configs c
+    WHERE upper_inf(c._block_range) AND c.supplier_id IN (SELECT p.id FROM p)
   ), per AS (
     SELECT sv.supplier_id, count(DISTINCT sv.service_id) n FROM sv GROUP BY 1
+  ), dom AS (
+    -- the newest live config of each (supplier, service) asked for, grouped once: an array subquery per row would scan
+    -- sv once per supplier (25 s for the 4,379 suppliers of one service)
+    SELECT x.supplier_id, array_agg(DISTINCT e.x ORDER BY e.x) d
+    FROM (SELECT DISTINCT ON (sv.supplier_id, sv.service_id) sv.supplier_id, sv.domains FROM sv
+          WHERE services IS NOT NULL AND sv.service_id = ANY(get_supplier_fleet.services)
+          ORDER BY sv.supplier_id, sv.service_id, sv.lo DESC) x,
+      jsonb_array_elements_text(CASE WHEN jsonb_typeof(x.domains) = 'array' THEN x.domains ELSE '[]'::jsonb END) e(x)
+    GROUP BY 1
   )
-  SELECT f.id, f.owner_id, f.st, f.stake_amount, coalesce(per.n, 0), 1::bigint
-  FROM f LEFT JOIN per ON per.supplier_id = f.id WHERE by_supplier
+  SELECT p.id, p.owner_id, p.st, p.stake_amount, coalesce(per.n, 0), 1::bigint,
+         CASE WHEN services IS NOT NULL THEN coalesce(dom.d, '{}'::text[]) END
+  FROM p LEFT JOIN per ON per.supplier_id = p.id LEFT JOIN dom ON dom.supplier_id = p.id
   UNION ALL
-  SELECT 'all', NULL, 'all', coalesce((SELECT sum(f.stake_amount) FROM f), 0), NULL, (SELECT count(*) FROM f)
+  SELECT 'all', NULL, 'all', coalesce((SELECT sum(f.stake_amount) FROM f), 0), NULL, (SELECT count(*) FROM f), NULL
   WHERE NOT by_supplier
   ORDER BY 4 DESC, 1;
 END $$;

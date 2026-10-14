@@ -216,7 +216,7 @@ const HEIGHT_AT = `'The last indexed block at or before at_time (a timestamptz w
 // description: what + STATE_ROWS_NOTE + the columns.
 const STATE_DESCRIPTIONS: Record<string, string> = {
   get_supplier_fleet:
-    "Supplier fleet now: the current version of the suppliers of one list (suppliers, up to 200; owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with them now (operator_scope ever = every supplier any of whose service configs shared revenue with them at any time, in any stake status: filter with stake_statuses; ever requires operators and takes seconds for a large operator); domains (up to 200) = the suppliers with a live service config with an endpoint on one of them), or of every supplier when none is given. services keeps those with a live config for one of them (combined with the list). stake_statuses keeps those statuses (Staked, Unstaking, Unstaked; NULL = all). by_supplier (default true) = one row per supplier: owner_id, stake_status, stake_upokt and service_count (the services it has a live config for), largest stake first; false = one row for the whole fleet (supplier_id and stake_status say all; owner_id and service_count are NULL): stake_upokt summed and supplier_count, zeros when the fleet is empty.",
+    "Supplier fleet now: the current version of the suppliers of one list (suppliers, up to 200; owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with them now (operator_scope ever = every supplier any of whose service configs shared revenue with them at any time, in any stake status: filter with stake_statuses; ever requires operators and takes seconds for a large operator); domains (up to 200) = the suppliers with a live service config with an endpoint on one of them), or of every supplier when none is given. services keeps those with a live config for one of them (combined with the list). stake_statuses keeps those statuses (Staked, Unstaking, Unstaked; NULL = all). by_supplier (default true) = one row per supplier: owner_id, stake_status, stake_upokt and service_count (the services it has a live config for), largest stake first; false = one row for the whole fleet (supplier_id and stake_status say all; owner_id and service_count are NULL): stake_upokt summed and supplier_count, zeros when the fleet is empty. max_stake_upokt keeps the stakes below it. With services, service_domains = the endpoint root domains of each supplier's live configs for those services (NULL without services). row_limit (up to 1000; NULL = every row) returns one page in this order: for the next, pass the last row's stake_upokt and supplier_id as after_stake_upokt and after_supplier_id; it counts services for that page only, much faster than every row.",
   get_service_summary:
     "Services now: per service, the suppliers with a live service config for it and how many of them are Staked, and the applications with a live service row for it and how many are Staked; and its relay mining difficulty now, from its newest difficulty update: num_relays_ema, target_hash_hex and difficulty_updated_height (NULL when it never had one; get_relay_mining_difficulty lists the updates). services = those (up to 200); NULL = every service with a supplier config or an application.",
   get_application_fleet:
@@ -240,7 +240,8 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
 };
 export const STATE_FUNCTIONS = Object.keys(STATE_DESCRIPTIONS);
 const STATE_ROWS_NOTE = `'Rows paged by GraphQL (first / offset) up to the query limit (1000); page in this order for longer answers. Amounts in upokt.'`;
-// the state functions that page by keyset (an input argument named after_*)
+// the state functions that page by keyset only (an input argument named after_*, and row_limit 1000 by default;
+// get_supplier_fleet, whose row_limit defaults to every row, says how it pages in its own description)
 const STATE_KEYSET_NOTE = `'At most row_limit rows (default 1000, up to 1000) per call, in the order of the after_* keys: for the next page pass the last row''s keys as after_*, until a page comes back short; not first / offset. Amounts in upokt.'`;
 
 export function createSettlementSmartTagsFn(dbSchema: string): string {
@@ -300,7 +301,9 @@ BEGIN
            WHERE n.nspname = '${s}' AND p.prokind = 'f' AND p.proretset LOOP
     EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@simpleCollections only' || E'\n' || what || ' '
       || CASE WHEN EXISTS (SELECT 1 FROM pg_proc p2, unnest(p2.proargnames[1:p2.pronargs]) a
-                           WHERE p2.oid = f AND a LIKE 'after\_%') THEN ${STATE_KEYSET_NOTE} ELSE ${STATE_ROWS_NOTE} END
+                           WHERE p2.oid = f AND a LIKE 'after\_%')
+                     AND pg_get_function_arguments(f) LIKE '%row_limit integer DEFAULT 1000%' THEN ${STATE_KEYSET_NOTE}
+                ELSE ${STATE_ROWS_NOTE} END
       || E'\nColumns: ' || pg_get_function_result(f));
   END LOOP;
   FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

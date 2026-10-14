@@ -1735,8 +1735,25 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["owners => ARRAY['nobody']", []],
         ["services => ARRAY['svc-y']", ["s1 own-a Staked 300 2 1"]],
         ["owners => ARRAY['own-b'], services => ARRAY['svc-x']", ["s3 own-b Staked 500 1 1"]],
+        // a ceiling on the stake, exclusive
+        ["max_stake_upokt => 300", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
+        // keyset pages by stake descending, then id
+        ["row_limit => 2", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1"]],
+        ["row_limit => 2, after_stake_upokt => 300, after_supplier_id => 's1'", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
+        ["row_limit => 1, after_stake_upokt => 500, after_supplier_id => 's3', stake_statuses => ARRAY['Staked']", ["s1 own-a Staked 300 2 1"]],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
+      // with services, the domains of each supplier's live configs for them
+      for (const [args, want] of [
+        ["services => ARRAY['svc-y']", ["s1 a.net,b.io"]],
+        ["services => ARRAY['svc-x']", ["s3 b.io", "s1 a.net"]],
+        ["owners => ARRAY['own-b']", ["s3 ", "s4 "]],
+      ] as const)
+        assert.deepEqual(
+          [args, (await c.query(`SELECT concat_ws(' ', supplier_id, coalesce(array_to_string(service_domains, ','), '')) k
+                                 FROM ${S}.get_supplier_fleet(${args})`)).rows.map((r) => r.k)],
+          [args, want]
+        );
       // domains ranked by what was claimed on them, with the Staked suppliers on each now and their stake
       await c.query(`
         CREATE TABLE ${S}.domain_service_daily_rewards (domain text, service_id text, day date, relays bigint,
@@ -1823,7 +1840,16 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         const [, , , stake, , count] = now[0].split(" ");
         assert.deepEqual([d, stake, count], [d, old.stake, old.n]);
       }
+      // two live versions of one supplier for a moment: it counts once, with the newer one
+      await c.query("SAVEPOINT dup");
+      await c.query(`INSERT INTO ${S}.suppliers VALUES ('s3', 'own-b', 'Staked', 600, int8range(9, NULL))`);
+      assert.deepEqual(await fleet("stake_statuses => ARRAY['Staked'], by_supplier => false"), ["all  all 900  2"]);
+      assert.deepEqual(await fleet("owners => ARRAY['own-b'], stake_statuses => ARRAY['Staked']"), ["s3 own-b Staked 600 1 1"]);
+      await c.query("ROLLBACK TO SAVEPOINT dup");
       for (const [args, err] of [
+        ["row_limit => 0", /row_limit must be between 1 and 1000, or NULL/],
+        ["row_limit => 10, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
+        ["after_stake_upokt => 300, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
         ["owners => ARRAY['own-a'], domains => ARRAY['a.net']", /pass one of suppliers, owners/],
         ["operators => ARRAY['op-1'], operator_scope => 'past'", /operator_scope is now or ever \(has past\)/],
         ["operator_scope => 'ever'", /operator_scope ever applies to operators/],
