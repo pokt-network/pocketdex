@@ -521,7 +521,7 @@ BEGIN
            JOIN (VALUES ('get_supplier_earnings', 'gateway_ids')
                       , ('get_created_claims', 'from_session_end_height')
                       , ('get_created_claims_count', 'from_session_end_height')
-                      , ('get_service_summary', 'num_relays_ema')
+                      , ('get_service_summary', 'owners')
                       , ('get_height_at', 'beyond_tip')
                       , ('get_supplier_fleet', 'after_supplier_id')
                       , ('get_claims', 'current_owner_id')
@@ -1063,12 +1063,19 @@ END $$;
 -- which get_relay_mining_difficulty lists one by one (the Service entity's own difficulty columns are not written).
 -- SubQuery's GiST on (service_id, _block_range) cannot order: it read every update of every service (1.06M) and took
 -- 2.2 s for the 174 live services (mainnet replica, 2026-10-14); idx_rmd_service_block reads one per service.
-CREATE OR REPLACE FUNCTION ${s}.get_service_summary(services text[] DEFAULT NULL)
+-- owners keeps the services those addresses own now (the Service entity's owner_id).
+CREATE OR REPLACE FUNCTION ${s}.get_service_summary(services text[] DEFAULT NULL, owners text[] DEFAULT NULL)
 RETURNS TABLE(service_id text, staked_suppliers bigint, suppliers bigint, staked_applications bigint,
   applications bigint, num_relays_ema numeric, target_hash_hex text, difficulty_updated_height bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  IF owners IS NOT NULL THEN
+    PERFORM ${s}._validate(owners, 'owners', NULL, NULL, NULL);
+    -- the services they own now (269 live Service rows on mainnet, 2026-10-14), among services when both are given
+    services := ARRAY(SELECT sv.id FROM ${s}.services sv WHERE sv.owner_id = ANY(owners) AND upper_inf(sv._block_range)
+                        AND (get_service_summary.services IS NULL OR sv.id = ANY(get_service_summary.services)));
+  END IF;
   RETURN QUERY
   WITH sc AS (
     SELECT c.service_id, count(DISTINCT c.supplier_id) FILTER (WHERE su.stake_status::text = 'Staked') staked,

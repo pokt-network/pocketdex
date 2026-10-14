@@ -1801,11 +1801,18 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         CREATE TABLE ${S}.event_relay_mining_difficulty_updateds (service_id text, new_target_hash_hex_encoded text,
           new_num_relays_ema numeric, block_id numeric);
         INSERT INTO ${S}.event_relay_mining_difficulty_updateds VALUES ('svc-x', 'ff', 10, 10), ('svc-x', 'fd', 30, 20),
-          ('svc-x', 'fe', 20, 15), ('svc-z', 'aa', 7, 5);`);
+          ('svc-x', 'fe', 20, 15), ('svc-z', 'aa', 7, 5);
+        CREATE TABLE ${S}.services (id text, owner_id text, _block_range int8range);
+        INSERT INTO ${S}.services VALUES ('svc-x', 'own-s', int8range(1, NULL)), ('svc-z', 'own-s', int8range(1, NULL)),
+          ('svc-y', 'own-s', int8range(1, 5)), ('svc-y', 'own-t', int8range(5, NULL));`);
       const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
       for (const [args, want] of [
         ["", ["svc-x 2 2 1 2 30 fd 20", "svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
         ["ARRAY['svc-y', 'svc-z', 'none']", ["svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        // the services an address owns now (svc-y was own-s's before)
+        ["owners => ARRAY['own-s']", ["svc-x 2 2 1 2 30 fd 20", "svc-z 0 0 1 1 7 aa 5"]],
+        ["ARRAY['svc-z', 'svc-y'], owners => ARRAY['own-s']", ["svc-z 0 0 1 1 7 aa 5"]],
+        ["owners => ARRAY['nobody']", []],
       ] as const)
         assert.deepEqual(
           [args, await rows(`SELECT service_id, staked_suppliers::text, suppliers::text, staked_applications::text,
