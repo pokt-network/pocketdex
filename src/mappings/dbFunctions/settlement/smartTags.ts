@@ -209,7 +209,7 @@ const KEYSET_JSON_NOTE = `'Returns {range, data}: data = the rows of the functio
 
 const LAST_SETTLEMENT = `'The last settlement the money tables hold: the highest height they wrote (a height with settlement events, which may have no settled claim) up to what the indexer has processed, and its block time; null before the first one. Poll it (two small reads) and refetch recent catalog data whenever it changes. It moves forward when a new settlement is written. A history fill or gap repair below it does not move it, nor does covered_to, which follows the blocks. After the indexer rewinds (rare) it goes back, then forward again as those heights are rewritten.'`;
 
-const HEIGHT_AT = `'The last indexed block at or before at_time (a timestamptz with an explicit zone, 2026-10-01T00:00:00Z): its height and block_time; null when no indexed block is that early. For the height to ask about a time: the chain at that height, or the functions that take a height.'`;
+const HEIGHT_AT = `'The last indexed block at or before at_time (a timestamptz with an explicit zone, 2026-10-01T00:00:00Z): its height and block_time; null when no indexed block is that early. beyond_tip is true when at_time is after the newest indexed block: the answer is that block, and a later one may still come at or before at_time. A time inside a stretch with no indexed block answers the last block before it. For the height to ask about a time: the chain at that height, or the functions that take a height.'`;
 
 // The published functions over the current state of the entity tables, and get_supplier_domains (whose rows are the
 // domain rewards' own days, outside the money coverage): a plain list each, with no _json twin. Their GraphQL

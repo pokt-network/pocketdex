@@ -505,7 +505,8 @@ BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            JOIN (VALUES ('get_supplier_earnings', 'services'), ('get_created_claims', 'from_session_end_height'),
                         ('get_service_summary', 'num_relays_ema'),
-                        ('get_created_claims_count', 'from_session_end_height')) n(name, arg) ON n.name = p.proname
+                        ('get_created_claims_count', 'from_session_end_height'), ('get_height_at', 'beyond_tip'))
+             n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
@@ -668,9 +669,12 @@ $$;
 
 -- The last indexed block at or before a time: its height and block time, for a caller that has a time and needs the
 -- height to ask the chain or the entity tables about (blocks.timestamp is UTC without time zone; one probe of
--- idx_blocks_timestamp_id). height and block_time are NULL when no indexed block is that early. Not set-returning, like
--- get_last_settlement. PL/pgSQL: a SQL body would need the blocks table to exist when it is created.
-CREATE OR REPLACE FUNCTION ${s}.get_height_at(at_time timestamptz, OUT height bigint, OUT block_time timestamptz)
+-- idx_blocks_timestamp_id). height and block_time are NULL when no indexed block is that early. A time after the newest
+-- indexed block answers that block with beyond_tip true: the indexer has not reached it, so a later block may still
+-- come at or before it. A time inside a stretch with no indexed block answers the last block before it. Not
+-- set-returning, like get_last_settlement. PL/pgSQL: a SQL body would need the blocks table to exist when it is created.
+CREATE OR REPLACE FUNCTION ${s}.get_height_at(at_time timestamptz, OUT height bigint, OUT block_time timestamptz,
+  OUT beyond_tip boolean)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF at_time IS NULL THEN
@@ -678,6 +682,10 @@ BEGIN
   END IF;
   SELECT bl.id::bigint, bl.timestamp AT TIME ZONE 'UTC' INTO height, block_time FROM ${s}.blocks bl
   WHERE bl.timestamp <= (at_time AT TIME ZONE 'UTC') ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
+  IF height IS NOT NULL THEN
+    -- after the newest block's time; at it the answer is final (block times only increase)
+    beyond_tip := NOT EXISTS (SELECT 1 FROM ${s}.blocks bl WHERE bl.timestamp >= (at_time AT TIME ZONE 'UTC'));
+  END IF;
 END $$;
 
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct

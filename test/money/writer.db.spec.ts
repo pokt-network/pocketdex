@@ -1481,14 +1481,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`INSERT INTO ${S}.blocks VALUES (1000000001, '2027-01-01 00:00:00.000001'),
         (1000000002, '2027-01-01 00:00:00.000005'), (1000000003, '2027-01-01 00:00:00.000005')`);
       const at = async (t: string) =>
-        (await c.query(`SELECT height::text, to_char(block_time AT TIME ZONE 'UTC', 'SS.US') t FROM ${S}.get_height_at('${t}')`)).rows;
+        (await c.query(`SELECT height::text, to_char(block_time AT TIME ZONE 'UTC', 'SS.US') t, beyond_tip FROM ${S}.get_height_at('${t}')`)).rows;
       for (const [time, want] of [
-        ["2027-01-01T00:00:00.000001Z", [{ height: "1000000001", t: "00.000001" }]],
-        ["2027-01-01T00:00:00.000004Z", [{ height: "1000000001", t: "00.000001" }]],
-        ["2027-01-01T00:00:00.000005Z", [{ height: "1000000003", t: "00.000005" }]],
-        ["2027-01-01T01:00:01+01:00", [{ height: "1000000003", t: "00.000005" }]],
+        ["2027-01-01T00:00:00.000001Z", [{ height: "1000000001", t: "00.000001", beyond_tip: false }]],
+        ["2027-01-01T00:00:00.000004Z", [{ height: "1000000001", t: "00.000001", beyond_tip: false }]],
+        // at the newest block's time: not beyond it; after it: the newest block, beyond the tip
+        ["2027-01-01T00:00:00.000005Z", [{ height: "1000000003", t: "00.000005", beyond_tip: false }]],
+        ["2027-01-01T01:00:01+01:00", [{ height: "1000000003", t: "00.000005", beyond_tip: true }]],
         // before the first indexed block: one row of NULLs (not set-returning)
-        ["2000-01-01T00:00:00Z", [{ height: null, t: null }]],
+        ["2000-01-01T00:00:00Z", [{ height: null, t: null, beyond_tip: null }]],
       ] as const)
         assert.deepEqual([time, await at(time)], [time, want]);
       await c.query("SAVEPOINT e");
