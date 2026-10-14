@@ -232,7 +232,8 @@ const keysetBranches = (
     )
     .join("\n    UNION ALL\n");
 // the events each kind has
-const LIFECYCLE_KIND_EVENTS = ["supplier", "application", "gateway"].map(
+const LIFECYCLE_KINDS = [...new Set(LIFECYCLE_BRANCHES.map((b) => b.kind))];
+const LIFECYCLE_KIND_EVENTS = LIFECYCLE_KINDS.map(
   (kind) => [kind, [...new Set(LIFECYCLE_BRANCHES.filter((b) => b.kind === kind).map((b) => b.event))]] as const
 );
 const lifecycleBranches = (s: string) =>
@@ -258,7 +259,7 @@ const OPERATOR_SCOPE_CHECK = `  IF operator_scope IS NULL OR operator_scope NOT 
   END IF;`;
 const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: string, re: string, pad = "  ") =>
   [
-    `IF operator_scope = 'ever' AND operators IS NOT NULL AND num_nonnulls(${list}, owners) = 0 THEN`,
+    `IF operator_scope = 'ever' AND num_nonnulls(${list}, owners) = 0 THEN`,
     `  PERFORM ${s}._validate(operators, 'operators', ${rs}, ${re}, NULL);`,
     `  ids := ${s}._operator_suppliers_ever(operators);`,
     `ELSE`,
@@ -1315,8 +1316,8 @@ RETURNS TABLE(height bigint, block_time timestamptz, actor_id text, event text, 
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE cv record; rg record; ids text[]; bh numeric;
 BEGIN
-  IF kind IS NULL OR kind NOT IN ('supplier', 'application', 'gateway') THEN
-    RAISE EXCEPTION 'kind is supplier, application or gateway (has %)', kind;
+  IF kind IS NULL OR kind NOT IN (${LIFECYCLE_KINDS.map((k) => `'${k}'`).join(", ")}) THEN
+    RAISE EXCEPTION 'kind is ${LIFECYCLE_KINDS.slice(0, -1).join(", ")} or ${LIFECYCLE_KINDS[LIFECYCLE_KINDS.length - 1]} (has %)', kind;
   END IF;
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;

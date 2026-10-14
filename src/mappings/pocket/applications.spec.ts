@@ -25,8 +25,9 @@ describe("application unbonding reason names", () => {
       reasons,
       "the SQL map names exactly the proto's reasons"
     );
-    for (const r of reasons)
+    for (const r of reasons) {
       assert.equal(APP_UNBONDING_REASON_NAMES[r], getAppUnbondingReasonFromSDK(r), `reason ${r}`);
+    }
     assert.throws(() => getAppUnbondingReasonFromSDK(3), /Unknown ApplicationUnbondingReason=3/);
   });
 });

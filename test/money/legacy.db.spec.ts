@@ -1358,7 +1358,9 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
         bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false,
         by_supplier boolean DEFAULT true, owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false)
         RETURNS TABLE(bucket_start timestamptz) LANGUAGE sql AS 'SELECT now()';
-      -- get_claims from before operator_scope, get_actor_lifecycle from before gateway_id
+      -- get_claims and get_supplier_fleet from before operator_scope, get_actor_lifecycle from before gateway_id
+      CREATE FUNCTION ${S}.get_supplier_fleet(suppliers text[] DEFAULT NULL, owners text[] DEFAULT NULL)
+        RETURNS TABLE(supplier_id text) LANGUAGE sql AS 'SELECT NULL::text';
       CREATE FUNCTION ${S}.get_claims(suppliers text[], range_start timestamptz, range_end timestamptz)
         RETURNS TABLE(height bigint) LANGUAGE sql AS 'SELECT 1::bigint';
       CREATE FUNCTION ${S}.get_actor_lifecycle(kind text, addresses text[], range_start timestamptz, range_end timestamptz,
@@ -1374,12 +1376,13 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     ]);
     const overloads = await c.query(
       `SELECT p.proname, count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace
-         AND p.proname IN ('get_claims', 'get_claims_json', 'get_actor_lifecycle', 'get_actor_lifecycle_json') GROUP BY 1 ORDER BY 1`,
+         AND p.proname IN ('get_claims', 'get_claims_json', 'get_actor_lifecycle', 'get_actor_lifecycle_json', 'get_supplier_fleet')
+       GROUP BY 1 ORDER BY 1`,
       [S]
     );
     assert.deepEqual(overloads.rows, [
       { proname: "get_actor_lifecycle", n: 1 }, { proname: "get_actor_lifecycle_json", n: 1 },
-      { proname: "get_claims", n: 1 }, { proname: "get_claims_json", n: 1 },
+      { proname: "get_claims", n: 1 }, { proname: "get_claims_json", n: 1 }, { proname: "get_supplier_fleet", n: 1 },
     ]);
   });
 
