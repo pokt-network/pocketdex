@@ -652,6 +652,20 @@ LANGUAGE sql STABLE AS $$
   ORDER BY sb.height DESC LIMIT 1
 $$;
 
+-- The last indexed block at or before a time: its height and block time, for a caller that has a time and needs the
+-- height to ask the chain or the entity tables about (blocks.timestamp is UTC without time zone; one probe of
+-- idx_blocks_timestamp_id). height and block_time are NULL when no indexed block is that early. Not set-returning, like
+-- get_last_settlement. PL/pgSQL: a SQL body would need the blocks table to exist when it is created.
+CREATE OR REPLACE FUNCTION ${s}.get_height_at(at_time timestamptz, OUT height bigint, OUT block_time timestamptz)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF at_time IS NULL THEN
+    RAISE EXCEPTION 'at_time is required: a timestamptz with an explicit zone (2026-10-01T00:00:00Z)';
+  END IF;
+  SELECT bl.id::bigint, bl.timestamp AT TIME ZONE 'UTC' INTO height, block_time FROM ${s}.blocks bl
+  WHERE bl.timestamp <= (at_time AT TIME ZONE 'UTC') ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
+END $$;
+
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct
 -- event_claim_settleds.block_id) that settlement_blocks lacks, and the settlement_gaps rows in the range
 -- ('from-to'). The distinct block ids come from a loose index scan: one index probe per settlement height,

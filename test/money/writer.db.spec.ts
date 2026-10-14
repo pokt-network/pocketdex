@@ -1474,6 +1474,33 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("get_height_at is the last indexed block at or before a time, and is described for GraphQL", async () => {
+    await c.query("BEGIN");
+    try {
+      // three blocks after the fixtures' last one, two of them in the same microsecond (the higher height answers)
+      await c.query(`INSERT INTO ${S}.blocks VALUES (1000000001, '2027-01-01 00:00:00.000001'),
+        (1000000002, '2027-01-01 00:00:00.000005'), (1000000003, '2027-01-01 00:00:00.000005')`);
+      const at = async (t: string) =>
+        (await c.query(`SELECT height::text, to_char(block_time AT TIME ZONE 'UTC', 'SS.US') t FROM ${S}.get_height_at('${t}')`)).rows;
+      for (const [time, want] of [
+        ["2027-01-01T00:00:00.000001Z", [{ height: "1000000001", t: "00.000001" }]],
+        ["2027-01-01T00:00:00.000004Z", [{ height: "1000000001", t: "00.000001" }]],
+        ["2027-01-01T00:00:00.000005Z", [{ height: "1000000003", t: "00.000005" }]],
+        ["2027-01-01T01:00:01+01:00", [{ height: "1000000003", t: "00.000005" }]],
+        // before the first indexed block: one row of NULLs (not set-returning)
+        ["2000-01-01T00:00:00Z", [{ height: null, t: null }]],
+      ] as const)
+        assert.deepEqual([time, await at(time)], [time, want]);
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_height_at(NULL)`), /at_time is required/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(`SELECT obj_description('${S}.get_height_at(timestamptz)'::regprocedure, 'pg_proc') d`);
+    assert.match(String(d.rows[0].d), /^The last indexed block at or before at_time/);
+  });
+
   it("get_staked_supplier_services lists the live configs of Staked suppliers and pages by keyset", async () => {
     await c.query("BEGIN");
     try {
@@ -2725,11 +2752,11 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         [S]
       )
     ).rows.map((r) => String(r.proname));
-    // ...but the functions over the current state, and get_last_settlement (one row, not set-returning, so it has no
+    // ...but the functions over the current state, and get_last_settlement and get_height_at (one row, not set-returning, so they have no
     // list or _json twin), published on purpose
     assert.deepEqual(
       shown.filter((n) => !catalog.includes(n.replace(/_json$/, "")) && !n.startsWith("legacy_")),
-      ["get_last_settlement", ...STATE_FUNCTIONS].sort()
+      ["get_height_at", "get_last_settlement", ...STATE_FUNCTIONS].sort()
     );
     const vrd = await c.query(
       `SELECT count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = '_vrd_range_start'`,
