@@ -1091,6 +1091,88 @@ BEGIN
   ORDER BY 3 DESC, 1;
 END $$;
 
+-- Gateways now, like get_application_fleet: their current version, kept to the gateways listed (up to 200; none = every
+-- gateway) and to some stake statuses. by_gateway: one row each, with delegated_applications (the applications that
+-- delegate to it now: live application_gateways rows, whatever the application's status) and the delegate and
+-- undelegate messages it ever received (a re-delegation counts again), largest stake first; false: one row for all
+-- ('all' in gateway_id and stake_status), the stakes and counts summed. Small tables (18 gateway versions, 411
+-- delegations and no undelegation on mainnet, 2026-10-14): SubQuery's GiST indexes by gateway_id serve them.
+CREATE OR REPLACE FUNCTION ${s}.get_gateway_fleet(gateways text[] DEFAULT NULL, stake_statuses text[] DEFAULT NULL,
+  by_gateway boolean DEFAULT true)
+RETURNS TABLE(gateway_id text, stake_status text, stake_upokt numeric, delegated_applications bigint,
+  delegations_ever bigint, undelegations_ever bigint, gateway_count bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
+    RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
+  END IF;
+  IF gateways IS NOT NULL THEN PERFORM ${s}._validate(gateways, 'gateways', NULL, NULL, NULL); END IF;
+  RETURN QUERY
+  WITH f AS (
+    SELECT g.id, g.stake_status::text st, g.stake_amount::numeric amount,
+           (SELECT count(*) FROM ${s}.application_gateways ag
+            WHERE ag.gateway_id = g.id AND ag._block_range @> 9223372036854775807::bigint) delegated,
+           (SELECT count(*) FROM ${s}.msg_delegate_to_gateways m WHERE m.gateway_id = g.id) delegations,
+           (SELECT count(*) FROM ${s}.msg_undelegate_from_gateways m WHERE m.gateway_id = g.id) undelegations
+    FROM ${s}.gateways g
+    WHERE g._block_range @> 9223372036854775807::bigint
+      AND (get_gateway_fleet.gateways IS NULL OR g.id = ANY(get_gateway_fleet.gateways))
+      AND (stake_statuses IS NULL OR g.stake_status::text = ANY(stake_statuses))
+  )
+  SELECT f.id, f.st, f.amount, f.delegated, f.delegations, f.undelegations, 1::bigint FROM f WHERE by_gateway
+  UNION ALL
+  SELECT 'all', 'all', coalesce((SELECT sum(f.amount) FROM f), 0), coalesce((SELECT sum(f.delegated) FROM f), 0)::bigint,
+         coalesce((SELECT sum(f.delegations) FROM f), 0)::bigint, coalesce((SELECT sum(f.undelegations) FROM f), 0)::bigint,
+         (SELECT count(*) FROM f)
+  WHERE NOT by_gateway
+  ORDER BY 3 DESC, 1;
+END $$;
+
+-- Gateways and the applications delegating to them at a height (at_height NULL = now): each gateway's stake and status,
+-- and each delegated application's stake, status and services, all as of that height (the version of each row whose
+-- _block_range holds it). One row per (gateway, application); a gateway with no delegation at the height has one row
+-- with NULL application columns, and a gateway with no version at the height (not staked yet) none. Keyset paging on
+-- (gateway_id, application_id). An application has many versions (16.5k for one, 1.35M for the 151 that delegate to
+-- the largest gateway on mainnet, 2026-10-14): the one at the height comes from the GiST on (account_id, _block_range),
+-- account_id being the application's own address like id: 46 ms for those 151 now, 7 ms at height 700,000 (mainnet
+-- replica).
+CREATE OR REPLACE FUNCTION ${s}.get_gateway_delegations(gateways text[], at_height bigint DEFAULT NULL,
+  row_limit integer DEFAULT 1000, after_gateway_id text DEFAULT NULL, after_application_id text DEFAULT NULL)
+RETURNS TABLE(gateway_id text, gateway_stake_upokt numeric, gateway_stake_status text, application_id text,
+  stake_upokt numeric, stake_status text, service_ids text[])
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
+BEGIN
+  PERFORM ${s}._validate(gateways, 'gateways', NULL, NULL, NULL);
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_gateway_id / after_application_id', row_limit;
+  END IF;
+  IF after_application_id IS NOT NULL AND after_gateway_id IS NULL THEN
+    RAISE EXCEPTION 'after_application_id goes with after_gateway_id (the last row of the previous page)';
+  END IF;
+  IF at_height < 1 THEN
+    RAISE EXCEPTION 'at_height must be a block height (has %)', at_height;
+  END IF;
+  h := coalesce(at_height, 9223372036854775807);
+  RETURN QUERY
+  SELECT g.id, g.stake_amount::numeric, g.stake_status::text, d.application_id, a.stake_amount::numeric,
+         a.stake_status::text,
+         CASE WHEN d.application_id IS NOT NULL THEN ARRAY(
+           SELECT DISTINCT sv.service_id FROM ${s}.application_services sv
+           WHERE sv.application_id = d.application_id AND sv._block_range @> h ORDER BY 1) END
+  FROM ${s}.gateways g
+  LEFT JOIN ${s}.application_gateways d ON d.gateway_id = g.id AND d._block_range @> h
+  LEFT JOIN LATERAL (
+    SELECT ap.stake_amount, ap.stake_status FROM ${s}.applications ap
+    WHERE ap.account_id = d.application_id AND ap.id = d.application_id AND ap._block_range @> h
+  ) a ON true
+  WHERE g.id = ANY(get_gateway_delegations.gateways) AND g._block_range @> h
+    -- a page ending on a gateway's row with no application (after_application_id NULL) goes on with the next gateway
+    AND (after_gateway_id IS NULL OR g.id >= after_gateway_id)
+    AND (after_gateway_id IS NULL OR g.id > after_gateway_id OR d.application_id > after_application_id)
+  ORDER BY 1, 4 LIMIT row_limit;
+END $$;
+
 -- Relay mining difficulty history: each update of the services listed (up to 200), newest first (by height, then
 -- service), with the relays EMA and the target hash before and after it; the newest row of a service is its current
 -- difficulty (the Service entity's own difficulty columns are not written: mainnet 2026-10-13). Keyset paging on (height, service_id), like get_claims. Covers the indexed blocks. Each service's

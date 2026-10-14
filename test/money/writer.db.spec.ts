@@ -1553,6 +1553,90 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.match(String(d.rows[0].d), /^@simpleCollections only\nLive service configs[\s\S]*pass the last row's keys as after_\*/);
   });
 
+  it("get_gateway_fleet and get_gateway_delegations read gateways and their delegations now and at a height", async () => {
+    await c.query("BEGIN");
+    try {
+      // g1 staked at 10 (stake 100, then 150 from 50); g2 staked at 30, Unstaked at 60; g3 staked at 70 with no delegation.
+      // a1 delegates to g1 from 10, a2 from 20 to 40 then to g2 from 40; a3 to g1 from 45. a1 restaked at 50 (20 -> 25)
+      // and changed services at 50 (svc-x, svc-y -> svc-x).
+      await c.query(`
+        CREATE TABLE ${S}.gateways (id text, stake_amount numeric, stake_status text, _block_range int8range);
+        INSERT INTO ${S}.gateways VALUES ('g1', 100, 'Staked', int8range(10, 50)), ('g1', 150, 'Staked', int8range(50, NULL)),
+          ('g2', 70, 'Staked', int8range(30, 60)), ('g2', 70, 'Unstaked', int8range(60, NULL)),
+          ('g3', 90, 'Staked', int8range(70, NULL));
+        INSERT INTO ${S}.application_gateways (gateway_id, application_id, _block_range) VALUES ('g1', 'a1', int8range(10, NULL)),
+          ('g1', 'a2', int8range(20, 40)), ('g2', 'a2', int8range(40, NULL)), ('g1', 'a3', int8range(45, NULL));
+        CREATE TABLE ${S}.applications (id text, account_id text, stake_amount numeric, stake_status text, _block_range int8range);
+        INSERT INTO ${S}.applications VALUES ('a1', 'a1', 20, 'Staked', int8range(5, 50)), ('a1', 'a1', 25, 'Staked', int8range(50, NULL)),
+          ('a2', 'a2', 30, 'Staked', int8range(15, 55)), ('a2', 'a2', 30, 'Unstaking', int8range(55, NULL)),
+          ('a3', 'a3', 40, 'Staked', int8range(45, NULL));
+        CREATE TABLE ${S}.application_services (application_id text, service_id text, _block_range int8range);
+        INSERT INTO ${S}.application_services VALUES ('a1', 'svc-y', int8range(5, 50)), ('a1', 'svc-x', int8range(5, NULL)),
+          ('a2', 'svc-z', int8range(15, NULL)), ('a3', 'svc-x', int8range(45, NULL));
+        CREATE TABLE ${S}.msg_delegate_to_gateways (id text, application_id text, gateway_id text, block_id numeric);
+        CREATE TABLE ${S}.msg_undelegate_from_gateways (LIKE ${S}.msg_delegate_to_gateways);
+        INSERT INTO ${S}.msg_delegate_to_gateways VALUES ('d1', 'a1', 'g1', 10), ('d2', 'a2', 'g1', 20), ('d3', 'a2', 'g2', 40),
+          ('d4', 'a3', 'g1', 45), ('d5', 'a3', 'g1', 46);
+        INSERT INTO ${S}.msg_undelegate_from_gateways VALUES ('u1', 'a2', 'g1', 40);`);
+      const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
+      const fleet = (args: string) =>
+        rows(`SELECT gateway_id, stake_status, stake_upokt::text, delegated_applications::text, delegations_ever::text,
+                     undelegations_ever::text, gateway_count::text FROM ${S}.get_gateway_fleet(${args})`);
+      for (const [args, want] of [
+        ["", ["g1 Staked 150 2 4 1 1", "g3 Staked 90 0 0 0 1", "g2 Unstaked 70 1 1 0 1"]],
+        ["gateways => ARRAY['g2', 'none']", ["g2 Unstaked 70 1 1 0 1"]],
+        ["stake_statuses => ARRAY['Staked'], by_gateway => false", ["all all 240 2 4 1 2"]],
+        ["gateways => ARRAY['none'], by_gateway => false", ["all all 0 0 0 0 0"]],
+      ] as const)
+        assert.deepEqual([args, await fleet(args)], [args, want]);
+      const delegations = (args: string) =>
+        rows(`SELECT gateway_id, gateway_stake_upokt::text, gateway_stake_status, application_id, stake_upokt::text, stake_status,
+                     array_to_string(service_ids, ',') FROM ${S}.get_gateway_delegations(${args})`);
+      const now = ["g1 150 Staked a1 25 Staked svc-x", "g1 150 Staked a3 40 Staked svc-x", "g2 70 Unstaked a2 30 Unstaking svc-z",
+        "g3 90 Staked    "];
+      for (const [args, want] of [
+        ["ARRAY['g3', 'g2', 'g1']", now],
+        ["ARRAY['g1', 'g2', 'g3'], at_height => 30", ["g1 100 Staked a1 20 Staked svc-x,svc-y", "g1 100 Staked a2 30 Staked svc-z",
+          "g2 70 Staked    "]],
+        ["ARRAY['g2'], at_height => 45", ["g2 70 Staked a2 30 Staked svc-z"]],
+        ["ARRAY['g3'], at_height => 30", []],
+      ] as const)
+        assert.deepEqual([args, await delegations(args)], [args, want]);
+      // pages of one row: the keys of the last row, application_id NULL for a gateway with no delegation
+      const paged: string[] = [];
+      let page = await delegations("ARRAY['g1', 'g2', 'g3'], row_limit => 1");
+      paged.push(...page);
+      while (page.length === 1) {
+        const [g, , , app] = page[0].split(" ");
+        page = await delegations(`ARRAY['g1', 'g2', 'g3'], row_limit => 1, after_gateway_id => '${g}', after_application_id => ${app ? `'${app}'` : "NULL"}`);
+        paged.push(...page);
+      }
+      assert.deepEqual(paged, now);
+      assert.deepEqual(await delegations("ARRAY['g1', 'g2', 'g3'], after_gateway_id => 'g2'"), [now[3]]);
+      for (const [fn, args, err] of [
+        ["get_gateway_delegations", "NULL", /gateways must have between 1 and 200 elements/],
+        ["get_gateway_delegations", "ARRAY['g1'], row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["get_gateway_delegations", "ARRAY['g1'], after_application_id => 'a1'", /after_application_id goes with after_gateway_id/],
+        ["get_gateway_delegations", "ARRAY['g1'], at_height => 0", /at_height must be a block height/],
+        ["get_gateway_fleet", "stake_statuses => ARRAY['Bonded']", /stake_statuses takes Staked, Unstaking and Unstaked/],
+        ["get_gateway_fleet", "gateways => ARRAY[]::text[]", /gateways must have between 1 and 200 elements/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(${args})`), err, `${fn}(${args})`);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(
+      `SELECT p.proname, obj_description(p.oid, 'pg_proc') d FROM pg_proc p
+       WHERE p.pronamespace = $1::regnamespace AND p.proname IN ('get_gateway_fleet', 'get_gateway_delegations') ORDER BY 1`,
+      [S]
+    );
+    assert.match(String(d.rows[0].d), /^@simpleCollections only\nGateways and the applications[\s\S]*pass the last row's keys as after_\*/);
+    assert.match(String(d.rows[1].d), /^@simpleCollections only\nGateways now[\s\S]*paged by GraphQL \(first \/ offset\)/);
+  });
+
   it("get_supplier_fleet, get_service_summary and get_application_fleet read the current versions, per actor or as one fleet row", async () => {
     await c.query("BEGIN");
     try {
