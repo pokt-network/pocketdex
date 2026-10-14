@@ -11,6 +11,7 @@
 //            any other update: a MorseClaimableAccount one records its shannon_dest_address, the rest are ignored
 //   bulkCreate                                                        -> insert at [height, null)
 //   getByFields [field, "in", values]                                 -> the rows open at height
+// Every destroy, update and bulkCreate must carry the block transaction (BLOCK_TX).
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await, @typescript-eslint/no-var-requires */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -30,8 +31,10 @@ const sequelize = {
   fn: (fn: string, ...args: Array<unknown>) => ({ fn, args }),
   col: (col: string) => ({ col }),
   where: (left: unknown, right: unknown) => ({ left, right }),
-  transaction: async (_: unknown, cb: (tx: unknown) => Promise<unknown>) => cb({}),
 };
+
+const BLOCK_TX = { block: "transaction" };
+const inBlockTx = (transaction: unknown) => assert.equal(transaction, BLOCK_TX, "a write outside the block transaction");
 
 type IdIn = { id: Record<symbol, Array<string>> };
 
@@ -39,14 +42,16 @@ const model = (name: string) => {
   tables[name] = tables[name] || [];
   return {
     sequelize,
-    destroy: async ({ where }: { where: Record<symbol, [unknown, IdIn]> }) => {
+    destroy: async ({ transaction, where }: { where: Record<symbol, [unknown, IdIn]>; transaction: unknown }) => {
+      inBlockTx(transaction);
       const and = where[Symbol.for("and")];
       const ids = and ? and[1].id[Symbol.for("in")] : null;
       tables[name] = tables[name].filter(
         (row) => row.lo !== height || (ids !== null && !ids.includes(row.id as string))
       );
     },
-    update: async (values: Record<string, unknown>, { where }: { where: IdIn & { __block_range?: unknown } }) => {
+    update: async (values: Record<string, unknown>, { transaction, where }: { where: IdIn & { __block_range?: unknown }; transaction: unknown }) => {
+      inBlockTx(transaction);
       if (!where.__block_range) {
         if (name === "MorseClaimableAccount") morseDestinations[where.id as unknown as string] = values.shannon_dest_address;
         return;
@@ -59,7 +64,8 @@ const model = (name: string) => {
         else row.hi = height;
       }
     },
-    bulkCreate: async (docs: Array<Record<string, unknown>>) => {
+    bulkCreate: async (docs: Array<Record<string, unknown>>, { transaction }: { transaction: unknown }) => {
+      inBlockTx(transaction);
       for (const { __block_range, ...doc } of docs) {
         const [lo, hi] = __block_range as [number, number | null];
         tables[name].push({ ...doc, lo: Number(lo), hi });
@@ -77,7 +83,7 @@ globals.logger = {
   error: () => undefined,
 };
 globals.store = {
-  context: { getHistoricalUnit: () => height, transaction: undefined },
+  context: { getHistoricalUnit: () => height, transaction: BLOCK_TX },
   modelProvider: { getModel: (name: string) => ({ model: model(name) }) },
   getByFields: async (
     name: string,

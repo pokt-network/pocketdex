@@ -10,7 +10,6 @@ import type {
   BulkCreateOptions,
   Sequelize,
 } from "@subql/x-sequelize";
-import pLimit from "p-limit";
 import type { SupplyDenom } from "../../types";
 import { positiveIntFromEnv } from "./env";
 
@@ -28,9 +27,8 @@ type Transformer<T> = (doc: T) => any;
 // PAGE_LIMIT should be less or equal to --query-limit=<value> otherwise Subql will throw an error.
 const PAGE_LIMIT = positiveIntFromEnv("POCKETDEX_DB_PAGE_LIMIT", process.env.POCKETDEX_DB_PAGE_LIMIT, 1000);
 const BATCH_SIZE = positiveIntFromEnv("POCKETDEX_DB_BATCH_SIZE", process.env.POCKETDEX_DB_BATCH_SIZE, 5000);
-const CONCURRENCY = positiveIntFromEnv("POCKETDEX_DB_BULK_WRITE_CONCURRENCY", process.env.POCKETDEX_DB_BULK_WRITE_CONCURRENCY, 5);
 
-logger.info(`[Global] PAGE_LIMIT=${PAGE_LIMIT} BATCH_SIZE=${BATCH_SIZE} CONCURRENCY=${CONCURRENCY}`);
+logger.info(`[Global] PAGE_LIMIT=${PAGE_LIMIT} BATCH_SIZE=${BATCH_SIZE}`);
 
 /**
  * Retrieves the store model associated with the given name.
@@ -51,6 +49,18 @@ export function getStoreModel(name: string): IModel<BaseEntity> {
 export function getSequelize(name: string): Sequelize {
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   return getStoreModel(name).model.sequelize!;
+}
+
+// The transaction SubQuery opens for the block, which also holds its blocks row, the version closes and
+// lastProcessedHeight. A write outside it commits before the block does, so readers would see a half-written block,
+// and a block that fails later would leave those rows behind. The transaction only exists with --enable-cache=false.
+// One transaction is one connection, so its queries run one at a time.
+function blockTransaction() {
+  const transaction = store.context.transaction;
+  if (!transaction) {
+    throw new Error("[db] no block transaction: the indexer must run with --enable-cache=false");
+  }
+  return transaction;
 }
 
 /**
@@ -180,7 +190,8 @@ export async function fetchPaginatedRecords<T>({
 // }
 
 /**
- * High-throughput, memory-efficient parallel bulk insert with optional transformation and _block_range enforcement.
+ * Memory-efficient batched bulk insert in the block transaction, with optional transformation and _block_range
+ * enforcement.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function optimizedBulkCreate<T>(
@@ -191,11 +202,11 @@ export async function optimizedBulkCreate<T>(
   bulkCreateOpts?: BulkCreateOptions<BaseEntity>,
 ): Promise<void> {
   if (docs.length === 0) return; // avoid the need of caller validate length before call this.
+  const transaction = blockTransaction();
   logger.info(
-    `[optimizedBulkCreate] Initiating bulk creation for model: '${modelName}'. Total records: ${docs.length}, Batch size: ${BATCH_SIZE}, Concurrency: ${CONCURRENCY}.`,
+    `[optimizedBulkCreate] Initiating bulk creation for model: '${modelName}'. Total records: ${docs.length}, Batch size: ${BATCH_SIZE}.`,
   );
   const model = store.modelProvider.getModel(modelName).model
-  const limit = pLimit(CONCURRENCY);
 
   const batches: any[][] = [];
   let currentBatch: any[] = [];
@@ -219,7 +230,8 @@ export async function optimizedBulkCreate<T>(
       where: {
         // @ts-ignore
         block_id: BigInt(store.context.getHistoricalUnit())
-      }
+      },
+      transaction,
     });
   } else if (removeBy === 'block_range') {
     const sequelize = getSequelize(modelName);
@@ -229,32 +241,27 @@ export async function optimizedBulkCreate<T>(
         sequelize.fn("lower", sequelize.col("_block_range")),
         store.context.getHistoricalUnit()
       ),
+      transaction,
     });
   }
 
-  const tasks = batches.map((batch, index) =>
-    limit(async () => {
-      try {
-        await model.sequelize!.transaction({ logging: false }, async (tx) => {
-          await model.bulkCreate(batch, {
-            transaction: tx,
-            ignoreDuplicates: true,
-            ...bulkCreateOpts,
-          });
-        });
-        logger.info(`[optimizedBulkCreate] ${modelName} batch ${index + 1}/${batches.length} inserted`);
-      } catch (err) {
-        logger.error(`[optimizedBulkCreate] ${modelName} batch batch ${index + 1}/${batches.length} failed`);
-        throw err;
-      }
-    }),
-  );
-
-  await Promise.all(tasks);
+  for (const [index, batch] of batches.entries()) {
+    try {
+      await model.bulkCreate(batch, {
+        transaction,
+        ignoreDuplicates: true,
+        ...bulkCreateOpts,
+      });
+      logger.info(`[optimizedBulkCreate] ${modelName} batch ${index + 1}/${batches.length} inserted`);
+    } catch (err) {
+      logger.error(`[optimizedBulkCreate] ${modelName} batch batch ${index + 1}/${batches.length} failed`);
+      throw err;
+    }
+  }
 }
 
 /**
- * Batched raw SQL bulk insert with the same batching and concurrency as optimizedBulkCreate.
+ * Batched raw SQL bulk insert with the same batching as optimizedBulkCreate, in the block transaction.
  * Used for tables not managed by SubQuery (no _block_range, no SubQL model registry).
  *
  * @param table       Fully-qualified table name (e.g. `${schema}.mod_to_acct_transfers`)
@@ -281,16 +288,16 @@ export async function rawBulkInsert({
 }): Promise<void> {
   if (rows.length === 0) return;
 
+  const transaction = blockTransaction();
   const sequelize = getSequelize('Block');
-  const limit = pLimit(CONCURRENCY);
 
   logger.info(
-    `[rawBulkInsert] ${table}: ${rows.length} records, batch=${BATCH_SIZE}, concurrency=${CONCURRENCY}`,
+    `[rawBulkInsert] ${table}: ${rows.length} records, batch=${BATCH_SIZE}`,
   );
 
   await sequelize.query(
     `DELETE FROM ${table} WHERE ${blockIdCol} = ${blockId}`,
-    { useMaster: true },
+    { transaction, useMaster: true },
   );
 
   const batches: string[][] = [];
@@ -300,22 +307,18 @@ export async function rawBulkInsert({
 
   const columnList = columns.join(', ');
 
-  await Promise.all(
-    batches.map((batch, index) =>
-      limit(async () => {
-        try {
-          await sequelize.query(
-            `INSERT INTO ${table} (${columnList}) VALUES ${batch.join(', ')} ON CONFLICT (${conflictCol}) DO NOTHING`,
-            { useMaster: true },
-          );
-          logger.info(`[rawBulkInsert] ${table} batch ${index + 1}/${batches.length} inserted`);
-        } catch (err) {
-          logger.error(`[rawBulkInsert] ${table} batch ${index + 1}/${batches.length} failed`);
-          throw err;
-        }
-      }),
-    ),
-  );
+  for (const [index, batch] of batches.entries()) {
+    try {
+      await sequelize.query(
+        `INSERT INTO ${table} (${columnList}) VALUES ${batch.join(', ')} ON CONFLICT (${conflictCol}) DO NOTHING`,
+        { transaction, useMaster: true },
+      );
+      logger.info(`[rawBulkInsert] ${table} batch ${index + 1}/${batches.length} inserted`);
+    } catch (err) {
+      logger.error(`[rawBulkInsert] ${table} batch ${index + 1}/${batches.length} failed`);
+      throw err;
+    }
+  }
 }
 
 export function getDbSchema(): string {
