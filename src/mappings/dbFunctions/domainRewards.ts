@@ -260,11 +260,5 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     // summary of every service read all 1.06M and sorted them per service (2.2 s, mainnet replica 2026-10-14).
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rmd_service_block
       ON ${dbSchema}.event_relay_mining_difficulty_updateds (service_id, block_id)`,
-    // The suppliers that shared revenue with an address at any time (_operator_suppliers_ever, operator_scope ever): each
-    // distinct (supplier, rev_share address list) of every config version, walked by a loose scan. The GIN on rev_share
-    // finds the versions but not their supplier: 12 s on the heap for the 7 largest operators (mainnet replica,
-    // 2026-10-14). Deduplicated, ~100 MB for the 10M versions of a local copy of mainnet's distribution.
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_supplier_rev_share_addresses
-      ON ${dbSchema}.supplier_service_configs (supplier_id, (jsonb_path_query_array(rev_share, '$[*].address')::text))`,
   ];
 }

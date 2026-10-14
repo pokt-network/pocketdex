@@ -905,27 +905,17 @@ BEGIN
 END $$;
 
 -- The suppliers that shared revenue with the addresses at any time: any version of a service config, live or closed,
--- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). Every stake writes new versions of
--- all a supplier's configs (~10.7M on mainnet, ~900 per supplier), so containment through SubQuery's GIN on rev_share
--- found ~980k versions per large operator and read them from the heap: 12 s for the 7 largest (mainnet replica,
--- 2026-10-14). A loose scan of idx_ssc_supplier_rev_share_addresses visits each distinct (supplier, address list) once
--- instead (~53k on mainnet) and keeps those that list an address: ~0.43 s warm whatever the addresses, on a local copy
--- of mainnet's distribution (10.2M versions, 2026-10-14). The expression must stay the index's to use it.
+-- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). SubQuery's GIN on rev_share
+-- (jsonb_ops) serves the containment, but every stake writes a new version of the configs it lists, so a large operator
+-- matches ~980k versions read from the heap: 12 s for the 7 largest operators on mainnet (2026-10-14). Unused today;
+-- a config-history table kept by the indexer is to replace it.
 CREATE OR REPLACE FUNCTION ${s}._operator_suppliers_ever(addresses text[]) RETURNS text[]
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   RETURN ARRAY(
-    WITH RECURSIVE t(sid, k) AS (
-      (SELECT c.supplier_id, jsonb_path_query_array(c.rev_share, '$[*].address')::text
-       FROM ${s}.supplier_service_configs c ORDER BY 1, 2 LIMIT 1)
-      UNION ALL
-      SELECT n.sid, n.k FROM t CROSS JOIN LATERAL (
-        SELECT c.supplier_id sid, jsonb_path_query_array(c.rev_share, '$[*].address')::text k
-        FROM ${s}.supplier_service_configs c
-        WHERE (c.supplier_id, jsonb_path_query_array(c.rev_share, '$[*].address')::text) > (t.sid, t.k)
-        ORDER BY 1, 2 LIMIT 1) n
-    )
-    SELECT DISTINCT t.sid FROM t WHERE t.k::jsonb ?| addresses ORDER BY 1);
+    SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
+    JOIN ${s}.supplier_service_configs ssc ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a))
+    ORDER BY 1);
 END $$;
 
 -- The suppliers a supplier function answers for, from its three lists, of which it takes at most one: suppliers as given
