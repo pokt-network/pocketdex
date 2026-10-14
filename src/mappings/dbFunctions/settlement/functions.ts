@@ -1103,7 +1103,8 @@ END $$;
 -- Gateways now, like get_application_fleet: their current version, kept to the gateways listed (up to 200; none = every
 -- gateway) and to some stake statuses. by_gateway: one row each, with delegated_applications (the applications that
 -- delegate to it now: live application_gateways rows, whatever the application's status) and the delegate and
--- undelegate messages it ever received (a re-delegation counts again), largest stake first; false: one row for all
+-- undelegate messages it ever received (a re-delegation counts again; a delegation in the genesis state has no message
+-- and is not counted: mainnet has none, 411 delegation rows for 411 messages, 2026-10-14), largest stake first; false: one row for all
 -- ('all' in gateway_id and stake_status), the stakes and counts summed. Small tables (18 gateway versions, 411
 -- delegations and no undelegation on mainnet, 2026-10-14): SubQuery's GiST indexes by gateway_id serve them.
 CREATE OR REPLACE FUNCTION ${s}.get_gateway_fleet(gateways text[] DEFAULT NULL, stake_statuses text[] DEFAULT NULL,
@@ -1143,7 +1144,8 @@ END $$;
 -- with NULL application columns, and a gateway with no version at the height (not staked yet) none. Keyset paging on
 -- (gateway_id, application_id). An application has many versions (16.5k for one, 1.35M for the 151 that delegate to
 -- the largest gateway on mainnet, 2026-10-14): the one at the height comes from the GiST on (account_id, _block_range),
--- account_id being the application's own address like id: 46 ms for those 151 now, 7 ms at height 700,000 (mainnet
+-- account_id being the application's own address like id (equal in all 2,499,720 versions on mainnet, counted
+-- 2026-10-14; applications.ts sets both to the address): 46 ms for those 151 now, 7 ms at height 700,000 (mainnet
 -- replica).
 CREATE OR REPLACE FUNCTION ${s}.get_gateway_delegations(gateways text[], at_height bigint DEFAULT NULL,
   row_limit integer DEFAULT 1000, after_gateway_id text DEFAULT NULL, after_application_id text DEFAULT NULL)
