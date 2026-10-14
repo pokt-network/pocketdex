@@ -102,10 +102,11 @@ export const CATALOG_FUNCTIONS = [
 ];
 const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
 
-// The application unbonding events keep the proto's number: get_actor_lifecycle names it as the proto does
-// (APPLICATION_UNBONDING_REASON_*), with the name the supplier enum uses for the same reason (BELOW_MIN_STAKE).
+// The application unbonding events keep the proto's number: get_actor_lifecycle names it as the Application entity's
+// unstaking_reason does (applications.ts getAppUnbondingReasonFromSDK), so a row compares with its entity; a number the
+// mapping does not know comes as itself.
 const appReason =
-  "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MIN_STAKE' WHEN 2 THEN 'MIGRATION' ELSE m.reason::text END";
+  "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MINIMUM_STAKE' WHEN 2 THEN 'MIGRATION' ELSE m.reason::text END";
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
@@ -944,8 +945,9 @@ END $$;
 -- (~3,100) by the primary key, ~5 ms for nodefleet.net's 2,351 suppliers, which hold half of each height's claims (a
 -- fleet that settles rarely walks many heights); applications, each one's newest from (application_id, height);
 -- services, each one's newest (height, application) from settlement_claims_by_application_service, then those
--- applications' claims, 1.5 ms for 100 rows, 75 ms for 1000 (there is no claim index by service; each service has at
--- most 3 applications a height on mainnet, so whole heights cost little). The OFFSET 0 keeps the primary key probe: with
+-- applications' claims, 1.5 ms for 100 rows, 75 ms for 1000 (there is no claim index by service; measured on the
+-- mainnet replica, 2026-10-13, when the busiest services had 2 or 3 applications at the last settlement height, so
+-- whole heights cost little). The OFFSET 0 keeps the primary key probe: with
 -- the fleet filter pushed in, the planner probed (supplier_id, height) once per supplier per height (120 ms a height).
 -- Expired claims: their small table (617k rows) by supplier index for a short list, else walked newest first (the
 -- whole table when nothing matches: 338 ms).
