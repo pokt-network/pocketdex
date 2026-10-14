@@ -12,9 +12,13 @@ reduced to a small, documented surface:
 - Anything that combines or sums rows is a function. Every function and argument is described in the schema
   (introspection).
 
-Functions that return rows come as `<name>List` (paged with `first` / `offset`, at most 1000 rows) and, where they read
-a time range, as `<name>Json` too: `{range, data}` with every row in one call and the part of the range the data covers.
-Amounts are in upokt. In `...Json` every number is a string.
+Functions that return rows come as `<name>List` (paged with `first` / `offset`, at most 1000 rows) and, where they sum
+over a time range, as `<name>Json` too: `{range, data}` with every row in one call and the part of the range the data
+covers. Four functions list rows one by one instead: `getClaims`, `getActorLifecycle`, `getRelayMiningDifficulty` and
+`getCreatedClaims` return at most `rowLimit` rows (default 100, up to 1000) newest first, in `...List` and `...Json`
+alike; fetch the next page by passing the last row's keys as `before*` (`beforeHeight` with `beforeEventIdx`,
+`beforeId` or `beforeServiceId`) until a page comes back short. `getSupplierDomainsList` and the fleet and summary
+functions have no `...Json`. Amounts are in upokt. In `...Json` every number is a string.
 
 ## Replacements
 
@@ -22,7 +26,7 @@ Amounts are in upokt. In `...Json` every number is a string.
 |---|---|
 | `suppliers(filter: {ownerId ...}) { totalCount aggregates { sum { stakeAmount } } }` | `getSupplierFleetList(owners: [...], bySupplier: false)` |
 | `suppliers(filter: {serviceConfigs: {some: {revShare: {contains: ...}}}})` | `getSupplierFleetList(operators: [...])`: the Staked suppliers that share revenue with them |
-| `getSupplierStatsByDomains(pDomains: [...])` | `getSupplierFleetList(domains: [...], stakeStatuses: ["Staked"], bySupplier: false)` |
+| `getSupplierStatsByDomains(pDomains: [...])` | `getSupplierFleetList(domains: [...], stakeStatuses: ["Staked"], bySupplier: false)` (up to 200 domains a call) |
 | `supplierServiceConfigs(filter: {serviceId, supplier: {stakeStatus}})` | `getSupplierFleetList(services: [...], stakeStatuses: ["Staked"])` |
 | `applicationServices(filter: {serviceId, application: {stakeStatus}})`, nested `applicationServices { totalCount }` | `getApplicationFleetList(services: [...])`, its `serviceCount` / `gatewayCount` |
 | per-service counts of suppliers and applications | `getServiceSummaryList(services: [...])` |

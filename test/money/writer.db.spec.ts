@@ -1464,6 +1464,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`UPDATE ${S}.money_progress SET height = $1`, [below.h]);
       const got2 = await c.query(`SELECT height::text, block_time FROM ${S}.get_last_settlement()`);
       assert.deepEqual(got2.rows, [{ height: below.h, block_time: below.block_time }]);
+      // with no progress: one row of NULLs, as the comment says (not set-returning, so not an empty result)
+      await c.query(`DELETE FROM ${S}.money_progress`);
+      const got3 = await c.query(`SELECT height::text, block_time FROM ${S}.get_last_settlement()`);
+      assert.deepEqual(got3.rows, [{ height: null, block_time: null }]);
     } finally {
       await c.query("ROLLBACK");
     }
@@ -1818,7 +1822,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       for (const [args, err] of [
         ["'validator', ARRAY['v1'], NULL, NULL", /kind is supplier, application or gateway/],
         ["'application', ARRAY['a1'], NULL, NULL, owners => ARRAY['own-a']", /owners and operators apply to kind supplier/],
-        ["'supplier', NULL, NULL, NULL", /pass one of suppliers, owners/],
+        ["'supplier', NULL, NULL, NULL", /pass one of addresses, owners/],
+        ["'supplier', ARRAY['s1'], NULL, NULL, owners => ARRAY['own-a']", /pass one of addresses, owners/],
+        ["'supplier', ARRAY[]::text[], NULL, NULL", /addresses must have between 1 and 200 elements/],
         ["'gateway', NULL, NULL, NULL", /addresses must have between 1 and 200 elements/],
         ["'supplier', ARRAY['s1'], NULL, NULL, before_height => 5", /pass both before_height and before_id/],
       ] as const) {
@@ -1837,7 +1843,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`
         CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_amount numeric);
         COMMENT ON TABLE ${S}.suppliers IS E'@foreignKey (owner_id) REFERENCES accounts (id)\n@omit create\nan old text';`);
-      for (let i = 0; i < 2; i++) await c.query(createEntityDescriptionsFn(S));
+      await c.query(createEntityDescriptionsFn(S));
+      const tuples = async () =>
+        (await c.query(`SELECT objsubid, ctid::text FROM pg_description WHERE objoid = '${S}.suppliers'::regclass ORDER BY 1`)).rows;
+      const first = await tuples();
+      assert.equal(first.length, 4, "the table and its 3 columns are described");
+      await c.query(createEntityDescriptionsFn(S));
+      assert.deepEqual(await tuples(), first, "an unchanged description is not written again");
       const t = (await c.query(`SELECT obj_description('${S}.suppliers'::regclass, 'pg_class') d`)).rows[0].d as string;
       assert.equal(
         t,
@@ -1940,14 +1952,17 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           ADD COLUMN total_estimated_relays numeric, ADD COLUMN total_computed_units numeric,
           ADD COLUMN total_estimated_computed_units numeric;
         INSERT INTO ${S}.blocks SELECT 1000 + g, '2026-03-01 10:30'::timestamp + g * interval '1 minute', 100 + g, 60000 + g, g % 5,
-          g % 5 - g % 2, g % 2, 10 * g, 11 * g, 20 * g, 21 * g FROM generate_series(0, 119) g;`);
+          g % 5 - g % 2, g % 2, 10 * g, 11 * g, 20 * g, 21 * g FROM generate_series(0, 119) g;
+        -- the first block: its previous one is not indexed, so update_block_took leaves 0
+        UPDATE ${S}.blocks SET time_to_block = 0 WHERE id = 1000;`);
       const want = async (trunc: string | null, from: string, to: string) =>
         (
           await c.query(
             `SELECT count(*) || ' ' || min(id) || ' ' || max(id) || ' ' || sum(total_txs) || ' ' || sum(successful_txs) || ' '
                     || sum(failed_txs) || ' ' || sum(total_relays) || ' ' || sum(total_estimated_relays) || ' '
                     || sum(total_computed_units) || ' ' || sum(total_estimated_computed_units) || ' '
-                    || round(avg(time_to_block), 3) || ' ' || min(time_to_block) || ' ' || max(time_to_block) || ' '
+                    || round(avg(time_to_block) FILTER (WHERE time_to_block > 0), 3) || ' '
+                    || min(time_to_block) FILTER (WHERE time_to_block > 0) || ' ' || max(time_to_block) || ' '
                     || round(avg(size), 3) k
              FROM ${S}.blocks WHERE timestamp >= $2::timestamptz AT TIME ZONE 'UTC' AND timestamp < $3::timestamptz AT TIME ZONE 'UTC'
              GROUP BY CASE WHEN $1::text IS NULL THEN NULL ELSE date_trunc($1, timestamp) END ORDER BY min(timestamp) DESC`,
@@ -1973,6 +1988,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ] as const) {
         const rows = await got(bucket, from, to);
         assert.deepEqual([bucket, from, rows.map((r) => r.k)], [bucket, from, await want(bucket, from, to)]);
+        if (bucket === null) assert.match(String(rows[0].k), / 60001 60119 /, "the 0 of block 1000 is not the minimum");
         assert.ok(rows.length > 0);
         if (bucket === "hour")
           for (const r of rows) assert.equal(new Date(r.bucket_end).getTime() - new Date(r.bucket_start).getTime() <= 3600e3, true);

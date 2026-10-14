@@ -103,13 +103,19 @@ export const CATALOG_FUNCTIONS = [
 const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
 
 // The application unbonding events keep the proto's number: get_actor_lifecycle names it with the Application entity's
-// unstaking_reason names. A copy of applications.ts getAppUnbondingReasonFromSDK: change both. The entity can also say
-// TRANSFER, which comes from a transfer, not from an unbonding event. An unbonding end whose reason the indexer did not
-// recognize is stored as -1 (applicationUnbondingReasonFromJSON) and comes as UNRECOGNIZED, the proto's name; an
-// unbonding begin with one stops the indexer (getAppUnbondingReasonFromSDK throws), so none is stored.
+// unstaking_reason names: the mapping of applications.ts getAppUnbondingReasonFromSDK, which applications.spec.ts checks
+// against this one. The entity can also say TRANSFER, which comes from a transfer, not from an unbonding event. An
+// unbonding end whose reason the indexer did not recognize is stored as -1 (applicationUnbondingReasonFromJSON) and comes
+// as UNRECOGNIZED, the proto's name, which the entity's enum lacks; an unbonding begin with one stops the indexer
+// (getAppUnbondingReasonFromSDK throws), so none is stored.
+export const APP_UNBONDING_REASON_NAMES: Record<number, string> = {
+  0: "ELECTIVE",
+  1: "BELOW_MINIMUM_STAKE",
+  2: "MIGRATION",
+};
 const appReason =
-  "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MINIMUM_STAKE' WHEN 2 THEN 'MIGRATION' WHEN -1 THEN 'UNRECOGNIZED' " +
-  "ELSE m.reason::text END";
+  `CASE m.reason ${Object.entries(APP_UNBONDING_REASON_NAMES).map(([n, name]) => `WHEN ${n} THEN '${name}'`).join(" ")} ` +
+  "WHEN -1 THEN 'UNRECOGNIZED' ELSE m.reason::text END";
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
@@ -466,11 +472,12 @@ END $$;
 
 -- The highest height the money tables wrote (settlement_blocks: a height with settlement events, which may have no
 -- settled claim) at or below money_progress.height, and its block time: the one-row money_progress and a probe of the
--- settlement_blocks primary key. It moves forward when a
--- new settlement is written, so a client can poll it and refetch only when it changes. A history fill or gap repair
--- below it does not move it, nor does covered_to advancing with the blocks. After a rewind of the money step it goes
--- back to the highest written height at or below the progress, and forward again as the step rewrites those heights.
--- No row (null in GraphQL) until the first height is written or while money_progress has no row.
+-- settlement_blocks primary key. It moves forward when a new settlement is written, so a client can poll it and refetch
+-- only when it changes. A history fill or gap repair below it does not move it, nor does covered_to advancing with the
+-- blocks. After a rewind of the money step it goes back to the highest written height at or below the progress, and
+-- forward again as the step rewrites those heights. Until the first height is written, or while money_progress has no
+-- row, height and block_time are NULL: not set-returning, so SQL gets one row of NULLs, not an empty result, and
+-- GraphQL gets getLastSettlement null (subql-query 2.22.2, measured 2026-10-14).
 CREATE OR REPLACE FUNCTION ${s}.get_last_settlement(OUT height bigint, OUT block_time timestamptz)
 LANGUAGE sql STABLE AS $$
   -- not past money_progress, as the catalog: a rewound money step leaves its rows above the progress until it
@@ -1140,6 +1147,11 @@ BEGIN
     RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
   END IF;
   IF kind = 'supplier' THEN
+    -- checked here so the errors name addresses, the argument the caller passed, not _supplier_ids' suppliers
+    IF num_nonnulls(addresses, owners, operators) <> 1 THEN
+      RAISE EXCEPTION 'pass one of addresses, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
+    END IF;
+    PERFORM ${s}._validate(addresses, CASE WHEN addresses IS NULL THEN '' ELSE 'addresses' END, range_start, range_end, NULL);
     ids := ${s}._supplier_ids(addresses, owners, operators, true, range_start, range_end, NULL);
   ELSE
     IF num_nonnulls(owners, operators) > 0 THEN
@@ -1259,7 +1271,8 @@ END $$;
 -- Block statistics per bucket from the blocks' own report columns (the indexer fills them per block): blocks, the
 -- heights they span, transactions (total, successful, failed), relays and compute units (claimed and estimated), and
 -- the time between blocks and the block size. Covers the indexed blocks. The whole chain is one parallel scan of
--- blocks (963k rows, 188 ms on the mainnet replica, 2026-10-13); a range reads idx_blocks_timestamp_id (24 hours by
+-- blocks (963k rows, 188 ms on the mainnet replica, 2026-10-13); a block whose previous one is not indexed has
+-- time_to_block 0 (update_block_took), which is no interval: the averages and minimum leave it out. a range reads idx_blocks_timestamp_id (24 hours by
 -- hour 6 ms, 92 days by day 214 ms).
 CREATE OR REPLACE FUNCTION ${s}.get_block_stats(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, blocks bigint, first_height bigint, last_height bigint,
@@ -1277,8 +1290,8 @@ ${covered("blocks", true)}
            ${s}._bucket_end(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.t) b_end,
            count(*)::bigint, min(bl.id)::bigint, max(bl.id)::bigint, sum(bl.total_txs)::numeric,
            sum(bl.successful_txs)::numeric, sum(bl.failed_txs)::numeric, sum(bl.total_relays), sum(bl.total_estimated_relays),
-           sum(bl.total_computed_units), sum(bl.total_estimated_computed_units), round(avg(bl.time_to_block), 3),
-           min(bl.time_to_block), max(bl.time_to_block), round(avg(bl.size), 3)
+           sum(bl.total_computed_units), sum(bl.total_estimated_computed_units), round(avg(bl.time_to_block) FILTER (WHERE bl.time_to_block > 0), 3),
+           min(bl.time_to_block) FILTER (WHERE bl.time_to_block > 0), max(bl.time_to_block), round(avg(bl.size), 3)
     FROM ${s}.blocks bl
     WHERE bl.timestamp >= range_start AT TIME ZONE 'UTC' AND bl.timestamp < range_end AT TIME ZONE 'UTC'
     GROUP BY 1, 2

@@ -276,7 +276,8 @@ export const ENTITY_DESCRIPTIONS: Record<string, { table: string; columns: Recor
   },
 };
 
-// Tables or columns missing from the database are skipped (a schema migration can still be pending);
+// Tables or columns missing from the database are skipped (a schema migration can still be pending), and so are the
+// comments that already say it: each COMMENT takes a lock on its table, and this runs on every start;
 // entityDescriptions.spec.ts keeps the names honest against schema.graphql.
 export function createEntityDescriptionsFn(dbSchema: string): string {
   const s = dbSchema;
@@ -297,10 +298,13 @@ BEGIN
     -- the smart tag lines stay first, the description replaces whatever text followed them
     tags := (SELECT string_agg(l, E'\n' ORDER BY i) FROM unnest(string_to_array(coalesce(r.c, ''), E'\n')) WITH ORDINALITY u(l, i)
              WHERE l ~ '^@');
-    EXECUTE format('COMMENT ON TABLE %s IS %L', r.t, coalesce(tags || E'\n', '') || r.what);
+    IF r.c IS DISTINCT FROM coalesce(tags || E'\n', '') || r.what THEN
+      EXECUTE format('COMMENT ON TABLE %s IS %L', r.t, coalesce(tags || E'\n', '') || r.what);
+    END IF;
   END LOOP;
   FOR r IN SELECT format('%I.%I.%I', '${s}', d.tbl, d.col) target, d.what FROM (VALUES ${columns}) d(tbl, col, what)
-           JOIN information_schema.columns c ON c.table_schema = '${s}' AND c.table_name = d.tbl AND c.column_name = d.col LOOP
+           JOIN information_schema.columns c ON c.table_schema = '${s}' AND c.table_name = d.tbl AND c.column_name = d.col
+           WHERE col_description(format('%I.%I', '${s}', d.tbl)::regclass, c.ordinal_position::int) IS DISTINCT FROM d.what LOOP
     EXECUTE format('COMMENT ON COLUMN %s IS %L', r.target, r.what);
   END LOOP;
 END $$;
