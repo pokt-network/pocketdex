@@ -518,7 +518,7 @@ DO $$
 DECLARE f regprocedure;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
-           JOIN (VALUES ('get_supplier_earnings', 'services')
+           JOIN (VALUES ('get_supplier_earnings', 'gateway_ids')
                       , ('get_created_claims', 'from_session_end_height')
                       , ('get_created_claims_count', 'from_session_end_height')
                       , ('get_service_summary', 'num_relays_ema')
@@ -1782,6 +1782,7 @@ END $$;
 -- daily_claims_by_supplier_application_service. An owner of 1037 suppliers by service over its whole history read 3.07M
 -- daily rows there (mainnet, 2026-10-09), and has 253k monthly ones. services (up to 200) keeps those services' claims,
 -- read from the same per-service sources as by_service (also without it, which then sums them as 'all').
+-- by_application rows carry gateway_ids, the application's gateways now, so a client needs no second read for them.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_earnings(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_application boolean DEFAULT false, by_supplier boolean DEFAULT true,
   owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL,
@@ -1790,7 +1791,7 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text
   claimed_upokt numeric, settled_upokt numeric, overservicing_loss_upokt numeric,
   relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, settled_claims bigint,
   settled_claims_with_proof bigint, settled_claims_without_proof bigint, first_settled_height bigint,
-  last_settled_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+  last_settled_height bigint, gateway_ids text[], covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
 DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz; use_month boolean; mm date[]; dd date[];
   nb date[]; nbm date[];
@@ -1821,7 +1822,7 @@ ${covered("settled")}
                 WHERE date_trunc('month', g)::date <> ALL(mm));
   END IF;
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
-  RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
+  RETURN QUERY WITH q AS (
   WITH res0(bucket_start, bucket_end, supplier_id, service_id, application_id, claimed_upokt, settled_upokt, overservicing_loss_upokt, relays, estimated_relays, compute_units, estimated_compute_units, settled_claims, settled_claims_with_proof, settled_claims_without_proof, first_settled_height, last_settled_height) AS (
   WITH r AS (
     -- without a breakdown the smaller daily_claims_by_supplier is enough (25x fewer rows over every supplier); services
@@ -1893,7 +1894,16 @@ ${covered("settled")}
   CROSS JOIN (SELECT r.supplier_id, r.service_id, r.application_id, bool_and(r.claimed_upokt IS NULL) claimed_upokt_na, bool_and(r.settled_upokt IS NULL) settled_upokt_na, bool_and(r.overservicing_loss_upokt IS NULL) overservicing_loss_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.settled_claims IS NULL) settled_claims_na, bool_and(r.settled_claims_with_proof IS NULL) settled_claims_with_proof_na, bool_and(r.settled_claims_without_proof IS NULL) settled_claims_without_proof_na FROM res r GROUP BY r.supplier_id, r.service_id, r.application_id) k
   WHERE bucket IS NOT NULL AND fill_empty_buckets
     AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)) AND coalesce(r.application_id, chr(1)) = coalesce(k.application_id, chr(1)))
-  ) q ORDER BY 1 DESC, 3, 4, 5;
+  ), gw AS (
+    -- by_application: each application's gateways now (application_gateways is small: 411 rows on mainnet, 2026-10-14)
+    SELECT g.application_id, array_agg(DISTINCT g.gateway_id ORDER BY g.gateway_id) ids FROM ${s}.application_gateways g
+    WHERE by_application AND g._block_range @> 9223372036854775807::bigint
+      AND g.application_id IN (SELECT DISTINCT q.application_id FROM q)
+    GROUP BY 1
+  )
+  SELECT q.*, CASE WHEN by_application THEN coalesce(gw.ids, '{}'::text[]) END, cv.covered_from, cv.covered_to, cv.gaps
+  FROM q LEFT JOIN gw ON gw.application_id = q.application_id
+  ORDER BY 1 DESC, 3, 4, 5;
 END $$;
 
 -- Supplier: how what it generated was distributed. Stakers come as ONE row per supplier with recipient 'all'

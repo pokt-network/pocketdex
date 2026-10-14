@@ -3007,6 +3007,24 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       c.query(`SELECT * FROM ${S}.get_supplier_earnings(NULL, NULL, NULL, services => ARRAY[]::text[])`),
       /services must have between 1 and 200 elements/
     );
+    // by_application rows carry each application's gateways now; NULL without by_application
+    await c.query("BEGIN");
+    try {
+      const app = (await c.query(`SELECT application_id FROM ${S}.claim_settlements WHERE supplier_id = $1 LIMIT 1`, [top.supplier_id]))
+        .rows[0].application_id;
+      await c.query(`INSERT INTO ${S}.application_gateways VALUES ('gw-b', $1, int8range(1, NULL)), ('gw-a', $1, int8range(1, NULL)),
+                       ('gw-old', $1, int8range(1, 2))`, [app]);
+      const gws = await c.query(
+        `SELECT application_id, array_to_string(gateway_ids, ',') g FROM ${S}.get_supplier_earnings(ARRAY[$1], NULL, NULL, by_application => true)`,
+        [top.supplier_id]
+      );
+      assert.ok(gws.rows.length > 1);
+      for (const r of gws.rows) assert.equal(r.g, r.application_id === app ? "gw-a,gw-b" : "", String(r.application_id));
+      const none = await c.query(`SELECT DISTINCT gateway_ids FROM ${S}.get_supplier_earnings(ARRAY[$1], NULL, NULL)`, [top.supplier_id]);
+      assert.deepEqual(none.rows, [{ gateway_ids: null }]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
   });
 
   it("get_supplier_earnings counts settled claims with and without a proof, from the rollup and from the base", async () => {
