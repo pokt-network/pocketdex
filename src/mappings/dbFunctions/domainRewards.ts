@@ -260,5 +260,12 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     // summary of every service read all 1.06M and sorted them per service (2.2 s, mainnet replica 2026-10-14).
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rmd_service_block
       ON ${dbSchema}.event_relay_mining_difficulty_updateds (service_id, block_id)`,
+    // Morse claimable accounts by their Shannon destination and by their Morse address (/migration search,
+    // pnf-explorer): only GiST indexes on other columns, so each lookup scanned the table (57,764 rows, 53 MB on
+    // mainnet, 2026-10-14).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_morse_claimable_accounts_shannon_dest
+      ON ${dbSchema}.morse_claimable_accounts (shannon_dest_address)`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_morse_claimable_accounts_morse_output
+      ON ${dbSchema}.morse_claimable_accounts (morse_output_address)`,
   ];
 }
