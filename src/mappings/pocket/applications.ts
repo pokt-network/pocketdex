@@ -534,8 +534,10 @@ async function _handleTransferApplicationEndEvent(
     }).save(),
     store.bulkCreate("ApplicationService", newApplicationServices),
     store.bulkCreate("ApplicationGateway", appDelegatedToGateways),
-    store.bulkRemove("ApplicationService", sourceApplicationServices.map(service => service.id)),
-    store.bulkRemove("ApplicationGateway", sourceApplicationGateways.map(item => item.id)),
+    removeApplicationDelegationsAndServices([sourceAddress], {
+      services: sourceApplicationServices,
+      gateways: sourceApplicationGateways,
+    }),
   ]);
 
   return [sourceApplication, destinationApplication];
@@ -760,12 +762,6 @@ async function _handleApplicationUnbondingEndEvent(
   application.unstakingEndBlockId = getBlockId(event.block);
   // stakeStatus is owned by reconcile — app will be absent from AllApplications at this height, so reconcile marks it Unstaked via the tracked loop. unstakingReason was already set by handleApplicationUnbondingBeginEvent; don't overwrite it here.
 
-  const applicationServices = (await fetchAllApplicationServiceByApplicationId(applicationAddress)).map(item => item.id);
-  // The chain deletes the whole application at unbonding end (x/application RemoveApplication), its gateway
-  // delegations included, without a per-gateway event. Close them here too, or the gateway keeps being
-  // credited with what the application spends after it stakes again.
-  const applicationGateways = (await fetchAllApplicationGatewayByApplicationId(applicationAddress)).map(item => item.id);
-
   const eventId = getEventId(event);
 
   await Promise.all([
@@ -778,8 +774,10 @@ async function _handleApplicationUnbondingEndEvent(
       applicationId: applicationAddress,
       eventId,
     }).save(),
-    store.bulkRemove("ApplicationService", applicationServices),
-    store.bulkRemove("ApplicationGateway", applicationGateways),
+    // the chain deletes the whole application at unbonding end, its gateway delegations included, without a
+    // per-gateway event: close them, or the gateway keeps being credited with what the application spends after it
+    // stakes again
+    removeApplicationDelegationsAndServices([applicationAddress]),
   ]);
 
   return application;
@@ -996,17 +994,21 @@ export async function handleApplicationUnbondingBeginEvent(
 }
 
 // The chain deletes an application's gateway delegations and service configs with it (x/application
-// RemoveApplication). The unbonding-end and transfer-end handlers close them; an application the reconcile closes out
-// as Unstaked without them (an end event the indexer missed) must close them too, or its gateways stay delegated, as
-// 57 mainnet rows did whose end events were indexed before the unbonding-end handler closed delegations (dd64251).
-export async function removeApplicationDelegationsAndServices(applicationIds: Array<string>): Promise<void> {
-  const [services, gateways] = await Promise.all([
-    Promise.all(applicationIds.map(fetchAllApplicationServiceByApplicationId)),
-    Promise.all(applicationIds.map(fetchAllApplicationGatewayByApplicationId)),
-  ]);
+// RemoveApplication). The three paths that end an application close them through this one helper: unbonding end,
+// transfer end (which passes the rows it already read to copy them to the destination) and the reconcile's close-out
+// of an application whose end event the indexer missed, or its gateways stay delegated, as 57 mainnet rows did whose
+// end events were indexed before the unbonding-end handler closed delegations (dd64251).
+export async function removeApplicationDelegationsAndServices(
+  applicationIds: Array<string>,
+  read?: { services: Array<{ id: string }>; gateways: Array<{ id: string }> },
+): Promise<void> {
+  const rows = read ?? {
+    services: (await Promise.all(applicationIds.map(fetchAllApplicationServiceByApplicationId))).flat(),
+    gateways: (await Promise.all(applicationIds.map(fetchAllApplicationGatewayByApplicationId))).flat(),
+  };
   await Promise.all([
-    store.bulkRemove("ApplicationService", services.flat().map(({ id }) => id)),
-    store.bulkRemove("ApplicationGateway", gateways.flat().map(({ id }) => id)),
+    store.bulkRemove("ApplicationService", rows.services.map(({ id }) => id)),
+    store.bulkRemove("ApplicationGateway", rows.gateways.map(({ id }) => id)),
   ]);
 }
 
