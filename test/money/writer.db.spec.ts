@@ -1593,6 +1593,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["owners => ARRAY['nobody']", []],
         ["services => ARRAY['svc-y']", ["s1 own-a Staked 300 2 1"]],
         ["owners => ARRAY['own-b'], services => ARRAY['svc-x']", ["s3 own-b Staked 500 1 1"]],
+        // suppliers with owners or operators: the listed ones among theirs, per supplier or as one row
+        ["suppliers => ARRAY['s1', 's2', 's3'], owners => ARRAY['own-a']", ["s1 own-a Staked 300 2 1", "s2 own-a Unstaking 100 0 1"]],
+        ["suppliers => ARRAY['s1', 's3', 's4'], operators => ARRAY['op-1'], by_supplier => false", ["all  all 800  2"]],
+        ["suppliers => ARRAY['s4', 's2'], operators => ARRAY['op-1'], operator_scope => 'ever'", ["s4 own-b Unstaked 50 0 1"]],
+        ["suppliers => ARRAY['s2'], operators => ARRAY['op-1'], by_supplier => false", ["all  all 0  0"]],
+        ["suppliers => ARRAY['s2'], operators => ARRAY['op-1']", []],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
       // domains ranked by what was claimed on them, with the Staked suppliers on each now and their stake
@@ -1681,6 +1687,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["operator_scope => 'ever'", /operator_scope ever applies to operators/],
         ["operators => ARRAY['op-1'], owners => ARRAY['own-a'], operator_scope => 'ever'", /pass one of suppliers, owners/],
         ["operators => ARRAY[]::text[], operator_scope => 'ever'", /operators must have between 1 and 200 elements/],
+        ["suppliers => ARRAY[]::text[], owners => ARRAY['own-a']", /suppliers must have between 1 and 200 elements/],
+        ["suppliers => ARRAY['s1'], owners => ARRAY['own-a'], operators => ARRAY['op-1']", /pass one of suppliers, owners/],
         ["stake_statuses => ARRAY['Bonded']", /stake_statuses takes Staked, Unstaking and Unstaked/],
         ["domains => ARRAY[]::text[]", /domains must have between 1 and 200 elements/],
       ] as const) {
