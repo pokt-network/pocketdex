@@ -280,6 +280,10 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
     `NOT EXISTS (SELECT 1 FROM ${s}.supplier_service_configs c2 WHERE c2.supplier_id = ${a}.supplier_id
                  AND c2.service_id = ${a}.service_id AND upper_inf(c2._block_range)
                  AND lower(c2._block_range) > lower(${a}._block_range))`;
+  // get_claims' current_owner_id: the supplier's owner now (its live version; the newer one if two are live for a moment)
+  const currentOwner = (alias: string) =>
+    `(SELECT su.owner_id FROM ${s}.suppliers su WHERE su.id = ${alias}.supplier_id AND upper_inf(su._block_range)
+      ORDER BY lower(su._block_range) DESC LIMIT 1)`;
   // the reshaped helpers as SQL VALUES (name, signature or NULL): the DDL drops their other overloads
   const helperValues = Object.entries(HELPER_SIGNATURES)
     .map(([name, args]) => `('${name}', ${args === null ? "NULL" : `'${args}'`})`)
@@ -520,6 +524,7 @@ BEGIN
                       , ('get_service_summary', 'num_relays_ema')
                       , ('get_height_at', 'beyond_tip')
                       , ('get_supplier_fleet', 'after_supplier_id')
+                      , ('get_claims', 'current_owner_id')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -1463,7 +1468,7 @@ RETURNS TABLE(status text, height bigint, event_idx integer, block_time timestam
   supplier_owner_id text, application_id text, service_id text, session_id text, session_end_height bigint,
   relays bigint, estimated_relays bigint, claimed_compute_units bigint, estimated_compute_units bigint,
   claimed_upokt bigint, settled_upokt bigint, relay_minted_upokt bigint, global_minted_upokt bigint,
-  overservicing_loss_upokt bigint, settled_with_proof boolean, expiration_reason text,
+  overservicing_loss_upokt bigint, settled_with_proof boolean, expiration_reason text, current_owner_id text,
   covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE cv record; lo bigint; hi bigint; ids text[]; path text; bh bigint; be integer;
@@ -1558,12 +1563,13 @@ ${covered(null)}
     SELECT 'settled'::text, c.height, c.event_idx, c.block_time, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id,
            c.service_id, c.session_id, c.session_end, c.relays, c.estimated_relays, c.claimed_compute_units,
            c.estimated_compute_units, c.claimed_upokt, c.settled_upokt, c.relay_minted_upokt, c.global_minted_upokt,
-           c.overservicing_loss_upokt, c.settled_with_proof, NULL::text, cv.covered_from, cv.covered_to, cv.gaps
+           c.overservicing_loss_upokt, c.settled_with_proof, NULL::text, ${currentOwner("c")}, cv.covered_from, cv.covered_to,
+           cv.gaps
     FROM k JOIN ${s}.claim_settlements c ON c.height = k.height AND c.event_idx = k.event_idx
     UNION ALL
     SELECT 'expired', e.height, e.event_idx, sb.block_time, e.supplier_id, NULL, e.application_id, e.service_id, NULL,
            e.session_end, e.relays, e.estimated_relays, e.claimed_compute_units, e.estimated_compute_units,
-           e.claimed_upokt, NULL, NULL, NULL, NULL, NULL, e.reason, cv.covered_from, cv.covered_to, cv.gaps
+           e.claimed_upokt, NULL, NULL, NULL, NULL, NULL, e.reason, ${currentOwner("e")}, cv.covered_from, cv.covered_to, cv.gaps
     FROM x JOIN ${s}.claim_expirations e ON e.height = x.height AND e.event_idx = x.event_idx
     JOIN ${s}.settlement_blocks sb ON sb.height = e.height
   ) r ORDER BY 2 DESC, 3 DESC LIMIT row_limit;

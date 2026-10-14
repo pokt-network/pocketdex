@@ -1,4 +1,4 @@
-// The entity tables the newer catalog functions read (get_actor_lifecycle, get_relay_mining_difficulty,
+// The entity tables the newer catalog functions read (get_actor_lifecycle, get_relay_mining_difficulty, get_claims,
 // get_created_claims, get_block_stats, get_morse_claims), reduced to their columns, with one row per height that the heights query
 // returns (each height needs its blocks row): supplier sup-l, application app-l, service svc-d; and the blocks' report
 // columns. Run inside the test's transaction.
@@ -44,6 +44,9 @@ export const entityStubsSql = (S: string, heights: string): string => `
       CREATE TABLE ${S}.msg_claim_morse_supplier_services (id text, claim_msg_id text, service_id text);
       CREATE TABLE ${S}.msg_recover_morse_accounts (id text, shannon_dest_address_id text, morse_src_address text,
         recovered_balance_amount numeric, is_admin boolean, block_id numeric, transaction_id text);
+      -- get_claims' current_owner_id
+      CREATE TABLE IF NOT EXISTS ${S}.suppliers (id text, _block_range int8range);
+      ALTER TABLE ${S}.suppliers ADD COLUMN IF NOT EXISTS owner_id text;
       CREATE TABLE ${S}.msg_create_claims (id text, supplier_id text, application_id text, service_id text, session_id text,
         session_end_height numeric, num_relays numeric, num_estimated_relays numeric, num_claimed_computed_units numeric,
         num_estimated_computed_units numeric, claimed_amount numeric, transaction_id text, block_id numeric);
