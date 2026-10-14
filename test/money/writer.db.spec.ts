@@ -1474,6 +1474,58 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("get_staked_supplier_services lists the live configs of Staked suppliers and pages by keyset", async () => {
+    await c.query("BEGIN");
+    try {
+      // s1 Staked with two live configs and a closed one; s2 Unstaked (its live config must not show); s3 Staked
+      await c.query(`
+        CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_status text, stake_amount numeric, _block_range int8range);
+        INSERT INTO ${S}.suppliers VALUES ('s1', 'own-a', 'Staked', 300, int8range(5, NULL)), ('s1', 'own-x', 'Staked', 100, int8range(1, 5)),
+          ('s2', 'own-a', 'Unstaked', 0, int8range(1, NULL)), ('s3', 'own-b', 'Staked', 500, int8range(1, NULL));
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, domains jsonb, activated_at_id numeric,
+          _block_range int8range);
+        INSERT INTO ${S}.supplier_service_configs VALUES
+          ('s1', 'svc-x', '["a.net"]', 10, int8range(1, NULL)), ('s1', 'svc-y', '["a.net", "b.io"]', 12, int8range(1, NULL)),
+          ('s1', 'svc-z', '["c.org"]', 3, int8range(1, 4)), ('s2', 'svc-x', '["a.net"]', 2, int8range(1, NULL)),
+          ('s3', 'svc-x', 'null', 7, int8range(1, NULL));`);
+      const got = async (args: string) =>
+        (
+          await c.query(
+            `SELECT concat_ws(' ', supplier_id, service_id, owner_id, stake_upokt, array_to_string(domains, ','), activated_at_height) k
+             FROM ${S}.get_staked_supplier_services(${args})`
+          )
+        ).rows.map((r) => String(r.k));
+      const all = ["s1 svc-x own-a 300 a.net 10", "s1 svc-y own-a 300 a.net,b.io 12", "s3 svc-x own-b 500  7"];
+      assert.deepEqual(await got(""), all);
+      assert.deepEqual(await got("services => ARRAY['svc-x']"), [all[0], all[2]]);
+      const paged: string[] = [];
+      let page = await got("row_limit => 1");
+      paged.push(...page);
+      while (page.length === 1) {
+        const [sup, svc] = page[0].split(" ");
+        page = await got(`row_limit => 1, after_supplier_id => '${sup}', after_service_id => '${svc}'`);
+        paged.push(...page);
+      }
+      assert.deepEqual(paged, all);
+      for (const [args, err] of [
+        ["row_limit => 0", /row_limit must be between 1 and 1000/],
+        ["after_supplier_id => 's1'", /pass both after_supplier_id and after_service_id/],
+        ["services => ARRAY[]::text[]", /services must have between 1 and 200 elements/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_supplier_services(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(
+      `SELECT obj_description(p.oid, 'pg_proc') d FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = 'get_staked_supplier_services'`,
+      [S]
+    );
+    assert.match(String(d.rows[0].d), /^@simpleCollections only\nLive service configs[\s\S]*pass the last row's keys as after_\*/);
+  });
+
   it("get_supplier_fleet, get_service_summary and get_application_fleet read the current versions, per actor or as one fleet row", async () => {
     await c.query("BEGIN");
     try {

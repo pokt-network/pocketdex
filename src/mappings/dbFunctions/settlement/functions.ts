@@ -1112,6 +1112,38 @@ BEGIN
   ORDER BY 2 DESC, 1;
 END $$;
 
+-- The live service configs of the Staked suppliers, one row per (supplier, service), with the supplier's owner and stake
+-- and the config's endpoint domains: the suppliers { serviceConfigs } join consumers built by hand (158,314 live configs
+-- on mainnet, 2026-10-14, unique per supplier and service). Keyset paging on (supplier_id, service_id) through
+-- idx_ssc_live_supplier_service; services narrows through idx_ssc_live_service.
+CREATE OR REPLACE FUNCTION ${s}.get_staked_supplier_services(services text[] DEFAULT NULL, row_limit integer DEFAULT 1000,
+  after_supplier_id text DEFAULT NULL, after_service_id text DEFAULT NULL)
+RETURNS TABLE(supplier_id text, service_id text, owner_id text, stake_upokt numeric, domains text[],
+  activated_at_height bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_supplier_id / after_service_id', row_limit;
+  END IF;
+  IF (after_supplier_id IS NULL) <> (after_service_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both after_supplier_id and after_service_id (the last row of the previous page), or neither';
+  END IF;
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  RETURN QUERY
+  SELECT c.supplier_id, c.service_id, su.owner_id, su.stake_amount,
+         ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.domains) = 'array' THEN c.domains ELSE '[]'::jsonb END)),
+         c.activated_at_id::bigint
+  FROM ${s}.supplier_service_configs c
+  JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+  WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services))
+    -- the plain bound lets the index range start at the key; with the row comparison alone the planner walked the
+    -- suppliers from the first one (1.2 s for a middle page on mainnet; 26 ms with it, 2026-10-14)
+    AND (after_supplier_id IS NULL OR c.supplier_id >= after_supplier_id)
+    AND (after_supplier_id IS NULL OR (c.supplier_id, c.service_id) > (after_supplier_id, after_service_id))
+  ORDER BY c.supplier_id, c.service_id
+  LIMIT row_limit;
+END $$;
+
 -- Created claims (MsgCreateClaim) counted per supplier, for up to 20 suppliers, in [range_start, range_end): what
 -- msgCreateClaims { totalCount } answered, which get_created_claims can only list row by row. One row per requested
 -- supplier, 0 when it made none, with the first and last height counted. Covers the indexed blocks (_block_heights of

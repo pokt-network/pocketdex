@@ -223,11 +223,15 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
     "Supplier domains (the root domains of the endpoints suppliers stake with) ranked by what their suppliers claimed: claimed_upokt, relays and compute units summed over the UTC days that start inside [range_start, range_end) (NULL = every day; first_day and last_day = the days found), with staked_suppliers = the Staked suppliers that have a live service config on the domain now and staked_upokt = their stake. top = the first N domains (NULL = all).",
   get_created_claims_count:
     "Created claims (MsgCreateClaim) counted per supplier, for up to 20 suppliers, in [range_start, range_end) (timestamptz with an explicit zone; NULL = the whole history): one row per requested supplier with claims (0 when it made none) and the first and last height counted. Covers the indexed blocks. To list the claims themselves use get_created_claims.",
+  get_staked_supplier_services:
+    "Live service configs of the Staked suppliers now, one row per (supplier, service): the supplier's owner_id and stake_upokt, the service, the endpoint root domains of that config, and activated_at_height (the height from which the chain serves the config; a config waiting for its session start has a height above the current block). services keeps those services (up to 200; NULL = all). Ordered by supplier_id, then service_id; for the next page pass the last row's supplier_id and service_id as after_supplier_id and after_service_id.",
   get_morse_claim_summary:
     "Morse migration now: the Morse accounts imported for claiming on Shannon, one row for the claimed ones and one for the unclaimed: accounts, and the sums of their liquid balance (unstaked_balance_upokt) and of the supplier and application stakes they carry. The accounts one by one: morseClaimableAccounts.",
 };
 export const STATE_FUNCTIONS = Object.keys(STATE_DESCRIPTIONS);
 const STATE_ROWS_NOTE = `'Rows paged by GraphQL (first / offset) up to the query limit (1000); page in this order for longer answers. Amounts in upokt.'`;
+// the state functions that page by keyset (an input argument named after_*)
+const STATE_KEYSET_NOTE = `'At most row_limit rows (default 1000, up to 1000) per call, in the order of the after_* keys: for the next page pass the last row''s keys as after_*, until a page comes back short; not first / offset. Amounts in upokt.'`;
 
 export function createSettlementSmartTagsFn(dbSchema: string): string {
   const s = dbSchema;
@@ -284,7 +288,9 @@ BEGIN
   FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            JOIN (VALUES ${state}) d(name, what) ON d.name = p.proname
            WHERE n.nspname = '${s}' AND p.prokind = 'f' AND p.proretset LOOP
-    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@simpleCollections only' || E'\n' || what || ' ' || ${STATE_ROWS_NOTE}
+    EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@simpleCollections only' || E'\n' || what || ' '
+      || CASE WHEN EXISTS (SELECT 1 FROM pg_proc p2, unnest(p2.proargnames[1:p2.pronargs]) a
+                           WHERE p2.oid = f AND a LIKE 'after\_%') THEN ${STATE_KEYSET_NOTE} ELSE ${STATE_ROWS_NOTE} END
       || E'\nColumns: ' || pg_get_function_result(f));
   END LOOP;
   FOR f, what IN SELECT p.oid::regprocedure, d.what FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
