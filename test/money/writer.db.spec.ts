@@ -1658,6 +1658,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           ('s6', 'svc-b', '["y.io"]', 2, int8range(2, 5));`);
       assert.deepEqual(await staked("stake_statuses => ARRAY['Unstaked']"), ["s2 own-a op-s2 0 svc-x a.net 1 1", "s6 own-d op-s6 0 svc-a x.io 1 1"]);
       assert.deepEqual(await staked("stake_statuses => ARRAY['Staked', 'Unstaked'], row_limit => 2"), [sup[0], "s2 own-a op-s2 0 svc-x a.net 1 1"]);
+      // a Staked supplier with no live config gets empty arrays, not its closed configs, whatever else is asked for
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s5', 'svc-q', '["q.io"]', 1, int8range(1, 3))`);
+      assert.deepEqual(await staked("stake_statuses => ARRAY['Staked', 'Unstaked'], after_supplier_id => 's3'"),
+        ["s5 own-c op-s5 70   0 0", "s6 own-d op-s6 0 svc-a x.io 1 1"]);
       await c.query("SAVEPOINT e");
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(stake_statuses => ARRAY['Bonded'])`), /stake_statuses takes Staked/);
       await c.query("ROLLBACK TO SAVEPOINT e");
