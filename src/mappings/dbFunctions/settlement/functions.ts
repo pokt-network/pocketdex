@@ -248,7 +248,7 @@ const lifecycleBranches = (s: string) =>
     }))
   );
 
-// operator_scope (get_supplier_fleet, get_claims, get_actor_lifecycle): now (default) = operators as _supplier_ids
+// operator_scope (get_supplier_fleet, get_claims, get_actor_lifecycle, get_supplier_penalties): now (default) = operators as _supplier_ids
 // resolves them; ever = every supplier any version of whose service configs shared revenue with them
 // (_operator_suppliers_ever), in any stake status, with all its rows. list = the function's own supplier list argument.
 const OPERATOR_SCOPE_CHECK = `  IF operator_scope IS NULL OR operator_scope NOT IN ('now', 'ever') THEN
@@ -257,13 +257,13 @@ const OPERATOR_SCOPE_CHECK = `  IF operator_scope IS NULL OR operator_scope NOT 
   IF operator_scope = 'ever' AND operators IS NULL THEN
     RAISE EXCEPTION 'operator_scope ever applies to operators';
   END IF;`;
-const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: string, re: string, pad = "  ") =>
+const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: string, re: string, pad = "  ", bucket = "NULL") =>
   [
     `IF operator_scope = 'ever' AND num_nonnulls(${list}, owners) = 0 THEN`,
-    `  PERFORM ${s}._validate(operators, 'operators', ${rs}, ${re}, NULL);`,
+    `  PERFORM ${s}._validate(operators, 'operators', ${rs}, ${re}, ${bucket});`,
     `  ids := ${s}._operator_suppliers_ever(operators);`,
     `ELSE`,
-    `  ids := ${s}._supplier_ids(${list}, owners, operators, ${requireOne}, ${rs}, ${re}, NULL);`,
+    `  ids := ${s}._supplier_ids(${list}, owners, operators, ${requireOne}, ${rs}, ${re}, ${bucket});`,
     `END IF;`,
   ].map((l) => pad + l).join("\n");
 
@@ -482,7 +482,7 @@ BEGIN
   END LOOP;
 END $$;
 
--- operator_scope came last to get_supplier_fleet, get_claims and get_actor_lifecycle, and gateway_id to the rows of
+-- operator_scope came last to get_supplier_fleet, get_claims, get_actor_lifecycle and get_supplier_penalties, and gateway_id to the rows of
 -- get_actor_lifecycle: likewise, a database written by an earlier build of them has those dropped first (their _json
 -- twins are rebuilt below).
 DO $$
@@ -490,7 +490,7 @@ DECLARE f regprocedure;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            WHERE p.pronamespace = '${s}'::regnamespace
-             AND p.proname IN ('get_supplier_fleet', 'get_claims', 'get_actor_lifecycle')
+             AND p.proname IN ('get_supplier_fleet', 'get_claims', 'get_actor_lifecycle', 'get_supplier_penalties')
              AND (NOT ('operator_scope' = ANY(coalesce(p.proargnames, '{}')))
                   OR p.proname = 'get_actor_lifecycle' AND NOT ('gateway_id' = ANY(coalesce(p.proargnames, '{}')))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -895,16 +895,27 @@ BEGIN
 END $$;
 
 -- The suppliers that shared revenue with the addresses at any time: any version of a service config, live or closed,
--- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). SubQuery's GIN on rev_share
--- (jsonb_ops) serves the containment: the largest operator's 1,995 suppliers (1,055 now) in 1.3 s on mainnet
--- (2026-10-14).
+-- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). Every stake writes new versions of
+-- all a supplier's configs (~10.7M on mainnet, ~900 per supplier), so containment through SubQuery's GIN on rev_share
+-- found ~980k versions per large operator and read them from the heap: 12 s for the 7 largest (mainnet replica,
+-- 2026-10-14). A loose scan of idx_ssc_supplier_rev_share_addresses visits each distinct (supplier, address list) once
+-- instead (~53k on mainnet) and keeps those that list an address: ~0.43 s warm whatever the addresses, on a local copy
+-- of mainnet's distribution (10.2M versions, 2026-10-14). The expression must stay the index's to use it.
 CREATE OR REPLACE FUNCTION ${s}._operator_suppliers_ever(addresses text[]) RETURNS text[]
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   RETURN ARRAY(
-    SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
-    JOIN ${s}.supplier_service_configs ssc ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a))
-    ORDER BY 1);
+    WITH RECURSIVE t(sid, k) AS (
+      (SELECT c.supplier_id, jsonb_path_query_array(c.rev_share, '$[*].address')::text
+       FROM ${s}.supplier_service_configs c ORDER BY 1, 2 LIMIT 1)
+      UNION ALL
+      SELECT n.sid, n.k FROM t CROSS JOIN LATERAL (
+        SELECT c.supplier_id sid, jsonb_path_query_array(c.rev_share, '$[*].address')::text k
+        FROM ${s}.supplier_service_configs c
+        WHERE (c.supplier_id, jsonb_path_query_array(c.rev_share, '$[*].address')::text) > (t.sid, t.k)
+        ORDER BY 1, 2 LIMIT 1) n
+    )
+    SELECT DISTINCT t.sid FROM t WHERE t.k::jsonb ?| addresses ORDER BY 1);
 END $$;
 
 -- The suppliers a supplier function answers for, from its three lists, of which it takes at most one: suppliers as given
@@ -2109,17 +2120,22 @@ END $$;
 
 -- Supplier penalties: expired and discarded claims, and slashes. Base only: they are rare. A discarded
 -- claim has no amount_upokt or relay counts on chain: NULL, not 0.
+-- operator_scope ever: every supplier that shared revenue with the operators at any time (_operator_suppliers_ever),
+-- for the slashes of the suppliers an operator ran before.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_penalties(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL,
+  operator_scope text DEFAULT 'now')
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, kind text, reason text, events bigint, claimed_upokt numeric,
   slashed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz;
+DECLARE rg record; sp record; all_suppliers boolean; cv record; fb timestamptz; ids text[];
 BEGIN
+${OPERATOR_SCOPE_CHECK}
   -- NULL (no suppliers, owners or operators): every supplier
-  suppliers := ${s}._supplier_ids(suppliers, owners, operators, false, range_start, range_end, bucket);
+${scopedSupplierIds(s, "suppliers", false, "range_start", "range_end", "  ", "bucket")}
+  suppliers := ids;
   all_suppliers := suppliers IS NULL;
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket, true);

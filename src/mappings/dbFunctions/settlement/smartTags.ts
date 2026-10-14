@@ -175,7 +175,7 @@ const DESCRIPTIONS: Record<string, string> = {
   get_supply_flows:
     "Network supply flows: burn, relay mint (mint_equals_burn), mint_ratio_unminted, overservicing loss, global mint and reimbursement, each by receiving role (by_role), plus slashes. Mainnet 690,685 to 716,533: one supplier paid a shareholder twice (poktroll v0.1.29 to v0.1.33), and the supplier role of mint_equals_burn and global_mint includes that overpayment (about 39 POKT), which came from the supplier module, not from the mint.",
   get_supplier_penalties:
-    "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; suppliers NULL = every supplier; by_service, by_supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now) in place of suppliers.",
+    "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; suppliers NULL = every supplier; by_service, by_supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now; operator_scope ever = every supplier any of whose service configs shared revenue with them at any time, in any stake status) in place of suppliers.",
   get_service_usage:
     "Service usage: claimed and settled upokt, relays, compute units and claims per service; services, or top_by_settled = N for the N services that settled the most (rank_by_settled); by_service.",
   get_app_auto_unstakes:

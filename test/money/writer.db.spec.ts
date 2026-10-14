@@ -2369,6 +2369,27 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         { kind: "slashed", reason: "PROOF_INVALID", claimed: null, slashed: "30", relays: null },
         { kind: "slashed", reason: "unknown", claimed: null, slashed: "5", relays: null },
       ]);
+      // operator_scope ever: sup-x shared revenue with op-old in a closed config version only, and is no supplier now
+      await c.query(`
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range);
+        INSERT INTO ${S}.supplier_service_configs VALUES ('sup-x', 'svc-x', '[{"address": "op-new"}, {"address": "op-old"}]', int8range(1, 9)),
+          ('sup-x', 'svc-x', '[{"address": "op-new"}]', int8range(9, NULL)), ('sup-z', 'svc-x', '[{"address": "op-z"}]', int8range(1, NULL));
+        CREATE TABLE ${S}.suppliers (id text, stake_status text, _block_range int8range);`);
+      const scoped = async (args: string) =>
+        (
+          await c.query(`SELECT kind, reason, slashed_upokt::text slashed FROM ${S}.get_supplier_penalties(NULL, NULL, NULL,
+                           operators => ARRAY['op-old'], ${args}) ORDER BY kind, reason`)
+        ).rows;
+      assert.deepEqual(await scoped("operator_scope => 'ever'"), rows.map(({ kind, reason, slashed }) => ({ kind, reason, slashed })));
+      assert.deepEqual(await scoped("operator_scope => 'now'"), []);
+      for (const [args, err] of [
+        ["operator_scope => 'past'", /operator_scope is now or ever \(has past\)/],
+        ["operator_scope => 'ever', bucket => 'minute'", /invalid bucket: minute/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(scoped(args), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
     } finally {
       await c.query("ROLLBACK");
     }
