@@ -12,6 +12,7 @@ import { after, before, describe, it } from "node:test";
 import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
 import { createEntityDescriptionsFn } from "../../src/mappings/dbFunctions/entityDescriptions";
+import { createDeprecationsFn, DEPRECATED_RELATION, deprecatedTag } from "../../src/mappings/dbFunctions/deprecations";
 import { getSupplierStatsByDomainsFn } from "../../src/mappings/dbFunctions/rewards";
 import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementTablesFn, ROLLUP_TABLES } from "../../src/mappings/dbFunctions/settlement/schema";
@@ -1951,7 +1952,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const t = (await c.query(`SELECT obj_description('${S}.suppliers'::regclass, 'pg_class') d`)).rows[0].d as string;
       assert.equal(
         t,
-        "@foreignKey (owner_id) REFERENCES accounts (id)\n@omit create\nOne row per supplier, keyed by operator address, " +
+        `@foreignKey (owner_id) REFERENCES accounts (id)|${DEPRECATED_RELATION}\n@omit create\nOne row per supplier, keyed by operator address, ` +
           "with its stake and unstaking state. SubQuery keeps its history; GraphQL lists show the current version of each " +
           "row unless asked for an earlier height."
       );
@@ -1966,6 +1967,47 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["owner_id", "Owner address (Account id), from the last stake message or Morse claim."],
         ["stake_amount", "Stake in upokt: the amount of the last stake message (a Morse claim adds its stake to the previous one), reduced by slashes; 0 once Unstaked."],
       ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("the deprecations mark the tables and functions that go, first in their comment, once, and skip what is missing", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`
+        CREATE TABLE IF NOT EXISTS ${S}.event_claim_settleds (block_id numeric);
+        COMMENT ON TABLE ${S}.event_claim_settleds IS E'@deprecated an older mark\n@foreignKey (supplier_id) REFERENCES suppliers (id)\nold text';
+        CREATE TABLE IF NOT EXISTS ${S}.relays (id text);
+        CREATE FUNCTION ${S}.get_rewards_by_addresses_and_time(a text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+        CREATE FUNCTION ${S}.get_rewards_by_addresses_and_time(a text, b text) RETURNS int LANGUAGE sql AS 'SELECT 2';
+        COMMENT ON FUNCTION ${S}.get_rewards_by_addresses_and_time(text, text) IS 'its description';`);
+      await c.query(createDeprecationsFn(S));
+      const comments = async () =>
+        (
+          await c.query(
+            `SELECT 'table ' || k.relname n, obj_description(k.oid, 'pg_class') d FROM pg_class k
+             WHERE k.relnamespace = $1::regnamespace AND k.relname IN ('event_claim_settleds', 'relays')
+             UNION ALL SELECT 'function ' || pronargs, obj_description(p.oid, 'pg_proc') FROM pg_proc p
+             WHERE p.pronamespace = $1::regnamespace AND p.proname = 'get_rewards_by_addresses_and_time' ORDER BY 1`,
+            [S]
+          )
+        ).rows.map((r) => [r.n, r.d]);
+      const fn = deprecatedTag("legacyRewardsByAddressesAndTime (same arguments, the old JSON under data)");
+      const want = [
+        ["function 1", fn],
+        ["function 2", `${fn}\nits description`],
+        ["table event_claim_settleds", `${deprecatedTag("getClaimsList or getClaimsJson; sums in getSupplierEarningsJson, getApplicationSpendJson, getGatewaySpendJson, getServiceUsageJson")}\n@foreignKey (supplier_id) REFERENCES suppliers (id)\nold text`],
+        ["table relays", deprecatedTag("nothing: the table is empty")],
+      ];
+      assert.deepEqual(await comments(), want);
+      // a second start writes nothing: same pg_description tuples
+      const tuples = async () =>
+        (await c.query(`SELECT objoid::text, ctid::text FROM pg_description WHERE description ~ '^@deprecated' ORDER BY 1`)).rows;
+      const before = await tuples();
+      await c.query(createDeprecationsFn(S));
+      assert.deepEqual(await comments(), want);
+      assert.deepEqual(await tuples(), before);
     } finally {
       await c.query("ROLLBACK");
     }

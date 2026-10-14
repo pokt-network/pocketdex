@@ -1,7 +1,9 @@
 // GraphQL descriptions of the entity tables that stay exposed: one per table and per column, written as COMMENT ON by
 // createEntityDescriptionsFn at start. A table keeps the smart tags SubQuery or smartTags.ts put in its comment
 // (@foreignKey, @omit); the description goes after them. The columns that hold no data say so (measured on mainnet,
-// 2026-10-13). A test checks every table and column against schema.graphql.
+// 2026-10-13). A test checks every table and column against schema.graphql. Their forward relations (@foreignKey) get
+// |@deprecated: relations leave the schema (deprecations.ts).
+import { DEPRECATED_RELATION } from "./deprecations";
 
 const HISTORY = "SubQuery keeps its history; GraphQL lists show the current version of each row unless asked for an earlier height.";
 
@@ -336,8 +338,11 @@ BEGIN
   FOR r IN SELECT k.oid, k.oid::regclass t, d.what, obj_description(k.oid, 'pg_class') c FROM pg_class k
            JOIN (VALUES ${tables}) d(name, what) ON d.name = k.relname
            WHERE k.relnamespace = '${s}'::regnamespace AND k.relkind = 'r' LOOP
-    -- the smart tag lines stay first, the description replaces whatever text followed them
-    tags := (SELECT string_agg(l, E'\n' ORDER BY i) FROM unnest(string_to_array(coalesce(r.c, ''), E'\n')) WITH ORDINALITY u(l, i)
+    -- the smart tag lines stay first, each relation deprecated once, and the description replaces whatever text
+    -- followed them
+    tags := (SELECT string_agg(CASE WHEN l ~ '^@foreignKey' AND l !~ '[|]@deprecated' THEN l || '|' || ${q(DEPRECATED_RELATION)}
+                                    ELSE l END, E'\n' ORDER BY i)
+             FROM unnest(string_to_array(coalesce(r.c, ''), E'\n')) WITH ORDINALITY u(l, i)
              WHERE l ~ '^@');
     IF r.c IS DISTINCT FROM coalesce(tags || E'\n', '') || r.what THEN
       EXECUTE format('COMMENT ON TABLE %s IS %L', r.t, coalesce(tags || E'\n', '') || r.what);

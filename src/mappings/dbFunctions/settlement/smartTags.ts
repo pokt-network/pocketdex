@@ -126,7 +126,7 @@ const OMITTED_FUNCTIONS = [
 // The legacy_* functions (functions.ts): what each replaces, for its GraphQL description. GraphQL publishes them as
 // legacyRewardsByAddressesAndTime, ...; a consumer switches by renaming the field it calls and reading .data of the
 // {range, data} it returns (the two totals were a number, now under data).
-const LEGACY_REPLACES: Record<string, string> = {
+export const LEGACY_REPLACES: Record<string, string> = {
   legacy_rewards_by_addresses_and_time: "get_rewards_by_addresses_and_time (getRewardsByAddressesAndTime)",
   legacy_rewards_by_addresses_and_time_group_by_date:
     "get_rewards_by_addresses_and_time_group_by_date (getRewardsByAddressesAndTimeGroupByDate)",

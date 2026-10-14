@@ -16,6 +16,7 @@ import {
   refreshDomainServiceDailyRewardsFn,
 } from "./domainRewards";
 import { addEntityColumnsFn } from "./entityColumns";
+import { createDeprecationsFn } from "./deprecations";
 import { createEntityDescriptionsFn } from "./entityDescriptions";
 import { createModToAcctTransfersTableFn, createModToAcctTransfersSummarizedTableFn } from "./modToAcctTransfers";
 import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
@@ -189,6 +190,8 @@ export async function createDbFunctions(): Promise<void> {
     getOverservicedsByDelegatorAddressesAndTimesFn,
     getComputeUnitsToTokensMultiplierEvolutionFn,
   )
+  // the @deprecated marks of the tables and functions above that leave the GraphQL schema (docs/graphql-migration.md)
+  await createFunctions(schema, createDeprecationsFn)
 
   logger.info(`[createDbFunctions] db functions were saved successfully to schema=${schema}.`)
 
