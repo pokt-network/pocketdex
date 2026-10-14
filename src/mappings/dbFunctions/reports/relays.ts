@@ -55,8 +55,13 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.relay_by_block_and_services
     CONSTRAINT relay_by_block_and_services_pkey PRIMARY KEY (_id)
 );
 
-COMMENT ON TABLE ${dbSchema}.relay_by_block_and_services
-    IS '@foreignKey (block_id) REFERENCES blocks (id)';
+-- set once: createDeprecationsFn adds its @deprecated line to this comment on every start
+DO $$
+BEGIN
+  IF obj_description('${dbSchema}.relay_by_block_and_services'::regclass, 'pg_class') IS NULL THEN
+    COMMENT ON TABLE ${dbSchema}.relay_by_block_and_services IS '@foreignKey (block_id) REFERENCES blocks (id)';
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_relays_services_block_id
     ON ${dbSchema}.relay_by_block_and_services USING btree

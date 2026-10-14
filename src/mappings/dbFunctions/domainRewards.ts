@@ -182,6 +182,21 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_supplier_domains
       ON ${dbSchema}.supplier_service_configs (supplier_id) INCLUDE (domains)
       WHERE upper_inf(_block_range)`,
+    // get_supplier_stats_by_domains (igniter, once a minute per provider): the live configs of the domains, then their
+    // live suppliers. Both tables keep every version (mainnet 2026-10-13: 179,283 supplier rows for nodefleet.net's
+    // 2,350 live suppliers), and the indexes above cover all of them, so the query read 725k supplier rows (a seq
+    // scan, ~400 ms). These cover the live rows only.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_domains
+      ON ${dbSchema}.supplier_service_configs USING GIN (domains)
+      WHERE upper_inf(_block_range)`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_suppliers_live_id
+      ON ${dbSchema}.suppliers (id) INCLUDE (stake_status, stake_amount)
+      WHERE upper_inf(_block_range)`,
+    // get_service_summary and get_supplier_fleet(services): the live configs of a service. Without it the summary of
+    // every service seq-scanned all 9.6M config versions for the 157k live ones (1.8 s, mainnet replica 2026-10-13).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_service
+      ON ${dbSchema}.supplier_service_configs (service_id, supplier_id)
+      WHERE upper_inf(_block_range)`,
     // Indexes for the domain_service_daily_rewards summary table.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dsdr_domain_day
       ON ${dbSchema}.domain_service_daily_rewards (domain, day)`,

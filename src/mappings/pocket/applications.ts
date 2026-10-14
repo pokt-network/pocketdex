@@ -74,7 +74,7 @@ import {
 } from "./pagination";
 import getQueryClient from "../utils/query_client";
 
-function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
+export function getAppUnbondingReasonFromSDK(item: ApplicationUnbondingReasonSDKType | string | number): ApplicationUnbondingReason {
   switch (item) {
     case 0:
     case ApplicationUnbondingReasonSDKType.APPLICATION_UNBONDING_REASON_ELECTIVE:

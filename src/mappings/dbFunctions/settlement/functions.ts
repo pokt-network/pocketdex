@@ -94,8 +94,178 @@ export const CATALOG_FUNCTIONS = [
   "get_app_auto_unstakes",
   "get_supplier_proofs",
   "get_param_history",
+  "get_claims",
+  "get_actor_lifecycle",
+  "get_block_stats",
+  "get_relay_mining_difficulty",
+  "get_created_claims",
+  "get_morse_claims",
 ];
 const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
+
+// The application unbonding events keep the proto's number: get_actor_lifecycle names it with the Application entity's
+// unstaking_reason names: the mapping of applications.ts getAppUnbondingReasonFromSDK, which applications.spec.ts checks
+// against this one. The entity can also say TRANSFER, which comes from a transfer, not from an unbonding event. An
+// unbonding end whose reason the indexer did not recognize is stored as -1 (applicationUnbondingReasonFromJSON) and comes
+// as UNRECOGNIZED, the proto's name, which the entity's enum lacks; an unbonding begin with one stops the indexer
+// (getAppUnbondingReasonFromSDK throws), so none is stored.
+export const APP_UNBONDING_REASON_NAMES: Record<number, string> = {
+  0: "ELECTIVE",
+  1: "BELOW_MINIMUM_STAKE",
+  2: "MIGRATION",
+};
+const appReason =
+  `CASE m.reason ${Object.entries(APP_UNBONDING_REASON_NAMES).map(([n, name]) => `WHEN ${n} THEN '${name}'`).join(" ")} ` +
+  "WHEN -1 THEN 'UNRECOGNIZED' ELSE m.reason::text END";
+
+// get_actor_lifecycle reads one table per (kind, event): the columns each fills, by name (the others are NULL), with
+// the same actor filter, height range and keyset in every branch (keysetBranches).
+const LIFECYCLE_COLUMNS: Record<string, string> = {
+  transaction_id: "text",
+  stake_upokt: "numeric",
+  owner_id: "text",
+  reason: "text",
+  unbonding_end_height: "numeric",
+  session_end_height: "numeric",
+  service_id: "text",
+  application_id: "text",
+  session_id: "text",
+  penalty_upokt: "numeric",
+  previous_stake_upokt: "numeric",
+  proof_validation_status: "text",
+  gateway_id: "text",
+};
+const unbonding = { unbonding_end_height: "m.unbonding_end_height", session_end_height: "m.session_end_height" };
+const delegation = { transaction_id: "m.transaction_id", application_id: "m.application_id", gateway_id: "m.gateway_id" };
+const appUnbonding = { reason: appReason, unbonding_end_height: "m.unstaking_end_height", session_end_height: "m.session_end_height" };
+const LIFECYCLE_BRANCHES: { kind: string; event: string; table: string; actor: string; cols: Record<string, string> }[] = [
+  { kind: "supplier", event: "stake", table: "msg_stake_suppliers", actor: "supplier_id",
+    cols: { transaction_id: "m.transaction_id", stake_upokt: "m.stake_amount", owner_id: "m.owner_id" } },
+  { kind: "supplier", event: "unstake", table: "msg_unstake_suppliers", actor: "supplier_id", cols: { transaction_id: "m.transaction_id" } },
+  { kind: "supplier", event: "unbonding_begin", table: "event_supplier_unbonding_begins", actor: "supplier_id",
+    cols: { reason: "m.reason::text", ...unbonding } },
+  { kind: "supplier", event: "unbonding_end", table: "event_supplier_unbonding_ends", actor: "supplier_id",
+    cols: { reason: "m.reason::text", ...unbonding } },
+  { kind: "supplier", event: "slash", table: "event_supplier_slasheds", actor: "supplier_id",
+    cols: { stake_upokt: "m.after_stake_amount", session_end_height: "m.session_end_height", service_id: "m.service_id",
+      application_id: "m.application_id", session_id: "m.session_id", penalty_upokt: "m.proof_missing_penalty",
+      previous_stake_upokt: "m.previous_stake_amount", proof_validation_status: "m.proof_validation_status::text" } },
+  { kind: "application", event: "stake", table: "msg_stake_applications", actor: "application_id",
+    cols: { transaction_id: "m.transaction_id", stake_upokt: "m.stake_amount" } },
+  { kind: "application", event: "unstake", table: "msg_unstake_applications", actor: "application_id", cols: { transaction_id: "m.transaction_id" } },
+  { kind: "application", event: "unbonding_begin", table: "event_application_unbonding_begins", actor: "application_id", cols: appUnbonding },
+  { kind: "application", event: "unbonding_end", table: "event_application_unbonding_ends", actor: "application_id", cols: appUnbonding },
+  { kind: "gateway", event: "stake", table: "msg_stake_gateways", actor: "gateway_id",
+    cols: { transaction_id: "m.transaction_id", stake_upokt: "m.stake_amount" } },
+  { kind: "gateway", event: "unstake", table: "msg_unstake_gateways", actor: "gateway_id", cols: { transaction_id: "m.transaction_id" } },
+  { kind: "gateway", event: "unbonding_begin", table: "event_gateway_unbonding_begins", actor: "gateway_id",
+    cols: { transaction_id: "m.transaction_id", ...unbonding } },
+  { kind: "gateway", event: "unbonding_end", table: "event_gateway_unbonding_ends", actor: "gateway_id", cols: unbonding },
+  // a delegation is an event of both actors: the application's row names the gateway, the gateway's the application
+  ...(["application", "gateway"] as const).flatMap((kind) => [
+    { kind, event: "delegate", table: "msg_delegate_to_gateways", actor: `${kind}_id`, cols: delegation },
+    { kind, event: "undelegate", table: "msg_undelegate_from_gateways", actor: `${kind}_id`, cols: delegation },
+  ]),
+];
+// get_morse_claims reads one table per kind of Morse claim, the same way: the columns each fills, by name.
+const MORSE_COLUMNS: Record<string, string> = {
+  transaction_id: "text",
+  morse_src_address: "text",
+  shannon_dest_address: "text",
+  shannon_operator_address: "text",
+  shannon_signing_address: "text",
+  morse_node_address: "text",
+  balance_upokt: "numeric",
+  stake_upokt: "numeric",
+  claim_signer_type: "text",
+  is_admin: "boolean",
+};
+const morseClaim = {
+  transaction_id: "m.transaction_id",
+  morse_src_address: "m.morse_src_address",
+  shannon_signing_address: "m.shannon_signing_address",
+  balance_upokt: "m.balance_amount",
+};
+// shannon: the columns shannon_addresses matches
+const MORSE_BRANCHES: { kind: string; table: string; shannon: string[]; cols: Record<string, string> }[] = [
+  { kind: "account", table: "msg_claim_morse_accounts", shannon: ["shannon_dest_address"],
+    cols: { ...morseClaim, shannon_dest_address: "m.shannon_dest_address" } },
+  { kind: "application", table: "msg_claim_morse_applications", shannon: ["shannon_dest_address"],
+    cols: { ...morseClaim, shannon_dest_address: "m.shannon_dest_address", stake_upokt: "m.stake_amount" } },
+  { kind: "supplier", table: "msg_claim_morse_suppliers", shannon: ["shannon_owner_address", "shannon_operator_address"],
+    cols: { ...morseClaim, shannon_dest_address: "m.shannon_owner_address", shannon_operator_address: "m.shannon_operator_address",
+      morse_node_address: "m.morse_node_address", stake_upokt: "m.stake_amount", claim_signer_type: "m.claim_signer_type::text" } },
+  { kind: "recover", table: "msg_recover_morse_accounts", shannon: ["shannon_dest_address_id"],
+    cols: { transaction_id: "m.transaction_id", morse_src_address: "m.morse_src_address",
+      shannon_dest_address: "m.shannon_dest_address_id", balance_upokt: "m.recovered_balance_amount", is_admin: "m.is_admin" } },
+];
+// morse_lc: morse_addresses lowercased, as the indexer stores morse_src_address
+const morseBranches = (s: string) =>
+  keysetBranches(
+    s,
+    MORSE_COLUMNS,
+    MORSE_BRANCHES.map((b) => ({
+      table: b.table,
+      head: `'${b.kind}', m.id`,
+      cols: b.cols,
+      filter: `(kinds IS NULL OR '${b.kind}' = ANY(kinds)) AND (morse_lc IS NULL OR m.morse_src_address = ANY(morse_lc))
+       AND (shannon_addresses IS NULL OR ${b.shannon.map((c) => `m.${c} = ANY(shannon_addresses)`).join(" OR ")})`,
+    }))
+  );
+
+// UNION ALL of one newest-first read per table, for get_actor_lifecycle and get_morse_claims: after head, the columns
+// each branch fills by name (NULL::type for the others), its own filter, and the same height range and (height, id)
+// keyset, written once here.
+const keysetBranches = (
+  s: string,
+  columns: Record<string, string>,
+  branches: { table: string; head: string; cols: Record<string, string>; filter: string }[]
+) =>
+  branches
+    .map(
+      (b) => `    (SELECT m.block_id, ${b.head},
+            ${Object.entries(columns).map(([c, type]) => b.cols[c] ?? `NULL::${type}`).join(", ")}
+     FROM ${s}.${b.table} m
+     WHERE ${b.filter}
+       AND m.block_id BETWEEN rg.lo AND rg.hi AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
+     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit)`
+    )
+    .join("\n    UNION ALL\n");
+// the events each kind has
+const LIFECYCLE_KINDS = [...new Set(LIFECYCLE_BRANCHES.map((b) => b.kind))];
+const LIFECYCLE_KIND_EVENTS = LIFECYCLE_KINDS.map(
+  (kind) => [kind, [...new Set(LIFECYCLE_BRANCHES.filter((b) => b.kind === kind).map((b) => b.event))]] as const
+);
+const lifecycleBranches = (s: string) =>
+  keysetBranches(
+    s,
+    LIFECYCLE_COLUMNS,
+    LIFECYCLE_BRANCHES.map((b) => ({
+      table: b.table,
+      head: `m.${b.actor}, '${b.event}', m.id`,
+      cols: b.cols,
+      filter: `kind = '${b.kind}' AND (events IS NULL OR '${b.event}' = ANY(events)) AND m.${b.actor} = ANY(ids)`,
+    }))
+  );
+
+// operator_scope (get_supplier_fleet, get_claims, get_actor_lifecycle): now (default) = operators as _supplier_ids
+// resolves them; ever = every supplier any version of whose service configs shared revenue with them
+// (_operator_suppliers_ever), in any stake status, with all its rows. list = the function's own supplier list argument.
+const OPERATOR_SCOPE_CHECK = `  IF operator_scope IS NULL OR operator_scope NOT IN ('now', 'ever') THEN
+    RAISE EXCEPTION 'operator_scope is now or ever (has %)', operator_scope;
+  END IF;
+  IF operator_scope = 'ever' AND operators IS NULL THEN
+    RAISE EXCEPTION 'operator_scope ever applies to operators';
+  END IF;`;
+const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: string, re: string, pad = "  ") =>
+  [
+    `IF operator_scope = 'ever' AND num_nonnulls(${list}, owners) = 0 THEN`,
+    `  PERFORM ${s}._validate(operators, 'operators', ${rs}, ${re}, NULL);`,
+    `  ids := ${s}._operator_suppliers_ever(operators);`,
+    `ELSE`,
+    `  ids := ${s}._supplier_ids(${list}, owners, operators, ${requireOne}, ${rs}, ${re}, NULL);`,
+    `END IF;`,
+  ].map((l) => pad + l).join("\n");
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
@@ -288,6 +458,17 @@ BEGIN
   END LOOP;
 END $$;
 
+-- first_settled_height / last_settled_height came later to get_application_spend's and get_gateway_spend's rows, likewise.
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           WHERE p.pronamespace = '${s}'::regnamespace AND p.proname IN ('get_application_spend', 'get_gateway_spend')
+             AND pg_get_function_result(p.oid) NOT LIKE '%last_settled_height%' LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
 -- operators came last to the supplier functions: CREATE OR REPLACE with it leaves the signature without it next to the
 -- new one, and two overloads make every call ambiguous, so a database written before has the old one dropped first.
 DO $$
@@ -297,6 +478,21 @@ BEGIN
            WHERE p.pronamespace = '${s}'::regnamespace
              AND p.proname IN ('get_supplier_earnings', 'get_supplier_distribution', 'get_supplier_penalties', 'get_supplier_proofs')
              AND NOT ('operators' = ANY(coalesce(p.proargnames, '{}'))) LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
+-- operator_scope came last to get_supplier_fleet, get_claims and get_actor_lifecycle, and gateway_id to the rows of
+-- get_actor_lifecycle: likewise, a database written by an earlier build of them has those dropped first (their _json
+-- twins are rebuilt below).
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           WHERE p.pronamespace = '${s}'::regnamespace
+             AND p.proname IN ('get_supplier_fleet', 'get_claims', 'get_actor_lifecycle')
+             AND (NOT ('operator_scope' = ANY(coalesce(p.proargnames, '{}')))
+                  OR p.proname = 'get_actor_lifecycle' AND NOT ('gateway_id' = ANY(coalesce(p.proargnames, '{}')))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
 END $$;
@@ -439,6 +635,23 @@ BEGIN
   END IF;
 END $$;
 
+-- The highest height the money tables wrote (settlement_blocks: a height with settlement events, which may have no
+-- settled claim) at or below money_progress.height, and its block time: the one-row money_progress and a probe of the
+-- settlement_blocks primary key. It moves forward when a new settlement is written, so a client can poll it and refetch
+-- only when it changes. A history fill or gap repair below it does not move it, nor does covered_to advancing with the
+-- blocks. After a rewind of the money step it goes back to the highest written height at or below the progress, and
+-- forward again as the step rewrites those heights. Until the first height is written, or while money_progress has no
+-- row, height and block_time are NULL: not set-returning, so SQL gets one row of NULLs, not an empty result, and
+-- GraphQL gets getLastSettlement null (subql-query 2.22.2, measured 2026-10-14).
+CREATE OR REPLACE FUNCTION ${s}.get_last_settlement(OUT height bigint, OUT block_time timestamptz)
+LANGUAGE sql STABLE AS $$
+  -- not past money_progress, as the catalog: a rewound money step leaves its rows above the progress until it
+  -- rewrites them
+  SELECT sb.height, sb.block_time FROM ${s}.settlement_blocks sb
+  WHERE sb.height <= (SELECT mp.height FROM ${s}.money_progress mp)
+  ORDER BY sb.height DESC LIMIT 1
+$$;
+
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct
 -- event_claim_settleds.block_id) that settlement_blocks lacks, and the settlement_gaps rows in the range
 -- ('from-to'). The distinct block ids come from a loose index scan: one index probe per settlement height,
@@ -481,36 +694,43 @@ CREATE OR REPLACE FUNCTION ${s}.get_application_spend(applications text[], range
   fill_empty_buckets boolean DEFAULT false)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, application_id text, service_id text, supplier_id text,
   burned_upokt numeric, overserviced_unpaid_upokt numeric, reimbursed_upokt numeric,
-  relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, claims bigint, covered_from timestamptz,
-  covered_to timestamptz, covered_gaps jsonb)
+  relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, claims bigint,
+  first_settled_height bigint, last_settled_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record; fb timestamptz;
+DECLARE rg record; sp record; cv record; fb timestamptz; nb date[];
 BEGIN
   PERFORM ${s}._validate(applications, 'applications', range_start, range_end, bucket);
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  -- the rollup days with a height whose first_height / last_height the rollups may not hold (settlement_blocks.bounds_rollup):
+  -- a row of those reads as NULL height, and so does each group it is in, as in get_supplier_earnings
+  nb := ARRAY(SELECT DISTINCT sb.day FROM ${s}.settlement_blocks sb WHERE NOT sb.bounds_rollup AND sb.day BETWEEN rg.d1 AND rg.d2);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
-  WITH res0(bucket_start, bucket_end, application_id, service_id, supplier_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims) AS (
+  WITH res0(bucket_start, bucket_end, application_id, service_id, supplier_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims, first_settled_height, last_settled_height) AS (
   WITH r AS (
     SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.application_id, d.service_id, ''::text supplier_id, d.settled_upokt,
            d.overservicing_loss_upokt, d.global_minted_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units,
-           d.claim_count claims
+           d.claim_count claims, CASE WHEN d.day <> ALL(nb) THEN d.first_height END fh,
+           CASE WHEN d.day <> ALL(nb) THEN d.last_height END lh
     FROM ${s}.daily_claims_by_application_service d
     WHERE NOT by_supplier AND d.application_id = ANY(applications) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.application_id, d.service_id, d.supplier_id, d.settled_upokt, d.overservicing_loss_upokt,
-           d.global_minted_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units, d.claim_count
+           d.global_minted_upokt, d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units, d.claim_count,
+           CASE WHEN d.day <> ALL(nb) THEN d.first_height END, CASE WHEN d.day <> ALL(nb) THEN d.last_height END
     FROM ${s}.daily_claims_by_supplier_application_service d
     WHERE by_supplier AND d.application_id = ANY(applications) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT c.block_time, c.application_id, c.service_id, '', c.settled_upokt, c.overservicing_loss_upokt,
-           c.global_minted_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, c.claim_count
+           c.global_minted_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, c.claim_count,
+           c.height, c.height
     FROM ${s}.settlement_claims_by_application_service c
     WHERE NOT by_supplier AND c.application_id = ANY(applications) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
     UNION ALL
     SELECT c.block_time, c.application_id, c.service_id, c.supplier_id, c.settled_upokt, c.overservicing_loss_upokt,
-           c.global_minted_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, 1::bigint
+           c.global_minted_upokt, c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, 1::bigint,
+           c.height, c.height
     FROM ${s}.claim_settlements c
     WHERE by_supplier AND c.application_id = ANY(applications) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
   )
@@ -518,24 +738,26 @@ ${covered("settled")}
          CASE WHEN by_service THEN r.service_id ELSE 'all' END, CASE WHEN by_supplier THEN r.supplier_id ELSE 'all' END,
          sum(r.settled_upokt)::numeric, sum(r.overservicing_loss_upokt)::numeric, sum(r.global_minted_upokt)::numeric,
          sum(r.relays)::numeric, sum(r.estimated_relays)::numeric, sum(r.claimed_compute_units)::numeric,
-         sum(r.estimated_compute_units)::numeric, sum(r.claims)::bigint
+         sum(r.estimated_compute_units)::numeric, sum(r.claims)::bigint,
+         -- a height only when every row of the group holds its bounds
+         CASE WHEN bool_and(r.fh IS NOT NULL) THEN min(r.fh) END, CASE WHEN bool_and(r.lh IS NOT NULL) THEN max(r.lh) END
   FROM r GROUP BY 1, 2, 3, 4, 5
-  ), res(bucket_start, bucket_end, application_id, service_id, supplier_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims) AS (
+  ), res(bucket_start, bucket_end, application_id, service_id, supplier_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims, first_settled_height, last_settled_height) AS (
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, NULL::bigint, NULL::bigint
   FROM (SELECT DISTINCT unnest(applications) id) u
   WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_application AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.application_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, NULL::bigint, NULL::bigint
   WHERE fill_empty_buckets AND NOT by_application AND fb IS NOT NULL AND cardinality(applications) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
-  SELECT b.bucket_start, b.bucket_end, k.application_id, k.service_id, k.supplier_id, CASE WHEN k.burned_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overserviced_unpaid_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.reimbursed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END
+  SELECT b.bucket_start, b.bucket_end, k.application_id, k.service_id, k.supplier_id, CASE WHEN k.burned_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overserviced_unpaid_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.reimbursed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END, NULL::bigint, NULL::bigint
   FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.covered) b
   CROSS JOIN (SELECT r.application_id, r.service_id, r.supplier_id, bool_and(r.burned_upokt IS NULL) burned_upokt_na, bool_and(r.overserviced_unpaid_upokt IS NULL) overserviced_unpaid_upokt_na, bool_and(r.reimbursed_upokt IS NULL) reimbursed_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.claims IS NULL) claims_na FROM res r GROUP BY r.application_id, r.service_id, r.supplier_id) k
   WHERE bucket IS NOT NULL AND fill_empty_buckets
@@ -550,17 +772,20 @@ CREATE OR REPLACE FUNCTION ${s}.get_gateway_spend(gateways text[], range_start t
   fill_empty_buckets boolean DEFAULT false)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, gateway_id text, application_id text, service_id text,
   burned_upokt numeric, overserviced_unpaid_upokt numeric, reimbursed_upokt numeric,
-  relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, claims bigint, covered_from timestamptz,
-  covered_to timestamptz, covered_gaps jsonb)
+  relays numeric, estimated_relays numeric, compute_units numeric, estimated_compute_units numeric, claims bigint,
+  first_settled_height bigint, last_settled_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record; fb timestamptz;
+DECLARE rg record; sp record; cv record; fb timestamptz; nb date[];
 BEGIN
   PERFORM ${s}._validate(gateways, 'gateways', range_start, range_end, bucket);
 ${covered("settled")}
   rg := ${s}._ranges(range_start, range_end, bucket);
+  -- the rollup days with a height whose first_height / last_height the rollups may not hold (settlement_blocks.bounds_rollup):
+  -- a row of those reads as NULL height, and so does each group it is in, as in get_supplier_earnings
+  nb := ARRAY(SELECT DISTINCT sb.day FROM ${s}.settlement_blocks sb WHERE NOT sb.bounds_rollup AND sb.day BETWEEN rg.d1 AND rg.d2);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
-  WITH res0(bucket_start, bucket_end, gateway_id, application_id, service_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims) AS (
+  WITH res0(bucket_start, bucket_end, gateway_id, application_id, service_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims, first_settled_height, last_settled_height) AS (
   WITH days AS (
     SELECT sb.day, min(sb.height) lo, max(sb.height) hi FROM ${s}.settlement_blocks sb
     WHERE sb.day BETWEEN rg.d1 AND rg.d2 GROUP BY sb.day
@@ -571,13 +796,14 @@ ${covered("settled")}
     -- rollup days the delegation covers whole
     SELECT dc.day::timestamp AT TIME ZONE 'UTC' block_time, iv.gateway_id gw, dc.application_id, dc.service_id, dc.settled_upokt,
            dc.overservicing_loss_upokt, dc.global_minted_upokt, dc.relays, dc.estimated_relays, dc.claimed_compute_units,
-           dc.estimated_compute_units, dc.claim_count claims
+           dc.estimated_compute_units, dc.claim_count claims, CASE WHEN dc.day <> ALL(nb) THEN dc.first_height END fh,
+           CASE WHEN dc.day <> ALL(nb) THEN dc.last_height END lh
     FROM iv JOIN days d ON iv.from_height <= d.lo AND (iv.to_height IS NULL OR iv.to_height > d.hi)
     JOIN ${s}.daily_claims_by_application_service dc ON dc.application_id = iv.application_id AND dc.day = d.day
     UNION ALL
     -- rollup days it covers in part (usually none): the claims of those (application, day) pairs by index
     SELECT c.block_time, iv.gateway_id, c.application_id, c.service_id, c.settled_upokt, c.overservicing_loss_upokt, c.global_minted_upokt,
-           c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, c.claim_count
+           c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, c.claim_count, c.height, c.height
     FROM iv JOIN days d ON NOT (iv.from_height <= d.lo AND (iv.to_height IS NULL OR iv.to_height > d.hi))
                        AND iv.from_height <= d.hi AND (iv.to_height IS NULL OR iv.to_height > d.lo)
     CROSS JOIN LATERAL (
@@ -588,7 +814,7 @@ ${covered("settled")}
     UNION ALL
     -- edges: base
     SELECT c.block_time, iv.gateway_id, c.application_id, c.service_id, c.settled_upokt, c.overservicing_loss_upokt, c.global_minted_upokt,
-           c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, c.claim_count
+           c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, c.claim_count, c.height, c.height
     FROM iv JOIN ${s}.settlement_claims_by_application_service c ON c.application_id = iv.application_id
          AND c.height >= iv.from_height AND (iv.to_height IS NULL OR c.height < iv.to_height)
     WHERE (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
@@ -597,24 +823,26 @@ ${covered("settled")}
          CASE WHEN by_service THEN x.service_id ELSE 'all' END,
          sum(x.settled_upokt)::numeric, sum(x.overservicing_loss_upokt)::numeric, sum(x.global_minted_upokt)::numeric,
          sum(x.relays)::numeric, sum(x.estimated_relays)::numeric, sum(x.claimed_compute_units)::numeric,
-         sum(x.estimated_compute_units)::numeric, sum(x.claims)::bigint
+         sum(x.estimated_compute_units)::numeric, sum(x.claims)::bigint,
+         -- a height only when every row of the group holds its bounds
+         CASE WHEN bool_and(x.fh IS NOT NULL) THEN min(x.fh) END, CASE WHEN bool_and(x.lh IS NOT NULL) THEN max(x.lh) END
   FROM x GROUP BY 1, 2, 3, 4, 5
-  ), res(bucket_start, bucket_end, gateway_id, application_id, service_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims) AS (
+  ), res(bucket_start, bucket_end, gateway_id, application_id, service_id, burned_upokt, overserviced_unpaid_upokt, reimbursed_upokt, relays, estimated_relays, compute_units, estimated_compute_units, claims, first_settled_height, last_settled_height) AS (
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, NULL::bigint, NULL::bigint
   FROM (SELECT DISTINCT unnest(gateways) id) u
   WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_gateway AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.gateway_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint, NULL::bigint, NULL::bigint
   WHERE fill_empty_buckets AND NOT by_gateway AND fb IS NOT NULL AND cardinality(gateways) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
-  SELECT b.bucket_start, b.bucket_end, k.gateway_id, k.application_id, k.service_id, CASE WHEN k.burned_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overserviced_unpaid_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.reimbursed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END
+  SELECT b.bucket_start, b.bucket_end, k.gateway_id, k.application_id, k.service_id, CASE WHEN k.burned_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overserviced_unpaid_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.reimbursed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END, NULL::bigint, NULL::bigint
   FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.covered) b
   CROSS JOIN (SELECT r.gateway_id, r.application_id, r.service_id, bool_and(r.burned_upokt IS NULL) burned_upokt_na, bool_and(r.overserviced_unpaid_upokt IS NULL) overserviced_unpaid_upokt_na, bool_and(r.reimbursed_upokt IS NULL) reimbursed_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.claims IS NULL) claims_na FROM res r GROUP BY r.gateway_id, r.application_id, r.service_id) k
   WHERE bucket IS NOT NULL AND fill_empty_buckets
@@ -640,6 +868,19 @@ BEGIN
     ORDER BY m.supplier_id);
 END $$;
 
+-- The suppliers that shared revenue with the addresses at any time: any version of a service config, live or closed,
+-- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). SubQuery's GIN on rev_share
+-- (jsonb_ops) serves the containment: the largest operator's 1,995 suppliers (1,055 now) in 1.3 s on mainnet
+-- (2026-10-14).
+CREATE OR REPLACE FUNCTION ${s}._operator_suppliers_ever(addresses text[]) RETURNS text[]
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  RETURN ARRAY(
+    SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
+    JOIN ${s}.supplier_service_configs ssc ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a))
+    ORDER BY 1);
+END $$;
+
 -- The suppliers a supplier function answers for, from its three lists, of which it takes at most one: suppliers as given
 -- (up to 200), owners (the suppliers each owns now, no cap) or operators (_operator_suppliers, no cap). NULL = every
 -- supplier, which p_require_one refuses (get_supplier_distribution needs one of the lists).
@@ -661,6 +902,549 @@ BEGIN
   END IF;
   PERFORM ${s}._validate(suppliers, CASE WHEN suppliers IS NULL THEN '' ELSE 'suppliers' END, range_start, range_end, bucket);
   RETURN suppliers;
+END $$;
+
+-- A fleet now: the suppliers of one list (_supplier_ids: suppliers, owners or operators; or domains: the suppliers with
+-- a live service config whose endpoints are on one of them, any stake status), or every supplier when none is given,
+-- their current version only, optionally kept to those with a live config for one of services, and to some stake
+-- statuses. by_supplier: one row per supplier (its owner,
+-- status, stake and the services it has a live config for), largest stake first, then by id; false: one row for the whole
+-- fleet ('all' in supplier_id and stake_status, NULL owner and service_count), zeros when it is empty. The fleet row
+-- leaves service_count out: nodefleet.net's 2,351 Staked suppliers have 98,510 live configs, and counting their
+-- services took 158 ms of the call (mainnet replica, 2026-10-13).
+-- Replaces the relation filter suppliers(serviceConfigs some revShare contains) with aggregates, and
+-- get_supplier_stats_by_domains (domains, Staked, by_supplier false). Live rows through the partial indexes
+-- idx_suppliers_live_id, idx_ssc_live_domains and idx_ssc_live_rev_share.
+CREATE OR REPLACE FUNCTION ${s}.get_supplier_fleet(suppliers text[] DEFAULT NULL, owners text[] DEFAULT NULL,
+  operators text[] DEFAULT NULL, domains text[] DEFAULT NULL, services text[] DEFAULT NULL,
+  stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true, operator_scope text DEFAULT 'now')
+RETURNS TABLE(supplier_id text, owner_id text, stake_status text, stake_upokt numeric, service_count bigint,
+  supplier_count bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE ids text[]; sids text[];
+BEGIN
+  IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
+    RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
+  END IF;
+${OPERATOR_SCOPE_CHECK}
+  IF domains IS NOT NULL THEN
+    IF num_nonnulls(suppliers, owners, operators) > 0 THEN
+      RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now), operators (the suppliers that share revenue with them now) or domains (the suppliers with a live endpoint on them)';
+    END IF;
+    PERFORM ${s}._validate(domains, 'domains', NULL, NULL, NULL);
+    ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
+                 WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
+  ELSE
+${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
+  END IF;
+  IF services IS NOT NULL THEN
+    PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
+    -- idx_ssc_live_service
+    sids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
+                  WHERE c.service_id = ANY(get_supplier_fleet.services) AND upper_inf(c._block_range));
+  END IF;
+  RETURN QUERY
+  WITH f AS (
+    SELECT su.id, su.owner_id, su.stake_status::text st, su.stake_amount
+    FROM ${s}.suppliers su
+    WHERE upper_inf(su._block_range) AND (ids IS NULL OR su.id = ANY(ids)) AND (sids IS NULL OR su.id = ANY(sids))
+      AND (stake_statuses IS NULL OR su.stake_status::text = ANY(stake_statuses))
+  ), sv AS (
+    SELECT c.supplier_id, c.service_id FROM ${s}.supplier_service_configs c
+    WHERE upper_inf(c._block_range) AND c.supplier_id IN (SELECT f.id FROM f)
+  ), per AS (
+    SELECT sv.supplier_id, count(DISTINCT sv.service_id) n FROM sv GROUP BY 1
+  )
+  SELECT f.id, f.owner_id, f.st, f.stake_amount, coalesce(per.n, 0), 1::bigint
+  FROM f LEFT JOIN per ON per.supplier_id = f.id WHERE by_supplier
+  UNION ALL
+  SELECT 'all', NULL, 'all', coalesce((SELECT sum(f.stake_amount) FROM f), 0), NULL, (SELECT count(*) FROM f)
+  WHERE NOT by_supplier
+  ORDER BY 4 DESC, 1;
+END $$;
+
+-- Per service now: the suppliers with a live config for it (staked_suppliers: of those, the Staked ones) and the
+-- applications with a live service row for it (staked_applications likewise); services NULL = every service with a
+-- live config or application. Live configs through idx_ssc_live_service; applications through the GiST indexes on
+-- _block_range (332 live of 2.46M versions on mainnet, 2026-10-13).
+CREATE OR REPLACE FUNCTION ${s}.get_service_summary(services text[] DEFAULT NULL)
+RETURNS TABLE(service_id text, staked_suppliers bigint, suppliers bigint, staked_applications bigint,
+  applications bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  RETURN QUERY
+  WITH sc AS (
+    SELECT c.service_id, count(DISTINCT c.supplier_id) FILTER (WHERE su.stake_status::text = 'Staked') staked,
+           count(DISTINCT c.supplier_id) n
+    FROM ${s}.supplier_service_configs c
+    LEFT JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range)
+    WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services))
+    GROUP BY 1
+  ), ac AS (
+    SELECT a.service_id, count(DISTINCT a.application_id) FILTER (WHERE ap.stake_status::text = 'Staked') staked,
+           count(DISTINCT a.application_id) n
+    FROM ${s}.application_services a
+    LEFT JOIN ${s}.applications ap ON ap.id = a.application_id AND ap._block_range @> 9223372036854775807::bigint
+    WHERE a._block_range @> 9223372036854775807::bigint AND (services IS NULL OR a.service_id = ANY(services))
+    GROUP BY 1
+  )
+  SELECT coalesce(sc.service_id, ac.service_id), coalesce(sc.staked, 0), coalesce(sc.n, 0), coalesce(ac.staked, 0),
+         coalesce(ac.n, 0)
+  FROM sc FULL JOIN ac ON ac.service_id = sc.service_id
+  ORDER BY 1;
+END $$;
+
+-- Applications now, like get_supplier_fleet: their current version, kept to the applications listed (up to 200), to
+-- those with a live service row for one of services and to those delegating to one of gateways now (all combined; none
+-- = every application), and to some stake statuses. by_application: one row each (status, stake, how many services and
+-- gateways it has now), largest stake first; false: one row for all ('all' in application_id and stake_status, NULL
+-- counts).
+CREATE OR REPLACE FUNCTION ${s}.get_application_fleet(applications text[] DEFAULT NULL, services text[] DEFAULT NULL,
+  gateways text[] DEFAULT NULL, stake_statuses text[] DEFAULT NULL, by_application boolean DEFAULT true)
+RETURNS TABLE(application_id text, stake_status text, stake_upokt numeric, service_count bigint, gateway_count bigint,
+  application_count bigint)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
+    RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
+  END IF;
+  IF applications IS NOT NULL THEN PERFORM ${s}._validate(applications, 'applications', NULL, NULL, NULL); END IF;
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  IF gateways IS NOT NULL THEN PERFORM ${s}._validate(gateways, 'gateways', NULL, NULL, NULL); END IF;
+  RETURN QUERY
+  WITH f AS (
+    SELECT ap.id, ap.stake_status::text st, ap.stake_amount
+    FROM ${s}.applications ap
+    WHERE ap._block_range @> 9223372036854775807::bigint
+      AND (get_application_fleet.applications IS NULL OR ap.id = ANY(get_application_fleet.applications))
+      AND (stake_statuses IS NULL OR ap.stake_status::text = ANY(stake_statuses))
+      AND (services IS NULL OR EXISTS (SELECT 1 FROM ${s}.application_services a WHERE a.application_id = ap.id
+             AND a.service_id = ANY(services) AND a._block_range @> 9223372036854775807::bigint))
+      AND (gateways IS NULL OR EXISTS (SELECT 1 FROM ${s}.application_gateways g WHERE g.application_id = ap.id
+             AND g.gateway_id = ANY(gateways) AND g._block_range @> 9223372036854775807::bigint))
+  )
+  SELECT f.id, f.st, f.stake_amount,
+         (SELECT count(DISTINCT a.service_id) FROM ${s}.application_services a
+          WHERE a.application_id = f.id AND a._block_range @> 9223372036854775807::bigint),
+         (SELECT count(DISTINCT g.gateway_id) FROM ${s}.application_gateways g
+          WHERE g.application_id = f.id AND g._block_range @> 9223372036854775807::bigint), 1::bigint
+  FROM f WHERE by_application
+  UNION ALL
+  SELECT 'all', 'all', coalesce((SELECT sum(f.stake_amount) FROM f), 0), NULL, NULL, (SELECT count(*) FROM f)
+  WHERE NOT by_application
+  ORDER BY 3 DESC, 1;
+END $$;
+
+-- Relay mining difficulty history: each update of the services listed (up to 200), newest first (by height, then
+-- service), with the relays EMA and the target hash before and after it; the newest row of a service is its current
+-- difficulty (the Service entity's own difficulty columns are not written: mainnet 2026-10-13). Keyset paging on (height, service_id), like get_claims. Covers the indexed blocks. Each service's
+-- updates through the GiST index on (service_id, _block_range); 1.06M updates on mainnet (2026-10-13).
+CREATE OR REPLACE FUNCTION ${s}.get_relay_mining_difficulty(services text[], range_start timestamptz,
+  range_end timestamptz, row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL,
+  before_service_id text DEFAULT NULL)
+RETURNS TABLE(height bigint, block_time timestamptz, service_id text, prev_num_relays_ema numeric,
+  new_num_relays_ema numeric, prev_target_hash_hex text, new_target_hash_hex text, covered_from timestamptz,
+  covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; rg record; bh numeric;
+BEGIN
+  PERFORM ${s}._validate(services, 'services', range_start, range_end, NULL);
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_service_id', row_limit;
+  END IF;
+  IF (before_height IS NULL) <> (before_service_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_service_id (the last row of the previous page), or neither';
+  END IF;
+${covered(null, true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  bh := coalesce(before_height, 9223372036854775807);
+  RETURN QUERY
+  SELECT d.block_id::bigint, bl.timestamp AT TIME ZONE 'UTC', d.service_id, d.prev_num_relays_ema, d.new_num_relays_ema,
+         d.prev_target_hash_hex_encoded, d.new_target_hash_hex_encoded, cv.covered_from, cv.covered_to, cv.gaps
+  FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
+    SELECT e.block_id, e.service_id, e.prev_num_relays_ema, e.new_num_relays_ema, e.prev_target_hash_hex_encoded,
+           e.new_target_hash_hex_encoded
+    FROM ${s}.event_relay_mining_difficulty_updateds e
+    WHERE e.service_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi
+      AND (e.block_id < bh OR e.block_id = bh AND e.service_id < before_service_id)
+    ORDER BY e.block_id DESC LIMIT row_limit) d
+  JOIN ${s}.blocks bl ON bl.id = d.block_id
+  ORDER BY d.block_id DESC, d.service_id DESC LIMIT row_limit;
+END $$;
+
+-- Supplier domains ranked by what their suppliers claimed: domain_service_daily_rewards summed over the UTC days that
+-- start inside [range_start, range_end) (NULL = every day), with the Staked suppliers that have a live config on the
+-- domain now and their stake (as get_supplier_stats_by_domains); top keeps the first N (NULL = all). The live configs
+-- are reduced to distinct (supplier, domains) before their domains are expanded: 157k configs are 4.5k suppliers
+-- (mainnet replica 2026-10-13, 356 ms for the 35 domains; 2.5 s testing each config against each domain).
+CREATE OR REPLACE FUNCTION ${s}.get_supplier_domains(range_start timestamptz DEFAULT NULL,
+  range_end timestamptz DEFAULT NULL, top integer DEFAULT NULL)
+RETURNS TABLE(domain text, claimed_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric,
+  estimated_compute_units numeric, first_day date, last_day date, staked_suppliers bigint, staked_upokt numeric)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
+  IF top IS NOT NULL AND top < 1 THEN RAISE EXCEPTION 'top must be at least 1 (has %)', top; END IF;
+  RETURN QUERY
+  WITH g AS (
+    SELECT d.domain, sum(d.gross_rewards) claimed, sum(d.relays) relays, sum(d.estimated_relays) est_relays,
+           sum(d.computed_units) cu, sum(d.estimated_computed_units) est_cu, min(d.day) d1, max(d.day) d2
+    FROM ${s}.domain_service_daily_rewards d
+    WHERE (range_start IS NULL OR d.day::timestamp AT TIME ZONE 'UTC' >= range_start)
+      AND (range_end IS NULL OR d.day::timestamp AT TIME ZONE 'UTC' < range_end)
+    GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT top
+  ), m0 AS (
+    SELECT DISTINCT c.supplier_id, c.domains FROM ${s}.supplier_service_configs c WHERE upper_inf(c._block_range)
+  ), m AS (
+    SELECT DISTINCT x.domain, m0.supplier_id
+    FROM m0 CROSS JOIN LATERAL jsonb_array_elements_text(m0.domains) x(domain)
+    WHERE jsonb_typeof(m0.domains) = 'array' AND x.domain IN (SELECT g.domain FROM g)
+  ), st AS (
+    SELECT m.domain, count(*) n, sum(su.stake_amount) stake
+    FROM m JOIN ${s}.suppliers su ON su.id = m.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+    GROUP BY 1
+  )
+  SELECT g.domain, g.claimed, g.relays, g.est_relays, g.cu, g.est_cu, g.d1, g.d2, coalesce(st.n, 0),
+         coalesce(st.stake, 0)
+  FROM g LEFT JOIN st ON st.domain = g.domain
+  ORDER BY 2 DESC, 1;
+END $$;
+
+-- The Morse accounts the Shannon migration imported, claimed or not: how many and what they hold (liquid balance, and
+-- the supplier and application stakes to restake). Current versions of morse_claimable_accounts (57,762, 53 MB on
+-- mainnet, 2026-10-13); the accounts themselves stay a GraphQL list. PL/pgSQL, like _operator_suppliers.
+CREATE OR REPLACE FUNCTION ${s}.get_morse_claim_summary()
+RETURNS TABLE(claimed boolean, accounts bigint, unstaked_balance_upokt numeric, supplier_stake_upokt numeric,
+  application_stake_upokt numeric)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  RETURN QUERY
+  SELECT m.claimed, count(*), coalesce(sum(m.unstaked_balance_amount), 0), coalesce(sum(m.supplier_stake_amount), 0),
+         coalesce(sum(m.application_stake_amount), 0)
+  FROM ${s}.morse_claimable_accounts m WHERE upper_inf(m._block_range)
+  GROUP BY 1 ORDER BY 1;
+END $$;
+
+-- Claims one by one, newest first: settled (claim_settlements) and expired (claim_expirations), at most row_limit
+-- (up to 1000) per call; the next page passes the last row's height and event_idx as before_height / before_event_idx
+-- (a keyset: rows written meanwhile do not shift the pages). Filters: one of suppliers / owners / operators
+-- (_supplier_ids; NULL = every supplier), and applications and services (up to 200 each), all combined.
+-- Each settled-claim filter has its own index walk, picked before the query (measured on the mainnet replica,
+-- 2026-10-13, 100 newest rows): up to 200 suppliers, each supplier's newest claims from (supplier_id, height), 12 ms
+-- for 3; a larger fleet (owners, operators) or no filter, the settlement heights newest first, each height's claims
+-- (~3,100) by the primary key, ~5 ms for nodefleet.net's 2,351 suppliers, which hold half of each height's claims (a
+-- fleet that settles rarely walks many heights); applications, each one's newest from (application_id, height);
+-- services, each one's newest (height, application) from settlement_claims_by_application_service, then those
+-- applications' claims, 1.5 ms for 100 rows, 75 ms for 1000 (claim_settlements has no index by service; measured on the
+-- mainnet replica, 2026-10-13, when the busiest services had 2 or 3 applications at the last settlement height, so
+-- whole heights cost little). The OFFSET 0 keeps the primary key probe: with
+-- the fleet filter pushed in, the planner probed (supplier_id, height) once per supplier per height (120 ms a height).
+-- Expired claims: their small table (617k rows) by supplier index for a short list, else walked newest first (the
+-- whole table when nothing matches: 338 ms).
+CREATE OR REPLACE FUNCTION ${s}.get_claims(suppliers text[], range_start timestamptz, range_end timestamptz,
+  owners text[] DEFAULT NULL, operators text[] DEFAULT NULL, applications text[] DEFAULT NULL,
+  services text[] DEFAULT NULL, statuses text[] DEFAULT NULL, row_limit integer DEFAULT 100,
+  before_height bigint DEFAULT NULL, before_event_idx integer DEFAULT NULL, operator_scope text DEFAULT 'now')
+RETURNS TABLE(status text, height bigint, event_idx integer, block_time timestamptz, supplier_id text,
+  supplier_owner_id text, application_id text, service_id text, session_id text, session_end_height bigint,
+  relays bigint, estimated_relays bigint, claimed_compute_units bigint, estimated_compute_units bigint,
+  claimed_upokt bigint, settled_upokt bigint, relay_minted_upokt bigint, global_minted_upokt bigint,
+  overservicing_loss_upokt bigint, settled_with_proof boolean, expiration_reason text,
+  covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; lo bigint; hi bigint; ids text[]; path text; bh bigint; be integer;
+BEGIN
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_event_idx', row_limit;
+  END IF;
+  IF statuses IS NOT NULL AND NOT statuses <@ ARRAY['settled', 'expired'] THEN
+    RAISE EXCEPTION 'statuses takes settled and expired (has %)', statuses;
+  END IF;
+  IF (before_height IS NULL) <> (before_event_idx IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_event_idx (the last row of the previous page), or neither';
+  END IF;
+${OPERATOR_SCOPE_CHECK}
+${scopedSupplierIds(s, "suppliers", false, "range_start", "range_end")}
+  IF applications IS NOT NULL THEN PERFORM ${s}._validate(applications, 'applications', NULL, NULL, NULL); END IF;
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+${covered(null)}
+  -- heights bound the index walks; each row is also kept to the range by its settlement's time
+  SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb
+  WHERE sb.block_time >= range_start AND sb.block_time < range_end;
+  -- a keyset row past the range reads nothing past the range
+  bh := coalesce(before_height, 9223372036854775807);
+  be := coalesce(before_event_idx, 2147483647);
+  hi := least(hi, bh);
+  IF lo IS NULL OR hi IS NULL OR lo > hi THEN RETURN; END IF;
+  path := CASE WHEN ids IS NOT NULL AND cardinality(ids) <= 200 THEN 'suppliers' WHEN ids IS NOT NULL THEN 'heights'
+               WHEN applications IS NOT NULL THEN 'applications' WHEN services IS NOT NULL THEN 'services' ELSE 'heights' END;
+  RETURN QUERY
+  WITH k(height, event_idx) AS (
+    SELECT q.height, q.event_idx FROM (
+      SELECT c.height, c.event_idx FROM (SELECT DISTINCT unnest(ids) id) u CROSS JOIN LATERAL (
+        SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
+        WHERE c.supplier_id = u.id AND c.height BETWEEN lo AND hi AND (c.height, c.event_idx) < (bh, be)
+          AND c.block_time >= range_start AND c.block_time < range_end
+          AND (applications IS NULL OR c.application_id = ANY(applications)) AND (services IS NULL OR c.service_id = ANY(services))
+        ORDER BY c.height DESC, c.event_idx DESC LIMIT row_limit) c
+      WHERE path = 'suppliers'
+      UNION ALL
+      SELECT c.height, c.event_idx FROM (SELECT DISTINCT unnest(applications) id) u CROSS JOIN LATERAL (
+        SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
+        WHERE c.application_id = u.id AND c.height BETWEEN lo AND hi AND (c.height, c.event_idx) < (bh, be)
+          AND c.block_time >= range_start AND c.block_time < range_end
+          AND (services IS NULL OR c.service_id = ANY(services))
+        ORDER BY c.height DESC, c.event_idx DESC LIMIT row_limit) c
+      WHERE path = 'applications'
+      UNION ALL
+      SELECT c.height, c.event_idx FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
+        SELECT c.height, c.event_idx
+        -- every (height, application) of the service at its newest row_limit + 1 heights: each height has a claim of the
+        -- service, so row_limit of them below the keyset's height hold at least row_limit claims, whatever the keyset
+        -- leaves at its own height
+        FROM (SELECT a.height, a.application_id FROM ${s}.settlement_claims_by_application_service a
+              WHERE a.service_id = u.id AND a.height IN (
+                SELECT DISTINCT a2.height FROM ${s}.settlement_claims_by_application_service a2
+                WHERE a2.service_id = u.id AND a2.height BETWEEN lo AND hi AND a2.block_time >= range_start
+                  AND a2.block_time < range_end ORDER BY a2.height DESC LIMIT row_limit + 1)) a
+        CROSS JOIN LATERAL (SELECT c.height, c.event_idx FROM ${s}.claim_settlements c
+                            WHERE c.application_id = a.application_id AND c.height = a.height AND c.service_id = u.id
+                              AND (c.height, c.event_idx) < (bh, be)) c
+        ORDER BY c.height DESC, c.event_idx DESC LIMIT row_limit) c
+      WHERE path = 'services'
+      UNION ALL
+      (SELECT c.height, c.event_idx
+       FROM (SELECT sb.height FROM ${s}.settlement_blocks sb WHERE sb.height BETWEEN lo AND hi
+               AND sb.block_time >= range_start AND sb.block_time < range_end ORDER BY sb.height DESC) h
+       CROSS JOIN LATERAL (SELECT c.height, c.event_idx, c.supplier_id, c.application_id, c.service_id
+                           FROM ${s}.claim_settlements c WHERE c.height = h.height OFFSET 0) c
+       WHERE path = 'heights' AND (c.height, c.event_idx) < (bh, be) AND (ids IS NULL OR c.supplier_id = ANY(ids))
+         AND (applications IS NULL OR c.application_id = ANY(applications)) AND (services IS NULL OR c.service_id = ANY(services))
+       ORDER BY h.height DESC, c.event_idx DESC LIMIT row_limit)
+    ) q WHERE statuses IS NULL OR 'settled' = ANY(statuses)
+    ORDER BY 1 DESC, 2 DESC LIMIT row_limit
+  ), x(height, event_idx) AS (
+    (SELECT e.height, e.event_idx FROM ${s}.claim_expirations e
+     JOIN ${s}.settlement_blocks sb ON sb.height = e.height AND sb.block_time >= range_start AND sb.block_time < range_end
+     WHERE (statuses IS NULL OR 'expired' = ANY(statuses)) AND cardinality(ids) <= 200
+       AND e.supplier_id = ANY(ids) AND e.height BETWEEN lo AND hi AND (e.height, e.event_idx) < (bh, be)
+       AND (applications IS NULL OR e.application_id = ANY(applications)) AND (services IS NULL OR e.service_id = ANY(services))
+     ORDER BY e.height DESC, e.event_idx DESC LIMIT row_limit)
+    UNION ALL
+    (SELECT e.height, e.event_idx
+     FROM (SELECT e.* FROM ${s}.claim_expirations e WHERE e.height BETWEEN lo AND hi
+           ORDER BY e.height DESC, e.event_idx DESC OFFSET 0) e
+     JOIN ${s}.settlement_blocks sb ON sb.height = e.height AND sb.block_time >= range_start AND sb.block_time < range_end
+     WHERE (statuses IS NULL OR 'expired' = ANY(statuses)) AND (ids IS NULL OR cardinality(ids) > 200)
+       AND (e.height, e.event_idx) < (bh, be) AND (ids IS NULL OR e.supplier_id = ANY(ids))
+       AND (applications IS NULL OR e.application_id = ANY(applications)) AND (services IS NULL OR e.service_id = ANY(services))
+     ORDER BY e.height DESC, e.event_idx DESC LIMIT row_limit)
+  )
+  SELECT r.* FROM (
+    SELECT 'settled'::text, c.height, c.event_idx, c.block_time, c.supplier_id, nullif(c.supplier_owner_id, ''), c.application_id,
+           c.service_id, c.session_id, c.session_end, c.relays, c.estimated_relays, c.claimed_compute_units,
+           c.estimated_compute_units, c.claimed_upokt, c.settled_upokt, c.relay_minted_upokt, c.global_minted_upokt,
+           c.overservicing_loss_upokt, c.settled_with_proof, NULL::text, cv.covered_from, cv.covered_to, cv.gaps
+    FROM k JOIN ${s}.claim_settlements c ON c.height = k.height AND c.event_idx = k.event_idx
+    UNION ALL
+    SELECT 'expired', e.height, e.event_idx, sb.block_time, e.supplier_id, NULL, e.application_id, e.service_id, NULL,
+           e.session_end, e.relays, e.estimated_relays, e.claimed_compute_units, e.estimated_compute_units,
+           e.claimed_upokt, NULL, NULL, NULL, NULL, NULL, e.reason, cv.covered_from, cv.covered_to, cv.gaps
+    FROM x JOIN ${s}.claim_expirations e ON e.height = x.height AND e.event_idx = x.event_idx
+    JOIN ${s}.settlement_blocks sb ON sb.height = e.height
+  ) r ORDER BY 2 DESC, 3 DESC LIMIT row_limit;
+END $$;
+
+-- Claims created (MsgCreateClaim) by up to 20 suppliers, newest first, before they settle or expire: what get_claims
+-- cannot list, for a supplier's own monitor (the sessions it claimed, the last claim it made). msg_create_claims has
+-- only GiST indexes (54 GB, 46M rows on mainnet): each supplier's claims are a bitmap of all of them, ~130 ms for the
+-- busiest one (mainnet replica, 2026-10-13), hence the cap. Keyset paging on (height, id), like get_claims. Covers the
+-- indexed blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_created_claims(suppliers text[], range_start timestamptz, range_end timestamptz,
+  row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
+RETURNS TABLE(height bigint, block_time timestamptz, id text, supplier_id text, application_id text, service_id text,
+  session_id text, session_end_height bigint, relays numeric, estimated_relays numeric, claimed_compute_units numeric,
+  estimated_compute_units numeric, claimed_upokt numeric, transaction_id text, covered_from timestamptz,
+  covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; rg record; bh numeric;
+BEGIN
+  IF suppliers IS NULL OR cardinality(suppliers) < 1 OR cardinality(suppliers) > 20 THEN
+    RAISE EXCEPTION 'suppliers must have between 1 and 20 elements (has %)', coalesce(cardinality(suppliers), 0);
+  END IF;
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
+  END IF;
+  IF (before_height IS NULL) <> (before_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
+  END IF;
+${covered(null, true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  bh := coalesce(before_height, 9223372036854775807);
+  RETURN QUERY
+  SELECT m.block_id::bigint, bl.timestamp AT TIME ZONE 'UTC', m.id, m.supplier_id, m.application_id, m.service_id,
+         m.session_id, m.session_end_height::bigint, m.num_relays, m.num_estimated_relays, m.num_claimed_computed_units,
+         m.num_estimated_computed_units, m.claimed_amount, m.transaction_id, cv.covered_from, cv.covered_to, cv.gaps
+  FROM (SELECT DISTINCT unnest(suppliers) sid) u CROSS JOIN LATERAL (
+    SELECT m.* FROM ${s}.msg_create_claims m
+    WHERE m.supplier_id = u.sid AND m.block_id BETWEEN rg.lo AND rg.hi
+      AND (m.block_id < bh OR m.block_id = bh AND m.id < before_id)
+    ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit) m
+  JOIN ${s}.blocks bl ON bl.id = m.block_id
+  ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit;
+END $$;
+
+-- An actor's stake history, one row per event, newest first: stake and unstake messages, unbonding begin and end,
+-- for suppliers the slashes (penalty, stake before and after, proof status), and for applications and gateways the
+-- delegations of one to the other (delegate, undelegate). Reads the indexer's own message and event
+-- tables, so it covers the indexed blocks. kind = supplier (suppliers, owners or operators, through _supplier_ids),
+-- application or gateway (addresses, up to 200); one list is required: the tables have no block-ordered index (their
+-- block_id indexes are GiST), so a network-wide newest-first read would sort them whole. Keyset paging like get_claims,
+-- on (height, id).
+CREATE OR REPLACE FUNCTION ${s}.get_actor_lifecycle(kind text, addresses text[], range_start timestamptz,
+  range_end timestamptz, owners text[] DEFAULT NULL, operators text[] DEFAULT NULL, events text[] DEFAULT NULL,
+  row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL, before_id text DEFAULT NULL,
+  operator_scope text DEFAULT 'now')
+RETURNS TABLE(height bigint, block_time timestamptz, actor_id text, event text, id text, transaction_id text,
+  stake_upokt numeric, owner_id text, reason text, unbonding_end_height bigint, session_end_height bigint,
+  service_id text, application_id text, session_id text, penalty_upokt numeric, previous_stake_upokt numeric,
+  proof_validation_status text, gateway_id text, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; rg record; ids text[]; bh numeric;
+BEGIN
+  IF kind IS NULL OR kind NOT IN (${LIFECYCLE_KINDS.map((k) => `'${k}'`).join(", ")}) THEN
+    RAISE EXCEPTION 'kind is ${LIFECYCLE_KINDS.slice(0, -1).join(", ")} or ${LIFECYCLE_KINDS[LIFECYCLE_KINDS.length - 1]} (has %)', kind;
+  END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
+  END IF;
+${LIFECYCLE_KIND_EVENTS.map(
+    ([k, evs]) => `  IF kind = '${k}' AND events IS NOT NULL AND NOT events <@ ARRAY[${evs.map((e) => `'${e}'`).join(", ")}] THEN
+    RAISE EXCEPTION 'events of kind ${k} are ${evs.join(", ")} (has %)', events;
+  END IF;`
+  ).join("\n")}
+  IF (before_height IS NULL) <> (before_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
+  END IF;
+${OPERATOR_SCOPE_CHECK}
+  IF kind = 'supplier' THEN
+    -- checked here so the errors name addresses, the argument the caller passed, not _supplier_ids' suppliers
+    IF num_nonnulls(addresses, owners, operators) <> 1 THEN
+      RAISE EXCEPTION 'pass one of addresses, owners (the suppliers they own now) or operators (the suppliers that share revenue with them now)';
+    END IF;
+    PERFORM ${s}._validate(addresses, CASE WHEN addresses IS NULL THEN '' ELSE 'addresses' END, range_start, range_end, NULL);
+${scopedSupplierIds(s, "addresses", true, "range_start", "range_end", "    ")}
+  ELSE
+    IF num_nonnulls(owners, operators) > 0 THEN
+      RAISE EXCEPTION 'owners and operators apply to kind supplier';
+    END IF;
+    PERFORM ${s}._validate(addresses, 'addresses', range_start, range_end, NULL);
+    ids := addresses;
+  END IF;
+${covered(null, true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  bh := coalesce(before_height, 9223372036854775807);
+  RETURN QUERY
+  WITH e(height, actor_id, event, id, transaction_id, stake_upokt, owner_id, reason, unbonding_end_height,
+         session_end_height, service_id, application_id, session_id, penalty_upokt, previous_stake_upokt,
+         proof_validation_status, gateway_id) AS (
+${lifecycleBranches(s)}
+  )
+  SELECT e.height::bigint, bl.timestamp AT TIME ZONE 'UTC', e.actor_id, e.event, e.id, e.transaction_id, e.stake_upokt,
+         e.owner_id, e.reason, e.unbonding_end_height::bigint, e.session_end_height::bigint, e.service_id,
+         e.application_id, e.session_id, e.penalty_upokt, e.previous_stake_upokt, e.proof_validation_status,
+         e.gateway_id, cv.covered_from, cv.covered_to, cv.gaps
+  FROM e JOIN ${s}.blocks bl ON bl.id = e.height
+  ORDER BY e.height DESC, e.id DESC LIMIT row_limit;
+END $$;
+
+-- Morse claims one by one, newest first: an account's balance (account), an application's or a supplier's stake and
+-- balance (application, supplier: its owner as shannon_dest_address, its operator, the services it claimed), and the
+-- authority's recoveries (recover). Filters, combined: morse_addresses (up to 200, hex in any case: the indexer stores it lowercased),
+-- shannon_addresses (up to 200: the destination; for a supplier its owner or operator), kinds (NULL = all). The four
+-- message tables are small (8.8k supplier claims, 1.6k account claims, 0.6k recoveries on mainnet, 2026-10-14), so a
+-- read with no list sorts them whole. Keyset paging on (height, id), like get_actor_lifecycle. Covers the indexed
+-- blocks. The accounts that can be claimed are the morseClaimableAccounts list, and get_morse_claim_summary sums them.
+CREATE OR REPLACE FUNCTION ${s}.get_morse_claims(morse_addresses text[], shannon_addresses text[],
+  range_start timestamptz, range_end timestamptz, kinds text[] DEFAULT NULL, row_limit integer DEFAULT 100,
+  before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
+RETURNS TABLE(height bigint, block_time timestamptz, kind text, id text, transaction_id text, morse_src_address text,
+  shannon_dest_address text, shannon_operator_address text, shannon_signing_address text, morse_node_address text,
+  balance_upokt numeric, stake_upokt numeric, service_ids text[], claim_signer_type text, is_admin boolean,
+  covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; rg record; bh numeric; morse_lc text[];
+BEGIN
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
+  IF morse_addresses IS NOT NULL THEN
+    PERFORM ${s}._validate(morse_addresses, 'morse_addresses', NULL, NULL, NULL);
+    morse_lc := ARRAY(SELECT lower(a) FROM unnest(morse_addresses) a);
+  END IF;
+  IF shannon_addresses IS NOT NULL THEN PERFORM ${s}._validate(shannon_addresses, 'shannon_addresses', NULL, NULL, NULL); END IF;
+  IF kinds IS NOT NULL AND NOT kinds <@ ARRAY[${MORSE_BRANCHES.map((b) => `'${b.kind}'`).join(", ")}] THEN
+    RAISE EXCEPTION 'kinds takes ${MORSE_BRANCHES.map((b) => b.kind).join(", ")} (has %)', kinds;
+  END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
+  END IF;
+  IF (before_height IS NULL) <> (before_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
+  END IF;
+${covered(null, true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  bh := coalesce(before_height, 9223372036854775807);
+  RETURN QUERY
+  WITH c(height, kind, id, ${Object.keys(MORSE_COLUMNS).join(", ")}) AS (
+${morseBranches(s)}
+  )
+  SELECT c.height::bigint, bl.timestamp AT TIME ZONE 'UTC', c.kind, c.id, c.transaction_id, c.morse_src_address,
+         c.shannon_dest_address, c.shannon_operator_address, c.shannon_signing_address, c.morse_node_address,
+         c.balance_upokt, c.stake_upokt,
+         CASE c.kind
+           WHEN 'supplier' THEN ARRAY(SELECT DISTINCT sv.service_id FROM ${s}.msg_claim_morse_supplier_services sv
+                                      WHERE sv.claim_msg_id = c.id ORDER BY 1)
+           WHEN 'application' THEN ARRAY(SELECT DISTINCT sv.service_id FROM ${s}.msg_claim_morse_application_services sv
+                                         WHERE sv.claim_msg_id = c.id ORDER BY 1)
+         END,
+         c.claim_signer_type, c.is_admin, cv.covered_from, cv.covered_to, cv.gaps
+  FROM c JOIN ${s}.blocks bl ON bl.id = c.height
+  ORDER BY c.height DESC, c.id DESC LIMIT row_limit;
+END $$;
+
+-- Block statistics per bucket from the blocks' own report columns (the indexer fills them per block): blocks, the
+-- heights they span, transactions (total, successful, failed), relays and compute units (claimed and estimated), and
+-- the time between blocks and the block size. Covers the indexed blocks. The whole chain is one parallel scan of
+-- blocks (963k rows, 188 ms on the mainnet replica, 2026-10-13); a range reads idx_blocks_timestamp_id (24 hours by
+-- hour 6 ms, 92 days by day 214 ms). A block whose previous one is not indexed has time_to_block 0
+-- (update_block_took), which is no interval: the average and the minimum leave it out.
+CREATE OR REPLACE FUNCTION ${s}.get_block_stats(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL)
+RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, blocks bigint, first_height bigint, last_height bigint,
+  total_txs numeric, successful_txs numeric, failed_txs numeric, relays numeric, estimated_relays numeric,
+  compute_units numeric, estimated_compute_units numeric, avg_time_to_block_ms numeric, min_time_to_block_ms numeric,
+  max_time_to_block_ms numeric, avg_size_bytes numeric, covered_from timestamptz, covered_to timestamptz,
+  covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE sp record; cv record;
+BEGIN
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, bucket);
+${covered("blocks", true)}
+  RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
+    SELECT ${s}._bucket(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.f) b_start,
+           ${s}._bucket_end(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.t) b_end,
+           count(*)::bigint, min(bl.id)::bigint, max(bl.id)::bigint, sum(bl.total_txs)::numeric,
+           sum(bl.successful_txs)::numeric, sum(bl.failed_txs)::numeric, sum(bl.total_relays), sum(bl.total_estimated_relays),
+           sum(bl.total_computed_units), sum(bl.total_estimated_computed_units), round(avg(bl.time_to_block) FILTER (WHERE bl.time_to_block > 0), 3),
+           min(bl.time_to_block) FILTER (WHERE bl.time_to_block > 0), max(bl.time_to_block), round(avg(bl.size), 3)
+    FROM ${s}.blocks bl
+    WHERE bl.timestamp >= range_start AT TIME ZONE 'UTC' AND bl.timestamp < range_end AT TIME ZONE 'UTC'
+    GROUP BY 1, 2
+  ) q ORDER BY 1 DESC;
 END $$;
 
 -- Supplier: what it generated, and the first and last settlement height of the claims of each row (the rollups'
@@ -1985,8 +2769,8 @@ CREATE OR REPLACE FUNCTION ${s}._json_strings(j jsonb) RETURNS jsonb LANGUAGE sq
     ELSE j END
 $$;
 
--- <function>_json for every catalog function that returns rows: the same arguments and defaults, and every row in one
--- jsonb array, in the function's row order, from one execution. Numbers come as JSON strings (amounts reach 2^53, past
+-- <function>_json for every catalog function that returns rows: the same arguments and defaults, and every row (one
+-- page of row_limit for the functions that page with before_*) in one jsonb array, in the function's row order, from one execution. Numbers come as JSON strings (amounts reach 2^53, past
 -- what a JavaScript number holds exactly), as the GraphQL list gives BigInt / BigFloat. GraphQL serves the row variant as a list capped at
 -- --query-limit (1000 in tilt); the jsonb is a scalar, so no row cap or page applies. Built from pg_proc, so a
 -- wrapper always has its function's current signature; the old ones are dropped first.
