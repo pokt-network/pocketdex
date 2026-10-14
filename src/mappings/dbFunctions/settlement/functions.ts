@@ -104,10 +104,12 @@ const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]
 
 // The application unbonding events keep the proto's number: get_actor_lifecycle names it with the Application entity's
 // unstaking_reason names. A copy of applications.ts getAppUnbondingReasonFromSDK: change both. The entity can also say
-// TRANSFER, which comes from a transfer, not from an unbonding event. A reason the indexer did not recognize is stored
-// as -1 (applicationUnbondingReasonFromJSON) and comes as '-1'.
+// TRANSFER, which comes from a transfer, not from an unbonding event. An unbonding end whose reason the indexer did not
+// recognize is stored as -1 (applicationUnbondingReasonFromJSON) and comes as UNRECOGNIZED, the proto's name; an
+// unbonding begin with one stops the indexer (getAppUnbondingReasonFromSDK throws), so none is stored.
 const appReason =
-  "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MINIMUM_STAKE' WHEN 2 THEN 'MIGRATION' ELSE m.reason::text END";
+  "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MINIMUM_STAKE' WHEN 2 THEN 'MIGRATION' WHEN -1 THEN 'UNRECOGNIZED' " +
+  "ELSE m.reason::text END";
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
@@ -463,11 +465,12 @@ BEGIN
 END $$;
 
 -- The highest height the money tables wrote (settlement_blocks: a height with settlement events, which may have no
--- settled claim) at or below money_progress.height, and its block time: two primary-key probes. It moves forward when a
+-- settled claim) at or below money_progress.height, and its block time: the one-row money_progress and a probe of the
+-- settlement_blocks primary key. It moves forward when a
 -- new settlement is written, so a client can poll it and refetch only when it changes. A history fill or gap repair
 -- below it does not move it, nor does covered_to advancing with the blocks. After a rewind of the money step it goes
--- back to the progress, and forward again as the step rewrites those heights. No row (null in GraphQL) until the first
--- height is written.
+-- back to the highest written height at or below the progress, and forward again as the step rewrites those heights.
+-- No row (null in GraphQL) until the first height is written or while money_progress has no row.
 CREATE OR REPLACE FUNCTION ${s}.get_last_settlement(OUT height bigint, OUT block_time timestamptz)
 LANGUAGE sql STABLE AS $$
   -- not past money_progress, as the catalog: a rewound money step leaves its rows above the progress until it
