@@ -102,6 +102,11 @@ export const CATALOG_FUNCTIONS = [
 ];
 const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
 
+// The application unbonding events keep the proto's number: get_actor_lifecycle names it as the proto does
+// (APPLICATION_UNBONDING_REASON_*), with the name the supplier enum uses for the same reason (BELOW_MIN_STAKE).
+const appReason =
+  "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MIN_STAKE' WHEN 2 THEN 'MIGRATION' ELSE m.reason::text END";
+
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
   // the reshaped helpers as SQL VALUES (name, signature or NULL): the DDL drops their other overloads
@@ -114,10 +119,6 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   // get_supply_flows, which pass cv to _income / _supply_flows; blocks for the functions over the indexer's own
   // tables). Without a bucket a row's bucket_start is the requested range_start (covered_from with an open start). The rows then carry
   // cv.covered_from, cv.covered_to and cv.gaps, and every fill keeps to cv.covered.
-  // the application unbonding events keep the proto's number; the names are the Application entity's
-  // (applications.ts getAppUnbondingReasonFromSDK)
-  const appReason =
-    "CASE m.reason WHEN 0 THEN 'ELECTIVE' WHEN 1 THEN 'BELOW_MINIMUM_STAKE' WHEN 2 THEN 'MIGRATION' ELSE m.reason::text END";
   const covered = (span: "settled" | "blocks" | null, blocks = false) =>
     [
       "  -- what is not written is not read: the covered part of the range only (_coverage)",
@@ -459,8 +460,8 @@ BEGIN
   END IF;
 END $$;
 
--- The highest height the money tables wrote (settlement_blocks: a height with settlement events, which may have no settled claim) and its block time,
--- one probe of the primary key. It moves when a new settlement is written, so a client can poll it and refetch the
+-- The highest height the money tables wrote (settlement_blocks: a height with settlement events, which may have no settled claim) up to
+-- money_progress, and its block time, one probe of the primary key. It moves when a new settlement is written, so a client can poll it and refetch the
 -- recent data it shows only when it moves. It does not move when older heights are rewritten (a history fill or a gap
 -- repair) or when covered_to advances with the blocks. No row (null in GraphQL) until the first height is written.
 CREATE OR REPLACE FUNCTION ${s}.get_last_settlement(OUT height bigint, OUT block_time timestamptz)
@@ -943,7 +944,8 @@ END $$;
 -- (~3,100) by the primary key, ~5 ms for nodefleet.net's 2,351 suppliers, which hold half of each height's claims (a
 -- fleet that settles rarely walks many heights); applications, each one's newest from (application_id, height);
 -- services, each one's newest (height, application) from settlement_claims_by_application_service, then those
--- applications' claims, 1.5 ms (there is no claim index by service). The OFFSET 0 keeps the primary key probe: with
+-- applications' claims, 1.5 ms for 100 rows, 75 ms for 1000 (there is no claim index by service; each service has at
+-- most 3 applications a height on mainnet, so whole heights cost little). The OFFSET 0 keeps the primary key probe: with
 -- the fleet filter pushed in, the planner probed (supplier_id, height) once per supplier per height (120 ms a height).
 -- Expired claims: their small table (617k rows) by supplier index for a short list, else walked newest first (the
 -- whole table when nothing matches: 338 ms).
@@ -2597,8 +2599,8 @@ CREATE OR REPLACE FUNCTION ${s}._json_strings(j jsonb) RETURNS jsonb LANGUAGE sq
     ELSE j END
 $$;
 
--- <function>_json for every catalog function that returns rows: the same arguments and defaults, and every row in one
--- jsonb array, in the function's row order, from one execution. Numbers come as JSON strings (amounts reach 2^53, past
+-- <function>_json for every catalog function that returns rows: the same arguments and defaults, and every row (one
+-- page of row_limit for the functions that page with before_*) in one jsonb array, in the function's row order, from one execution. Numbers come as JSON strings (amounts reach 2^53, past
 -- what a JavaScript number holds exactly), as the GraphQL list gives BigInt / BigFloat. GraphQL serves the row variant as a list capped at
 -- --query-limit (1000 in tilt); the jsonb is a scalar, so no row cap or page applies. Built from pg_proc, so a
 -- wrapper always has its function's current signature; the old ones are dropped first.

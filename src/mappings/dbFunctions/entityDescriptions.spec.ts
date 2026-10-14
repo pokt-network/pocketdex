@@ -18,7 +18,10 @@ for (const m of schema.matchAll(/^type\s+(\w+)\s+@entity\b[^{]*\{([\s\S]*?)^\}/g
     .filter((l) => /^\w+\s*:/.test(l) && !l.includes("@derivedFrom"))
     .map((l) => {
       const [name, type] = l.split(":").map((x) => x.trim());
-      const base = type.replace(/[[\]!]/g, " ").trim().split(/\s+/)[0];
+      const base = type
+        .replace(/[[\]!]/g, " ")
+        .trim()
+        .split(/\s+/)[0];
       return `${snake(name)}${entities.has(base) ? "_id" : ""}`;
     })
     .sort();
