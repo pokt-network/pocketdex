@@ -1617,6 +1617,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const sup = ["s1 own-a op-s1 300 svc-x,svc-y a.net,b.io 2 2", "s3 own-b op-s3 500 svc-x,svc-y a.net 2 1", "s5 own-c op-s5 70   0 0"];
       assert.deepEqual(await staked(""), sup);
       assert.deepEqual(await staked("row_limit => 2, after_supplier_id => 's1'"), sup.slice(1));
+      // other statuses: s2 (Unstaked) keeps a live config; s6 has none, so the configs closed at its last closing (9)
+      await c.query(`INSERT INTO ${S}.suppliers VALUES ('s6', 'own-d', 'Unstaked', 0, int8range(1, NULL), 'op-s6');
+        INSERT INTO ${S}.supplier_service_configs VALUES ('s6', 'svc-a', '["x.io"]', 2, int8range(2, 9)),
+          ('s6', 'svc-b', '["y.io"]', 2, int8range(2, 5));`);
+      assert.deepEqual(await staked("stake_statuses => ARRAY['Unstaked']"), ["s2 own-a op-s2 0 svc-x a.net 1 1", "s6 own-d op-s6 0 svc-a x.io 1 1"]);
+      assert.deepEqual(await staked("stake_statuses => ARRAY['Staked', 'Unstaked'], row_limit => 2"), [sup[0], "s2 own-a op-s2 0 svc-x a.net 1 1"]);
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(stake_statuses => ARRAY['Bonded'])`), /stake_statuses takes Staked/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
       await c.query("SAVEPOINT e");
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(row_limit => 0)`), /row_limit must be between 1 and 1000/);
       await c.query("ROLLBACK TO SAVEPOINT e");

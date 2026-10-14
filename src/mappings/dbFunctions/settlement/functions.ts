@@ -520,6 +520,7 @@ BEGIN
                       , ('get_supplier_fleet', 'after_supplier_id')
                       , ('get_claims', 'current_owner_id')
                       , ('get_gateway_delegations', 'height')
+                      , ('get_staked_suppliers', 'stake_statuses')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -1387,17 +1388,40 @@ BEGIN
   LIMIT row_limit;
 END $$;
 
--- The Staked suppliers now, one row each in supplier_id order: owner, operator, stake, and the services and endpoint
--- root domains of their live configs (empty arrays without one): the suppliers { serviceConfigs } walk consumers made.
+-- The Staked suppliers now (or those of stake_statuses), one row each in supplier_id order: owner, operator, stake, and
+-- the services and endpoint root domains of their live configs (empty arrays without one; for a supplier in another
+-- status with none live, the configs closed at its last closing): the suppliers { serviceConfigs } walk consumers made.
 -- Keyset paging on supplier_id: a stable key, so a walk neither skips nor repeats a supplier whose stake changes
 -- meanwhile. A page of 1000 takes 31-50 ms on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id,
 -- idx_ssc_live_supplier_service and idx_ssc_live_supplier_domains.
-CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers(row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL)
+CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers(row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL,
+  stake_statuses text[] DEFAULT ARRAY['Staked'])
 RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_supplier_id', row_limit;
+  END IF;
+  IF stake_statuses IS NULL OR cardinality(stake_statuses) < 1 OR NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
+    RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
+  END IF;
+  IF stake_statuses <> ARRAY['Staked'] THEN
+    -- other statuses: a supplier with no live config gets the configs closed at its last closing (the newest upper of
+    -- its versions, through the GiST on (supplier_id, _block_range)): ~2.8 s a page of 1000 Unstaked suppliers on mainnet
+    RETURN QUERY
+    SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
+           ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c WHERE c.supplier_id = su.id
+                 AND CASE WHEN m.live THEN upper_inf(c._block_range) ELSE upper(c._block_range) = m.last_upper END ORDER BY 1),
+           ARRAY(SELECT DISTINCT e.x FROM ${s}.supplier_service_configs c, ${configDomains("c")} e(x) WHERE c.supplier_id = su.id
+                 AND CASE WHEN m.live THEN upper_inf(c._block_range) ELSE upper(c._block_range) = m.last_upper END ORDER BY 1)
+    FROM ${s}.suppliers su
+    CROSS JOIN LATERAL (SELECT bool_or(upper_inf(c._block_range)) live, max(upper(c._block_range)) last_upper
+                        FROM ${s}.supplier_service_configs c WHERE c.supplier_id = su.id) m
+    WHERE upper_inf(su._block_range) AND su.stake_status::text = ANY(stake_statuses)
+      AND (after_supplier_id IS NULL OR su.id > after_supplier_id)
+    ORDER BY su.id
+    LIMIT row_limit;
+    RETURN;
   END IF;
   RETURN QUERY
   -- two array subqueries, each index-only: service_id from idx_ssc_live_supplier_service, domains from
