@@ -255,6 +255,11 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_rev_share
       ON ${dbSchema}.supplier_service_configs USING GIN (rev_share jsonb_path_ops)
       WHERE upper_inf(_block_range)`,
+    // The newest relay mining difficulty update of a service (get_service_summary; get_relay_mining_difficulty's newest
+    // first per service): the GiST on (service_id, _block_range) finds a service's updates but cannot order them, so the
+    // summary of every service read all 1.06M and sorted them per service (2.2 s, mainnet replica 2026-10-14).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rmd_service_block
+      ON ${dbSchema}.event_relay_mining_difficulty_updateds (service_id, block_id)`,
     // The suppliers that shared revenue with an address at any time (_operator_suppliers_ever, operator_scope ever): each
     // distinct (supplier, rev_share address list) of every config version, walked by a loose scan. The GIN on rev_share
     // finds the versions but not their supplier: 12 s on the heap for the 7 largest operators (mainnet replica,

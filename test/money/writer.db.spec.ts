@@ -1643,15 +1643,21 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         INSERT INTO ${S}.application_services VALUES ('a1', 'svc-x', int8range(1, NULL)), ('a1', 'svc-z', int8range(1, NULL)),
           ('a2', 'svc-x', int8range(1, NULL)), ('a3', 'svc-x', int8range(1, 4));
         INSERT INTO ${S}.application_gateways (application_id, gateway_id, _block_range) VALUES ('a1', 'g1', int8range(1, NULL)), ('a3', 'g1', int8range(1, NULL)),
-          ('a3', 'g2', int8range(1, NULL)), ('a2', 'g2', int8range(1, 3));`);
+          ('a3', 'g2', int8range(1, NULL)), ('a2', 'g2', int8range(1, 3));
+        -- the newest update of a service is its difficulty now; svc-y never had one
+        CREATE TABLE ${S}.event_relay_mining_difficulty_updateds (service_id text, new_target_hash_hex_encoded text,
+          new_num_relays_ema numeric, block_id numeric);
+        INSERT INTO ${S}.event_relay_mining_difficulty_updateds VALUES ('svc-x', 'ff', 10, 10), ('svc-x', 'fd', 30, 20),
+          ('svc-x', 'fe', 20, 15), ('svc-z', 'aa', 7, 5);`);
       const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
       for (const [args, want] of [
-        ["", ["svc-x 2 2 1 2", "svc-y 1 1 0 0", "svc-z 0 0 1 1"]],
-        ["ARRAY['svc-y', 'svc-z', 'none']", ["svc-y 1 1 0 0", "svc-z 0 0 1 1"]],
+        ["", ["svc-x 2 2 1 2 30 fd 20", "svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        ["ARRAY['svc-y', 'svc-z', 'none']", ["svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
       ] as const)
         assert.deepEqual(
           [args, await rows(`SELECT service_id, staked_suppliers::text, suppliers::text, staked_applications::text,
-                               applications::text FROM ${S}.get_service_summary(${args})`)],
+                               applications::text, num_relays_ema::text, target_hash_hex, difficulty_updated_height::text
+                             FROM ${S}.get_service_summary(${args})`)],
           [args, want]
         );
       for (const [args, want] of [

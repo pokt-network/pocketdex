@@ -497,13 +497,14 @@ BEGIN
   END LOOP;
 END $$;
 
--- services came last to get_supplier_earnings and from_session_end_height to get_created_claims: likewise.
+-- services came last to get_supplier_earnings and from_session_end_height to get_created_claims, and the relay mining
+-- difficulty columns to the rows of get_service_summary (CREATE OR REPLACE cannot change the columns): likewise.
 DO $$
 DECLARE f regprocedure;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
-           JOIN (VALUES ('get_supplier_earnings', 'services'), ('get_created_claims', 'from_session_end_height'))
-             n(name, arg) ON n.name = p.proname
+           JOIN (VALUES ('get_supplier_earnings', 'services'), ('get_created_claims', 'from_session_end_height'),
+                        ('get_service_summary', 'num_relays_ema')) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
   END LOOP;
@@ -1012,9 +1013,13 @@ END $$;
 -- applications with a live service row for it (staked_applications likewise); services NULL = every service with a
 -- live config or application. Live configs through idx_ssc_live_service; applications through the GiST indexes on
 -- _block_range (332 live of 2.46M versions on mainnet, 2026-10-13).
+-- And its relay mining difficulty now: the newest update of the service (its relays EMA, target hash and height),
+-- which get_relay_mining_difficulty lists one by one (the Service entity's own difficulty columns are not written).
+-- SubQuery's GiST on (service_id, _block_range) cannot order: it read every update of every service (1.06M) and took
+-- 2.2 s for the 174 live services (mainnet replica, 2026-10-14); idx_rmd_service_block reads one per service.
 CREATE OR REPLACE FUNCTION ${s}.get_service_summary(services text[] DEFAULT NULL)
 RETURNS TABLE(service_id text, staked_suppliers bigint, suppliers bigint, staked_applications bigint,
-  applications bigint)
+  applications bigint, num_relays_ema numeric, target_hash_hex text, difficulty_updated_height bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
@@ -1035,8 +1040,13 @@ BEGIN
     GROUP BY 1
   )
   SELECT coalesce(sc.service_id, ac.service_id), coalesce(sc.staked, 0), coalesce(sc.n, 0), coalesce(ac.staked, 0),
-         coalesce(ac.n, 0)
+         coalesce(ac.n, 0), d.new_num_relays_ema::numeric, d.new_target_hash_hex_encoded::text, d.block_id::bigint
   FROM sc FULL JOIN ac ON ac.service_id = sc.service_id
+  -- the newest difficulty update of the service (idx_rmd_service_block)
+  LEFT JOIN LATERAL (
+    SELECT e.new_num_relays_ema, e.new_target_hash_hex_encoded, e.block_id FROM ${s}.event_relay_mining_difficulty_updateds e
+    WHERE e.service_id = coalesce(sc.service_id, ac.service_id) ORDER BY e.block_id DESC LIMIT 1
+  ) d ON true
   ORDER BY 1;
 END $$;
 
