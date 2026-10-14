@@ -1767,7 +1767,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         INSERT INTO ${S}.event_application_unbonding_begins VALUES ('ab1', 'a1', 1, 110, 130, 120);
         INSERT INTO ${S}.event_application_unbonding_ends VALUES ('ae1', 'a1', 1, 110, 130, 130);
         INSERT INTO ${S}.event_application_unbonding_begins VALUES ('ab2', 'a2', 0, 110, 130, 140), ('ab3', 'a3', 2, 110, 130, 150);
-        INSERT INTO ${S}.event_application_unbonding_ends VALUES ('ae2', 'a2', 0, 110, 130, 170), ('ae3', 'a3', 7, 110, 130, 180);
+        INSERT INTO ${S}.event_application_unbonding_ends VALUES ('ae2', 'a2', 0, 110, 130, 170), ('ae3', 'a3', -1, 110, 130, 180);
         INSERT INTO ${S}.msg_stake_gateways VALUES ('mg1', 'g1', 700, 140, 'tx6');
         INSERT INTO ${S}.msg_unstake_gateways VALUES ('mgu1', 'g1', 160, 'tx7');
         INSERT INTO ${S}.event_gateway_unbonding_begins VALUES ('gb1', 'g1', 200, 160, 170, 'tx7');`);
@@ -1793,10 +1793,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["'supplier', ARRAY['s1', 's2'], NULL, NULL, events => ARRAY['stake']", ["200 s1 stake ms2 1500 - -", "150 s2 stake ms3 900 - -", "100 s1 stake ms1 1000 - -"]],
         ["'supplier', ARRAY['s1'], '2026-03-01T04:00:00Z', '2026-03-01T05:00:00Z'", ["290 s1 unstake mu1 - - -", "250 s1 slash sl1 1490 - 10"]],
         // the application events keep the proto number (0 elective, 1 below the minimum stake, 2 migration); the rows name
-        // it as the Application entity does, and a number it does not know as itself
+        // it as the Application entity does; -1 is what the indexer stores for a reason it did not recognize
         ["'application', ARRAY['a1'], NULL, NULL", ["130 a1 unbonding_end ae1 - BELOW_MINIMUM_STAKE -", "120 a1 unbonding_begin ab1 - BELOW_MINIMUM_STAKE -", "110 a1 stake ma1 500 - -"]],
         ["'application', ARRAY['a2', 'a3'], NULL, NULL", [
-          "180 a3 unbonding_end ae3 - 7 -", "170 a2 unbonding_end ae2 - ELECTIVE -",
+          "180 a3 unbonding_end ae3 - -1 -", "170 a2 unbonding_end ae2 - ELECTIVE -",
           "150 a3 unbonding_begin ab3 - MIGRATION -", "140 a2 unbonding_begin ab2 - ELECTIVE -",
         ]],
         ["'gateway', ARRAY['g1'], NULL, NULL", ["170 g1 unbonding_begin gb1 - - -", "160 g1 unstake mgu1 - - -", "140 g1 stake mg1 700 - -"]],
