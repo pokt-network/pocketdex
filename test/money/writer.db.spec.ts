@@ -2226,7 +2226,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         INSERT INTO ${S}.msg_claim_morse_application_services VALUES ('as1', 'app1', 'svc-b'), ('as2', 'app1', 'svc-a');
         INSERT INTO ${S}.msg_claim_morse_suppliers VALUES ('sup1', 'sign3', 'own3', 'op3', 'm3', 'NODE3', 'CLAIM_SIGNER_TYPE_OPERATOR', 900, 9, 300, 'tx3');
         INSERT INTO ${S}.msg_claim_morse_supplier_services VALUES ('ss1', 'sup1', 'svc-a'), ('ss2', 'sup1', 'svc-a');
-        INSERT INTO ${S}.msg_recover_morse_accounts VALUES ('rec1', 'dest1', 'm4', 40, true, 300, 'tx4');`);
+        INSERT INTO ${S}.msg_recover_morse_accounts VALUES ('rec1', 'dest1', 'm4', 40, true, 300, 'tx4');
+        -- the supplier claim's destination as the chain records it: its claimed account (here the operator, not the owner)
+        CREATE TABLE ${S}.morse_claimable_accounts (id text, claimed_msg_id text, shannon_dest_address text, _block_range int8range);
+        INSERT INTO ${S}.morse_claimable_accounts VALUES ('m3', NULL, NULL, int8range(1, 300)), ('m3', 'sup1', 'op3', int8range(300, NULL));`);
       const got = async (args: string) =>
         (
           await c.query(
@@ -2238,7 +2241,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           )
         ).rows.map((r) => String(r.k));
       const all = [
-        "300 supplier sup1 m3 own3 op3 9 900 svc-a CLAIM_SIGNER_TYPE_OPERATOR -",
+        "300 supplier sup1 m3 op3 op3 9 900 svc-a CLAIM_SIGNER_TYPE_OPERATOR -",
         "300 recover rec1 m4 dest1 - 40 - - - true",
         "200 application app1 m2 dest2 - 7 500 svc-a,svc-b - -",
         "100 account acc1 m1 dest1 - 100 - - - -",

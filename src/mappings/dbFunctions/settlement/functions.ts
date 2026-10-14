@@ -193,7 +193,7 @@ const MORSE_BRANCHES: { kind: string; table: string; shannon: string[]; cols: Re
   { kind: "application", table: "msg_claim_morse_applications", shannon: ["shannon_dest_address"],
     cols: { ...morseClaim, shannon_dest_address: "m.shannon_dest_address", stake_upokt: "m.stake_amount" } },
   { kind: "supplier", table: "msg_claim_morse_suppliers", shannon: ["shannon_owner_address", "shannon_operator_address"],
-    cols: { ...morseClaim, shannon_dest_address: "m.shannon_owner_address", shannon_operator_address: "m.shannon_operator_address",
+    cols: { ...morseClaim, shannon_operator_address: "m.shannon_operator_address",
       morse_node_address: "m.morse_node_address", stake_upokt: "m.stake_amount", claim_signer_type: "m.claim_signer_type::text" } },
   { kind: "recover", table: "msg_recover_morse_accounts", shannon: ["shannon_dest_address_id"],
     cols: { transaction_id: "m.transaction_id", morse_src_address: "m.morse_src_address",
@@ -1768,7 +1768,7 @@ ${lifecycleBranches(s)}
 END $$;
 
 -- Morse claims one by one, newest first: an account's balance (account), an application's or a supplier's stake and
--- balance (application, supplier: its owner as shannon_dest_address, its operator, the services it claimed), and the
+-- balance (application, supplier: shannon_dest_address as the chain records it, from the claimed account, its operator, the services it claimed), and the
 -- authority's recoveries (recover). Filters, combined: morse_addresses (up to 200, hex in any case: the indexer stores it lowercased),
 -- shannon_addresses (up to 200: the destination; for a supplier its owner or operator), kinds (NULL = all). The four
 -- message tables are small (8.8k supplier claims, 1.6k account claims, 0.6k recoveries on mainnet, 2026-10-14), so a
@@ -1808,7 +1808,13 @@ ${covered(null, true)}
 ${morseBranches(s)}
   )
   SELECT c.height::bigint, bl.timestamp AT TIME ZONE 'UTC', c.kind, c.id, c.transaction_id, c.morse_src_address,
-         c.shannon_dest_address, c.shannon_operator_address, c.shannon_signing_address, c.morse_node_address,
+         -- a supplier claim's destination as the chain records it: the claimed account's shannon_dest_address (the
+         -- supplier address before poktroll v0.1.20, then the address the stake was minted to), one probe of the GiST
+         -- on (claimed_msg_id, _block_range); 8,767 of 8,767 mainnet supplier claims have their account row
+         CASE WHEN c.kind = 'supplier' THEN (SELECT a.shannon_dest_address::text FROM ${s}.morse_claimable_accounts a
+                                             WHERE a.claimed_msg_id = c.id AND upper_inf(a._block_range) LIMIT 1)
+              ELSE c.shannon_dest_address END,
+         c.shannon_operator_address, c.shannon_signing_address, c.morse_node_address,
          c.balance_upokt, c.stake_upokt,
          CASE c.kind
            WHEN 'supplier' THEN ARRAY(SELECT DISTINCT sv.service_id FROM ${s}.msg_claim_morse_supplier_services sv

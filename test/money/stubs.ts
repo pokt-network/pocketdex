@@ -44,6 +44,10 @@ export const entityStubsSql = (S: string, heights: string): string => `
       CREATE TABLE ${S}.msg_claim_morse_supplier_services (id text, claim_msg_id text, service_id text);
       CREATE TABLE ${S}.msg_recover_morse_accounts (id text, shannon_dest_address_id text, morse_src_address text,
         recovered_balance_amount numeric, is_admin boolean, block_id numeric, transaction_id text);
+      -- get_morse_claims' supplier destination
+      CREATE TABLE IF NOT EXISTS ${S}.morse_claimable_accounts (id text, _block_range int8range);
+      ALTER TABLE ${S}.morse_claimable_accounts ADD COLUMN IF NOT EXISTS claimed_msg_id text,
+        ADD COLUMN IF NOT EXISTS shannon_dest_address text;
       -- get_claims' current_owner_id
       CREATE TABLE IF NOT EXISTS ${S}.suppliers (id text, _block_range int8range);
       ALTER TABLE ${S}.suppliers ADD COLUMN IF NOT EXISTS owner_id text;
