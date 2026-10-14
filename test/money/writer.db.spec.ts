@@ -2985,6 +2985,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("the smart tags find keyset state functions by an argument named after_ with the underscore escaped", () => {
+    // in the template literal a single backslash is lost: LIKE 'after_%' would match any argument starting "after"
+    const sql = createSettlementSmartTagsFn(S);
+    assert.ok(sql.includes("a LIKE 'after\\_%'"), "LIKE 'after\\_%' in the generated SQL");
+    assert.ok(!sql.includes("a LIKE 'after_%'"));
+  });
+
   it("GraphQL: every catalog function that returns rows is a plain list, and the helpers are hidden", async () => {
     // subql-query 2.22.2 adds a _block_range filter to every function connection, which the catalog rows lack
     const { rows } = await c.query(

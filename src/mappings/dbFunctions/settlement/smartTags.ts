@@ -308,7 +308,7 @@ BEGIN
            WHERE n.nspname = '${s}' AND p.prokind = 'f' AND p.proretset LOOP
     EXECUTE format('COMMENT ON FUNCTION %s IS %L', f, '@simpleCollections only' || E'\n' || what || ' '
       || CASE WHEN EXISTS (SELECT 1 FROM pg_proc p2, unnest(p2.proargnames[1:p2.pronargs]) a
-                           WHERE p2.oid = f AND a LIKE 'after\_%')
+                           WHERE p2.oid = f AND a LIKE 'after\\_%')
                      AND pg_get_function_arguments(f) LIKE '%row_limit integer DEFAULT 1000%' THEN ${STATE_KEYSET_NOTE}
                 WHEN (SELECT p3.proname FROM pg_proc p3 WHERE p3.oid = f) = ANY(ARRAY[${STATE_UNIT_FREE.map((n) => `'${n}'`).join(", ")}]) THEN ${STATE_ROWS_NOTE_NO_UNIT}
                 ELSE ${STATE_ROWS_NOTE} END
