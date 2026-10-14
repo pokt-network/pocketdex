@@ -269,21 +269,15 @@ const scopedSupplierIds = (s: string, list: string, requireOne: boolean, rs: str
 
 export function createSettlementFunctionsFn(dbSchema: string): string {
   const s = dbSchema;
-  // The newest live version of a supplier (alias a, of suppliers) or of a service config (of supplier_service_configs):
-  // during a restake the indexer can leave two live rows of one for a moment (.local partial-block findings, 2026-10-14),
-  // so a function that lists or sums live rows keeps the one no later live row supersedes. A probe per row through
-  // idx_suppliers_live_id / idx_ssc_live_supplier_service.
-  const newestSupplier = (a: string) =>
-    `NOT EXISTS (SELECT 1 FROM ${s}.suppliers s2 WHERE s2.id = ${a}.id AND upper_inf(s2._block_range)
-                 AND lower(s2._block_range) > lower(${a}._block_range))`;
-  const newestConfig = (a: string) =>
-    `NOT EXISTS (SELECT 1 FROM ${s}.supplier_service_configs c2 WHERE c2.supplier_id = ${a}.supplier_id
-                 AND c2.service_id = ${a}.service_id AND upper_inf(c2._block_range)
-                 AND lower(c2._block_range) > lower(${a}._block_range))`;
-  // get_claims' current_owner_id: the supplier's owner now (its live version; the newer one if two are live for a moment)
+  // The endpoint root domains of a service config (alias a, of supplier_service_configs) as rows x: its domains array,
+  // nothing when it is not one
+  const configDomains = (a: string) =>
+    `jsonb_array_elements_text(CASE WHEN jsonb_typeof(${a}.domains) = 'array' THEN ${a}.domains ELSE '[]'::jsonb END)`;
+  // get_claims' current_owner_id: the supplier's owner now, from its live version (LIMIT 1: a scalar subquery must not
+  // fail)
   const currentOwner = (alias: string) =>
     `(SELECT su.owner_id FROM ${s}.suppliers su WHERE su.id = ${alias}.supplier_id AND upper_inf(su._block_range)
-      ORDER BY lower(su._block_range) DESC LIMIT 1)`;
+      LIMIT 1)`;
   // the reshaped helpers as SQL VALUES (name, signature or NULL): the DDL drops their other overloads
   const helperValues = Object.entries(HELPER_SIGNATURES)
     .map(([name, args]) => `('${name}', ${args === null ? "NULL" : `'${args}'`})`)
@@ -934,7 +928,7 @@ BEGIN
           JOIN ${s}.supplier_service_configs ssc
             ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a)) AND upper_inf(ssc._block_range)) m
     WHERE EXISTS (SELECT 1 FROM ${s}.suppliers su WHERE su.id = m.supplier_id AND su.stake_status = 'Staked'
-                    AND su._block_range @> 9223372036854775807::bigint AND ${newestSupplier("su")})
+                    AND su._block_range @> 9223372036854775807::bigint)
     ORDER BY m.supplier_id);
 END $$;
 
@@ -965,8 +959,7 @@ BEGIN
   IF owners IS NOT NULL THEN
     PERFORM ${s}._validate(owners, 'owners', range_start, range_end, bucket);
     RETURN ARRAY(SELECT DISTINCT su.id FROM ${s}.suppliers su
-                 WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint
-                   AND ${newestSupplier("su")});
+                 WHERE su.owner_id = ANY(owners) AND su._block_range @> 9223372036854775807::bigint);
   END IF;
   IF operators IS NOT NULL THEN
     PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
@@ -988,11 +981,10 @@ END $$;
 -- get_supplier_stats_by_domains (domains, Staked, by_supplier false). Live rows through the partial indexes
 -- idx_suppliers_live_id, idx_ssc_live_domains and idx_ssc_live_rev_share.
 -- max_stake_upokt keeps the stakes below it (a below-minimum list). With services, each row also carries
--- service_domains: the endpoint root domains of its live configs for those services. A supplier counts once even if
--- the suppliers table holds two live versions of it for a moment (the newer one): a fleet total once read one
--- block's restakes twice. row_limit (up to 1000) pages by keyset on (stake_upokt descending, supplier_id) with
--- after_stake_upokt / after_supplier_id, and counts services for that page only: a page of 100 of the 4,548 Staked
--- suppliers in 34 ms on mainnet, where every row takes 0.17-0.23 s (2026-10-14). NULL = every row, as before.
+-- service_domains: the endpoint root domains of its live configs for those services. row_limit (up to 1000) pages by
+-- keyset on (stake_upokt descending, supplier_id) with after_stake_upokt / after_supplier_id, and counts services for
+-- that page only: a page of 100 of the 4,548 Staked suppliers in 34 ms on mainnet, where every row takes 0.17-0.23 s
+-- (2026-10-14). NULL = every row, as before.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_fleet(suppliers text[] DEFAULT NULL, owners text[] DEFAULT NULL,
   operators text[] DEFAULT NULL, domains text[] DEFAULT NULL, services text[] DEFAULT NULL,
   stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true, operator_scope text DEFAULT 'now',
@@ -1030,16 +1022,12 @@ ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
                   WHERE c.service_id = ANY(get_supplier_fleet.services) AND upper_inf(c._block_range));
   END IF;
   RETURN QUERY
-  WITH f0 AS (
-    -- the newest live version of each supplier, before the filters on its status and stake
-    SELECT DISTINCT ON (su.id) su.id, su.owner_id, su.stake_status::text st, su.stake_amount::numeric stake_amount
+  WITH f AS (
+    SELECT su.id, su.owner_id, su.stake_status::text st, su.stake_amount::numeric stake_amount
     FROM ${s}.suppliers su
     WHERE upper_inf(su._block_range) AND (ids IS NULL OR su.id = ANY(ids)) AND (sids IS NULL OR su.id = ANY(sids))
-    ORDER BY su.id, lower(su._block_range) DESC
-  ), f AS (
-    SELECT f0.* FROM f0
-    WHERE (stake_statuses IS NULL OR f0.st = ANY(stake_statuses))
-      AND (max_stake_upokt IS NULL OR f0.stake_amount < max_stake_upokt)
+      AND (stake_statuses IS NULL OR su.stake_status::text = ANY(stake_statuses))
+      AND (max_stake_upokt IS NULL OR su.stake_amount < max_stake_upokt)
   ), p AS (
     -- the rows of this call: every supplier, or one keyset page
     SELECT f.* FROM f
@@ -1047,18 +1035,16 @@ ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
                            OR f.stake_amount = after_stake_upokt AND f.id > after_supplier_id)
     ORDER BY f.stake_amount DESC, f.id LIMIT row_limit
   ), sv AS (
-    SELECT c.supplier_id, c.service_id, c.domains, lower(c._block_range) lo FROM ${s}.supplier_service_configs c
+    SELECT c.supplier_id, c.service_id, c.domains FROM ${s}.supplier_service_configs c
     WHERE upper_inf(c._block_range) AND c.supplier_id IN (SELECT p.id FROM p)
   ), per AS (
     SELECT sv.supplier_id, count(DISTINCT sv.service_id) n FROM sv GROUP BY 1
   ), dom AS (
-    -- the newest live config of each (supplier, service) asked for, grouped once: an array subquery per row would scan
-    -- sv once per supplier (25 s for the 4,379 suppliers of one service)
-    SELECT x.supplier_id, array_agg(DISTINCT e.x ORDER BY e.x) d
-    FROM (SELECT DISTINCT ON (sv.supplier_id, sv.service_id) sv.supplier_id, sv.domains FROM sv
-          WHERE services IS NOT NULL AND sv.service_id = ANY(get_supplier_fleet.services)
-          ORDER BY sv.supplier_id, sv.service_id, sv.lo DESC) x,
-      jsonb_array_elements_text(CASE WHEN jsonb_typeof(x.domains) = 'array' THEN x.domains ELSE '[]'::jsonb END) e(x)
+    -- grouped once: an array subquery per row would scan sv once per supplier (25 s for the 4,379 suppliers of one
+    -- service)
+    SELECT sv.supplier_id, array_agg(DISTINCT e.x ORDER BY e.x) d
+    FROM sv, ${configDomains("sv")} e(x)
+    WHERE services IS NOT NULL AND sv.service_id = ANY(get_supplier_fleet.services)
     GROUP BY 1
   )
   SELECT p.id, p.owner_id, p.st, p.stake_amount, coalesce(per.n, 0), 1::bigint,
@@ -1096,7 +1082,7 @@ BEGIN
     SELECT c.service_id, count(DISTINCT c.supplier_id) FILTER (WHERE su.stake_status::text = 'Staked') staked,
            count(DISTINCT c.supplier_id) n
     FROM ${s}.supplier_service_configs c
-    LEFT JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND ${newestSupplier("su")}
+    LEFT JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range)
     WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services))
     GROUP BY 1
   ), ac AS (
@@ -1311,7 +1297,6 @@ BEGIN
   ), st AS (
     SELECT m.domain, count(*) n, sum(su.stake_amount) stake
     FROM m JOIN ${s}.suppliers su ON su.id = m.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
-      AND ${newestSupplier("su")}
     GROUP BY 1
   )
   SELECT g.domain, g.claimed, g.relays, g.est_relays, g.cu, g.est_cu, g.d1, g.d2, coalesce(st.n, 0),
@@ -1343,8 +1328,7 @@ BEGIN
          c.activated_at_id::bigint
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
-    AND ${newestSupplier("su")}
-  WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services)) AND ${newestConfig("c")}
+  WHERE upper_inf(c._block_range) AND (services IS NULL OR c.service_id = ANY(services))
     -- the plain bound lets the index range start at the key; with the row comparison alone the planner walked the
     -- suppliers from the first one (1.2 s for a middle page on mainnet; 26 ms with it, 2026-10-14)
     AND (after_supplier_id IS NULL OR c.supplier_id >= after_supplier_id)
@@ -1374,17 +1358,15 @@ BEGIN
   SELECT count(*), count(DISTINCT c.supplier_id) INTO n_configs, n_suppliers
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
-    AND ${newestSupplier("su")}
-  WHERE upper_inf(c._block_range) AND ${newestConfig("c")};
+  WHERE upper_inf(c._block_range);
   RETURN QUERY
   SELECT d.x, c.service_id, count(*)::bigint, n_configs, n_suppliers
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
-    AND ${newestSupplier("su")}
   CROSS JOIN LATERAL (
     SELECT DISTINCT e.x FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.domains) = 'array' THEN c.domains ELSE '[]'::jsonb END) e(x)
   ) d
-  WHERE upper_inf(c._block_range) AND ${newestConfig("c")}
+  WHERE upper_inf(c._block_range)
     AND (after_domain IS NULL OR d.x >= after_domain)
     AND (after_domain IS NULL OR (d.x, c.service_id) > (after_domain, after_service_id))
   GROUP BY 1, 2
@@ -1396,7 +1378,7 @@ END $$;
 -- root domains of their live configs (empty arrays without one): the suppliers { serviceConfigs } walk consumers made.
 -- Keyset paging on supplier_id: a stable key, so a walk neither skips nor repeats a supplier whose stake changes
 -- meanwhile. A page of 1000 takes ~0.16 s on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id
--- and idx_ssc_live_supplier_service; the newest live version of each supplier and config only.
+-- and idx_ssc_live_supplier_service.
 CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers(row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL)
 RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1408,15 +1390,10 @@ BEGIN
   SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
          ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c
                WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1),
-         -- the newest live config of each service (DISTINCT ON over the supplier's ~35: 0.16 s a page; the anti-join
-         -- of newestConfig per supplier took 0.45-0.9 s)
-         ARRAY(SELECT DISTINCT e.x
-               FROM (SELECT DISTINCT ON (c.service_id) c.domains FROM ${s}.supplier_service_configs c
-                     WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY c.service_id, lower(c._block_range) DESC) c,
-                 jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.domains) = 'array' THEN c.domains ELSE '[]'::jsonb END) e(x)
-               ORDER BY 1)
+         ARRAY(SELECT DISTINCT e.x FROM ${s}.supplier_service_configs c, ${configDomains("c")} e(x)
+               WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1)
   FROM ${s}.suppliers su
-  WHERE upper_inf(su._block_range) AND su.stake_status::text = 'Staked' AND ${newestSupplier("su")}
+  WHERE upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
     AND (after_supplier_id IS NULL OR su.id > after_supplier_id)
   ORDER BY su.id
   LIMIT row_limit;

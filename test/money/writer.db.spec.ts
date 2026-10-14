@@ -1615,15 +1615,6 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query("SAVEPOINT e");
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(row_limit => 0)`), /row_limit must be between 1 and 1000/);
       await c.query("ROLLBACK TO SAVEPOINT e");
-      // a restake left two live versions for a moment: s1's newer one is Unstaked, s3's svc-x config has a newer one on
-      // z.io; every function reads the newer versions only
-      await c.query("SAVEPOINT dup");
-      await c.query(`INSERT INTO ${S}.suppliers VALUES ('s1', 'own-a', 'Unstaked', 0, int8range(9, NULL), 'op-s1');
-        INSERT INTO ${S}.supplier_service_configs VALUES ('s3', 'svc-x', '["z.io"]', 9, int8range(9, NULL));`);
-      assert.deepEqual(await got(""), ["s3 svc-x own-b 500 z.io 9", "s3 svc-y own-b 500 a.net,a.net 8"]);
-      assert.deepEqual(await groups(""), ["a.net svc-y 1 2 1", "z.io svc-x 1 2 1"]);
-      assert.deepEqual(await staked(""), ["s3 own-b op-s3 500 svc-x,svc-y a.net,z.io 2 2", "s5 own-c op-s5 70   0 0"]);
-      await c.query("ROLLBACK TO SAVEPOINT dup");
     } finally {
       await c.query("ROLLBACK");
     }
@@ -1870,12 +1861,6 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         const [, , , stake, , count] = now[0].split(" ");
         assert.deepEqual([d, stake, count], [d, old.stake, old.n]);
       }
-      // two live versions of one supplier for a moment: it counts once, with the newer one
-      await c.query("SAVEPOINT dup");
-      await c.query(`INSERT INTO ${S}.suppliers VALUES ('s3', 'own-b', 'Staked', 600, int8range(9, NULL))`);
-      assert.deepEqual(await fleet("stake_statuses => ARRAY['Staked'], by_supplier => false"), ["all  all 900  2"]);
-      assert.deepEqual(await fleet("owners => ARRAY['own-b'], stake_statuses => ARRAY['Staked']"), ["s3 own-b Staked 600 1 1"]);
-      await c.query("ROLLBACK TO SAVEPOINT dup");
       for (const [args, err] of [
         ["row_limit => 0", /row_limit must be between 1 and 1000, or NULL/],
         ["row_limit => 10, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
