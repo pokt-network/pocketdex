@@ -66,5 +66,5 @@ functions have no `...Json`. Amounts are in upokt. In `...Json` every number is 
 ## Timeline
 
 1. Now: the functions above are live next to the current schema. Move to them.
-2. Later, announced on this page with a date: relations, aggregates and the hidden tables are removed from the schema.
+2. Monday 2026-10-19 (UTC): relations, aggregates and the hidden tables are removed from the schema.
    Clients still using them will get `Cannot query field` errors.
