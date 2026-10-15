@@ -2141,6 +2141,21 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
       await c.query(`DELETE FROM ${S}.supplier_rev_share_wallets; DELETE FROM ${S}.supplier_rev_share_wallets_coverage;`);
+      // domain '' = a live config with no domain (get_staked_domain_services' '' row): s2's svc-z ([] domains) and
+      // s4's svc-z (NULL); combined with a domain, and with services one config must have both
+      await c.query("SAVEPOINT nodomain");
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s2', 'svc-z', '[]', '[]', int8range(1, NULL)),
+        ('s4', 'svc-z', '[]', NULL, int8range(1, NULL)), ('s1', 'svc-z', '[]', '["a.net"]', int8range(1, NULL))`);
+      for (const [args, want] of [
+        ["domains => ARRAY['']", ["s2 own-a Unstaking 100 1 1", "s4 own-b Unstaked 50 1 1"]],
+        ["domains => ARRAY['', 'b.io']", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 3 1", "s2 own-a Unstaking 100 1 1",
+          "s4 own-b Unstaked 50 1 1"]],
+        ["domains => ARRAY[''], services => ARRAY['svc-z']", ["s2 own-a Unstaking 100 1 1", "s4 own-b Unstaked 50 1 1"]],
+        ["domains => ARRAY[''], services => ARRAY['svc-x']", []],
+        ["domains => ARRAY['a.net'], services => ARRAY['svc-z']", ["s1 own-a Staked 300 3 1"]],
+      ] as const)
+        assert.deepEqual([args, await fleet(args)], [args, want]);
+      await c.query("ROLLBACK TO SAVEPOINT nodomain");
       // with services, the domains of each supplier's live configs for them
       for (const [args, want] of [
         ["services => ARRAY['svc-y']", ["s1 a.net,b.io"]],

@@ -274,6 +274,9 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   // nothing when it is not one
   const configDomains = (a: string) =>
     `jsonb_array_elements_text(CASE WHEN jsonb_typeof(${a}.domains) = 'array' THEN ${a}.domains ELSE '[]'::jsonb END)`;
+  // a config configDomains yields nothing for: domain '' in get_staked_domain_services and get_supplier_fleet
+  const noDomain = (a: string) =>
+    `coalesce(jsonb_array_length(CASE WHEN jsonb_typeof(${a}.domains) = 'array' THEN ${a}.domains END), 0) = 0`;
   // get_claims' current_owner_id: the supplier's owner now, from its live version (LIMIT 1: a scalar subquery must not
   // fail)
   const currentOwner = (alias: string) =>
@@ -1095,6 +1098,12 @@ ${OPERATOR_SCOPE_CHECK}
     IF services IS NULL THEN
       ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
                    WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
+      -- domain '' = a live config with no domain, the '' row of get_staked_domain_services (no index on it: 0.15 s over
+      -- the live configs on mainnet, none of which has no domain, 2026-10-15)
+      IF '' = ANY(get_supplier_fleet.domains) THEN
+        ids := ids || ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
+                            WHERE upper_inf(c._block_range) AND ${noDomain("c")});
+      END IF;
     ELSE
       PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
       -- with services, ONE live config for one of the services with an endpoint on one of the domains (not a domain on
@@ -1104,7 +1113,8 @@ ${OPERATOR_SCOPE_CHECK}
       ids := ARRAY(SELECT DISTINCT x.supplier_id
                    FROM (SELECT c.supplier_id, c.domains FROM ${s}.supplier_service_configs c
                          WHERE c.service_id = ANY(get_supplier_fleet.services) AND upper_inf(c._block_range) OFFSET 0) x
-                   WHERE x.domains ?| get_supplier_fleet.domains);
+                   WHERE x.domains ?| get_supplier_fleet.domains
+                      OR '' = ANY(get_supplier_fleet.domains) AND ${noDomain("x")});
     END IF;
   ELSE
 ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
