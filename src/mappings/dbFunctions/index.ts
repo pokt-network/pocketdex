@@ -39,6 +39,7 @@ import {
 import { updateTookOnBlocksFn } from "./reports/took";
 import { updateTxsDataOnBlockFn } from "./reports/txs";
 import { updateStakedValidatorsDataOnBlockFn, updateUnstakingValidatorsDataOnBlockFn } from "./reports/validators";
+import { createSupplierRevShareWalletsFn } from "./revShareWallets";
 import { getRewardsByDate, getRewardsByDomainsAndTimesGroupByServiceFn, getSupplierStatsByDomainsFn } from "./rewards";
 import {
   getRewardsByAddressesAndTime,
@@ -142,6 +143,8 @@ export async function createDbFunctions(): Promise<void> {
     refreshDomainServiceDailyRewardsFn,
     // the per-block claim counts get_claim_proofs_data_by_time reads, and their writer
     createClaimsByBlockFn,
+    // the (wallet, supplier) pairs of every rev_share, which operator_scope ever reads
+    createSupplierRevShareWalletsFn,
   )
   // settlement money tables, their single writer (src/mappings/money) and the catalog functions over them;
   // a failure here is fatal

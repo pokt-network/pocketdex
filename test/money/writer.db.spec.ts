@@ -13,6 +13,7 @@ import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
 import { createEntityDescriptionsFn } from "../../src/mappings/dbFunctions/entityDescriptions";
 import { createDeprecationsFn, DEPRECATED_RELATION, deprecatedTag } from "../../src/mappings/dbFunctions/deprecations";
+import { createSupplierRevShareWalletsFn } from "../../src/mappings/dbFunctions/revShareWallets";
 import { getSupplierStatsByDomainsFn } from "../../src/mappings/dbFunctions/rewards";
 import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementTablesFn, ROLLUP_TABLES } from "../../src/mappings/dbFunctions/settlement/schema";
@@ -202,6 +203,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       INSERT INTO ${S}.blocks VALUES (1, '2026-01-01'), (999999999, '2026-09-01 12:00');
       -- the indexer's money step processed every block (money/write.ts)
       INSERT INTO ${S}.money_progress VALUES (true, 1, 999999999);`);
+    await c.query(createSupplierRevShareWalletsFn(S));
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
   });
@@ -1678,6 +1680,40 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.match(String(d.rows[0].d), /^@simpleCollections only\nLive service configs[\s\S]*pass the last row's keys as after_\*/);
   });
 
+  it("supplier_rev_share_wallets: the startup DDL is the text created by hand on beta and mainnet, and reruns as the indexer's role", async () => {
+    // beta and mainnet got these tables by hand, before the release, from this exact text (as the indexer's role): a
+    // change here must ship as an ALTER, since CREATE ... IF NOT EXISTS would leave their tables as they are
+    const frozen = (schema: string) => `
+CREATE TABLE IF NOT EXISTS ${schema}.supplier_rev_share_wallets (
+  wallet_address    TEXT   NOT NULL,
+  supplier_id       TEXT   NOT NULL,
+  first_seen_height BIGINT NOT NULL,
+  PRIMARY KEY (wallet_address, supplier_id)
+);
+COMMENT ON TABLE ${schema}.supplier_rev_share_wallets IS E'@omit';
+CREATE TABLE IF NOT EXISTS ${schema}.supplier_rev_share_wallets_coverage (
+  singleton     BOOLEAN     PRIMARY KEY DEFAULT true CHECK (singleton),
+  backfilled_at TIMESTAMPTZ NOT NULL
+);
+COMMENT ON TABLE ${schema}.supplier_rev_share_wallets_coverage IS E'@omit';
+`;
+    assert.equal(createSupplierRevShareWalletsFn("mainnet"), frozen("mainnet"));
+    await c.query("BEGIN");
+    try {
+      await c.query(`CREATE ROLE rsw_indexer_ci NOSUPERUSER; CREATE SCHEMA rsw_ci AUTHORIZATION rsw_indexer_ci; SET LOCAL ROLE rsw_indexer_ci;`);
+      await c.query(createSupplierRevShareWalletsFn("rsw_ci"));
+      await c.query(createSupplierRevShareWalletsFn("rsw_ci"));
+      const owners = await c.query(`SELECT c.relname, pg_get_userbyid(c.relowner) o, obj_description(c.oid, 'pg_class') d
+        FROM pg_class c WHERE c.relnamespace = 'rsw_ci'::regnamespace AND c.relkind = 'r' ORDER BY 1`);
+      assert.deepEqual(owners.rows.map((r) => `${r.relname} ${r.o} ${r.d}`), [
+        "supplier_rev_share_wallets rsw_indexer_ci @omit",
+        "supplier_rev_share_wallets_coverage rsw_indexer_ci @omit",
+      ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("get_gateway_fleet and get_gateway_delegations read gateways and their delegations now and at a height", async () => {
     await c.query("BEGIN");
     try {
@@ -1819,6 +1855,19 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["row_limit => 1, after_stake_upokt => 500, after_supplier_id => 's3', stake_statuses => ARRAY['Staked']", ["s1 own-a Staked 300 2 1"]],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
+      // once the backfill has filled supplier_rev_share_wallets, ever reads the pairs there and no longer the configs:
+      // op-3 is in no config here, only in the table
+      await c.query(`
+        INSERT INTO ${S}.supplier_rev_share_wallets VALUES ('op-1', 's1', 1), ('op-1', 's3', 1), ('op-1', 's4', 1),
+          ('op-2', 's3', 1), ('op-3', 's2', 7);
+        INSERT INTO ${S}.supplier_rev_share_wallets_coverage (backfilled_at) VALUES (now());`);
+      for (const [args, want] of [
+        ["operators => ARRAY['op-1'], operator_scope => 'ever'", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1", "s4 own-b Unstaked 50 0 1"]],
+        ["operators => ARRAY['op-3'], operator_scope => 'ever'", ["s2 own-a Unstaking 100 0 1"]],
+        ["operators => ARRAY['op-2', 'op-3'], operator_scope => 'ever'", ["s3 own-b Staked 500 1 1", "s2 own-a Unstaking 100 0 1"]],
+      ] as const)
+        assert.deepEqual([args, await fleet(args)], [args, want]);
+      await c.query(`DELETE FROM ${S}.supplier_rev_share_wallets; DELETE FROM ${S}.supplier_rev_share_wallets_coverage;`);
       // with services, the domains of each supplier's live configs for them
       for (const [args, want] of [
         ["services => ARRAY['svc-y']", ["s1 a.net,b.io"]],

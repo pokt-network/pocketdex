@@ -27,7 +27,13 @@ let height = 0;
 
 const openAt = (row: Row, block: number) => row.lo !== null && row.lo <= block && (row.hi === null || block < row.hi);
 
+// the raw queries the handler sends (supplier_rev_share_wallets), with their bind values and transaction
+const queries: Array<{ sql: string; bind: Array<unknown>; transaction: unknown }> = [];
+
 const sequelize = {
+  query: async (sql: string, { bind, transaction }: { bind: Array<unknown>; transaction: unknown }) => {
+    queries.push({ sql, bind, transaction });
+  },
   fn: (fn: string, ...args: Array<unknown>) => ({ fn, args }),
   col: (col: string) => ({ col }),
   where: (left: unknown, right: unknown) => ({ left, right }),
@@ -811,5 +817,53 @@ describe("Morse supplier claim destination", () => {
     reset();
     const { msgs } = claimsTx(150, [{ supplier: S1, node: 1, signer: "node" }], "unknown-chain");
     await assert.rejects(index(150, msgs, []), /no v0\.1\.20 height for chain "unknown-chain"/);
+  });
+});
+
+describe("indexSupplier rev_share wallets", () => {
+  // a stake whose configs share revenue with the given wallets
+  const stakeSharing = (h: number, operator: string, services: Array<string>, wallets: Array<string>): CosmosMessage => {
+    const msg = stake(h, operator, services);
+    const decoded = msg.msg.decodedMsg as { services: Array<{ revShare: Array<unknown> }> };
+    for (const service of decoded.services) {
+      service.revShare = wallets.map((address) => ({ address, revSharePercentage: 100 / wallets.length }));
+    }
+    return msg;
+  };
+  // the (wallet, supplier, height) of every pair sent, sorted
+  const pairs = () =>
+    queries.flatMap(({ bind: [wallets, suppliers, h] }) =>
+      (wallets as Array<string>).map((w, i) => `${w} ${(suppliers as Array<string>)[i]} ${h}`)
+    ).sort();
+
+  it("writes the pairs of the configs a block writes, in the block transaction, and nothing for a block that writes none", async () => {
+    reset();
+    queries.length = 0;
+    // a transaction of its own for this block, to tell it from no transaction
+    const context = (globals.store as { context: { transaction: unknown } }).context;
+    const before = context.transaction;
+    const tx = { block: 500 };
+    context.transaction = tx;
+    try {
+      await index(500, [stakeSharing(500, S1, ["akash", "eth"], ["w-a", "w-b"]), stakeSharing(500, S2, ["eth"], ["w-a"])], []);
+    } finally {
+      context.transaction = before;
+    }
+    assert.equal(queries.length, 1);
+    assert.match(queries[0].sql, /INSERT INTO \S+\.supplier_rev_share_wallets [\s\S]* ON CONFLICT \(wallet_address, supplier_id\) DO NOTHING/);
+    assert.equal(queries[0].transaction, tx);
+    // a pair listed by two configs is sent twice; the INSERT keeps one (SELECT DISTINCT, ON CONFLICT)
+    assert.deepEqual(pairs(), [
+      `w-a ${S1} 500`, `w-a ${S1} 500`, `w-a ${S2} 500`, `w-b ${S1} 500`, `w-b ${S1} 500`,
+    ]);
+
+    // an unstake and a stake-only top-up write no config, so no pair
+    queries.length = 0;
+    await index(510, [unstake(510, S2), stake(510, S1, [])], []);
+    assert.equal(queries.length, 0);
+
+    // a restake that changes the wallets: the pairs of the configs it writes, at its height
+    await index(520, [stakeSharing(520, S1, ["akash"], ["w-c"])], []);
+    assert.deepEqual(pairs(), [`w-c ${S1} 520`]);
   });
 });

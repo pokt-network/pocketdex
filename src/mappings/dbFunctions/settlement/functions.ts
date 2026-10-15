@@ -965,14 +965,20 @@ BEGIN
 END $$;
 
 -- The suppliers that shared revenue with the addresses at any time: any version of a service config, live or closed,
--- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). SubQuery's GIN on rev_share
+-- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). Used by operator_scope ever in
+-- get_supplier_fleet, get_claims, get_actor_lifecycle and get_supplier_penalties. It reads the (wallet, supplier) pairs
+-- of supplier_rev_share_wallets (revShareWallets.ts), one primary key range per address, once the backfill has filled
+-- it (supplier_rev_share_wallets_coverage). Before that, the config versions themselves: SubQuery's GIN on rev_share
 -- (jsonb_ops) serves the containment, but every stake writes a new version of the configs it lists, so a large operator
--- matches ~980k versions read from the heap: slow, ~12 s for the 7 largest operators on mainnet (2026-10-14). Used by
--- operator_scope ever in get_supplier_fleet, get_claims, get_actor_lifecycle and get_supplier_penalties; a
--- config-history table kept by the indexer is to replace it.
+-- matches ~980k versions read from the heap, ~12 s for the 7 largest operators on mainnet (2026-10-14).
 CREATE OR REPLACE FUNCTION ${s}._operator_suppliers_ever(addresses text[]) RETURNS text[]
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
+  IF EXISTS (SELECT 1 FROM ${s}.supplier_rev_share_wallets_coverage) THEN
+    RETURN ARRAY(
+      SELECT DISTINCT w.supplier_id FROM ${s}.supplier_rev_share_wallets w WHERE w.wallet_address = ANY(addresses)
+      ORDER BY 1);
+  END IF;
   RETURN ARRAY(
     SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
     JOIN ${s}.supplier_service_configs ssc ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a))
