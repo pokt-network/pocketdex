@@ -1109,7 +1109,8 @@ ${OPERATOR_SCOPE_CHECK}
   ELSE
 ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
   END IF;
-  IF services IS NOT NULL THEN
+  -- with domains, ids already holds only suppliers with a config for one of services
+  IF services IS NOT NULL AND domains IS NULL THEN
     PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
     -- idx_ssc_live_service
     sids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
