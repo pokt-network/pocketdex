@@ -1662,12 +1662,16 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           await c.query(`SELECT concat_ws(' ', domain, service_id, configs, total_configs, total_suppliers) k
                          FROM ${S}.get_staked_domain_services(${args})`)
         ).rows.map((r) => String(r.k));
-      const want = ["a.net svc-x 1 4 2", "a.net svc-y 2 4 2", "b.io svc-y 1 4 2"];
+      // s3's svc-x config has no domain: counted under domain '' (first in the order)
+      const want = [" svc-x 1 4 2", "a.net svc-x 1 4 2", "a.net svc-y 2 4 2", "b.io svc-y 1 4 2"];
       assert.deepEqual(await groups(""), want);
       const regrouped = await c.query(`SELECT concat_ws(' ', d, service_id, count(*)) k FROM (
           SELECT DISTINCT r.supplier_id, r.service_id, d FROM ${S}.get_staked_supplier_services() r, unnest(r.domains) d) x
         GROUP BY d, service_id ORDER BY d, service_id`);
-      assert.deepEqual(regrouped.rows.map((r) => `${r.k} 4 2`), want);
+      assert.deepEqual(regrouped.rows.map((r) => `${r.k} 4 2`), want.slice(1));
+      // every config is on some row: the configs of the rows add up to at least total_configs
+      const sums = await c.query(`SELECT sum(configs)::int s, max(total_configs)::int t FROM ${S}.get_staked_domain_services()`);
+      assert.ok(sums.rows[0].s >= sums.rows[0].t, JSON.stringify(sums.rows[0]));
       const pagedGroups: string[] = [];
       let gpage = await groups("row_limit => 1");
       pagedGroups.push(...gpage);

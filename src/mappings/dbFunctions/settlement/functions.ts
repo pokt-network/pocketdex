@@ -1467,7 +1467,8 @@ END $$;
 
 -- The live service configs of the Staked suppliers counted per (endpoint root domain, service): configs = the configs
 -- that list the domain (once per config, whatever it repeats), as get_staked_supplier_services gives their domains;
--- a config with no domain is in no row. total_configs and total_suppliers, the same on every row of the first page
+-- a config with no domain is counted on the row of domain '' of its service, so the configs of the rows add up to at
+-- least total_configs. total_configs and total_suppliers, the same on every row of the first page
 -- (NULL on the next ones), are all those configs and their distinct suppliers, for a client to check it read everything. 472 groups over 160,488 configs on mainnet
 -- (2026-10-14; no config repeats a domain): the groups take ~0.2 s and the totals ~0.12 s through
 -- idx_suppliers_live_id and idx_ssc_live_supplier_service. Keyset paging on (domain, service_id).
@@ -1494,8 +1495,9 @@ BEGIN
   SELECT d.x, c.service_id, count(*)::bigint, n_configs, n_suppliers
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+  -- each distinct domain of the config, or one '' when it has none (so every config is counted on some row)
   CROSS JOIN LATERAL (
-    SELECT DISTINCT e.x FROM ${configDomains("c")} e(x)
+    SELECT DISTINCT coalesce(e.x, '') x FROM (SELECT 1) z LEFT JOIN LATERAL ${configDomains("c")} e(x) ON true
   ) d
   WHERE upper_inf(c._block_range)
     AND (after_domain IS NULL OR d.x >= after_domain)
