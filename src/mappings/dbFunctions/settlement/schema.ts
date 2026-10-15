@@ -394,6 +394,10 @@ CREATE INDEX IF NOT EXISTS daily_income_by_address_supplier_day_idx ON ${s}.dail
 CREATE INDEX IF NOT EXISTS daily_income_by_address_service_day_idx ON ${s}.daily_income_by_address_service (day);
 CREATE INDEX IF NOT EXISTS daily_claims_by_supplier_day_idx ON ${s}.daily_claims_by_supplier (day);
 CREATE INDEX IF NOT EXISTS daily_claims_by_supplier_application_service_day_idx ON ${s}.daily_claims_by_supplier_application_service (day);
+-- get_supplier_earnings with services and no suppliers (every supplier of a service): the day index alone read every
+-- supplier's rows of the range (30 days of eth: 1.67 s on mainnet); by service and day 0.22 s, 184k to 60k buffers for
+-- 90 days (2026-10-15). Built by hand CONCURRENTLY on beta and mainnet first (163 MB on mainnet); declared here.
+CREATE INDEX IF NOT EXISTS idx_dcsas_service_day ON ${s}.daily_claims_by_supplier_application_service (service_id, day);
 CREATE INDEX IF NOT EXISTS monthly_income_by_address_service_month_idx ON ${s}.monthly_income_by_address_service (month);
 CREATE INDEX IF NOT EXISTS monthly_income_by_address_supplier_month_idx ON ${s}.monthly_income_by_address_supplier (month);
 CREATE INDEX IF NOT EXISTS daily_delegator_rewards_by_validator_day_idx ON ${s}.daily_delegator_rewards_by_validator (day);
