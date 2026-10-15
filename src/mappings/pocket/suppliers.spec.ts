@@ -867,3 +867,20 @@ describe("indexSupplier rev_share wallets", () => {
     assert.deepEqual(pairs(), [`w-c ${S1} 520`]);
   });
 });
+
+describe("supplier_rev_share_wallets startup DDL", () => {
+  // Frozen: beta and mainnet got these tables by hand (2026-10-15, as the indexer's role) from exactly this text, kept
+  // in the fixtures byte for byte. The startup runs it again over those tables: a change to it would have to ship as an
+  // ALTER agreed beforehand, since CREATE ... IF NOT EXISTS leaves an existing table as it is.
+  const { createSupplierRevShareWalletsFn } =
+    require("../dbFunctions/revShareWallets") as typeof import("../dbFunctions/revShareWallets");
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+
+  for (const schema of ["mainnet", "beta"]) {
+    it(`is byte for byte the text created by hand on ${schema}`, () => {
+      const fixture = path.join(__dirname, "../dbFunctions/fixtures", `supplier_rev_share_wallets.${schema}.startup.txt`);
+      assert.equal(createSupplierRevShareWalletsFn(schema), fs.readFileSync(fixture, "utf8"));
+    });
+  }
+});

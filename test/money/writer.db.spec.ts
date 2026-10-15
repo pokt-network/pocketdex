@@ -1680,24 +1680,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.match(String(d.rows[0].d), /^@simpleCollections only\nLive service configs[\s\S]*pass the last row's keys as after_\*/);
   });
 
-  it("supplier_rev_share_wallets: the startup DDL is the text created by hand on beta and mainnet, and reruns as the indexer's role", async () => {
-    // beta and mainnet got these tables by hand, before the release, from this exact text (as the indexer's role): a
-    // change here must ship as an ALTER, since CREATE ... IF NOT EXISTS would leave their tables as they are
-    const frozen = (schema: string) => `
-CREATE TABLE IF NOT EXISTS ${schema}.supplier_rev_share_wallets (
-  wallet_address    TEXT   NOT NULL,
-  supplier_id       TEXT   NOT NULL,
-  first_seen_height BIGINT NOT NULL,
-  PRIMARY KEY (wallet_address, supplier_id)
-);
-COMMENT ON TABLE ${schema}.supplier_rev_share_wallets IS E'@omit';
-CREATE TABLE IF NOT EXISTS ${schema}.supplier_rev_share_wallets_coverage (
-  singleton     BOOLEAN     PRIMARY KEY DEFAULT true CHECK (singleton),
-  backfilled_at TIMESTAMPTZ NOT NULL
-);
-COMMENT ON TABLE ${schema}.supplier_rev_share_wallets_coverage IS E'@omit';
-`;
-    assert.equal(createSupplierRevShareWalletsFn("mainnet"), frozen("mainnet"));
+  it("supplier_rev_share_wallets: the startup DDL reruns as the indexer's role, which owns the tables", async () => {
+    // the text itself is frozen against the one created by hand in prod (suppliers.spec.ts)
     await c.query("BEGIN");
     try {
       await c.query(`CREATE ROLE rsw_indexer_ci NOSUPERUSER; CREATE SCHEMA rsw_ci AUTHORIZATION rsw_indexer_ci; SET LOCAL ROLE rsw_indexer_ci;`);
