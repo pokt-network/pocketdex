@@ -100,6 +100,7 @@ export const CATALOG_FUNCTIONS = [
   "get_relay_mining_difficulty",
   "get_created_claims",
   "get_morse_claims",
+  "get_native_transfers",
 ];
 const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
 
@@ -1856,6 +1857,59 @@ ${covered(null, true)}
     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit) m
   JOIN ${s}.blocks bl ON bl.id = m.block_id
   ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit;
+END $$;
+
+-- Native transfers (MsgSend) of up to 200 addresses, newest first (by height, then id), with their block time and their
+-- transaction's code, codespace, fees, signer and memo: what nativeTransfers { block { timestamp } transaction { ... } }
+-- answered in one request before the relations closed (pokt-data-agent: 2 requests to 1). direction: sent (the sender
+-- is one of addresses), received (the recipient is) or NULL for both; a transfer between two of them comes once. Keyset
+-- paging on (height, id), like get_created_claims. native_transfers is small (115,821 rows, 57 MB on mainnet,
+-- 2026-10-15): each direction through the GiST on sender_id / recipient_id, then sorted; the busiest address (19,070
+-- transfers), a page of 100 with its transactions in 47 ms. Covers the indexed blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_native_transfers(addresses text[], direction text DEFAULT NULL,
+  range_start timestamptz DEFAULT NULL, range_end timestamptz DEFAULT NULL, row_limit integer DEFAULT 100,
+  before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
+RETURNS TABLE(height bigint, block_time timestamptz, id text, sender_id text, recipient_id text, denom text,
+  amounts jsonb, status text, transaction_id text, tx_code integer, tx_codespace text, tx_fees jsonb,
+  tx_signer_address text, tx_memo text, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; rg record; bh numeric;
+BEGIN
+  PERFORM ${s}._validate(addresses, 'addresses', range_start, range_end, NULL);
+  IF direction IS NOT NULL AND direction NOT IN ('sent', 'received') THEN
+    RAISE EXCEPTION 'direction is sent, received or NULL for both (has %)', direction;
+  END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
+  END IF;
+  IF (before_height IS NULL) <> (before_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
+  END IF;
+${covered(null, true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  bh := coalesce(before_height, 9223372036854775807);
+  RETURN QUERY
+  WITH n AS (
+    (SELECT n.id, n.block_id, n.sender_id, n.recipient_id, n.denom, n.amounts, n.status::text st, n.transaction_id
+     FROM ${s}.native_transfers n
+     WHERE (direction IS NULL OR direction = 'sent') AND n.sender_id = ANY(addresses) AND upper_inf(n._block_range)
+       AND n.block_id BETWEEN rg.lo AND rg.hi AND (n.block_id < bh OR n.block_id = bh AND n.id < before_id)
+     ORDER BY n.block_id DESC, n.id DESC LIMIT row_limit)
+    UNION
+    (SELECT n.id, n.block_id, n.sender_id, n.recipient_id, n.denom, n.amounts, n.status::text, n.transaction_id
+     FROM ${s}.native_transfers n
+     WHERE (direction IS NULL OR direction = 'received') AND n.recipient_id = ANY(addresses) AND upper_inf(n._block_range)
+       AND n.block_id BETWEEN rg.lo AND rg.hi AND (n.block_id < bh OR n.block_id = bh AND n.id < before_id)
+     ORDER BY n.block_id DESC, n.id DESC LIMIT row_limit)
+  )
+  SELECT n.block_id::bigint, bl.timestamp AT TIME ZONE 'UTC', n.id, n.sender_id, n.recipient_id, n.denom, n.amounts,
+         n.st, n.transaction_id, tx.code::integer, tx.codespace::text, tx.fees::jsonb, tx.signer_address::text,
+         tx.memo::text, cv.covered_from, cv.covered_to, cv.gaps
+  FROM n JOIN ${s}.blocks bl ON bl.id = n.block_id
+  LEFT JOIN LATERAL (SELECT t.code, t.codespace, t.fees, t.signer_address, t.memo FROM ${s}.transactions t
+                     WHERE t.id = n.transaction_id AND upper_inf(t._block_range) LIMIT 1) tx ON true
+  ORDER BY n.block_id DESC, n.id DESC LIMIT row_limit;
 END $$;
 
 -- An actor's stake history, one row per event, newest first: stake and unstake messages, unbonding begin and end,

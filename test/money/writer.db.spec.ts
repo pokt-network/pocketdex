@@ -2282,7 +2282,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       [S]
     );
     assert.deepEqual(k.rows.map((r) => r.proname), [
-      "get_actor_lifecycle", "get_claims", "get_created_claims", "get_morse_claims", "get_relay_mining_difficulty",
+      "get_actor_lifecycle", "get_claims", "get_created_claims", "get_morse_claims", "get_native_transfers",
+      "get_relay_mining_difficulty",
     ]);
   });
 
@@ -2712,6 +2713,63 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_relay_mining_difficulty(ARRAY['svc-a'], NULL, NULL, row_offset => -1)`), /row_offset must be 0 or more/);
       await c.query("ROLLBACK TO SAVEPOINT e");
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_relay_mining_difficulty(NULL, NULL, NULL)`), /services must have between 1 and 200/);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_native_transfers lists an address's transfers newest first with their transaction, by direction, by keyset", async () => {
+    await c.query("BEGIN");
+    try {
+      // a sends to b (100) and to c (200), b sends to a (200), c to d (250, not ours), a to itself (300); tx3 is not indexed
+      await c.query(`
+        INSERT INTO ${S}.blocks SELECT g, '2026-03-01'::timestamp + g * interval '1 minute' FROM generate_series(100, 300, 50) g;
+        CREATE TABLE ${S}.native_transfers (id text, sender_id text, recipient_id text, denom text, amounts jsonb, status text,
+          transaction_id text, block_id numeric, _block_range int8range);
+        CREATE TABLE ${S}.transactions (id text, code integer, codespace text, fees jsonb, signer_address text, memo text,
+          _block_range int8range);
+        INSERT INTO ${S}.native_transfers VALUES ('n1', 'a', 'b', 'upokt', '[{"denom": "upokt", "amount": "1"}]', 'Success', 'tx1', 100, int8range(100, NULL)),
+          ('n2', 'b', 'a', 'upokt', '[{"denom": "upokt", "amount": "2"}]', 'Success', 'tx2', 200, int8range(200, NULL)),
+          ('n3', 'a', 'c', 'upokt', '[{"denom": "upokt", "amount": "3"}]', 'Error', 'tx3', 200, int8range(200, NULL)),
+          ('n4', 'c', 'd', 'upokt', '[{"denom": "upokt", "amount": "4"}]', 'Success', 'tx4', 250, int8range(250, NULL)),
+          ('n5', 'a', 'a', 'upokt', '[{"denom": "upokt", "amount": "5"}]', 'Success', 'tx5', 300, int8range(300, NULL));
+        INSERT INTO ${S}.transactions VALUES ('tx1', 0, '', '[{"denom": "upokt", "amount": "10"}]', 'a', 'hi', int8range(100, NULL)),
+          ('tx2', 0, '', '[]', 'b', '', int8range(200, NULL)), ('tx4', 0, '', '[]', 'c', '', int8range(250, NULL)),
+          ('tx5', 5, 'bank', '[{"denom": "upokt", "amount": "7"}]', 'a', 'self', int8range(300, NULL));`);
+      const got = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', height, id, sender_id, recipient_id, status, transaction_id, tx_code, tx_codespace,
+                           tx_fees::text, tx_signer_address, tx_memo) k FROM ${S}.get_native_transfers(${args})`)
+        ).rows.map((r) => String(r.k));
+      const all = [
+        '300 n5 a a Success tx5 5 bank [{"denom": "upokt", "amount": "7"}] a self',
+        "200 n3 a c Error tx3",
+        "200 n2 b a Success tx2 0  [] b ",
+        '100 n1 a b Success tx1 0  [{"denom": "upokt", "amount": "10"}] a hi',
+      ];
+      assert.deepEqual(await got("ARRAY['a']"), all);
+      assert.deepEqual(await got("ARRAY['a'], 'sent'"), [all[0], all[1], all[3]]);
+      assert.deepEqual(await got("ARRAY['a'], 'received'"), [all[0], all[2]]);
+      assert.deepEqual(await got("ARRAY['a'], NULL, '2026-03-01T03:00:00Z', '2026-03-01T04:00:00Z'"), all.slice(1, 3));
+      const paged: string[] = [];
+      let page = await got("ARRAY['a'], row_limit => 1");
+      paged.push(...page);
+      while (page.length === 1) {
+        const [height, id] = page[0].split(" ");
+        page = await got(`ARRAY['a'], row_limit => 1, before_height => ${height}, before_id => '${id}'`);
+        paged.push(...page);
+      }
+      assert.deepEqual(paged, all);
+      for (const [args, err] of [
+        ["ARRAY['a'], 'both'", /direction is sent, received or NULL/],
+        ["ARRAY[]::text[]", /addresses must have between 1 and 200 elements/],
+        ["ARRAY['a'], row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["ARRAY['a'], before_height => 5", /pass both before_height and before_id/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_native_transfers(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
     } finally {
       await c.query("ROLLBACK");
     }
@@ -3344,7 +3402,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     for (const n of STATE_FUNCTIONS) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     assert.deepEqual(catalog, [
       "get_actor_lifecycle", "get_app_auto_unstakes", "get_application_spend", "get_block_stats", "get_claims",
-      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_param_history",
+      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_native_transfers",
+      "get_param_history",
       "get_relay_mining_difficulty", "get_service_usage", "get_supplier_distribution", "get_supplier_earnings",
       "get_supplier_penalties", "get_supplier_proofs", "get_supply_flows", "get_validator_rewards", "money_coverage",
     ]);
@@ -3360,6 +3419,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     // the twins of the keyset functions hold one page (row_limit), the others every row
     const keyset = [
       "get_claims_json", "get_created_claims_json", "get_actor_lifecycle_json", "get_relay_mining_difficulty_json", "get_morse_claims_json",
+      "get_native_transfers_json",
     ];
     for (const r of twins.rows) {
       const limit = keyset.includes(String(r.proname)) ? /at most row_limit/ : /no row limit/;
@@ -3692,6 +3752,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_block_stats: "NULL, NULL",
         get_relay_mining_difficulty: "ARRAY['svc-d'], NULL, NULL",
         get_created_claims: "ARRAY['sup-l'], NULL, NULL",
+        get_native_transfers: "ARRAY['acc-s']",
         get_morse_claims: "NULL, NULL, NULL, NULL",
       };
       await stubEntityTables();
@@ -3888,6 +3949,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_block_stats: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
         get_relay_mining_difficulty: "ARRAY['svc-d'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_created_claims: "ARRAY['sup-l'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_native_transfers: "ARRAY['acc-r'], NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_morse_claims: "NULL, NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
       };
       await stubEntityTables();
@@ -3895,6 +3957,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // the functions that list rows one by one order them by height
       const byHeight = [
         "get_param_history", "get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims",
+        "get_native_transfers",
       ];
       for (const [fn, args] of Object.entries(calls)) {
         const col = byHeight.includes(fn) ? "height" : fn === "money_coverage" ? "first_height" : "bucket_start";
