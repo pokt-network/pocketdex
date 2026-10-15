@@ -1882,7 +1882,9 @@ END $$;
 -- is one of addresses), received (the recipient is) or NULL for both; a transfer between two of them comes once. Keyset
 -- paging on (height, id), like get_created_claims. native_transfers is small (115,821 rows, 57 MB on mainnet,
 -- 2026-10-15): each direction through the GiST on sender_id / recipient_id, then sorted; the busiest address (19,070
--- transfers), a page of 100 with its transactions in 47 ms. Covers the indexed blocks.
+-- transfers), a page of 100 with its transactions in 47 ms. Every transfer of the addresses is read to sort it: at the
+-- 200-address cap the planner may scan the whole table instead of the GiST; the 200 busiest senders (80,107 sent and
+-- 55,943 received) take 0.4 s. Covers the indexed blocks.
 CREATE OR REPLACE FUNCTION ${s}.get_native_transfers(addresses text[], direction text DEFAULT NULL,
   range_start timestamptz DEFAULT NULL, range_end timestamptz DEFAULT NULL, row_limit integer DEFAULT 100,
   before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
