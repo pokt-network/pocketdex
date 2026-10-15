@@ -37,6 +37,7 @@ import {
   MsgUnstakeSupplier,
 } from "../../types/proto-interfaces/pocket/supplier/tx";
 import {
+  blockTransaction,
   fetchPaginatedRecords,
   getSequelize,
   getStoreModel,
@@ -65,6 +66,7 @@ import {
 } from "../utils/pub_key";
 import { endpointDomains } from "../utils/service_config_history";
 import { getAttributes, getClaimProofStatusFromSDK } from "./relays";
+import { writeRevShareWallets } from "./rev_share_wallets";
 
 function getMorseSupplierClaimSignerType(item: typeof MorseSupplierClaimSignerTypeSDKType | string | number): MorseSupplierClaimSignerType {
   switch (item) {
@@ -1349,7 +1351,7 @@ async function performSupplierDatabaseOperations(data: {
       where: ids
         ? { [Symbol.for("and")]: [createdAtBlock, { id: { [Symbol.for("in")]: ids } }] }
         : createdAtBlock,
-      transaction: store.context.transaction,
+      transaction: blockTransaction(),
     });
   };
 
@@ -1404,7 +1406,7 @@ async function performSupplierDatabaseOperations(data: {
             __block_range: { [Symbol.for("contains")]: BigInt(block) },
           },
           hooks: false,
-          transaction: store.context.transaction,
+          transaction: blockTransaction(),
         }
       )
     );
@@ -1428,7 +1430,7 @@ async function performSupplierDatabaseOperations(data: {
             __block_range: { [Symbol.for("contains")]: BigInt(block) },
           },
           hooks: false,
-          transaction: store.context.transaction,
+          transaction: blockTransaction(),
         }
       )
     );
@@ -1485,6 +1487,9 @@ async function performSupplierDatabaseOperations(data: {
   if (savePromises.length > 0) {
     await Promise.all(savePromises);
   }
+
+  // the rev_share wallets of the configs this block wrote, for operator_scope ever
+  await writeRevShareWallets(data.servicesToSave, block);
 }
 
 // Helper: Sort events and messages by transaction order

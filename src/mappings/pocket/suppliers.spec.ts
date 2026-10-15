@@ -11,6 +11,7 @@
 //            any other update: a MorseClaimableAccount one records its shannon_dest_address, the rest are ignored
 //   bulkCreate                                                        -> insert at [height, null)
 //   getByFields [field, "in", values]                                 -> the rows open at height
+// Every destroy, update and bulkCreate must carry the block transaction (BLOCK_TX).
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await, @typescript-eslint/no-var-requires */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -26,12 +27,20 @@ let height = 0;
 
 const openAt = (row: Row, block: number) => row.lo !== null && row.lo <= block && (row.hi === null || block < row.hi);
 
+// the raw queries the handler sends (supplier_rev_share_wallets), with their bind values and transaction
+const queries: Array<{ sql: string; bind: Array<unknown>; transaction: unknown }> = [];
+
 const sequelize = {
+  query: async (sql: string, { bind, transaction }: { bind: Array<unknown>; transaction: unknown }) => {
+    queries.push({ sql, bind, transaction });
+  },
   fn: (fn: string, ...args: Array<unknown>) => ({ fn, args }),
   col: (col: string) => ({ col }),
   where: (left: unknown, right: unknown) => ({ left, right }),
-  transaction: async (_: unknown, cb: (tx: unknown) => Promise<unknown>) => cb({}),
 };
+
+const BLOCK_TX = { block: "transaction" };
+const inBlockTx = (transaction: unknown) => assert.equal(transaction, BLOCK_TX, "a write outside the block transaction");
 
 type IdIn = { id: Record<symbol, Array<string>> };
 
@@ -39,14 +48,16 @@ const model = (name: string) => {
   tables[name] = tables[name] || [];
   return {
     sequelize,
-    destroy: async ({ where }: { where: Record<symbol, [unknown, IdIn]> }) => {
+    destroy: async ({ transaction, where }: { where: Record<symbol, [unknown, IdIn]>; transaction: unknown }) => {
+      inBlockTx(transaction);
       const and = where[Symbol.for("and")];
       const ids = and ? and[1].id[Symbol.for("in")] : null;
       tables[name] = tables[name].filter(
         (row) => row.lo !== height || (ids !== null && !ids.includes(row.id as string))
       );
     },
-    update: async (values: Record<string, unknown>, { where }: { where: IdIn & { __block_range?: unknown } }) => {
+    update: async (values: Record<string, unknown>, { transaction, where }: { where: IdIn & { __block_range?: unknown }; transaction: unknown }) => {
+      inBlockTx(transaction);
       if (!where.__block_range) {
         if (name === "MorseClaimableAccount") morseDestinations[where.id as unknown as string] = values.shannon_dest_address;
         return;
@@ -59,7 +70,8 @@ const model = (name: string) => {
         else row.hi = height;
       }
     },
-    bulkCreate: async (docs: Array<Record<string, unknown>>) => {
+    bulkCreate: async (docs: Array<Record<string, unknown>>, { transaction }: { transaction: unknown }) => {
+      inBlockTx(transaction);
       for (const { __block_range, ...doc } of docs) {
         const [lo, hi] = __block_range as [number, number | null];
         tables[name].push({ ...doc, lo: Number(lo), hi });
@@ -77,7 +89,7 @@ globals.logger = {
   error: () => undefined,
 };
 globals.store = {
-  context: { getHistoricalUnit: () => height, transaction: undefined },
+  context: { getHistoricalUnit: () => height, transaction: BLOCK_TX },
   modelProvider: { getModel: (name: string) => ({ model: model(name) }) },
   getByFields: async (
     name: string,
@@ -806,4 +818,114 @@ describe("Morse supplier claim destination", () => {
     const { msgs } = claimsTx(150, [{ supplier: S1, node: 1, signer: "node" }], "unknown-chain");
     await assert.rejects(index(150, msgs, []), /no v0\.1\.20 height for chain "unknown-chain"/);
   });
+});
+
+describe("indexSupplier rev_share wallets", () => {
+  // a stake whose configs share revenue with the given wallets
+  const stakeSharing = (h: number, operator: string, services: Array<string>, wallets: Array<string>): CosmosMessage => {
+    const msg = stake(h, operator, services);
+    const decoded = msg.msg.decodedMsg as { services: Array<{ revShare: Array<unknown> }> };
+    for (const service of decoded.services) {
+      service.revShare = wallets.map((address) => ({ address, revSharePercentage: 100 / wallets.length }));
+    }
+    return msg;
+  };
+  const inserts = () => queries.filter(({ sql }) => sql.startsWith("INSERT"));
+  // the (wallet, supplier, height) of every pair sent, sorted
+  const pairs = () =>
+    inserts()
+      .flatMap(({ bind: [wallets, suppliers, h] }) =>
+        (wallets as Array<string>).map((w, i) => `${w} ${(suppliers as Array<string>)[i]} ${h}`)
+      )
+      .sort();
+
+  it("writes the pairs of the configs a block writes, in the block transaction, and nothing for a block that writes none", async () => {
+    reset();
+    queries.length = 0;
+    await index(500, [stakeSharing(500, S1, ["akash", "eth"], ["w-a", "w-b"]), stakeSharing(500, S2, ["eth"], ["w-a"])], []);
+    // one INSERT for the block (the rewind runs apart, at the start of a block after a gap, in indexer.manager.ts)
+    assert.equal(queries.length, 1);
+    // ORDER BY: the row locks in the order scripts/backfill_rev_share_wallets.sql takes them while it runs live
+    assert.match(queries[0].sql, /^INSERT INTO \S+\.supplier_rev_share_wallets [\s\S]*\nORDER BY 1, 2\nON CONFLICT \(wallet_address, supplier_id\) DO NOTHING$/);
+    inBlockTx(queries[0].transaction);
+    // a pair listed by two configs is sent twice; the INSERT keeps one (SELECT DISTINCT, ON CONFLICT)
+    assert.deepEqual(pairs(), [
+      `w-a ${S1} 500`, `w-a ${S1} 500`, `w-a ${S2} 500`, `w-b ${S1} 500`, `w-b ${S1} 500`,
+    ]);
+
+    // an unstake and a stake-only top-up write no config, so no pair
+    queries.length = 0;
+    await index(510, [unstake(510, S2), stake(510, S1, [])], []);
+    assert.equal(queries.length, 0);
+
+    // a restake that changes the wallets: the pairs of the configs it writes, at its height
+    await index(520, [stakeSharing(520, S1, ["akash"], ["w-c"])], []);
+    assert.deepEqual(pairs(), [`w-c ${S1} 520`]);
+  });
+
+  it("deletes the pairs at or above a block's height only when it does not follow the last one: start, rewind, retry", async () => {
+    const { rewindRevShareWallets } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    const deletes = async (h: number) => {
+      queries.length = 0;
+      await rewindRevShareWallets(h);
+      for (const { transaction } of queries) inBlockTx(transaction);
+      return queries.map(({ bind, sql }) => `${sql.replace(/^DELETE FROM \S+\./, "DELETE FROM ")} [${bind.join(",")}]`);
+    };
+    const del = (h: number) => [`DELETE FROM supplier_rev_share_wallets WHERE first_seen_height >= $1::bigint [${h}]`];
+    // the first block this process sees (nothing in this file calls the rewind before)
+    assert.deepEqual(await deletes(70000), del(70000));
+    // normal consecutive blocks: nothing
+    assert.deepEqual(await deletes(70001), []);
+    assert.deepEqual(await deletes(70002), []);
+    // the same height again (a retried block), then a rewind to an earlier height: delete
+    assert.deepEqual(await deletes(70002), del(70002));
+    assert.deepEqual(await deletes(69990), del(69990));
+    assert.deepEqual(await deletes(69991), []);
+  });
+
+  it("refuses to run in a worker thread (--workers), before it deletes anything from the table", async () => {
+    const { rewindRevShareWallets } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    queries.length = 0;
+    await assert.rejects(rewindRevShareWallets(80000, false), /runs with --workers: blocks arrive out of order/);
+    assert.equal(queries.length, 0);
+  });
+
+  it("genesis marks the table covered, in the block transaction", async () => {
+    const { markRevShareWalletsCovered } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    queries.length = 0;
+    await markRevShareWalletsCovered();
+    assert.equal(queries.length, 1);
+    assert.match(queries[0].sql, /^INSERT INTO \S+\.supplier_rev_share_wallets_coverage \(backfilled_at\) VALUES \(now\(\)\) ON CONFLICT \(singleton\) DO NOTHING$/);
+    inBlockTx(queries[0].transaction);
+  });
+
+  it("writes nothing without the block transaction", async () => {
+    const { writeRevShareWallets } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    const context = (globals.store as { context: { transaction: unknown } }).context;
+    context.transaction = undefined;
+    queries.length = 0;
+    try {
+      await assert.rejects(writeRevShareWallets([{ supplierId: S1, revShare: [{ address: "w-a", revSharePercentage: "100" }] }], 600), /no block transaction/);
+    } finally {
+      context.transaction = BLOCK_TX;
+    }
+    assert.equal(queries.length, 0);
+  });
+});
+
+describe("supplier_rev_share_wallets startup DDL", () => {
+  // Frozen: beta and mainnet got these tables by hand (2026-10-15, as the indexer's role) from exactly this text, kept
+  // in the fixtures byte for byte. The startup runs it again over those tables: a change to it would have to ship as an
+  // ALTER agreed beforehand, since CREATE ... IF NOT EXISTS leaves an existing table as it is.
+  const { createSupplierRevShareWalletsFn } =
+    require("../dbFunctions/revShareWallets") as typeof import("../dbFunctions/revShareWallets");
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+
+  for (const schema of ["mainnet", "beta"]) {
+    it(`is byte for byte the text created by hand on ${schema}`, () => {
+      const fixture = path.join(__dirname, "../dbFunctions/fixtures", `supplier_rev_share_wallets.${schema}.startup.txt`);
+      assert.equal(createSupplierRevShareWalletsFn(schema), fs.readFileSync(fixture, "utf8"));
+    });
+  }
 });

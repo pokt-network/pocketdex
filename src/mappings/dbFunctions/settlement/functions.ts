@@ -100,6 +100,7 @@ export const CATALOG_FUNCTIONS = [
   "get_relay_mining_difficulty",
   "get_created_claims",
   "get_morse_claims",
+  "get_native_transfers",
 ];
 const CATALOG_SQL = `ARRAY[${CATALOG_FUNCTIONS.map((f) => `'${f}'`).join(", ")}]::text[]`;
 
@@ -273,6 +274,13 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   // nothing when it is not one
   const configDomains = (a: string) =>
     `jsonb_array_elements_text(CASE WHEN jsonb_typeof(${a}.domains) = 'array' THEN ${a}.domains ELSE '[]'::jsonb END)`;
+  // the domain keys of a config (alias a) as rows x: each distinct domain, and '' for a null or '' element or when it
+  // has none, so every config has at least one; get_staked_domain_services' rows
+  const domainKeys = (a: string) =>
+    `(SELECT DISTINCT coalesce(e.x, '') x FROM (SELECT 1) z LEFT JOIN LATERAL ${configDomains(a)} e(x) ON true)`;
+  // a config on the row of domain '' of get_staked_domain_services, and so in get_supplier_fleet's domain '': the same
+  // keys (0.25-0.32 s over the live configs on mainnet, 2026-10-15, against 0.16 s for a length test that missed [null])
+  const noDomain = (a: string) => `'' IN (SELECT k.x FROM ${domainKeys(a)} k)`;
   // get_claims' current_owner_id: the supplier's owner now, from its live version (LIMIT 1: a scalar subquery must not
   // fail)
   const currentOwner = (alias: string) =>
@@ -514,13 +522,16 @@ BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            JOIN (VALUES ('get_supplier_earnings', 'gateway_ids')
                       , ('get_created_claims', 'from_session_end_height')
-                      , ('get_created_claims_count', 'from_session_end_height')
+                      , ('get_created_claims_count', 'beyond_tip')
                       , ('get_service_summary', 'owners')
                       , ('get_height_at', 'beyond_tip')
-                      , ('get_supplier_fleet', 'after_supplier_id')
                       , ('get_claims', 'current_owner_id')
+                      , ('get_supplier_fleet', 'row_offset')
+                      , ('get_application_fleet', 'row_offset')
                       , ('get_gateway_delegations', 'height')
-                      , ('get_staked_suppliers', 'stake_statuses')
+                      , ('get_staked_suppliers', 'at_height')
+                      , ('get_block_supplies', 'hash')
+                      , ('get_relay_mining_difficulty', 'row_offset')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -734,18 +745,49 @@ BEGIN
 END $$;
 
 -- The supply of each denomination at a block (the indexer's block_supplies rows of that height and their supplies):
--- what a block page read in two requests, block_supplies then supplies by id. Two index probes (0.2 ms on mainnet,
--- 2026-10-14); no row for a height the indexer has no supply for.
-CREATE OR REPLACE FUNCTION ${s}.get_block_supplies(height bigint)
+-- what a block page read in two requests, block_supplies then supplies by id. The block by height or by hash (exactly
+-- one; blocks.hash through its GiST index), so a page that has only the hash reads it beside the block row. Index
+-- probes only (1 ms by hash on mainnet, 2026-10-15); no row for a block the indexer has no supply for.
+CREATE OR REPLACE FUNCTION ${s}.get_block_supplies(height bigint DEFAULT NULL, hash text DEFAULT NULL)
 RETURNS TABLE(denom text, amount numeric)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
 BEGIN
-  IF height IS NULL THEN RAISE EXCEPTION 'height is required'; END IF;
+  h := ${s}._block_height_of(get_block_supplies.height, get_block_supplies.hash);
   RETURN QUERY
   SELECT sp.denom::text, sp.amount::numeric FROM ${s}.block_supplies bs
   JOIN ${s}.supplies sp ON sp.id = bs.supply_id AND upper_inf(sp._block_range)
-  WHERE bs.block_id = get_block_supplies.height AND upper_inf(bs._block_range)
+  WHERE bs.block_id = h AND upper_inf(bs._block_range)
   ORDER BY 1;
+END $$;
+
+-- A block's metadata record (the CometBFT block id, header and last commit the indexer received), by height or by
+-- hash, as get_block_supplies, so a block page reads its extras beside the block row (0.1-0.3 ms on mainnet).
+CREATE OR REPLACE FUNCTION ${s}.get_block_metadata(height bigint DEFAULT NULL, hash text DEFAULT NULL)
+RETURNS TABLE(block_height bigint, header jsonb, last_commit jsonb, block_id jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
+BEGIN
+  h := ${s}._block_height_of(get_block_metadata.height, get_block_metadata.hash);
+  RETURN QUERY
+  SELECT m.id::bigint, m.header, m.last_commit, m.block_id FROM ${s}.block_metadata m
+  WHERE m.id = h AND upper_inf(m._block_range)
+  LIMIT 1;
+END $$;
+
+-- The height of a block given by height or by hash (exactly one; the hash in any case, with or without 0x, spaces
+-- around it trimmed; blocks.hash is uppercase hex): NULL when no indexed block has that hash.
+CREATE OR REPLACE FUNCTION ${s}._block_height_of(height bigint, hash text) RETURNS bigint
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
+BEGIN
+  IF num_nonnulls(height, hash) <> 1 THEN
+    RAISE EXCEPTION 'pass height or hash (exactly one)';
+  END IF;
+  IF height IS NOT NULL THEN RETURN height; END IF;
+  SELECT b.id::bigint INTO h FROM ${s}.blocks b
+  WHERE b.hash = upper(regexp_replace(btrim(_block_height_of.hash), '^0x', '', 'i')) LIMIT 1;
+  RETURN h;
 END $$;
 
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct
@@ -965,17 +1007,27 @@ BEGIN
 END $$;
 
 -- The suppliers that shared revenue with the addresses at any time: any version of a service config, live or closed,
--- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). SubQuery's GIN on rev_share
+-- lists one of them in its rev_share; any stake status, no cap (operator_scope ever). Used by operator_scope ever in
+-- get_supplier_fleet, get_claims, get_actor_lifecycle and get_supplier_penalties. It reads the (wallet, supplier) pairs
+-- of supplier_rev_share_wallets (revShareWallets.ts), one primary key range per address (23 ms for nodefleet's 7 wallets
+-- and their 4,092 suppliers, mainnet replica 2026-10-15), once it covers every height
+-- (supplier_rev_share_wallets_coverage: set at genesis, or after the backfill). Before that, the config versions
+-- themselves, with the same pairs (both skip empty versions): SubQuery's GIN on rev_share
 -- (jsonb_ops) serves the containment, but every stake writes a new version of the configs it lists, so a large operator
--- matches ~980k versions read from the heap: slow, ~12 s for the 7 largest operators on mainnet (2026-10-14). Used by
--- operator_scope ever in get_supplier_fleet, get_claims, get_actor_lifecycle and get_supplier_penalties; a
--- config-history table kept by the indexer is to replace it.
+-- matches ~980k versions read from the heap, ~12 s for the 7 largest operators on mainnet (2026-10-14).
 CREATE OR REPLACE FUNCTION ${s}._operator_suppliers_ever(addresses text[]) RETURNS text[]
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
+  IF EXISTS (SELECT 1 FROM ${s}.supplier_rev_share_wallets_coverage) THEN
+    RETURN ARRAY(
+      SELECT DISTINCT w.supplier_id FROM ${s}.supplier_rev_share_wallets w WHERE w.wallet_address = ANY(addresses)
+      ORDER BY 1);
+  END IF;
   RETURN ARRAY(
     SELECT DISTINCT ssc.supplier_id FROM unnest(addresses) a
     JOIN ${s}.supplier_service_configs ssc ON ssc.rev_share @> jsonb_build_array(jsonb_build_object('address', a))
+      -- the versions the table's pairs come from: an empty one was created and closed in one block
+      AND NOT isempty(ssc._block_range)
     ORDER BY 1);
 END $$;
 
@@ -1017,12 +1069,13 @@ END $$;
 -- service_domains: the endpoint root domains of its live configs for those services. row_limit (up to 1000) pages by
 -- keyset on (stake_upokt descending, supplier_id) with after_stake_upokt / after_supplier_id, and counts services for
 -- that page only: a page of 100 of the 4,548 Staked suppliers in 34 ms on mainnet, where every row takes 0.17-0.23 s
--- (2026-10-14). NULL = every row, as before.
+-- (2026-10-14). NULL = every row, as before. row_offset skips that many rows of the order first, so a page at any depth
+-- counts services for its own rows only.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_fleet(suppliers text[] DEFAULT NULL, owners text[] DEFAULT NULL,
   operators text[] DEFAULT NULL, domains text[] DEFAULT NULL, services text[] DEFAULT NULL,
   stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true, operator_scope text DEFAULT 'now',
   max_stake_upokt numeric DEFAULT NULL, row_limit integer DEFAULT NULL, after_stake_upokt numeric DEFAULT NULL,
-  after_supplier_id text DEFAULT NULL)
+  after_supplier_id text DEFAULT NULL, row_offset integer DEFAULT 0)
 RETURNS TABLE(supplier_id text, owner_id text, stake_status text, stake_upokt numeric, service_count bigint,
   supplier_count bigint, service_domains text[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1034,6 +1087,9 @@ BEGIN
   IF row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000, or NULL for every row (has %)', row_limit;
   END IF;
+  IF row_offset IS NULL OR row_offset < 0 THEN
+    RAISE EXCEPTION 'row_offset must be 0 or more (has %)', row_offset;
+  END IF;
   IF (after_stake_upokt IS NULL) <> (after_supplier_id IS NULL) OR (after_supplier_id IS NOT NULL AND row_limit IS NULL) THEN
     RAISE EXCEPTION 'pass both after_stake_upokt and after_supplier_id (the last row of the previous page) with row_limit, or neither';
   END IF;
@@ -1043,12 +1099,32 @@ ${OPERATOR_SCOPE_CHECK}
       RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now), operators (the suppliers that share revenue with them now) or domains (the suppliers with a live endpoint on them)';
     END IF;
     PERFORM ${s}._validate(domains, 'domains', NULL, NULL, NULL);
-    ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
-                 WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
+    IF services IS NULL THEN
+      ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
+                   WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
+      -- domain '' = a live config with no domain, the '' row of get_staked_domain_services (no index on it: 0.25-0.32 s
+      -- over the live configs on mainnet, none of which has no domain, 2026-10-15)
+      IF '' = ANY(get_supplier_fleet.domains) THEN
+        ids := ids || ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
+                            WHERE upper_inf(c._block_range) AND ${noDomain("c")});
+      END IF;
+    ELSE
+      PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
+      -- with services, ONE live config for one of the services with an endpoint on one of the domains (not a domain on
+      -- one config and the service on another): the services' live configs through idx_ssc_live_service, then their
+      -- domains; the fence keeps the planner off the all-versions GIN on domains (0.11 s against 0.38 s for
+      -- nodefleet.net eth+base on mainnet, 2026-10-14)
+      ids := ARRAY(SELECT DISTINCT x.supplier_id
+                   FROM (SELECT c.supplier_id, c.domains FROM ${s}.supplier_service_configs c
+                         WHERE c.service_id = ANY(get_supplier_fleet.services) AND upper_inf(c._block_range) OFFSET 0) x
+                   WHERE x.domains ?| get_supplier_fleet.domains
+                      OR '' = ANY(get_supplier_fleet.domains) AND ${noDomain("x")});
+    END IF;
   ELSE
 ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
   END IF;
-  IF services IS NOT NULL THEN
+  -- with domains, ids already holds only suppliers with a config for one of services
+  IF services IS NOT NULL AND domains IS NULL THEN
     PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
     -- idx_ssc_live_service
     sids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
@@ -1066,7 +1142,7 @@ ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
     SELECT f.* FROM f
     WHERE by_supplier AND (after_supplier_id IS NULL OR f.stake_amount < after_stake_upokt
                            OR f.stake_amount = after_stake_upokt AND f.id > after_supplier_id)
-    ORDER BY f.stake_amount DESC, f.id LIMIT row_limit
+    ORDER BY f.stake_amount DESC, f.id LIMIT row_limit OFFSET row_offset
   ), sv AS (
     SELECT c.supplier_id, c.service_id, c.domains FROM ${s}.supplier_service_configs c
     WHERE upper_inf(c._block_range) AND c.supplier_id IN (SELECT p.id FROM p)
@@ -1097,7 +1173,8 @@ END $$;
 -- which get_relay_mining_difficulty lists one by one (the Service entity's own difficulty columns are not written).
 -- SubQuery's GiST on (service_id, _block_range) cannot order: it read every update of every service (1.06M) and took
 -- 2.2 s for the 174 live services (mainnet replica, 2026-10-14); idx_rmd_service_block reads one per service.
--- owners keeps the services those addresses own now (the Service entity's owner_id).
+-- owners keeps the services those addresses own now (the Service entity's owner_id). Every live service has its row,
+-- zeros when it has no supplier config or application now.
 CREATE OR REPLACE FUNCTION ${s}.get_service_summary(services text[] DEFAULT NULL, owners text[] DEFAULT NULL)
 RETURNS TABLE(service_id text, staked_suppliers bigint, suppliers bigint, staked_applications bigint,
   applications bigint, num_relays_ema numeric, target_hash_hex text, difficulty_updated_height bigint)
@@ -1125,14 +1202,20 @@ BEGIN
     LEFT JOIN ${s}.applications ap ON ap.id = a.application_id AND ap._block_range @> 9223372036854775807::bigint
     WHERE a._block_range @> 9223372036854775807::bigint AND (services IS NULL OR a.service_id = ANY(services))
     GROUP BY 1
+  ), os AS (
+    -- the live Service rows (those of services, which owners has resolved, or all): a service with no supplier config
+    -- or application now has its row of zeros (83 of 269 on mainnet, 2026-10-15)
+    SELECT sv.id service_id FROM ${s}.services sv
+    WHERE upper_inf(sv._block_range) AND (get_service_summary.services IS NULL OR sv.id = ANY(get_service_summary.services))
   )
-  SELECT coalesce(sc.service_id, ac.service_id), coalesce(sc.staked, 0), coalesce(sc.n, 0), coalesce(ac.staked, 0),
+  SELECT coalesce(sc.service_id, ac.service_id, os.service_id), coalesce(sc.staked, 0), coalesce(sc.n, 0), coalesce(ac.staked, 0),
          coalesce(ac.n, 0), d.new_num_relays_ema::numeric, d.new_target_hash_hex_encoded::text, d.block_id::bigint
   FROM sc FULL JOIN ac ON ac.service_id = sc.service_id
+  FULL JOIN os ON os.service_id = coalesce(sc.service_id, ac.service_id)
   -- the newest difficulty update of the service (idx_rmd_service_block)
   LEFT JOIN LATERAL (
     SELECT e.new_num_relays_ema, e.new_target_hash_hex_encoded, e.block_id FROM ${s}.event_relay_mining_difficulty_updateds e
-    WHERE e.service_id = coalesce(sc.service_id, ac.service_id) ORDER BY e.block_id DESC LIMIT 1
+    WHERE e.service_id = coalesce(sc.service_id, ac.service_id, os.service_id) ORDER BY e.block_id DESC LIMIT 1
   ) d ON true
   ORDER BY 1;
 END $$;
@@ -1141,15 +1224,23 @@ END $$;
 -- those with a live service row for one of services and to those delegating to one of gateways now (all combined; none
 -- = every application), and to some stake statuses. by_application: one row each (status, stake, how many services and
 -- gateways it has now), largest stake first; false: one row for all ('all' in application_id and stake_status, NULL
--- counts).
+-- counts). row_limit (up to 1000; NULL = every row) and row_offset return one page of that order, counted for its own
+-- rows only.
 CREATE OR REPLACE FUNCTION ${s}.get_application_fleet(applications text[] DEFAULT NULL, services text[] DEFAULT NULL,
-  gateways text[] DEFAULT NULL, stake_statuses text[] DEFAULT NULL, by_application boolean DEFAULT true)
+  gateways text[] DEFAULT NULL, stake_statuses text[] DEFAULT NULL, by_application boolean DEFAULT true,
+  row_limit integer DEFAULT NULL, row_offset integer DEFAULT 0)
 RETURNS TABLE(application_id text, stake_status text, stake_upokt numeric, service_count bigint, gateway_count bigint,
   application_count bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
     RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
+  END IF;
+  IF row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000, or NULL for every row (has %)', row_limit;
+  END IF;
+  IF row_offset IS NULL OR row_offset < 0 THEN
+    RAISE EXCEPTION 'row_offset must be 0 or more (has %)', row_offset;
   END IF;
   IF applications IS NOT NULL THEN PERFORM ${s}._validate(applications, 'applications', NULL, NULL, NULL); END IF;
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
@@ -1165,13 +1256,16 @@ BEGIN
              AND a.service_id = ANY(services) AND a._block_range @> 9223372036854775807::bigint))
       AND (gateways IS NULL OR EXISTS (SELECT 1 FROM ${s}.application_gateways g WHERE g.application_id = ap.id
              AND g.gateway_id = ANY(gateways) AND g._block_range @> 9223372036854775807::bigint))
+  ), p AS (
+    -- the rows of this call, in order, before their counts: every application, or one page (row_limit, row_offset)
+    SELECT f.* FROM f WHERE by_application ORDER BY f.stake_amount DESC, f.id LIMIT row_limit OFFSET row_offset
   )
-  SELECT f.id, f.st, f.stake_amount,
+  SELECT p.id, p.st, p.stake_amount,
          (SELECT count(DISTINCT a.service_id) FROM ${s}.application_services a
-          WHERE a.application_id = f.id AND a._block_range @> 9223372036854775807::bigint),
+          WHERE a.application_id = p.id AND a._block_range @> 9223372036854775807::bigint),
          (SELECT count(DISTINCT g.gateway_id) FROM ${s}.application_gateways g
-          WHERE g.application_id = f.id AND g._block_range @> 9223372036854775807::bigint), 1::bigint
-  FROM f WHERE by_application
+          WHERE g.application_id = p.id AND g._block_range @> 9223372036854775807::bigint), 1::bigint
+  FROM p
   UNION ALL
   SELECT 'all', 'all', coalesce((SELECT sum(f.stake_amount) FROM f), 0), NULL, NULL, (SELECT count(*) FROM f)
   WHERE NOT by_application
@@ -1275,9 +1369,12 @@ END $$;
 -- service), with the relays EMA and the target hash before and after it; the newest row of a service is its current
 -- difficulty (the Service entity's own difficulty columns are not written: mainnet 2026-10-13). Keyset paging on (height, service_id), like get_claims. Covers the indexed blocks. Each service's
 -- updates through the GiST index on (service_id, _block_range); 1.06M updates on mainnet (2026-10-13).
+-- row_offset skips that many rows of the order first (each service reads row_limit + row_offset of its newest), for a
+-- page past the first 1000 in one call; up to 10,000,000 (the busiest service has 20,957 updates on mainnet,
+-- 2026-10-15: an offset past every row gives an empty page, an offset of 20,000 costs 6 ms).
 CREATE OR REPLACE FUNCTION ${s}.get_relay_mining_difficulty(services text[], range_start timestamptz,
   range_end timestamptz, row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL,
-  before_service_id text DEFAULT NULL)
+  before_service_id text DEFAULT NULL, row_offset integer DEFAULT 0)
 RETURNS TABLE(height bigint, block_time timestamptz, service_id text, prev_num_relays_ema numeric,
   new_num_relays_ema numeric, prev_target_hash_hex text, new_target_hash_hex text, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
@@ -1288,6 +1385,9 @@ BEGIN
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_service_id', row_limit;
   END IF;
+  IF row_offset IS NULL OR row_offset < 0 OR row_offset > 10000000 THEN
+    RAISE EXCEPTION 'row_offset must be between 0 and 10000000 (has %)', row_offset;
+  END IF;
   IF (before_height IS NULL) <> (before_service_id IS NULL) THEN
     RAISE EXCEPTION 'pass both before_height and before_service_id (the last row of the previous page), or neither';
   END IF;
@@ -1295,18 +1395,22 @@ ${covered(null, true)}
   rg := ${s}._block_heights(range_start, range_end);
   IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
   bh := coalesce(before_height, 9223372036854775807);
+  -- the page (OFFSET, LIMIT) is cut before the join to blocks, so only its rows look up their block time (offset 1M
+  -- over the 188 services with updates on mainnet, 2026-10-15: 1.58 s against 2.86 s joining every row read)
   RETURN QUERY
   SELECT d.block_id::bigint, bl.timestamp AT TIME ZONE 'UTC', d.service_id, d.prev_num_relays_ema, d.new_num_relays_ema,
          d.prev_target_hash_hex_encoded, d.new_target_hash_hex_encoded, cv.covered_from, cv.covered_to, cv.gaps
-  FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
-    SELECT e.block_id, e.service_id, e.prev_num_relays_ema, e.new_num_relays_ema, e.prev_target_hash_hex_encoded,
-           e.new_target_hash_hex_encoded
-    FROM ${s}.event_relay_mining_difficulty_updateds e
-    WHERE e.service_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi
-      AND (e.block_id < bh OR e.block_id = bh AND e.service_id < before_service_id)
-    ORDER BY e.block_id DESC LIMIT row_limit) d
+  FROM (
+    SELECT p.* FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
+      SELECT e.block_id, e.service_id, e.prev_num_relays_ema, e.new_num_relays_ema, e.prev_target_hash_hex_encoded,
+             e.new_target_hash_hex_encoded
+      FROM ${s}.event_relay_mining_difficulty_updateds e
+      WHERE e.service_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi
+        AND (e.block_id < bh OR e.block_id = bh AND e.service_id < before_service_id)
+      ORDER BY e.block_id DESC LIMIT row_limit::bigint + row_offset) p
+    ORDER BY p.block_id DESC, p.service_id DESC LIMIT row_limit OFFSET row_offset) d
   JOIN ${s}.blocks bl ON bl.id = d.block_id
-  ORDER BY d.block_id DESC, d.service_id DESC LIMIT row_limit;
+  ORDER BY d.block_id DESC, d.service_id DESC;
 END $$;
 
 -- Supplier domains ranked by what their suppliers claimed: domain_service_daily_rewards summed over the UTC days that
@@ -1347,6 +1451,59 @@ BEGIN
   ORDER BY 2 DESC, 1;
 END $$;
 
+-- A supplier's service configs over time, one row per stretch of heights in which a config declared the same content:
+-- a row starts at the config's first version, after a gap (the supplier unstaked, or dropped the service and took it
+-- back) and when its rev_share or endpoints change. Every stake writes a new version of all the supplier's configs, and
+-- every activation another, so the versions repeat their content: the most of any supplier, 21,114 on mainnet, are 157
+-- rows, in 0.42 s (replica, 2026-10-14). rev_share is compared and returned sorted by address: the CLI builds it from a
+-- map, so its order changes on every stake (poktroll x/supplier/config/supplier_configs_reader.go). last_height is the
+-- last height of the stretch (NULL while the config declares it now); domains are those of its newest version. The
+-- configs are what the supplier declared, from its stake height (see getServices in src/mappings/pocket/suppliers.ts).
+-- Keyset paging on (service_id, first_height).
+CREATE OR REPLACE FUNCTION ${s}.get_supplier_config_history(supplier_id text, services text[] DEFAULT NULL,
+  row_limit integer DEFAULT 1000, after_service_id text DEFAULT NULL, after_first_height bigint DEFAULT NULL)
+RETURNS TABLE(service_id text, first_height bigint, last_height bigint, rev_share jsonb, endpoints jsonb, domains text[])
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF get_supplier_config_history.supplier_id IS NULL THEN RAISE EXCEPTION 'supplier_id is required'; END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_service_id / after_first_height', row_limit;
+  END IF;
+  IF (after_service_id IS NULL) <> (after_first_height IS NULL) THEN
+    RAISE EXCEPTION 'pass both after_service_id and after_first_height (the last row of the previous page), or neither';
+  END IF;
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  RETURN QUERY
+  WITH v AS (
+    SELECT c.service_id svc, lower(c._block_range) lo, upper(c._block_range) hi,
+           (SELECT coalesce(jsonb_agg(x ORDER BY x->>'address', x->>'revSharePercentage'), '[]'::jsonb)
+            FROM jsonb_array_elements(c.rev_share) x) rs,
+           c.endpoints ep, c.domains dm
+    FROM ${s}.supplier_service_configs c
+    WHERE c.supplier_id = get_supplier_config_history.supplier_id AND NOT isempty(c._block_range)
+      AND (services IS NULL OR c.service_id = ANY(services))
+      AND (after_service_id IS NULL OR c.service_id >= after_service_id)
+  ), w AS (
+    SELECT v.*, lag(v.hi) OVER k p_hi, lag(v.rs) OVER k p_rs, lag(v.ep) OVER k p_ep
+    FROM v WINDOW k AS (PARTITION BY v.svc ORDER BY v.lo)
+  ), g AS (
+    -- the stretch of each version: how many rows started up to it
+    SELECT w.*, count(*) FILTER (WHERE w.p_hi IS NULL OR w.p_hi <> w.lo OR w.rs <> w.p_rs OR w.ep <> w.p_ep)
+                  OVER (PARTITION BY w.svc ORDER BY w.lo) seg
+    FROM w
+  ), r AS (
+    SELECT g.svc, min(g.lo)::bigint f, CASE WHEN bool_or(g.hi IS NULL) THEN NULL ELSE max(g.hi)::bigint - 1 END l,
+           (array_agg(g.rs ORDER BY g.lo))[1] rs, (array_agg(g.ep ORDER BY g.lo))[1] ep,
+           (array_agg(g.dm ORDER BY g.lo DESC))[1] domains
+    FROM g GROUP BY g.svc, g.seg
+  )
+  SELECT r.svc, r.f, r.l, r.rs, r.ep, ARRAY(SELECT e.x FROM ${configDomains("r")} e(x))
+  FROM r
+  WHERE after_service_id IS NULL OR (r.svc, r.f) > (after_service_id, after_first_height)
+  ORDER BY r.svc, r.f
+  LIMIT row_limit;
+END $$;
+
 -- The live service configs of the Staked suppliers, one row per (supplier, service), with the supplier's owner and stake
 -- and the config's endpoint domains: the suppliers { serviceConfigs } join consumers built by hand (158,314 live configs
 -- on mainnet, 2026-10-14, unique per supplier and service). Keyset paging on (supplier_id, service_id) through
@@ -1381,7 +1538,8 @@ END $$;
 
 -- The live service configs of the Staked suppliers counted per (endpoint root domain, service): configs = the configs
 -- that list the domain (once per config, whatever it repeats), as get_staked_supplier_services gives their domains;
--- a config with no domain is in no row. total_configs and total_suppliers, the same on every row of the first page
+-- a config with no domain is counted on the row of domain '' of its service, so the configs of the rows add up to at
+-- least total_configs. total_configs and total_suppliers, the same on every row of the first page
 -- (NULL on the next ones), are all those configs and their distinct suppliers, for a client to check it read everything. 472 groups over 160,488 configs on mainnet
 -- (2026-10-14; no config repeats a domain): the groups take ~0.2 s and the totals ~0.12 s through
 -- idx_suppliers_live_id and idx_ssc_live_supplier_service. Keyset paging on (domain, service_id).
@@ -1408,9 +1566,8 @@ BEGIN
   SELECT d.x, c.service_id, count(*)::bigint, n_configs, n_suppliers
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
-  CROSS JOIN LATERAL (
-    SELECT DISTINCT e.x FROM ${configDomains("c")} e(x)
-  ) d
+  -- each distinct domain of the config, or one '' when it has none (so every config is counted on some row)
+  CROSS JOIN LATERAL ${domainKeys("c")} d
   WHERE upper_inf(c._block_range)
     AND (after_domain IS NULL OR d.x >= after_domain)
     AND (after_domain IS NULL OR (d.x, c.service_id) > (after_domain, after_service_id))
@@ -1423,12 +1580,15 @@ END $$;
 -- the services and endpoint root domains of their live configs (empty arrays without one; for a supplier not Staked
 -- with none live, the configs closed at its last closing): the suppliers { serviceConfigs } walk consumers made.
 -- Keyset paging on supplier_id: a stable key, so a walk neither skips nor repeats a supplier whose stake changes
--- meanwhile. A page of 1000 takes 31-50 ms on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id,
+-- meanwhile; at_height (NULL = _metadata.lastProcessedHeight) reads the versions in force at one height, which every
+-- row carries, so all the pages of a walk read the same state. A page of 1000 takes 31-50 ms on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id,
 -- idx_ssc_live_supplier_service and idx_ssc_live_supplier_domains.
 CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers(row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL,
-  stake_statuses text[] DEFAULT ARRAY['Staked'])
-RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[])
+  stake_statuses text[] DEFAULT ARRAY['Staked'], at_height bigint DEFAULT NULL)
+RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[],
+  height bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
 BEGIN
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_supplier_id', row_limit;
@@ -1436,37 +1596,53 @@ BEGIN
   IF stake_statuses IS NULL OR cardinality(stake_statuses) < 1 OR NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
     RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
   END IF;
+  IF at_height < 1 THEN
+    RAISE EXCEPTION 'at_height must be a block height (has %)', at_height;
+  END IF;
+  -- as get_gateway_delegations: NULL = the last height the indexer finished, read here; every row carries it, so a walk
+  -- pins its next pages (and other functions) to the same height
+  h := at_height;
+  IF h IS NULL THEN
+    SELECT (m.value #>> '{}')::bigint INTO h FROM ${s}._metadata m WHERE m.key = 'lastProcessedHeight';
+  END IF;
+  IF h IS NULL THEN
+    RAISE EXCEPTION 'no lastProcessedHeight in _metadata: pass at_height';
+  END IF;
   IF stake_statuses <> ARRAY['Staked'] THEN
-    -- other statuses: a supplier not Staked with no live config gets the configs closed at its last closing (a Staked
-    -- one with none gets empty arrays; the newest upper of
-    -- its versions, through the GiST on (supplier_id, _block_range)): ~2.8 s a page of 1000 Unstaked suppliers on mainnet
+    -- other statuses: a supplier not Staked with no config at the height gets the configs closed at its last closing up
+    -- to it (a Staked one with none gets empty arrays; the newest upper of its versions, through the GiST on
+    -- (supplier_id, _block_range)): ~2.8 s a page of 1000 Unstaked suppliers on mainnet
     RETURN QUERY
     SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
            ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c WHERE c.supplier_id = su.id
-                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN upper_inf(c._block_range)
+                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN c._block_range @> h
                           ELSE upper(c._block_range) = m.last_upper END ORDER BY 1),
            ARRAY(SELECT DISTINCT e.x FROM ${s}.supplier_service_configs c, ${configDomains("c")} e(x) WHERE c.supplier_id = su.id
-                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN upper_inf(c._block_range)
-                          ELSE upper(c._block_range) = m.last_upper END ORDER BY 1)
+                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN c._block_range @> h
+                          ELSE upper(c._block_range) = m.last_upper END ORDER BY 1),
+           h
     FROM ${s}.suppliers su
-    CROSS JOIN LATERAL (SELECT bool_or(upper_inf(c._block_range)) live, max(upper(c._block_range)) last_upper
+    CROSS JOIN LATERAL (SELECT bool_or(c._block_range @> h) live,
+                               max(upper(c._block_range)) FILTER (WHERE upper(c._block_range) <= h) last_upper
                         FROM ${s}.supplier_service_configs c WHERE c.supplier_id = su.id) m
-    WHERE upper_inf(su._block_range) AND su.stake_status::text = ANY(stake_statuses)
+    WHERE su._block_range @> h AND su.stake_status::text = ANY(stake_statuses)
       AND (after_supplier_id IS NULL OR su.id > after_supplier_id)
     ORDER BY su.id
     LIMIT row_limit;
     RETURN;
   END IF;
   RETURN QUERY
-  -- two array subqueries, each index-only: service_id from idx_ssc_live_supplier_service, domains from
-  -- idx_ssc_live_supplier_domains; one subquery for both reads the heap and took 0.35-0.44 s a page, against 31-50 ms
+  -- the versions in force at the height: suppliers through their GiST indexes, each supplier's configs through the
+  -- GiST on (supplier_id, _block_range); ~0.33 s a page of 1000 on mainnet, against ~0.16 s for the live rows, which a
+  -- block being written can show half-updated
   SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
          ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c
-               WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1),
+               WHERE c.supplier_id = su.id AND c._block_range @> h ORDER BY 1),
          ARRAY(SELECT DISTINCT e.x FROM ${s}.supplier_service_configs c, ${configDomains("c")} e(x)
-               WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1)
+               WHERE c.supplier_id = su.id AND c._block_range @> h ORDER BY 1),
+         h
   FROM ${s}.suppliers su
-  WHERE upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+  WHERE su._block_range @> h AND su.stake_status::text = 'Staked'
     AND (after_supplier_id IS NULL OR su.id > after_supplier_id)
   ORDER BY su.id
   LIMIT row_limit;
@@ -1475,13 +1651,15 @@ END $$;
 -- Created claims (MsgCreateClaim) counted per supplier, for up to 20 suppliers, in [range_start, range_end): what
 -- msgCreateClaims { totalCount } answered, which get_created_claims can only list row by row. One row per requested
 -- supplier, 0 when it made none, with the first and last height counted. Covers the indexed blocks (_block_heights of
--- the range). msg_create_claims has only GiST indexes: the busiest mainnet supplier's 30 days in 830 ms on the replica
+-- the range). beyond_tip = no indexed block at or after range_end yet (range_end NULL: range_start), as get_height_at:
+-- the indexer has not reached the end of the range, so the count may still grow, and a 0 there says nothing (a range
+-- past the tip counted 0, as an idle supplier does). One probe of idx_blocks_timestamp_id. msg_create_claims has only GiST indexes: the busiest mainnet supplier's 30 days in 830 ms on the replica
 -- (2026-10-14), hence the cap.
 CREATE OR REPLACE FUNCTION ${s}.get_created_claims_count(suppliers text[], range_start timestamptz,
   range_end timestamptz, from_session_end_height bigint DEFAULT NULL)
-RETURNS TABLE(supplier_id text, claims bigint, first_height bigint, last_height bigint)
+RETURNS TABLE(supplier_id text, claims bigint, first_height bigint, last_height bigint, beyond_tip boolean)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record;
+DECLARE rg record; bt boolean;
 BEGIN
   IF suppliers IS NULL OR cardinality(suppliers) < 1 OR cardinality(suppliers) > 20 THEN
     RAISE EXCEPTION 'suppliers must have between 1 and 20 elements (has %)', coalesce(cardinality(suppliers), 0);
@@ -1490,8 +1668,10 @@ BEGIN
   rg := ${s}._block_heights(range_start, range_end);
   -- as get_created_claims: the claims of sessions ending at or after it, read from that height
   rg.lo := CASE WHEN rg.lo IS NOT NULL THEN greatest(rg.lo, from_session_end_height) END;
+  bt := coalesce(range_end, range_start) IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM ${s}.blocks bl WHERE bl.timestamp >= (coalesce(range_end, range_start) AT TIME ZONE 'UTC'));
   RETURN QUERY
-  SELECT u.sid, coalesce(c.n, 0)::bigint, c.lo::bigint, c.hi::bigint
+  SELECT u.sid, coalesce(c.n, 0)::bigint, c.lo::bigint, c.hi::bigint, bt
   FROM (SELECT DISTINCT unnest(suppliers) sid) u
   LEFT JOIN LATERAL (
     SELECT count(*) n, min(m.block_id) lo, max(m.block_id) hi FROM ${s}.msg_create_claims m
@@ -1700,6 +1880,61 @@ ${covered(null, true)}
     ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit) m
   JOIN ${s}.blocks bl ON bl.id = m.block_id
   ORDER BY m.block_id DESC, m.id DESC LIMIT row_limit;
+END $$;
+
+-- Native transfers (MsgSend) of up to 200 addresses, newest first (by height, then id), with their block time and their
+-- transaction's code, codespace, fees, signer and memo: what nativeTransfers { block { timestamp } transaction { ... } }
+-- answered in one request before the relations closed (pokt-data-agent: 2 requests to 1). direction: sent (the sender
+-- is one of addresses), received (the recipient is) or NULL for both; a transfer between two of them comes once. Keyset
+-- paging on (height, id), like get_created_claims. native_transfers is small (115,821 rows, 57 MB on mainnet,
+-- 2026-10-15): each direction through the GiST on sender_id / recipient_id, then sorted; the busiest address (19,070
+-- transfers), a page of 100 with its transactions in 47 ms. Every transfer of the addresses is read to sort it: at the
+-- 200-address cap the planner may scan the whole table instead of the GiST; the 200 busiest senders (80,107 sent and
+-- 55,943 received) take 0.4 s. Covers the indexed blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_native_transfers(addresses text[], direction text DEFAULT NULL,
+  range_start timestamptz DEFAULT NULL, range_end timestamptz DEFAULT NULL, row_limit integer DEFAULT 100,
+  before_height bigint DEFAULT NULL, before_id text DEFAULT NULL)
+RETURNS TABLE(height bigint, block_time timestamptz, id text, sender_id text, recipient_id text, denom text,
+  amounts jsonb, status text, transaction_id text, tx_code integer, tx_codespace text, tx_fees jsonb,
+  tx_signer_address text, tx_memo text, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE cv record; rg record; bh numeric;
+BEGIN
+  PERFORM ${s}._validate(addresses, 'addresses', range_start, range_end, NULL);
+  IF direction IS NOT NULL AND direction NOT IN ('sent', 'received') THEN
+    RAISE EXCEPTION 'direction is sent, received or NULL for both (has %)', direction;
+  END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_id', row_limit;
+  END IF;
+  IF (before_height IS NULL) <> (before_id IS NULL) THEN
+    RAISE EXCEPTION 'pass both before_height and before_id (the last row of the previous page), or neither';
+  END IF;
+${covered(null, true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  bh := coalesce(before_height, 9223372036854775807);
+  RETURN QUERY
+  WITH n AS (
+    (SELECT n.id, n.block_id, n.sender_id, n.recipient_id, n.denom, n.amounts, n.status::text st, n.transaction_id
+     FROM ${s}.native_transfers n
+     WHERE (direction IS NULL OR direction = 'sent') AND n.sender_id = ANY(addresses) AND upper_inf(n._block_range)
+       AND n.block_id BETWEEN rg.lo AND rg.hi AND (n.block_id < bh OR n.block_id = bh AND n.id < before_id)
+     ORDER BY n.block_id DESC, n.id DESC LIMIT row_limit)
+    UNION
+    (SELECT n.id, n.block_id, n.sender_id, n.recipient_id, n.denom, n.amounts, n.status::text, n.transaction_id
+     FROM ${s}.native_transfers n
+     WHERE (direction IS NULL OR direction = 'received') AND n.recipient_id = ANY(addresses) AND upper_inf(n._block_range)
+       AND n.block_id BETWEEN rg.lo AND rg.hi AND (n.block_id < bh OR n.block_id = bh AND n.id < before_id)
+     ORDER BY n.block_id DESC, n.id DESC LIMIT row_limit)
+  )
+  SELECT n.block_id::bigint, bl.timestamp AT TIME ZONE 'UTC', n.id, n.sender_id, n.recipient_id, n.denom, n.amounts,
+         n.st, n.transaction_id, tx.code::integer, tx.codespace::text, tx.fees::jsonb, tx.signer_address::text,
+         tx.memo::text, cv.covered_from, cv.covered_to, cv.gaps
+  FROM n JOIN ${s}.blocks bl ON bl.id = n.block_id
+  LEFT JOIN LATERAL (SELECT t.code, t.codespace, t.fees, t.signer_address, t.memo FROM ${s}.transactions t
+                     WHERE t.id = n.transaction_id AND upper_inf(t._block_range) LIMIT 1) tx ON true
+  ORDER BY n.block_id DESC, n.id DESC LIMIT row_limit;
 END $$;
 
 -- An actor's stake history, one row per event, newest first: stake and unstake messages, unbonding begin and end,
@@ -3237,5 +3472,34 @@ BEGIN
       f.blocks::text);
   END LOOP;
 END $$;
+${blockTimeColumnsSql(s)}
 `;
 }
+
+// PostGraphile computed columns: the block time of a row that carries a height, now that the block relations are
+// gone (pnf-explorer /txs, /tx, the account view: one request less a page). Transaction.blockTime,
+// NativeTransfer.blockTime, Balance.lastUpdatedTime, checked through subql-query 2.22.2 in lists, by id and with
+// blockHeight. One idx_blocks_id probe per row (3-12 µs on mainnet, 2026-10-14); NULL while the block row is not
+// written yet. A function with a table-row argument depends on the table's row type: SubQuery's migration adds and
+// drops columns around it, but its dropTable (no CASCADE) fails while the function exists, so removing one of these
+// entities from schema.graphql needs its function dropped first. Created only where the tables exist (the catalog's
+// test schema has none of them). @omit filter: the field is not in the entity's filter (connection-filter makes computed
+// columns filterable by default), since a filter on a block time reads the whole table; not sortable either (no
+// @sortable), checked through subql-query 2.22.2 introspection.
+const BLOCK_TIME_COLUMNS: [string, string, string, string][] = [
+  ["transactions_block_time", "transactions", "block_id", "Time of the block that includes the transaction (UTC); null until that block is written."],
+  ["native_transfers_block_time", "native_transfers", "block_id", "Time of the block that includes the transfer (UTC); null until that block is written."],
+  ["balances_last_updated_time", "balances", "last_updated_block_id", "Time of the block where the balance last changed (UTC); null until that block is written."],
+];
+export const blockTimeColumnsSql = (s: string): string =>
+  BLOCK_TIME_COLUMNS.map(
+    ([fn, table, column, what]) => `DO $do$
+BEGIN
+  IF to_regclass('${s}.${table}') IS NOT NULL AND to_regclass('${s}.blocks') IS NOT NULL THEN
+    EXECUTE $f$CREATE OR REPLACE FUNCTION ${s}.${fn}(r ${s}.${table}) RETURNS timestamptz LANGUAGE sql STABLE AS $b$
+      SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = r.${column} LIMIT 1
+    $b$$f$;
+    EXECUTE $f$COMMENT ON FUNCTION ${s}.${fn}(${s}.${table}) IS E'@omit filter\n${what}'$f$;
+  END IF;
+END $do$;`
+  ).join("\n");

@@ -13,13 +13,12 @@ const sequelize = {
   fn: (fn: string, ...args: Array<unknown>) => ({ fn, args }),
   col: (col: string) => ({ col }),
   where: (left: unknown, right: unknown) => ({ left, right }),
-  transaction: async (_: unknown, cb: (tx: unknown) => Promise<unknown>) => cb({}),
 };
 
 const globals = globalThis as Record<string, unknown>;
 globals.logger = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
 globals.store = {
-  context: { getHistoricalUnit: () => 150, transaction: undefined },
+  context: { getHistoricalUnit: () => 150, transaction: {} },
   get: async () => undefined,
   bulkCreate: async (name: string, docs: Array<Record<string, unknown>>) => {
     (created[name] = created[name] || []).push(...docs);

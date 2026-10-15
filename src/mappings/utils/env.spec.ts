@@ -50,9 +50,8 @@ describe("db.ts settings", () => {
       load({
         POCKETDEX_DB_PAGE_LIMIT: "1234",
         POCKETDEX_DB_BATCH_SIZE: "",
-        POCKETDEX_DB_BULK_WRITE_CONCURRENCY: undefined,
       }),
-      "[Global] PAGE_LIMIT=1234 BATCH_SIZE=5000 CONCURRENCY=5"
+      "[Global] PAGE_LIMIT=1234 BATCH_SIZE=5000"
     );
   });
 

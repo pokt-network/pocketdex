@@ -6,6 +6,7 @@
 // (.local/ab/money/make_ci_fixtures.py in the author's checkout), not by the code under test.
 /* eslint-disable @typescript-eslint/no-floating-promises */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -13,8 +14,18 @@ import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
 import { createEntityDescriptionsFn } from "../../src/mappings/dbFunctions/entityDescriptions";
 import { createDeprecationsFn, DEPRECATED_RELATION, deprecatedTag } from "../../src/mappings/dbFunctions/deprecations";
+import {
+  createSupplierRevShareWalletsFn,
+  insertRevShareWalletsSql,
+  rewindNeeded,
+  rewindRevShareWalletsSql,
+} from "../../src/mappings/dbFunctions/revShareWallets";
 import { getSupplierStatsByDomainsFn } from "../../src/mappings/dbFunctions/rewards";
-import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
+import {
+  blockTimeColumnsSql,
+  CATALOG_FUNCTIONS,
+  createSettlementFunctionsFn,
+} from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementTablesFn, ROLLUP_TABLES } from "../../src/mappings/dbFunctions/settlement/schema";
 import {
   createSettlementSmartTagsFn,
@@ -202,6 +213,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       INSERT INTO ${S}.blocks VALUES (1, '2026-01-01'), (999999999, '2026-09-01 12:00');
       -- the indexer's money step processed every block (money/write.ts)
       INSERT INTO ${S}.money_progress VALUES (true, 1, 999999999);`);
+    await c.query(createSupplierRevShareWalletsFn(S));
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
   });
@@ -1502,6 +1514,43 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.match(String(d.rows[0].d), /^The last indexed block at or before at_time/);
   });
 
+  it("the block-time computed columns give each row its block's time, and stay published", async () => {
+    await c.query("BEGIN");
+    try {
+      // blocks 1 (2026-01-01) and 999999999 (2026-09-01 12:00); a row at a height with no block row yet gets NULL
+      await c.query(`
+        CREATE TABLE ${S}.transactions (id text, block_id numeric);
+        CREATE TABLE ${S}.native_transfers (id text, block_id numeric);
+        CREATE TABLE ${S}.balances (id text, last_updated_block_id numeric);
+        INSERT INTO ${S}.transactions VALUES ('t1', 999999999), ('t2', 5);
+        INSERT INTO ${S}.native_transfers VALUES ('n1', 1);
+        INSERT INTO ${S}.balances VALUES ('b1', 999999999);`);
+      // the startup DDL, twice (idempotent), then the smart tags, which must not hide them
+      await c.query(blockTimeColumnsSql(S));
+      await c.query(blockTimeColumnsSql(S));
+      await c.query(createSettlementSmartTagsFn(S));
+      const { rows } = await c.query(`
+        SELECT 'tx ' || t.id || ' ' || coalesce(to_char(${S}.transactions_block_time(t) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '-') k
+        FROM ${S}.transactions t
+        UNION ALL SELECT 'nt ' || n.id || ' ' || to_char(${S}.native_transfers_block_time(n) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI')
+        FROM ${S}.native_transfers n
+        UNION ALL SELECT 'bal ' || b.id || ' ' || to_char(${S}.balances_last_updated_time(b) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI')
+        FROM ${S}.balances b ORDER BY 1`);
+      assert.deepEqual(rows.map((r) => r.k), ["bal b1 2026-09-01 12:00", "nt n1 2026-01-01 00:00", "tx t1 2026-09-01 12:00", "tx t2 -"]);
+      const d = await c.query(`SELECT p.proname, count(*) OVER (PARTITION BY p.proname) n, obj_description(p.oid, 'pg_proc') d FROM pg_proc p
+        WHERE p.pronamespace = $1::regnamespace AND p.proname IN ('transactions_block_time', 'native_transfers_block_time',
+          'balances_last_updated_time') ORDER BY 1`, [S]);
+      // @omit filter: GraphQL shows the field but no filter on it, which would scan the whole table (no index on the time)
+      assert.deepEqual(d.rows.map((r) => [r.proname, String(r.n), /^@omit filter\nTime of the block/.test(String(r.d))]), [
+        ["balances_last_updated_time", "1", true],
+        ["native_transfers_block_time", "1", true],
+        ["transactions_block_time", "1", true],
+      ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("get_active_accounts counts the live upokt balances updated since each time", async () => {
     await c.query("BEGIN");
     try {
@@ -1552,12 +1601,36 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(await at("11"), ["mact 7", "upokt 1005"]);
       assert.deepEqual(await at("10"), ["mact 7", "upokt 1000"]);
       assert.deepEqual(await at("12"), []);
+      // by hash (any case), the same rows; and the block's metadata record, by height or by hash
+      await c.query(`
+        ALTER TABLE ${S}.blocks ADD COLUMN hash text;
+        INSERT INTO ${S}.blocks (id, timestamp, hash) VALUES (11, '2026-01-02', 'AB11');
+        CREATE TABLE ${S}.block_metadata (id numeric, block_id jsonb, header jsonb, last_commit jsonb, _block_range int8range);
+        INSERT INTO ${S}.block_metadata VALUES (11, '{"hash": "AB11"}', '{"height": "11"}', '{"round": 0}', int8range(11, NULL));`);
+      assert.deepEqual(await at("hash => 'ab11'"), ["mact 7", "upokt 1005"]);
+      assert.deepEqual(await at("hash => 'NONE'"), []);
+      const meta = async (args: string) =>
+        (await c.query(`SELECT block_height || ' ' || header::text || ' ' || last_commit::text || ' ' || block_id::text k
+                        FROM ${S}.get_block_metadata(${args})`)).rows.map((r) => r.k);
+      const m11 = ['11 {"height": "11"} {"round": 0} {"hash": "AB11"}'];
+      assert.deepEqual(await meta("11"), m11);
+      assert.deepEqual(await meta("hash => 'AB11'"), m11);
+      // with 0x (any case) and spaces around it
+      assert.deepEqual(await meta("hash => '0xab11'"), m11);
+      assert.deepEqual(await meta("hash => ' 0XAB11 '"), m11);
+      assert.deepEqual(await at("hash => '0xAB11'"), ["mact 7", "upokt 1005"]);
+      assert.deepEqual(await meta("12"), []);
+      for (const [fn, args] of [["get_block_supplies", "11, 'AB11'"], ["get_block_metadata", ""]] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(${args})`), /pass height or hash \(exactly one\)/, fn);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
       // each denomination in its own unit: not the upokt note of the other state functions
-      const d = await c.query(`SELECT obj_description('${S}.get_block_supplies(bigint)'::regprocedure, 'pg_proc') d`);
+      const d = await c.query(`SELECT obj_description('${S}.get_block_supplies(bigint, text)'::regprocedure, 'pg_proc') d`);
       assert.match(String(d.rows[0].d), /^@simpleCollections only\nSupply at a block/);
       assert.doesNotMatch(String(d.rows[0].d), /Amounts in upokt/);
       await c.query("SAVEPOINT e");
-      await assert.rejects(c.query(`SELECT * FROM ${S}.get_block_supplies(NULL)`), /height is required/);
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_block_supplies(NULL)`), /pass height or hash \(exactly one\)/);
       await c.query("ROLLBACK TO SAVEPOINT e");
     } finally {
       await c.query("ROLLBACK");
@@ -1614,12 +1687,16 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           await c.query(`SELECT concat_ws(' ', domain, service_id, configs, total_configs, total_suppliers) k
                          FROM ${S}.get_staked_domain_services(${args})`)
         ).rows.map((r) => String(r.k));
-      const want = ["a.net svc-x 1 4 2", "a.net svc-y 2 4 2", "b.io svc-y 1 4 2"];
+      // s3's svc-x config has no domain: counted under domain '' (first in the order)
+      const want = [" svc-x 1 4 2", "a.net svc-x 1 4 2", "a.net svc-y 2 4 2", "b.io svc-y 1 4 2"];
       assert.deepEqual(await groups(""), want);
       const regrouped = await c.query(`SELECT concat_ws(' ', d, service_id, count(*)) k FROM (
           SELECT DISTINCT r.supplier_id, r.service_id, d FROM ${S}.get_staked_supplier_services() r, unnest(r.domains) d) x
         GROUP BY d, service_id ORDER BY d, service_id`);
-      assert.deepEqual(regrouped.rows.map((r) => `${r.k} 4 2`), want);
+      assert.deepEqual(regrouped.rows.map((r) => `${r.k} 4 2`), want.slice(1));
+      // every config is on some row: the configs of the rows add up to at least total_configs
+      const sums = await c.query(`SELECT sum(configs)::int s, max(total_configs)::int t FROM ${S}.get_staked_domain_services()`);
+      assert.ok(sums.rows[0].s >= sums.rows[0].t, JSON.stringify(sums.rows[0]));
       const pagedGroups: string[] = [];
       let gpage = await groups("row_limit => 1");
       pagedGroups.push(...gpage);
@@ -1642,6 +1719,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`
         ALTER TABLE ${S}.suppliers ADD COLUMN operator_id text;
         UPDATE ${S}.suppliers SET operator_id = 'op-' || id;
+        CREATE TABLE ${S}._metadata (key varchar, value jsonb);
+        INSERT INTO ${S}._metadata VALUES ('lastProcessedHeight', '100');
         INSERT INTO ${S}.suppliers VALUES ('s5', 'own-c', 'Staked', 70, int8range(1, NULL), 'op-s5');`);
       const staked = async (args: string) =>
         (
@@ -1652,6 +1731,14 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const sup = ["s1 own-a op-s1 300 svc-x,svc-y a.net,b.io 2 2", "s3 own-b op-s3 500 svc-x,svc-y a.net 2 1", "s5 own-c op-s5 70   0 0"];
       assert.deepEqual(await staked(""), sup);
       assert.deepEqual(await staked("row_limit => 2, after_supplier_id => 's1'"), sup.slice(1));
+      // at a height: the versions in force then (s1 owned by own-x with 100 staked and svc-z live at 3), and the height
+      // on every row, lastProcessedHeight without at_height
+      const at3 = await staked("at_height => 3");
+      assert.deepEqual(at3[0], "s1 own-x op-s1 100 svc-x,svc-y,svc-z a.net,b.io,c.org 3 3");
+      const heights = async (args: string) =>
+        (await c.query(`SELECT DISTINCT height::text h FROM ${S}.get_staked_suppliers(${args})`)).rows.map((r) => r.h);
+      assert.deepEqual(await heights(""), ["100"]);
+      assert.deepEqual(await heights("at_height => 3"), ["3"]);
       // other statuses: s2 (Unstaked) keeps a live config; s6 has none, so the configs closed at its last closing (9)
       await c.query(`INSERT INTO ${S}.suppliers VALUES ('s6', 'own-d', 'Unstaked', 0, int8range(1, NULL), 'op-s6');
         INSERT INTO ${S}.supplier_service_configs VALUES ('s6', 'svc-a', '["x.io"]', 2, int8range(2, 9)),
@@ -1662,6 +1749,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s5', 'svc-q', '["q.io"]', 1, int8range(1, 3))`);
       assert.deepEqual(await staked("stake_statuses => ARRAY['Staked', 'Unstaked'], after_supplier_id => 's3'"),
         ["s5 own-c op-s5 70   0 0", "s6 own-d op-s6 0 svc-a x.io 1 1"]);
+      // other statuses at a height: s6's configs in force then (both at 4), else those closed at its last closing up to
+      // the height (svc-a at 9, before svc-c, live 10 to 12, closed after it), and the height on every row
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s6', 'svc-c', '["z.io"]', 2, int8range(10, 12))`);
+      const s6 = "stake_statuses => ARRAY['Unstaked'], after_supplier_id => 's5'";
+      assert.deepEqual(await staked(`${s6}, at_height => 4`), ["s6 own-d op-s6 0 svc-a,svc-b x.io,y.io 2 2"]);
+      assert.deepEqual(await staked(`${s6}, at_height => 9`), ["s6 own-d op-s6 0 svc-a x.io 1 1"]);
+      assert.deepEqual(await staked(`${s6}, at_height => 11`), ["s6 own-d op-s6 0 svc-c z.io 1 1"]);
+      assert.deepEqual(await staked(s6), ["s6 own-d op-s6 0 svc-c z.io 1 1"]);
+      assert.deepEqual(await heights(`${s6}, at_height => 9`), ["9"]);
       await c.query("SAVEPOINT e");
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(stake_statuses => ARRAY['Bonded'])`), /stake_statuses takes Staked/);
       await c.query("ROLLBACK TO SAVEPOINT e");
@@ -1676,6 +1772,276 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       [S]
     );
     assert.match(String(d.rows[0].d), /^@simpleCollections only\nLive service configs[\s\S]*pass the last row's keys as after_\*/);
+  });
+
+  it("supplier_rev_share_wallets: the startup DDL reruns as the indexer's role, which owns the tables", async () => {
+    // the text itself is frozen against the one created by hand in prod (suppliers.spec.ts)
+    await c.query("BEGIN");
+    try {
+      await c.query(`CREATE ROLE rsw_indexer_ci NOSUPERUSER; CREATE SCHEMA rsw_ci AUTHORIZATION rsw_indexer_ci; SET LOCAL ROLE rsw_indexer_ci;`);
+      await c.query(createSupplierRevShareWalletsFn("rsw_ci"));
+      await c.query(createSupplierRevShareWalletsFn("rsw_ci"));
+      const owners = await c.query(`SELECT c.relname, pg_get_userbyid(c.relowner) o, obj_description(c.oid, 'pg_class') d
+        FROM pg_class c WHERE c.relnamespace = 'rsw_ci'::regnamespace AND c.relkind = 'r' ORDER BY 1`);
+      assert.deepEqual(owners.rows.map((r) => `${r.relname} ${r.o} ${r.d}`), [
+        "supplier_rev_share_wallets rsw_indexer_ci @omit",
+        "supplier_rev_share_wallets_coverage rsw_indexer_ci @omit",
+      ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("supplier_rev_share_wallets: a reindex from a height drops the pairs the replayed blocks no longer write", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`CREATE SCHEMA rsw_rw; ${createSupplierRevShareWalletsFn("rsw_rw")}`);
+      // the indexer's statements, as src/mappings/pocket/rev_share_wallets.ts sends them: a block that does not follow
+      // the last one starts with the rewind; a block that writes configs then inserts their pairs
+      let last: number | undefined;
+      let rewinds: Array<number> = [];
+      const block = async (h: number, pairs: Array<[string, string]>) => {
+        if (rewindNeeded(last, h)) {
+          rewinds.push(h);
+          await c.query(rewindRevShareWalletsSql("rsw_rw"), [h]);
+        }
+        last = h;
+        if (pairs.length > 0) await c.query(insertRevShareWalletsSql("rsw_rw"), [pairs.map((p) => p[0]), pairs.map((p) => p[1]), h]);
+      };
+      const rows = async () =>
+        (await c.query(`SELECT wallet_address || ' ' || supplier_id || ' ' || first_seen_height k FROM rsw_rw.supplier_rev_share_wallets ORDER BY 1`))
+          .rows.map((r) => String(r.k));
+      // the first run, every block from 10 to 16: pairs at 10, 12 and 15; a pair seen again keeps its first height
+      for (let h = 10; h <= 16; h++) {
+        await block(h, h === 10 ? [["a", "s1"]] : h === 12 ? [["b", "s1"], ["c", "s2"], ["a", "s1"]] : h === 15 ? [["d", "s3"]] : []);
+      }
+      assert.deepEqual(await rows(), ["a s1 10", "b s1 12", "c s2 12", "d s3 15"]);
+      // consecutive blocks rewind nothing: only the first block of the run did
+      assert.deepEqual(rewinds, [10]);
+      rewinds = [];
+      // rewound to 11 and replayed from 12 by code that no longer writes c for s2: 12 does not follow 16, so it runs the
+      // rewind first, at the height of the pair to drop (a rewind of "above" would keep it); 13..16 follow and do not
+      for (let h = 12; h <= 16; h++) await block(h, h === 12 ? [["b", "s1"]] : h === 15 ? [["d", "s3"]] : []);
+      assert.deepEqual(await rows(), ["a s1 10", "b s1 12", "d s3 15"]);
+      assert.deepEqual(rewinds, [12]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  // scripts/*_rev_share_wallets.sql as the runbook runs them: psql (the CI image has postgresql-client and scripts/) in its
+  // own session, so over a schema the test commits, not one inside c's transaction
+  const psqlScript = (script: string, schema: string, vars: Array<string> = []) =>
+    new Promise<{ code: number | null; stderr: string; stdout: string }>((resolve, reject) => {
+      const args = [URL as string, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", `schema=${schema}`, ...vars.flatMap((v) => ["-v", v])];
+      const p = spawn("psql", [...args, "-f", path.join(__dirname, "..", "..", "scripts", script)]);
+      let stderr = "";
+      let stdout = "";
+      p.stderr.on("data", (d) => (stderr += String(d)));
+      p.stdout.on("data", (d) => (stdout += String(d)));
+      p.on("error", reject);
+      p.on("close", (code) => resolve({ code, stderr, stdout }));
+    });
+  const rswSchema = async (schema: string, configs: string) => {
+    await c.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; CREATE SCHEMA ${schema}; ${createSupplierRevShareWalletsFn(schema)}
+      CREATE TABLE ${schema}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range);
+      INSERT INTO ${schema}.supplier_service_configs VALUES ${configs};`);
+  };
+  const rswRows = async (schema: string) =>
+    (await c.query(`SELECT wallet_address || ' ' || supplier_id || ' ' || first_seen_height k FROM ${schema}.supplier_rev_share_wallets ORDER BY 1`))
+      .rows.map((r) => String(r.k));
+
+  it("supplier_rev_share_wallets: a live backfill batch waits for a block's uncommitted pairs, retries, and does not deadlock", async () => {
+    const holder = new Client({ connectionString: URL });
+    await holder.connect();
+    // outside any transaction, so each pg_stat_activity read is fresh
+    const watcher = new Client({ connectionString: URL });
+    await watcher.connect();
+    try {
+      // 4 suppliers in batches of 2: two ranges, the first and the last open
+      await rswSchema("rsw_bf", `('s0', 'svc', '[{"address": "w0"}]', int8range(10, 20)), ('s1', 'svc', '[{"address": "w1"}]', int8range(20, NULL)),
+        ('s2', 'svc', '[{"address": "w2"}]', int8range(30, NULL)), ('s3', 'svc', '[{"address": "w3"}]', int8range(40, NULL)),
+        ('s3', 'svc', '[{"address": "w9"}]', 'empty'::int8range)`);
+      // a block at 50 writes s1's and s0's pairs, given out of order, and has not committed
+      await holder.query("BEGIN");
+      await holder.query(insertRevShareWalletsSql("rsw_bf"), [["w1", "w0"], ["s1", "s0"], 50]);
+      // the block took its row locks in key order, as the batches do: inserted, and so locked, w0 before w1
+      const order = await holder.query(`SELECT wallet_address FROM rsw_bf.supplier_rev_share_wallets ORDER BY ctid`);
+      assert.deepEqual(order.rows.map((r) => r.wallet_address), ["w0", "w1"]);
+      const run = psqlScript("backfill_rev_share_wallets.sql", "rsw_bf", ["batch_size=2"]);
+      // the first batch (s0, s1) waits on the block's w0 until lock_timeout (2 s), rolls back, and retries: the block
+      // commits only once the batch has been seen waiting on the lock and then sleeping before its retry, not after a
+      // fixed delay, which a slow psql start could outrun (the batch then ran after the commit, on attempt 1)
+      const batchIn = async (waitEvent: string) => {
+        for (const until = Date.now() + 20_000; Date.now() < until; await new Promise((r) => setTimeout(r, 50))) {
+          const { rows } = await watcher.query(
+            `SELECT 1 FROM pg_stat_activity WHERE application_name = 'psql' AND query LIKE '%rsw_bf.supplier_rev_share_wallets AS w%'
+               AND ${waitEvent}`
+          );
+          if (rows.length > 0) return;
+        }
+        assert.fail(`the backfill batch never showed ${waitEvent}`);
+      };
+      await batchIn("wait_event_type = 'Lock'");
+      await batchIn("wait_event = 'PgSleep'");
+      await holder.query("COMMIT");
+      const { code, stderr } = await run;
+      assert.equal(code, 0, stderr);
+      assert.match(stderr, /batch 1\/2 attempt 1: canceling statement due to lock timeout, retrying in 1 s/);
+      assert.match(stderr, /batch 1\/2: 2 pairs inserted or lowered \(attempt [2-9]\)/);
+      assert.match(stderr, /batch 2\/2: 2 pairs inserted or lowered \(attempt 1\)/);
+      assert.doesNotMatch(stderr, /deadlock/);
+      // the block's pairs are lowered to the configs' first heights; the empty version adds nothing
+      assert.deepEqual(await rswRows("rsw_bf"), ["w0 s0 10", "w1 s1 20", "w2 s2 30", "w3 s3 40"]);
+      // a second run changes nothing
+      const again = await psqlScript("backfill_rev_share_wallets.sql", "rsw_bf", ["batch_size=2"]);
+      assert.equal(again.code, 0, again.stderr);
+      assert.equal((again.stderr.match(/: 0 pairs inserted or lowered \(attempt 1\)/g) ?? []).length, 2, again.stderr);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await holder.end();
+      await watcher.end();
+      await c.query("DROP SCHEMA IF EXISTS rsw_bf CASCADE");
+    }
+  });
+
+  it("supplier_rev_share_wallets: a backfill attempt that runs out of its statement timeout rolls back and is retried", async () => {
+    const holder = new Client({ connectionString: URL });
+    await holder.connect();
+    const watcher = new Client({ connectionString: URL });
+    await watcher.connect();
+    try {
+      await rswSchema("rsw_to", `('s0', 'svc', '[{"address": "w0"}]', int8range(10, NULL)), ('s1', 'svc', '[{"address": "w1"}]', int8range(20, NULL))`);
+      // a block holds w0 longer than the batch's 1.5 s (a retry's 1 s pause counts in it too): the statement timeout ends the
+      // attempt before lock_timeout (2 s)
+      await holder.query("BEGIN");
+      await holder.query(insertRevShareWalletsSql("rsw_to"), [["w0"], ["s0"], 50]);
+      const run = psqlScript("backfill_rev_share_wallets.sql", "rsw_to", ["batch_timeout=1500ms"]);
+      for (const until = Date.now() + 20_000; ; await new Promise((r) => setTimeout(r, 50))) {
+        const { rows } = await watcher.query(
+          `SELECT 1 FROM pg_stat_activity WHERE application_name = 'psql' AND query LIKE '%rsw_to.supplier_rev_share_wallets AS w%'
+             AND wait_event = 'PgSleep'`
+        );
+        if (rows.length > 0) break;
+        assert.ok(Date.now() < until, "the backfill batch never slept before a retry");
+      }
+      await holder.query("COMMIT");
+      const { code, stderr } = await run;
+      assert.equal(code, 0, stderr);
+      assert.match(stderr, /batch 1\/1 attempt 1: canceling statement due to statement timeout, retrying in 1 s/);
+      assert.match(stderr, /batch 1\/1: 2 pairs inserted or lowered \(attempt [2-9]\)/);
+      assert.deepEqual(await rswRows("rsw_to"), ["w0 s0 10", "w1 s1 20"]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await holder.end();
+      await watcher.end();
+      await c.query("DROP SCHEMA IF EXISTS rsw_to CASCADE");
+    }
+  });
+
+  it("supplier_rev_share_wallets: the coverage mark refuses while a pair is missing, extra or above its first height, and writes nothing", async () => {
+    try {
+      await rswSchema("rsw_cov", `('s1', 'svc', '[{"address": "w1"}, {"address": "w2"}]', int8range(10, NULL))`);
+      const covered = async () => Number((await c.query(`SELECT count(*) n FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows[0].n);
+      // w2 missing, and an extra pair no config version lists (a rewind racing a backfill batch)
+      await c.query(`INSERT INTO rsw_cov.supplier_rev_share_wallets VALUES ('w1', 's1', 10), ('w8', 's1', 12)`);
+      let r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.notEqual(r.code, 0);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 1 pairs missing .*, 1 extra .*, 0 above their first height/);
+      assert.equal(await covered(), 0);
+      // extra alone still refuses (w2 is in, but at 15: a block wrote it before the backfill lowered it to 10)
+      await c.query(`INSERT INTO rsw_cov.supplier_rev_share_wallets VALUES ('w2', 's1', 15)`);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.notEqual(r.code, 0);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 0 pairs missing .*, 1 extra .*, 1 above their first height/);
+      assert.equal(await covered(), 0);
+      // a pair above the first height a version lists it at refuses alone too: a rewind to 12 would delete w2 for good
+      await c.query(`DELETE FROM rsw_cov.supplier_rev_share_wallets WHERE wallet_address = 'w8'`);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.notEqual(r.code, 0);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 0 pairs missing .*, 0 extra .*, 1 above their first height/);
+      assert.equal(await covered(), 0);
+      // complete: marked, and a second run keeps the first row
+      await c.query(`UPDATE rsw_cov.supplier_rev_share_wallets SET first_seen_height = 10 WHERE wallet_address = 'w2'`);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.equal(r.code, 0, r.stderr);
+      const first = (await c.query(`SELECT backfilled_at FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows;
+      assert.equal(first.length, 1);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.equal(r.code, 0, r.stderr);
+      assert.deepEqual((await c.query(`SELECT backfilled_at FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows, first);
+    } finally {
+      await c.query("DROP SCHEMA IF EXISTS rsw_cov CASCADE");
+    }
+  });
+
+  it("get_supplier_config_history compresses a supplier's config versions to their changes of content", async () => {
+    await c.query("BEGIN");
+    try {
+      // kava: mainnet's pokt14psq…scsn8l-kava, 12 versions (restakes and activations repeat the content) and an unstake
+      // gap from 120893 to 135840; eth: a reordered rev_share (no change) and then new percentages; an empty range
+      const rs = (...e: Array<[string, number]>) =>
+        `'${JSON.stringify(e.map(([address, pct]) => ({ address, revSharePercentage: String(pct) })))}'`;
+      const ep = (url: string) => `'${JSON.stringify([{ url: `https://${url}`, rpcType: 3, configs: [] }])}'`;
+      const kava = (lo: number, hi: number, r: string, url: string) =>
+        `('sk', 'kava', ${r}, ${ep(url)}, '["${url}"]', int8range(${lo}, ${hi}))`;
+      const z = rs(["w-z", 100]);
+      const three = rs(["w-s", 5], ["w-q", 65], ["w-z", 30]);
+      await c.query(`
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, endpoints jsonb,
+          domains jsonb, _block_range int8range);
+        INSERT INTO ${S}.supplier_service_configs VALUES
+          ${kava(96805, 96806, z, "t.net")}, ${kava(96806, 98629, z, "t.net")},
+          ${kava(98629, 98631, z, "m.net")}, ${kava(98631, 99038, z, "m.net")},
+          ${kava(99038, 99041, z, "n.net")}, ${kava(99041, 115311, z, "n.net")},
+          ${kava(115311, 115321, three, "n.net")}, ${kava(115321, 115326, three, "n.net")},
+          ${kava(115326, 115331, three, "n.net")}, ${kava(115331, 120893, three, "n.net")},
+          ${kava(135841, 135851, three, "e.net")}, ${kava(135851, 164482, three, "e.net")},
+          ('sk', 'eth', ${rs(["w-a", 50], ["w-b", 50])}, ${ep("x.io")}, '["x.io"]', int8range(100, 200)),
+          ('sk', 'eth', ${rs(["w-b", 50], ["w-a", 50])}, ${ep("x.io")}, '["x.io"]', int8range(200, 300)),
+          ('sk', 'eth', ${rs(["w-a", 40], ["w-b", 60])}, ${ep("x.io")}, '["x.io"]', int8range(300, NULL)),
+          ('sk', 'eth', ${rs(["w-c", 100])}, ${ep("y.io")}, '["y.io"]', int8range(250, 250)),
+          ('other', 'kava', ${z}, ${ep("t.net")}, '["t.net"]', int8range(1, NULL));`);
+      const history = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', service_id, first_height, coalesce(last_height::text, '-'),
+                           (SELECT string_agg((x->>'address') || ':' || (x->>'revSharePercentage'), ',' ORDER BY i)
+                            FROM jsonb_array_elements(rev_share) WITH ORDINALITY a(x, i)),
+                           endpoints->0->>'url', array_to_string(domains, ',')) k
+                         FROM ${S}.get_supplier_config_history(${args})`)
+        ).rows.map((r) => String(r.k));
+      const all = [
+        "eth 100 299 w-a:50,w-b:50 https://x.io x.io",
+        "eth 300 - w-a:40,w-b:60 https://x.io x.io",
+        "kava 96805 98628 w-z:100 https://t.net t.net",
+        "kava 98629 99037 w-z:100 https://m.net m.net",
+        "kava 99038 115310 w-z:100 https://n.net n.net",
+        // sorted by address: the chain's order (w-s, w-q, w-z) is not kept
+        "kava 115311 120892 w-q:65,w-s:5,w-z:30 https://n.net n.net",
+        "kava 135841 164481 w-q:65,w-s:5,w-z:30 https://e.net e.net",
+      ];
+      assert.deepEqual(await history("'sk'"), all);
+      assert.deepEqual(await history("'sk', services => ARRAY['kava']"), all.slice(2));
+      assert.deepEqual(await history("'sk', row_limit => 3"), all.slice(0, 3));
+      assert.deepEqual(await history("'sk', row_limit => 3, after_service_id => 'kava', after_first_height => 96805"), all.slice(3, 6));
+      assert.deepEqual(await history("'nobody'"), []);
+      for (const [args, err] of [
+        ["NULL", /supplier_id is required/],
+        ["'sk', row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["'sk', after_service_id => 'kava'", /pass both after_service_id and after_first_height/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_supplier_config_history(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(
+      `SELECT obj_description(p.oid, 'pg_proc') d FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = 'get_supplier_config_history'`,
+      [S]
+    );
+    assert.match(String(d.rows[0].d), /^@simpleCollections only\nService configs of one supplier over time[\s\S]*pass the last row's keys as after_\*/);
   });
 
   it("get_gateway_fleet and get_gateway_delegations read gateways and their delegations now and at a height", async () => {
@@ -1811,14 +2177,60 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["owners => ARRAY['nobody']", []],
         ["services => ARRAY['svc-y']", ["s1 own-a Staked 300 2 1"]],
         ["owners => ARRAY['own-b'], services => ARRAY['svc-x']", ["s3 own-b Staked 500 1 1"]],
+        // domains with services: one config with both (s1 has b.io on svc-y and svc-x on a.net only)
+        ["domains => ARRAY['b.io'], services => ARRAY['svc-x']", ["s3 own-b Staked 500 1 1"]],
+        ["domains => ARRAY['a.net'], services => ARRAY['svc-y'], by_supplier => false", ["all  all 300  1"]],
         // a ceiling on the stake, exclusive
         ["max_stake_upokt => 300", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
         // keyset pages by stake descending, then id
         ["row_limit => 2", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1"]],
         ["row_limit => 2, after_stake_upokt => 300, after_supplier_id => 's1'", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
         ["row_limit => 1, after_stake_upokt => 500, after_supplier_id => 's3', stake_statuses => ARRAY['Staked']", ["s1 own-a Staked 300 2 1"]],
+        // row_offset: a page at any depth of the same order
+        ["row_limit => 2, row_offset => 1", ["s1 own-a Staked 300 2 1", "s2 own-a Unstaking 100 0 1"]],
+        ["row_offset => 3", ["s4 own-b Unstaked 50 0 1"]],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
+      // an empty version (created and closed in one block) shares revenue with nobody, on either path
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s2', 'svc-z', '[{"address": "op-4"}]', '["z.io"]', 'empty'::int8range)`);
+      assert.deepEqual(await fleet("operators => ARRAY['op-4'], operator_scope => 'ever'"), []);
+      await c.query(`DELETE FROM ${S}.supplier_service_configs WHERE service_id = 'svc-z'`);
+      // once the backfill has filled supplier_rev_share_wallets, ever reads the pairs there and no longer the configs:
+      // op-3 is in no config here, only in the table
+      await c.query(`
+        INSERT INTO ${S}.supplier_rev_share_wallets VALUES ('op-1', 's1', 1), ('op-1', 's3', 1), ('op-1', 's4', 1),
+          ('op-2', 's3', 1), ('op-3', 's2', 7);
+        INSERT INTO ${S}.supplier_rev_share_wallets_coverage (backfilled_at) VALUES (now());`);
+      for (const [args, want] of [
+        ["operators => ARRAY['op-1'], operator_scope => 'ever'", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1", "s4 own-b Unstaked 50 0 1"]],
+        ["operators => ARRAY['op-3'], operator_scope => 'ever'", ["s2 own-a Unstaking 100 0 1"]],
+        ["operators => ARRAY['op-2', 'op-3'], operator_scope => 'ever'", ["s3 own-b Staked 500 1 1", "s2 own-a Unstaking 100 0 1"]],
+      ] as const)
+        assert.deepEqual([args, await fleet(args)], [args, want]);
+      await c.query(`DELETE FROM ${S}.supplier_rev_share_wallets; DELETE FROM ${S}.supplier_rev_share_wallets_coverage;`);
+      // domain '' = a live config with no domain (get_staked_domain_services' '' row): s2's svc-z ([] domains) and
+      // s4's svc-z (NULL); combined with a domain, and with services one config must have both
+      await c.query("SAVEPOINT nodomain");
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s2', 'svc-z', '[]', '[]', int8range(1, NULL)),
+        ('s4', 'svc-z', '[]', NULL, int8range(1, NULL)), ('s1', 'svc-z', '[]', '["a.net"]', int8range(1, NULL))`);
+      for (const [args, want] of [
+        ["domains => ARRAY['']", ["s2 own-a Unstaking 100 1 1", "s4 own-b Unstaked 50 1 1"]],
+        ["domains => ARRAY['', 'b.io']", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 3 1", "s2 own-a Unstaking 100 1 1",
+          "s4 own-b Unstaked 50 1 1"]],
+        ["domains => ARRAY[''], services => ARRAY['svc-z']", ["s2 own-a Unstaking 100 1 1", "s4 own-b Unstaked 50 1 1"]],
+        ["domains => ARRAY[''], services => ARRAY['svc-x']", []],
+        ["domains => ARRAY['a.net'], services => ARRAY['svc-z']", ["s1 own-a Staked 300 3 1"]],
+      ] as const)
+        assert.deepEqual([args, await fleet(args)], [args, want]);
+      // a null element counts as no domain in both functions: s3's svc-w config [null] is on get_staked_domain_services'
+      // '' row (s3 is the only Staked one there), and so in get_supplier_fleet's domain ''
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s3', 'svc-w', '[]', '[null]', int8range(1, NULL))`);
+      const staked = await c.query(`SELECT service_id || ' ' || configs k FROM ${S}.get_staked_domain_services() WHERE domain = '' ORDER BY 1`);
+      assert.deepEqual(staked.rows.map((r) => r.k), ["svc-w 1"]);
+      const nodomain = await c.query(`SELECT supplier_id FROM ${S}.get_supplier_fleet(domains => ARRAY[''], services => ARRAY['svc-w'])
+        UNION ALL SELECT '|' UNION ALL (SELECT supplier_id FROM ${S}.get_supplier_fleet(domains => ARRAY['']) ORDER BY 1)`);
+      assert.deepEqual(nodomain.rows.map((r) => r.supplier_id), ["s3", "|", "s2", "s3", "s4"]);
+      await c.query("ROLLBACK TO SAVEPOINT nodomain");
       // with services, the domains of each supplier's live configs for them
       for (const [args, want] of [
         ["services => ARRAY['svc-y']", ["s1 a.net,b.io"]],
@@ -1879,14 +2291,18 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         INSERT INTO ${S}.event_relay_mining_difficulty_updateds VALUES ('svc-x', 'ff', 10, 10), ('svc-x', 'fd', 30, 20),
           ('svc-x', 'fe', 20, 15), ('svc-z', 'aa', 7, 5);
         CREATE TABLE ${S}.services (id text, owner_id text, _block_range int8range);
+        -- own-s also owns svc-w, which has no supplier config or application now: a row of zeros
         INSERT INTO ${S}.services VALUES ('svc-x', 'own-s', int8range(1, NULL)), ('svc-z', 'own-s', int8range(1, NULL)),
+          ('svc-w', 'own-s', int8range(1, NULL)),
           ('svc-y', 'own-s', int8range(1, 5)), ('svc-y', 'own-t', int8range(5, NULL));`);
       const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
       for (const [args, want] of [
-        ["", ["svc-x 2 2 1 2 30 fd 20", "svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        // every live service, svc-w (no config or application now) with zeros
+        ["", ["svc-w 0 0 0 0   ", "svc-x 2 2 1 2 30 fd 20", "svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        ["ARRAY['svc-w', 'svc-x']", ["svc-w 0 0 0 0   ", "svc-x 2 2 1 2 30 fd 20"]],
         ["ARRAY['svc-y', 'svc-z', 'none']", ["svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
         // the services an address owns now (svc-y was own-s's before)
-        ["owners => ARRAY['own-s']", ["svc-x 2 2 1 2 30 fd 20", "svc-z 0 0 1 1 7 aa 5"]],
+        ["owners => ARRAY['own-s']", ["svc-w 0 0 0 0   ", "svc-x 2 2 1 2 30 fd 20", "svc-z 0 0 1 1 7 aa 5"]],
         ["ARRAY['svc-z', 'svc-y'], owners => ARRAY['own-s']", ["svc-z 0 0 1 1 7 aa 5"]],
         ["owners => ARRAY['nobody']", []],
       ] as const)
@@ -1904,6 +2320,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["applications => ARRAY['a2', 'a3'], stake_statuses => ARRAY['Staked']", ["a3 Staked 70 0 2 1"]],
         ["stake_statuses => ARRAY['Staked'], by_application => false", ["all all 90   2"]],
         ["applications => ARRAY['none'], by_application => false", ["all all 0   0"]],
+        // one page of the order, counted for its own rows
+        ["row_limit => 1, row_offset => 1", ["a1 Staked 20 2 1 1"]],
       ] as const)
         assert.deepEqual(
           [args, await rows(`SELECT application_id, stake_status, stake_upokt::text, service_count::text, gateway_count::text,
@@ -1925,6 +2343,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       }
       for (const [args, err] of [
         ["row_limit => 0", /row_limit must be between 1 and 1000, or NULL/],
+        ["row_offset => -1", /row_offset must be 0 or more/],
         ["row_limit => 10, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
         ["after_stake_upokt => 300, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
         ["owners => ARRAY['own-a'], domains => ARRAY['a.net']", /pass one of suppliers, owners/],
@@ -1957,7 +2376,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       [S]
     );
     assert.deepEqual(k.rows.map((r) => r.proname), [
-      "get_actor_lifecycle", "get_claims", "get_created_claims", "get_morse_claims", "get_relay_mining_difficulty",
+      "get_actor_lifecycle", "get_claims", "get_created_claims", "get_morse_claims", "get_native_transfers",
+      "get_relay_mining_difficulty",
     ]);
   });
 
@@ -2380,7 +2800,75 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         paged.push(...page);
       }
       assert.deepEqual(paged, all);
+      // a page at any depth by row_offset
+      for (const off of [0, 1, 2, 3, 4, 5])
+        assert.deepEqual(await got(`ARRAY['svc-a', 'svc-b'], NULL, NULL, row_limit => 2, row_offset => ${off}`), all.slice(off, off + 2), String(off));
+      // the deepest offset with the largest page: an empty page, not an integer overflow of row_limit + row_offset
+      assert.deepEqual(await got(`ARRAY['svc-a', 'svc-b'], NULL, NULL, row_limit => 1000, row_offset => 10000000`), []);
+      for (const off of ["-1", "10000001", "2147483647"]) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_relay_mining_difficulty(ARRAY['svc-a'], NULL, NULL, row_offset => ${off})`),
+          /row_offset must be between 0 and 10000000/, off);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_relay_mining_difficulty(NULL, NULL, NULL)`), /services must have between 1 and 200/);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_native_transfers lists an address's transfers newest first with their transaction, by direction, by keyset", async () => {
+    await c.query("BEGIN");
+    try {
+      // a sends to b (100) and to c (200), b sends to a (200), c to d (250, not ours), a to itself (300); tx3 is not indexed
+      await c.query(`
+        INSERT INTO ${S}.blocks SELECT g, '2026-03-01'::timestamp + g * interval '1 minute' FROM generate_series(100, 300, 50) g;
+        CREATE TABLE ${S}.native_transfers (id text, sender_id text, recipient_id text, denom text, amounts jsonb, status text,
+          transaction_id text, block_id numeric, _block_range int8range);
+        CREATE TABLE ${S}.transactions (id text, code integer, codespace text, fees jsonb, signer_address text, memo text,
+          _block_range int8range);
+        INSERT INTO ${S}.native_transfers VALUES ('n1', 'a', 'b', 'upokt', '[{"denom": "upokt", "amount": "1"}]', 'Success', 'tx1', 100, int8range(100, NULL)),
+          ('n2', 'b', 'a', 'upokt', '[{"denom": "upokt", "amount": "2"}]', 'Success', 'tx2', 200, int8range(200, NULL)),
+          ('n3', 'a', 'c', 'upokt', '[{"denom": "upokt", "amount": "3"}]', 'Error', 'tx3', 200, int8range(200, NULL)),
+          ('n4', 'c', 'd', 'upokt', '[{"denom": "upokt", "amount": "4"}]', 'Success', 'tx4', 250, int8range(250, NULL)),
+          ('n5', 'a', 'a', 'upokt', '[{"denom": "upokt", "amount": "5"}]', 'Success', 'tx5', 300, int8range(300, NULL));
+        INSERT INTO ${S}.transactions VALUES ('tx1', 0, '', '[{"denom": "upokt", "amount": "10"}]', 'a', 'hi', int8range(100, NULL)),
+          ('tx2', 0, '', '[]', 'b', '', int8range(200, NULL)), ('tx4', 0, '', '[]', 'c', '', int8range(250, NULL)),
+          ('tx5', 5, 'bank', '[{"denom": "upokt", "amount": "7"}]', 'a', 'self', int8range(300, NULL));`);
+      const got = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', height, id, sender_id, recipient_id, status, transaction_id, tx_code, tx_codespace,
+                           tx_fees::text, tx_signer_address, tx_memo) k FROM ${S}.get_native_transfers(${args})`)
+        ).rows.map((r) => String(r.k));
+      const all = [
+        '300 n5 a a Success tx5 5 bank [{"denom": "upokt", "amount": "7"}] a self',
+        "200 n3 a c Error tx3",
+        "200 n2 b a Success tx2 0  [] b ",
+        '100 n1 a b Success tx1 0  [{"denom": "upokt", "amount": "10"}] a hi',
+      ];
+      assert.deepEqual(await got("ARRAY['a']"), all);
+      assert.deepEqual(await got("ARRAY['a'], 'sent'"), [all[0], all[1], all[3]]);
+      assert.deepEqual(await got("ARRAY['a'], 'received'"), [all[0], all[2]]);
+      assert.deepEqual(await got("ARRAY['a'], NULL, '2026-03-01T03:00:00Z', '2026-03-01T04:00:00Z'"), all.slice(1, 3));
+      const paged: string[] = [];
+      let page = await got("ARRAY['a'], row_limit => 1");
+      paged.push(...page);
+      while (page.length === 1) {
+        const [height, id] = page[0].split(" ");
+        page = await got(`ARRAY['a'], row_limit => 1, before_height => ${height}, before_id => '${id}'`);
+        paged.push(...page);
+      }
+      assert.deepEqual(paged, all);
+      for (const [args, err] of [
+        ["ARRAY['a'], 'both'", /direction is sent, received or NULL/],
+        ["ARRAY[]::text[]", /addresses must have between 1 and 200 elements/],
+        ["ARRAY['a'], row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["ARRAY['a'], before_height => 5", /pass both before_height and before_id/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_native_transfers(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
     } finally {
       await c.query("ROLLBACK");
     }
@@ -2422,13 +2910,21 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // the count of the same claims, per requested supplier, 0 for one that made none
       const count = async (args: string) =>
         (
-          await c.query(`SELECT concat_ws(' ', supplier_id, claims, first_height, last_height) k FROM ${S}.get_created_claims_count(${args})`)
+          await c.query(`SELECT concat_ws(' ', supplier_id, claims, first_height, last_height, beyond_tip) k FROM ${S}.get_created_claims_count(${args})`)
         ).rows.map((r) => String(r.k));
-      assert.deepEqual(await count("ARRAY['s2', 's1', 'nobody', 's1'], NULL, NULL"), ["nobody 0", "s1 3 100 200", "s2 1 250 250"]);
-      assert.deepEqual(await count("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), ["s1 2 200 200"]);
-      // the claims of sessions ending at or after 190, as the list gives them; a range past the last block counts none
-      assert.deepEqual(await count("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), ["s1 2 200 200", "s2 1 250 250"]);
-      assert.deepEqual(await count("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), ["s1 0"]);
+      assert.deepEqual(await count("ARRAY['s2', 's1', 'nobody', 's1'], NULL, NULL"), [
+        "nobody 0 f", "s1 3 100 200 f", "s2 1 250 250 f",
+      ]);
+      assert.deepEqual(await count("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), ["s1 2 200 200 f"]);
+      // the claims of sessions ending at or after 190, as the list gives them
+      assert.deepEqual(await count("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), [
+        "s1 2 200 200 f", "s2 1 250 250 f",
+      ]);
+      // a range past the last block (300, at 05:00) counts none and says beyond_tip; one ending past it counts what is
+      // indexed and says it too; one ending at the last block's time is final
+      assert.deepEqual(await count("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), ["s1 0 t"]);
+      assert.deepEqual(await count("ARRAY['s1'], NULL, '2030-01-01T00:00:00Z'"), ["s1 3 100 200 t"]);
+      assert.deepEqual(await count("ARRAY['s1'], NULL, '2026-03-01T05:00:00Z'"), ["s1 3 100 200 f"]);
       assert.deepEqual(await got("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), []);
       const many = Array.from({ length: 21 }, (_, i) => `'s${i}'`).join(", ");
       for (const fn of ["get_created_claims", "get_created_claims_count"]) {
@@ -3013,7 +3509,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     for (const n of STATE_FUNCTIONS) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     assert.deepEqual(catalog, [
       "get_actor_lifecycle", "get_app_auto_unstakes", "get_application_spend", "get_block_stats", "get_claims",
-      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_param_history",
+      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_native_transfers",
+      "get_param_history",
       "get_relay_mining_difficulty", "get_service_usage", "get_supplier_distribution", "get_supplier_earnings",
       "get_supplier_penalties", "get_supplier_proofs", "get_supply_flows", "get_validator_rewards", "money_coverage",
     ]);
@@ -3029,6 +3526,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     // the twins of the keyset functions hold one page (row_limit), the others every row
     const keyset = [
       "get_claims_json", "get_created_claims_json", "get_actor_lifecycle_json", "get_relay_mining_difficulty_json", "get_morse_claims_json",
+      "get_native_transfers_json",
     ];
     for (const r of twins.rows) {
       const limit = keyset.includes(String(r.proname)) ? /at most row_limit/ : /no row limit/;
@@ -3361,6 +3859,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_block_stats: "NULL, NULL",
         get_relay_mining_difficulty: "ARRAY['svc-d'], NULL, NULL",
         get_created_claims: "ARRAY['sup-l'], NULL, NULL",
+        get_native_transfers: "ARRAY['acc-s']",
         get_morse_claims: "NULL, NULL, NULL, NULL",
       };
       await stubEntityTables();
@@ -3557,6 +4056,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_block_stats: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
         get_relay_mining_difficulty: "ARRAY['svc-d'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_created_claims: "ARRAY['sup-l'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_native_transfers: "ARRAY['acc-r'], NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_morse_claims: "NULL, NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
       };
       await stubEntityTables();
@@ -3564,6 +4064,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // the functions that list rows one by one order them by height
       const byHeight = [
         "get_param_history", "get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims",
+        "get_native_transfers",
       ];
       for (const [fn, args] of Object.entries(calls)) {
         const col = byHeight.includes(fn) ? "height" : fn === "money_coverage" ? "first_height" : "bucket_start";

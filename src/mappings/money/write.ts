@@ -3,7 +3,7 @@ import { CosmosBlock, CosmosEvent, CosmosEventKind } from "@subql/types-cosmos";
 import { recordMoneyProgressCall, recordMoneySkipCall, writeSettlementCalls } from "../dbFunctions/settlement/writer";
 import type { ValidatorSnapshot } from "../pocket/validator";
 import { Param } from "../../types";
-import { getDbSchema, getSequelize } from "../utils/db";
+import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
 import { getParamId } from "../utils/ids";
 import { positiveIntFromEnv } from "../utils/env";
 import { firstEraFrom } from "../utils/params_history";
@@ -130,16 +130,6 @@ async function mapStateAt(
 function proposerOf(block: CosmosBlock): Uint8Array {
   const raw = block.header.proposerAddress as unknown as Uint8Array | string;
   return typeof raw === "string" ? fromHex(raw) : raw;
-}
-
-// Without the block transaction a write would autocommit, and a block that fails later would leave its
-// settlement written. The transaction only exists with --enable-cache=false.
-function blockTransaction() {
-  const transaction = store.context.transaction;
-  if (!transaction) {
-    throw new Error("[money] no block transaction: the indexer must run with --enable-cache=false");
-  }
-  return transaction;
 }
 
 // Returns the number of CALLs and the bytes of JSON sent, for the settlement profile line of indexMoney.

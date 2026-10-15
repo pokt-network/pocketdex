@@ -4,7 +4,7 @@ import { updateBlockReportsFnName } from "../dbFunctions/reports";
 import { upsertAppsByBlockAndServicesFnName } from "../dbFunctions/reports/apps";
 import { upsertRelaysByBlockAndServicesFnName } from "../dbFunctions/reports/relays";
 import { upsertSuppliersByBlockAndServicesFnName } from "../dbFunctions/reports/suppliers";
-import { getDbSchema, getSequelize } from "../utils/db";
+import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   try {
@@ -15,7 +15,7 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
 
     const defaultOptions = {
       // whe need to run it in the subql transaction, otherwise it will not find the block, and the function will do nothing
-      transaction: store.context.transaction,
+      transaction: blockTransaction(),
       // to avoid sequelize try to format the results; this function returns a void, so this is not needed
       raw: true,
       // runs directly in the write pool

@@ -1,0 +1,13 @@
+
+CREATE TABLE IF NOT EXISTS beta.supplier_rev_share_wallets (
+  wallet_address    TEXT   NOT NULL,
+  supplier_id       TEXT   NOT NULL,
+  first_seen_height BIGINT NOT NULL,
+  PRIMARY KEY (wallet_address, supplier_id)
+);
+COMMENT ON TABLE beta.supplier_rev_share_wallets IS E'@omit';
+CREATE TABLE IF NOT EXISTS beta.supplier_rev_share_wallets_coverage (
+  singleton     BOOLEAN     PRIMARY KEY DEFAULT true CHECK (singleton),
+  backfilled_at TIMESTAMPTZ NOT NULL
+);
+COMMENT ON TABLE beta.supplier_rev_share_wallets_coverage IS E'@omit';

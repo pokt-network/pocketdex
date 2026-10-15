@@ -11,17 +11,21 @@ import { MsgRecoverMorseAccount } from "../../client/pocket/migration/tx";
 const created: Record<string, Array<Record<string, unknown>>> = {};
 const updates: Array<{ values: Record<string, unknown>; where: Record<string, unknown> }> = [];
 
+// the block transaction: the claim's update must run in it (db.ts blockTransaction)
+const BLOCK_TX = { block: "transaction" };
+
 const globals = globalThis as Record<string, unknown>;
 globals.logger = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
 globals.store = {
-  context: { getHistoricalUnit: () => 99504, transaction: undefined },
+  context: { getHistoricalUnit: () => 99504, transaction: BLOCK_TX },
   bulkCreate: async (name: string, docs: Array<Record<string, unknown>>) => {
     (created[name] = created[name] || []).push(...docs);
   },
   modelProvider: {
     getModel: () => ({
       model: {
-        update: async (values: Record<string, unknown>, { where }: { where: Record<string, unknown> }) => {
+        update: async (values: Record<string, unknown>, { transaction, where }: { where: Record<string, unknown>; transaction: unknown }) => {
+          assert.equal(transaction, BLOCK_TX, "a write outside the block transaction");
           updates.push({ values, where });
           return [1];
         },

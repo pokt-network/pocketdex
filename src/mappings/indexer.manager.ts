@@ -30,6 +30,7 @@ import { REPLAY_ERAS } from "./money/replay";
 import { blockStakingEvents, indexMoney, moneyFromHeight, settlementEraAt } from "./money/write";
 import { handleEventClaimSettled } from "./pocket/relays";
 import { handleAddBlockReports } from "./pocket/reports";
+import { rewindRevShareWallets } from "./pocket/rev_share_wallets";
 import { indexSupplier } from "./pocket/suppliers";
 import { reconcileApplications } from "./pocket/applications";
 import { reconcileParams } from "./pocket/params";
@@ -728,6 +729,8 @@ async function _indexingHandler(block: CosmosBlock): Promise<void> {
     logger.warn(`[indexer.manager] unhandledEventTypes=${stringify(Array.from(unhandledEventTypes))} eventsByType=${stringify(eventsByType, jsonArrayCounter, 0)}`);
   }
 
+  // first, before any handler writes this height: after a rewind, the rev_share wallet pairs it left at or above it
+  await profilerWrap(rewindRevShareWallets, "indexingHandler", "rewindRevShareWallets")(block.header.height);
   // let's serialize to maybe avoid issues do to even loop saturation?
   await profilerWrap(indexPrimitives, "indexingHandler", "indexPrimitives")(block);
   // lets this happens first because is massive

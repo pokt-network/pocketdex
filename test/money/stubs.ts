@@ -44,6 +44,12 @@ export const entityStubsSql = (S: string, heights: string): string => `
       CREATE TABLE ${S}.msg_claim_morse_supplier_services (id text, claim_msg_id text, service_id text);
       CREATE TABLE ${S}.msg_recover_morse_accounts (id text, shannon_dest_address_id text, morse_src_address text,
         recovered_balance_amount numeric, is_admin boolean, block_id numeric, transaction_id text);
+      -- get_native_transfers: one transfer per height from acc-s to acc-r, and its transaction
+      CREATE TABLE ${S}.native_transfers (id text, sender_id text, recipient_id text, denom text, amounts jsonb, status text,
+        transaction_id text, block_id numeric, _block_range int8range);
+      CREATE TABLE IF NOT EXISTS ${S}.transactions (id text, _block_range int8range);
+      ALTER TABLE ${S}.transactions ADD COLUMN IF NOT EXISTS code integer, ADD COLUMN IF NOT EXISTS codespace text,
+        ADD COLUMN IF NOT EXISTS fees jsonb, ADD COLUMN IF NOT EXISTS signer_address text, ADD COLUMN IF NOT EXISTS memo text;
       -- get_morse_claims' supplier destination
       CREATE TABLE IF NOT EXISTS ${S}.morse_claimable_accounts (id text, _block_range int8range);
       ALTER TABLE ${S}.morse_claimable_accounts ADD COLUMN IF NOT EXISTS claimed_msg_id text,
@@ -62,5 +68,10 @@ export const entityStubsSql = (S: string, heights: string): string => `
         FROM (${heights}) b(id);
       INSERT INTO ${S}.msg_create_claims SELECT 'mc' || b.id, 'sup-l', 'app-l', 'svc-d', 'sess' || b.id, b.id, 5, 6, 7, 8, 9,
         'tx' || b.id, b.id FROM (${heights}) b(id);
+      INSERT INTO ${S}.native_transfers SELECT 'nt' || b.id, 'acc-s', 'acc-r', 'upokt', '[{"denom": "upokt", "amount": "5"}]',
+        'Success', 'tx' || b.id, b.id, int8range(b.id::bigint, NULL) FROM (${heights}) b(id);
+      INSERT INTO ${S}.transactions (id, code, codespace, fees, signer_address, memo, _block_range)
+        SELECT 'tx' || b.id, 0, '', '[{"denom": "upokt", "amount": "1"}]', 'acc-s', 'm', int8range(b.id::bigint, NULL)
+        FROM (${heights}) b(id);
       INSERT INTO ${S}.msg_claim_morse_accounts SELECT 'mm' || b.id, 'pokt-sign', 'pokt-dest', 'MORSE' || b.id, 100, b.id,
         'tx' || b.id FROM (${heights}) b(id);`;
