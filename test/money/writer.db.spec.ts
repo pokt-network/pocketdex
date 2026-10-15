@@ -1714,6 +1714,75 @@ COMMENT ON TABLE ${schema}.supplier_rev_share_wallets_coverage IS E'@omit';
     }
   });
 
+  it("get_supplier_config_history compresses a supplier's config versions to their changes of content", async () => {
+    await c.query("BEGIN");
+    try {
+      // kava: mainnet's pokt14psq…scsn8l-kava, 12 versions (restakes and activations repeat the content) and an unstake
+      // gap from 120893 to 135840; eth: a reordered rev_share (no change) and then new percentages; an empty range
+      const rs = (...e: Array<[string, number]>) =>
+        `'${JSON.stringify(e.map(([address, pct]) => ({ address, revSharePercentage: String(pct) })))}'`;
+      const ep = (url: string) => `'${JSON.stringify([{ url: `https://${url}`, rpcType: 3, configs: [] }])}'`;
+      const kava = (lo: number, hi: number, r: string, url: string) =>
+        `('sk', 'kava', ${r}, ${ep(url)}, '["${url}"]', int8range(${lo}, ${hi}))`;
+      const z = rs(["w-z", 100]);
+      const three = rs(["w-s", 5], ["w-q", 65], ["w-z", 30]);
+      await c.query(`
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, endpoints jsonb,
+          domains jsonb, _block_range int8range);
+        INSERT INTO ${S}.supplier_service_configs VALUES
+          ${kava(96805, 96806, z, "t.net")}, ${kava(96806, 98629, z, "t.net")},
+          ${kava(98629, 98631, z, "m.net")}, ${kava(98631, 99038, z, "m.net")},
+          ${kava(99038, 99041, z, "n.net")}, ${kava(99041, 115311, z, "n.net")},
+          ${kava(115311, 115321, three, "n.net")}, ${kava(115321, 115326, three, "n.net")},
+          ${kava(115326, 115331, three, "n.net")}, ${kava(115331, 120893, three, "n.net")},
+          ${kava(135841, 135851, three, "e.net")}, ${kava(135851, 164482, three, "e.net")},
+          ('sk', 'eth', ${rs(["w-a", 50], ["w-b", 50])}, ${ep("x.io")}, '["x.io"]', int8range(100, 200)),
+          ('sk', 'eth', ${rs(["w-b", 50], ["w-a", 50])}, ${ep("x.io")}, '["x.io"]', int8range(200, 300)),
+          ('sk', 'eth', ${rs(["w-a", 40], ["w-b", 60])}, ${ep("x.io")}, '["x.io"]', int8range(300, NULL)),
+          ('sk', 'eth', ${rs(["w-c", 100])}, ${ep("y.io")}, '["y.io"]', int8range(250, 250)),
+          ('other', 'kava', ${z}, ${ep("t.net")}, '["t.net"]', int8range(1, NULL));`);
+      const history = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', service_id, first_height, coalesce(last_height::text, '-'),
+                           (SELECT string_agg((x->>'address') || ':' || (x->>'revSharePercentage'), ',' ORDER BY i)
+                            FROM jsonb_array_elements(rev_share) WITH ORDINALITY a(x, i)),
+                           endpoints->0->>'url', array_to_string(domains, ',')) k
+                         FROM ${S}.get_supplier_config_history(${args})`)
+        ).rows.map((r) => String(r.k));
+      const all = [
+        "eth 100 299 w-a:50,w-b:50 https://x.io x.io",
+        "eth 300 - w-a:40,w-b:60 https://x.io x.io",
+        "kava 96805 98628 w-z:100 https://t.net t.net",
+        "kava 98629 99037 w-z:100 https://m.net m.net",
+        "kava 99038 115310 w-z:100 https://n.net n.net",
+        // sorted by address: the chain's order (w-s, w-q, w-z) is not kept
+        "kava 115311 120892 w-q:65,w-s:5,w-z:30 https://n.net n.net",
+        "kava 135841 164481 w-q:65,w-s:5,w-z:30 https://e.net e.net",
+      ];
+      assert.deepEqual(await history("'sk'"), all);
+      assert.deepEqual(await history("'sk', services => ARRAY['kava']"), all.slice(2));
+      assert.deepEqual(await history("'sk', row_limit => 3"), all.slice(0, 3));
+      assert.deepEqual(await history("'sk', row_limit => 3, after_service_id => 'kava', after_first_height => 96805"), all.slice(3, 6));
+      assert.deepEqual(await history("'nobody'"), []);
+      for (const [args, err] of [
+        ["NULL", /supplier_id is required/],
+        ["'sk', row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["'sk', after_service_id => 'kava'", /pass both after_service_id and after_first_height/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_supplier_config_history(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(
+      `SELECT obj_description(p.oid, 'pg_proc') d FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = 'get_supplier_config_history'`,
+      [S]
+    );
+    assert.match(String(d.rows[0].d), /^@simpleCollections only\nService configs of one supplier over time[\s\S]*pass the last row's keys as after_\*/);
+  });
+
   it("get_gateway_fleet and get_gateway_delegations read gateways and their delegations now and at a height", async () => {
     await c.query("BEGIN");
     try {

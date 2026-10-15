@@ -1353,6 +1353,59 @@ BEGIN
   ORDER BY 2 DESC, 1;
 END $$;
 
+-- A supplier's service configs over time, one row per stretch of heights in which a config declared the same content:
+-- a row starts at the config's first version, after a gap (the supplier unstaked, or dropped the service and took it
+-- back) and when its rev_share or endpoints change. Every stake writes a new version of all the supplier's configs, and
+-- every activation another, so the versions repeat their content: the most of any supplier, 21,114 on mainnet, are 157
+-- rows, in 0.42 s (replica, 2026-10-14). rev_share is compared and returned sorted by address: the CLI builds it from a
+-- map, so its order changes on every stake (poktroll x/supplier/config/supplier_configs_reader.go). last_height is the
+-- last height of the stretch (NULL while the config declares it now); domains are those of its newest version. The
+-- configs are what the supplier declared, from its stake height (see getServices in src/mappings/pocket/suppliers.ts).
+-- Keyset paging on (service_id, first_height).
+CREATE OR REPLACE FUNCTION ${s}.get_supplier_config_history(supplier_id text, services text[] DEFAULT NULL,
+  row_limit integer DEFAULT 1000, after_service_id text DEFAULT NULL, after_first_height bigint DEFAULT NULL)
+RETURNS TABLE(service_id text, first_height bigint, last_height bigint, rev_share jsonb, endpoints jsonb, domains text[])
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  IF get_supplier_config_history.supplier_id IS NULL THEN RAISE EXCEPTION 'supplier_id is required'; END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_service_id / after_first_height', row_limit;
+  END IF;
+  IF (after_service_id IS NULL) <> (after_first_height IS NULL) THEN
+    RAISE EXCEPTION 'pass both after_service_id and after_first_height (the last row of the previous page), or neither';
+  END IF;
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  RETURN QUERY
+  WITH v AS (
+    SELECT c.service_id svc, lower(c._block_range) lo, upper(c._block_range) hi,
+           (SELECT coalesce(jsonb_agg(x ORDER BY x->>'address', x->>'revSharePercentage'), '[]'::jsonb)
+            FROM jsonb_array_elements(c.rev_share) x) rs,
+           c.endpoints ep, c.domains dm
+    FROM ${s}.supplier_service_configs c
+    WHERE c.supplier_id = get_supplier_config_history.supplier_id AND NOT isempty(c._block_range)
+      AND (services IS NULL OR c.service_id = ANY(services))
+      AND (after_service_id IS NULL OR c.service_id >= after_service_id)
+  ), w AS (
+    SELECT v.*, lag(v.hi) OVER k p_hi, lag(v.rs) OVER k p_rs, lag(v.ep) OVER k p_ep
+    FROM v WINDOW k AS (PARTITION BY v.svc ORDER BY v.lo)
+  ), g AS (
+    -- the stretch of each version: how many rows started up to it
+    SELECT w.*, count(*) FILTER (WHERE w.p_hi IS NULL OR w.p_hi <> w.lo OR w.rs <> w.p_rs OR w.ep <> w.p_ep)
+                  OVER (PARTITION BY w.svc ORDER BY w.lo) seg
+    FROM w
+  ), r AS (
+    SELECT g.svc, min(g.lo)::bigint f, CASE WHEN bool_or(g.hi IS NULL) THEN NULL ELSE max(g.hi)::bigint - 1 END l,
+           (array_agg(g.rs ORDER BY g.lo))[1] rs, (array_agg(g.ep ORDER BY g.lo))[1] ep,
+           (array_agg(g.dm ORDER BY g.lo DESC))[1] domains
+    FROM g GROUP BY g.svc, g.seg
+  )
+  SELECT r.svc, r.f, r.l, r.rs, r.ep, ARRAY(SELECT e.x FROM ${configDomains("r")} e(x))
+  FROM r
+  WHERE after_service_id IS NULL OR (r.svc, r.f) > (after_service_id, after_first_height)
+  ORDER BY r.svc, r.f
+  LIMIT row_limit;
+END $$;
+
 -- The live service configs of the Staked suppliers, one row per (supplier, service), with the supplier's owner and stake
 -- and the config's endpoint domains: the suppliers { serviceConfigs } join consumers built by hand (158,314 live configs
 -- on mainnet, 2026-10-14, unique per supplier and service). Keyset paging on (supplier_id, service_id) through
