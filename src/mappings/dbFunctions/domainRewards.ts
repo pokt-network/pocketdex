@@ -267,5 +267,10 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
       ON ${dbSchema}.morse_claimable_accounts (shannon_dest_address)`,
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_morse_claimable_accounts_morse_output
       ON ${dbSchema}.morse_claimable_accounts (morse_output_address)`,
+    // A block's metadata record by height (get_block_metadata): only SubQuery's primary key and a GiST on other
+    // columns, so each lookup scanned the table (1148 MB on beta, 2026-10-15). Built by hand on mainnet first, with this
+    // definition.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_block_metadata_id
+      ON ${dbSchema}.block_metadata USING btree (id)`,
   ];
 }
