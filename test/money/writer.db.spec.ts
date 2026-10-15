@@ -1474,6 +1474,303 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("get_height_at is the last indexed block at or before a time, and is described for GraphQL", async () => {
+    await c.query("BEGIN");
+    try {
+      // three blocks after the fixtures' last one, two of them in the same microsecond (the higher height answers)
+      await c.query(`INSERT INTO ${S}.blocks VALUES (1000000001, '2027-01-01 00:00:00.000001'),
+        (1000000002, '2027-01-01 00:00:00.000005'), (1000000003, '2027-01-01 00:00:00.000005')`);
+      const at = async (t: string) =>
+        (await c.query(`SELECT height::text, to_char(block_time AT TIME ZONE 'UTC', 'SS.US') t, beyond_tip FROM ${S}.get_height_at('${t}')`)).rows;
+      for (const [time, want] of [
+        ["2027-01-01T00:00:00.000001Z", [{ height: "1000000001", t: "00.000001", beyond_tip: false }]],
+        ["2027-01-01T00:00:00.000004Z", [{ height: "1000000001", t: "00.000001", beyond_tip: false }]],
+        // at the newest block's time: not beyond it; after it: the newest block, beyond the tip
+        ["2027-01-01T00:00:00.000005Z", [{ height: "1000000003", t: "00.000005", beyond_tip: false }]],
+        ["2027-01-01T01:00:01+01:00", [{ height: "1000000003", t: "00.000005", beyond_tip: true }]],
+        // before the first indexed block: one row of NULLs (not set-returning)
+        ["2000-01-01T00:00:00Z", [{ height: null, t: null, beyond_tip: null }]],
+      ] as const)
+        assert.deepEqual([time, await at(time)], [time, want]);
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_height_at(NULL)`), /at_time is required/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(`SELECT obj_description('${S}.get_height_at(timestamptz)'::regprocedure, 'pg_proc') d`);
+    assert.match(String(d.rows[0].d), /^The last indexed block at or before at_time/);
+  });
+
+  it("get_active_accounts counts the live upokt balances updated since each time", async () => {
+    await c.query("BEGIN");
+    try {
+      // blocks 1 (2026-01-01) and 999999999 (2026-09-01 12:00); acc-a updated at the last block, acc-b at the first, acc-c's
+      // live row is another denom, acc-d's update at the last block is a closed version
+      await c.query(`
+        CREATE TABLE ${S}.balances (account_id text, denom text, last_updated_block_id numeric, _block_range int8range);
+        INSERT INTO ${S}.balances VALUES ('acc-a', 'upokt', 999999999, int8range(999999999, NULL)),
+          ('acc-a', 'upokt', 1, int8range(1, 999999999)), ('acc-b', 'upokt', 1, int8range(1, NULL)),
+          ('acc-c', 'mact', 999999999, int8range(999999999, NULL)), ('acc-d', 'upokt', 999999999, int8range(999999999, 999999999 + 1)),
+          ('acc-d', 'upokt', 1, int8range(1, 2));`);
+      const { rows } = await c.query(
+        `SELECT since_time AT TIME ZONE 'UTC' t, height::text, beyond_tip, accounts::text FROM ${S}.get_active_accounts($1::timestamptz[])`,
+        [["2026-06-01T00:00:00Z", "2025-01-01T00:00:00Z", "2026-09-01T12:00:00Z", "2026-09-02T00:00:00Z", "2026-06-01T00:00:00Z"]]
+      );
+      assert.deepEqual(
+        rows.map((r) => [new Date(String(r.t) + "Z").toISOString(), r.height, r.beyond_tip, r.accounts]),
+        [
+          ["2025-01-01T00:00:00.000Z", null, false, "2"],
+          ["2026-06-01T00:00:00.000Z", "1", false, "1"],
+          // at the last block's time: that block counts (the newest block before it is 1)
+          ["2026-09-01T12:00:00.000Z", "1", false, "1"],
+          ["2026-09-02T00:00:00.000Z", "999999999", true, null],
+        ]
+      );
+      for (const arg of ["ARRAY[]::timestamptz[]", "ARRAY[NULL]::timestamptz[]"]) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_active_accounts(${arg})`), /since_times must have between 1 and 20 times/);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_block_supplies gives the supply of each denomination at a block", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`
+        CREATE TABLE ${S}.block_supplies (block_id numeric, supply_id text, _block_range int8range);
+        CREATE TABLE ${S}.supplies (id text, denom text, amount numeric, _block_range int8range);
+        INSERT INTO ${S}.block_supplies VALUES (10, 'upokt@10', int8range(10, NULL)), (10, 'mact@1', int8range(10, NULL)),
+          (11, 'upokt@11', int8range(11, NULL)), (11, 'mact@1', int8range(11, NULL));
+        INSERT INTO ${S}.supplies VALUES ('upokt@10', 'upokt', 1000, int8range(10, NULL)), ('upokt@11', 'upokt', 1005, int8range(11, NULL)),
+          ('mact@1', 'mact', 7, int8range(1, NULL));`);
+      const at = async (h: string) =>
+        (await c.query(`SELECT denom || ' ' || amount k FROM ${S}.get_block_supplies(${h})`)).rows.map((r) => r.k);
+      assert.deepEqual(await at("11"), ["mact 7", "upokt 1005"]);
+      assert.deepEqual(await at("10"), ["mact 7", "upokt 1000"]);
+      assert.deepEqual(await at("12"), []);
+      // each denomination in its own unit: not the upokt note of the other state functions
+      const d = await c.query(`SELECT obj_description('${S}.get_block_supplies(bigint)'::regprocedure, 'pg_proc') d`);
+      assert.match(String(d.rows[0].d), /^@simpleCollections only\nSupply at a block/);
+      assert.doesNotMatch(String(d.rows[0].d), /Amounts in upokt/);
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_block_supplies(NULL)`), /height is required/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_staked_supplier_services lists the live configs of Staked suppliers and pages by keyset", async () => {
+    await c.query("BEGIN");
+    try {
+      // s1 Staked with two live configs and a closed one; s2 Unstaked (its live config must not show); s3 Staked
+      await c.query(`
+        CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_status text, stake_amount numeric, _block_range int8range);
+        INSERT INTO ${S}.suppliers VALUES ('s1', 'own-a', 'Staked', 300, int8range(5, NULL)), ('s1', 'own-x', 'Staked', 100, int8range(1, 5)),
+          ('s2', 'own-a', 'Unstaked', 0, int8range(1, NULL)), ('s3', 'own-b', 'Staked', 500, int8range(1, NULL));
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, domains jsonb, activated_at_id numeric,
+          _block_range int8range);
+        INSERT INTO ${S}.supplier_service_configs VALUES
+          ('s1', 'svc-x', '["a.net"]', 10, int8range(1, NULL)), ('s1', 'svc-y', '["a.net", "b.io"]', 12, int8range(1, NULL)),
+          ('s1', 'svc-z', '["c.org"]', 3, int8range(1, 4)), ('s2', 'svc-x', '["a.net"]', 2, int8range(1, NULL)),
+          ('s3', 'svc-x', 'null', 7, int8range(1, NULL));`);
+      const got = async (args: string) =>
+        (
+          await c.query(
+            `SELECT concat_ws(' ', supplier_id, service_id, owner_id, stake_upokt, array_to_string(domains, ','), activated_at_height) k
+             FROM ${S}.get_staked_supplier_services(${args})`
+          )
+        ).rows.map((r) => String(r.k));
+      const all = ["s1 svc-x own-a 300 a.net 10", "s1 svc-y own-a 300 a.net,b.io 12", "s3 svc-x own-b 500  7"];
+      assert.deepEqual(await got(""), all);
+      assert.deepEqual(await got("services => ARRAY['svc-x']"), [all[0], all[2]]);
+      const paged: string[] = [];
+      let page = await got("row_limit => 1");
+      paged.push(...page);
+      while (page.length === 1) {
+        const [sup, svc] = page[0].split(" ");
+        page = await got(`row_limit => 1, after_supplier_id => '${sup}', after_service_id => '${svc}'`);
+        paged.push(...page);
+      }
+      assert.deepEqual(paged, all);
+      for (const [args, err] of [
+        ["row_limit => 0", /row_limit must be between 1 and 1000/],
+        ["after_supplier_id => 's1'", /pass both after_supplier_id and after_service_id/],
+        ["services => ARRAY[]::text[]", /services must have between 1 and 200 elements/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_supplier_services(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+      // per (domain, service): each config once per distinct domain (s3's svc-y repeats a.net), none for no domain, the
+      // same counts as get_staked_supplier_services regrouped, and the totals on every row
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s3', 'svc-y', '["a.net", "a.net"]', 8, int8range(1, NULL))`);
+      const groups = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', domain, service_id, configs, total_configs, total_suppliers) k
+                         FROM ${S}.get_staked_domain_services(${args})`)
+        ).rows.map((r) => String(r.k));
+      const want = ["a.net svc-x 1 4 2", "a.net svc-y 2 4 2", "b.io svc-y 1 4 2"];
+      assert.deepEqual(await groups(""), want);
+      const regrouped = await c.query(`SELECT concat_ws(' ', d, service_id, count(*)) k FROM (
+          SELECT DISTINCT r.supplier_id, r.service_id, d FROM ${S}.get_staked_supplier_services() r, unnest(r.domains) d) x
+        GROUP BY d, service_id ORDER BY d, service_id`);
+      assert.deepEqual(regrouped.rows.map((r) => `${r.k} 4 2`), want);
+      const pagedGroups: string[] = [];
+      let gpage = await groups("row_limit => 1");
+      pagedGroups.push(...gpage);
+      while (gpage.length === 1) {
+        const [dom, svc] = gpage[0].split(" ");
+        gpage = await groups(`row_limit => 1, after_domain => '${dom}', after_service_id => '${svc}'`);
+        pagedGroups.push(...gpage);
+      }
+      // the totals on the first page only
+      assert.deepEqual(pagedGroups, [want[0], ...want.slice(1).map((w) => w.split(" ").slice(0, 3).join(" "))]);
+      for (const [args, err] of [
+        ["row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["after_domain => 'a.net'", /pass both after_domain and after_service_id/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_domain_services(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+      // the Staked suppliers one by one, s5 with no live config (empty arrays), s2 Unstaked left out
+      await c.query(`
+        ALTER TABLE ${S}.suppliers ADD COLUMN operator_id text;
+        UPDATE ${S}.suppliers SET operator_id = 'op-' || id;
+        INSERT INTO ${S}.suppliers VALUES ('s5', 'own-c', 'Staked', 70, int8range(1, NULL), 'op-s5');`);
+      const staked = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', supplier_id, owner_id, operator_id, stake_upokt, array_to_string(service_ids, ','),
+                           array_to_string(domains, ','), cardinality(service_ids), cardinality(domains)) k
+                         FROM ${S}.get_staked_suppliers(${args})`)
+        ).rows.map((r) => String(r.k));
+      const sup = ["s1 own-a op-s1 300 svc-x,svc-y a.net,b.io 2 2", "s3 own-b op-s3 500 svc-x,svc-y a.net 2 1", "s5 own-c op-s5 70   0 0"];
+      assert.deepEqual(await staked(""), sup);
+      assert.deepEqual(await staked("row_limit => 2, after_supplier_id => 's1'"), sup.slice(1));
+      // other statuses: s2 (Unstaked) keeps a live config; s6 has none, so the configs closed at its last closing (9)
+      await c.query(`INSERT INTO ${S}.suppliers VALUES ('s6', 'own-d', 'Unstaked', 0, int8range(1, NULL), 'op-s6');
+        INSERT INTO ${S}.supplier_service_configs VALUES ('s6', 'svc-a', '["x.io"]', 2, int8range(2, 9)),
+          ('s6', 'svc-b', '["y.io"]', 2, int8range(2, 5));`);
+      assert.deepEqual(await staked("stake_statuses => ARRAY['Unstaked']"), ["s2 own-a op-s2 0 svc-x a.net 1 1", "s6 own-d op-s6 0 svc-a x.io 1 1"]);
+      assert.deepEqual(await staked("stake_statuses => ARRAY['Staked', 'Unstaked'], row_limit => 2"), [sup[0], "s2 own-a op-s2 0 svc-x a.net 1 1"]);
+      // a Staked supplier with no live config gets empty arrays, not its closed configs, whatever else is asked for
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s5', 'svc-q', '["q.io"]', 1, int8range(1, 3))`);
+      assert.deepEqual(await staked("stake_statuses => ARRAY['Staked', 'Unstaked'], after_supplier_id => 's3'"),
+        ["s5 own-c op-s5 70   0 0", "s6 own-d op-s6 0 svc-a x.io 1 1"]);
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(stake_statuses => ARRAY['Bonded'])`), /stake_statuses takes Staked/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
+      await c.query("SAVEPOINT e");
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(row_limit => 0)`), /row_limit must be between 1 and 1000/);
+      await c.query("ROLLBACK TO SAVEPOINT e");
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(
+      `SELECT obj_description(p.oid, 'pg_proc') d FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = 'get_staked_supplier_services'`,
+      [S]
+    );
+    assert.match(String(d.rows[0].d), /^@simpleCollections only\nLive service configs[\s\S]*pass the last row's keys as after_\*/);
+  });
+
+  it("get_gateway_fleet and get_gateway_delegations read gateways and their delegations now and at a height", async () => {
+    await c.query("BEGIN");
+    try {
+      // g1 staked at 10 (stake 100, then 150 from 50); g2 staked at 30, Unstaked at 60; g3 staked at 70 with no delegation.
+      // a1 delegates to g1 from 10, a2 from 20 to 40 then to g2 from 40; a3 to g1 from 45. a1 restaked at 50 (20 -> 25)
+      // and changed services at 50 (svc-x, svc-y -> svc-x).
+      await c.query(`
+        CREATE TABLE ${S}.gateways (id text, stake_amount numeric, stake_status text, _block_range int8range);
+        INSERT INTO ${S}.gateways VALUES ('g1', 100, 'Staked', int8range(10, 50)), ('g1', 150, 'Staked', int8range(50, NULL)),
+          ('g2', 70, 'Staked', int8range(30, 60)), ('g2', 70, 'Unstaked', int8range(60, NULL)),
+          ('g3', 90, 'Staked', int8range(70, NULL));
+        INSERT INTO ${S}.application_gateways (gateway_id, application_id, _block_range) VALUES ('g1', 'a1', int8range(10, NULL)),
+          ('g1', 'a2', int8range(20, 40)), ('g2', 'a2', int8range(40, NULL)), ('g1', 'a3', int8range(45, NULL));
+        CREATE TABLE ${S}.applications (id text, account_id text, stake_amount numeric, stake_status text, _block_range int8range);
+        INSERT INTO ${S}.applications VALUES ('a1', 'a1', 20, 'Staked', int8range(5, 50)), ('a1', 'a1', 25, 'Staked', int8range(50, NULL)),
+          ('a2', 'a2', 30, 'Staked', int8range(15, 55)), ('a2', 'a2', 30, 'Unstaking', int8range(55, NULL)),
+          ('a3', 'a3', 40, 'Staked', int8range(45, NULL));
+        CREATE TABLE ${S}.application_services (application_id text, service_id text, _block_range int8range);
+        INSERT INTO ${S}.application_services VALUES ('a1', 'svc-y', int8range(5, 50)), ('a1', 'svc-x', int8range(5, NULL)),
+          ('a2', 'svc-z', int8range(15, NULL)), ('a3', 'svc-x', int8range(45, NULL));
+        CREATE TABLE ${S}.msg_delegate_to_gateways (id text, application_id text, gateway_id text, block_id numeric);
+        CREATE TABLE ${S}.msg_undelegate_from_gateways (LIKE ${S}.msg_delegate_to_gateways);
+        INSERT INTO ${S}.msg_delegate_to_gateways VALUES ('d1', 'a1', 'g1', 10), ('d2', 'a2', 'g1', 20), ('d3', 'a2', 'g2', 40),
+          ('d4', 'a3', 'g1', 45), ('d5', 'a3', 'g1', 46);
+        INSERT INTO ${S}.msg_undelegate_from_gateways VALUES ('u1', 'a2', 'g1', 40);
+        CREATE TABLE ${S}._metadata (key varchar, value jsonb);
+        INSERT INTO ${S}._metadata VALUES ('lastProcessedHeight', '100'), ('targetHeight', '101');`);
+      const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
+      const fleet = (args: string) =>
+        rows(`SELECT gateway_id, stake_status, stake_upokt::text, delegated_applications::text, delegations_ever::text,
+                     undelegations_ever::text, gateway_count::text FROM ${S}.get_gateway_fleet(${args})`);
+      for (const [args, want] of [
+        ["", ["g1 Staked 150 2 4 1 1", "g3 Staked 90 0 0 0 1", "g2 Unstaked 70 1 1 0 1"]],
+        ["gateways => ARRAY['g2', 'none']", ["g2 Unstaked 70 1 1 0 1"]],
+        ["stake_statuses => ARRAY['Staked'], by_gateway => false", ["all all 240 2 4 1 2"]],
+        ["gateways => ARRAY['none'], by_gateway => false", ["all all 0 0 0 0 0"]],
+      ] as const)
+        assert.deepEqual([args, await fleet(args)], [args, want]);
+      const delegations = (args: string) =>
+        rows(`SELECT gateway_id, gateway_stake_upokt::text, gateway_stake_status, application_id, stake_upokt::text, stake_status,
+                     array_to_string(service_ids, ',') FROM ${S}.get_gateway_delegations(${args})`);
+      const now = ["g1 150 Staked a1 25 Staked svc-x", "g1 150 Staked a3 40 Staked svc-x", "g2 70 Unstaked a2 30 Unstaking svc-z",
+        "g3 90 Staked    "];
+      for (const [args, want] of [
+        ["ARRAY['g3', 'g2', 'g1']", now],
+        ["ARRAY['g1', 'g2', 'g3'], at_height => 30", ["g1 100 Staked a1 20 Staked svc-x,svc-y", "g1 100 Staked a2 30 Staked svc-z",
+          "g2 70 Staked    "]],
+        ["ARRAY['g2'], at_height => 45", ["g2 70 Staked a2 30 Staked svc-z"]],
+        ["ARRAY['g3'], at_height => 30", []],
+      ] as const)
+        assert.deepEqual([args, await delegations(args)], [args, want]);
+      // pages of one row: the keys of the last row, application_id NULL for a gateway with no delegation
+      const paged: string[] = [];
+      let page = await delegations("ARRAY['g1', 'g2', 'g3'], row_limit => 1");
+      paged.push(...page);
+      while (page.length === 1) {
+        const [g, , , app] = page[0].split(" ");
+        page = await delegations(`ARRAY['g1', 'g2', 'g3'], row_limit => 1, after_gateway_id => '${g}', after_application_id => ${app ? `'${app}'` : "NULL"}`);
+        paged.push(...page);
+      }
+      assert.deepEqual(paged, now);
+      assert.deepEqual(await delegations("ARRAY['g1', 'g2', 'g3'], after_gateway_id => 'g2'"), [now[3]]);
+      // the height read: lastProcessedHeight without at_height, else at_height; NULL at_height reads that height
+      const heights = async (args: string) =>
+        (await c.query(`SELECT DISTINCT height::text h FROM ${S}.get_gateway_delegations(${args})`)).rows.map((r) => r.h);
+      assert.deepEqual(await heights("ARRAY['g1', 'g2']"), ["100"]);
+      assert.deepEqual(await heights("ARRAY['g1', 'g2'], at_height => 30"), ["30"]);
+      await c.query(`UPDATE ${S}._metadata SET value = '45' WHERE key = 'lastProcessedHeight'`);
+      assert.deepEqual(await delegations("ARRAY['g2']"), ["g2 70 Staked a2 30 Staked svc-z"]);
+      for (const [fn, args, err] of [
+        ["get_gateway_delegations", "NULL", /gateways must have between 1 and 200 elements/],
+        ["get_gateway_delegations", "ARRAY['g1'], row_limit => 1001", /row_limit must be between 1 and 1000/],
+        ["get_gateway_delegations", "ARRAY['g1'], after_application_id => 'a1'", /after_application_id goes with after_gateway_id/],
+        ["get_gateway_delegations", "ARRAY['g1'], at_height => 0", /at_height must be a block height/],
+        ["get_gateway_fleet", "stake_statuses => ARRAY['Bonded']", /stake_statuses takes Staked, Unstaking and Unstaked/],
+        ["get_gateway_fleet", "gateways => ARRAY[]::text[]", /gateways must have between 1 and 200 elements/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(${args})`), err, `${fn}(${args})`);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    const d = await c.query(
+      `SELECT p.proname, obj_description(p.oid, 'pg_proc') d FROM pg_proc p
+       WHERE p.pronamespace = $1::regnamespace AND p.proname IN ('get_gateway_fleet', 'get_gateway_delegations') ORDER BY 1`,
+      [S]
+    );
+    assert.match(String(d.rows[0].d), /^@simpleCollections only\nGateways and the applications[\s\S]*pass the last row's keys as after_\*/);
+    assert.match(String(d.rows[1].d), /^@simpleCollections only\nGateways now[\s\S]*paged by GraphQL \(first \/ offset\)/);
+  });
+
   it("get_supplier_fleet, get_service_summary and get_application_fleet read the current versions, per actor or as one fleet row", async () => {
     await c.query("BEGIN");
     try {
@@ -1514,8 +1811,25 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["owners => ARRAY['nobody']", []],
         ["services => ARRAY['svc-y']", ["s1 own-a Staked 300 2 1"]],
         ["owners => ARRAY['own-b'], services => ARRAY['svc-x']", ["s3 own-b Staked 500 1 1"]],
+        // a ceiling on the stake, exclusive
+        ["max_stake_upokt => 300", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
+        // keyset pages by stake descending, then id
+        ["row_limit => 2", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1"]],
+        ["row_limit => 2, after_stake_upokt => 300, after_supplier_id => 's1'", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
+        ["row_limit => 1, after_stake_upokt => 500, after_supplier_id => 's3', stake_statuses => ARRAY['Staked']", ["s1 own-a Staked 300 2 1"]],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
+      // with services, the domains of each supplier's live configs for them
+      for (const [args, want] of [
+        ["services => ARRAY['svc-y']", ["s1 a.net,b.io"]],
+        ["services => ARRAY['svc-x']", ["s3 b.io", "s1 a.net"]],
+        ["owners => ARRAY['own-b']", ["s3 ", "s4 "]],
+      ] as const)
+        assert.deepEqual(
+          [args, (await c.query(`SELECT concat_ws(' ', supplier_id, coalesce(array_to_string(service_domains, ','), '')) k
+                                 FROM ${S}.get_supplier_fleet(${args})`)).rows.map((r) => r.k)],
+          [args, want]
+        );
       // domains ranked by what was claimed on them, with the Staked suppliers on each now and their stake
       await c.query(`
         CREATE TABLE ${S}.domain_service_daily_rewards (domain text, service_id text, day date, relays bigint,
@@ -1558,15 +1872,28 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         INSERT INTO ${S}.application_services VALUES ('a1', 'svc-x', int8range(1, NULL)), ('a1', 'svc-z', int8range(1, NULL)),
           ('a2', 'svc-x', int8range(1, NULL)), ('a3', 'svc-x', int8range(1, 4));
         INSERT INTO ${S}.application_gateways (application_id, gateway_id, _block_range) VALUES ('a1', 'g1', int8range(1, NULL)), ('a3', 'g1', int8range(1, NULL)),
-          ('a3', 'g2', int8range(1, NULL)), ('a2', 'g2', int8range(1, 3));`);
+          ('a3', 'g2', int8range(1, NULL)), ('a2', 'g2', int8range(1, 3));
+        -- the newest update of a service is its difficulty now; svc-y never had one
+        CREATE TABLE ${S}.event_relay_mining_difficulty_updateds (service_id text, new_target_hash_hex_encoded text,
+          new_num_relays_ema numeric, block_id numeric);
+        INSERT INTO ${S}.event_relay_mining_difficulty_updateds VALUES ('svc-x', 'ff', 10, 10), ('svc-x', 'fd', 30, 20),
+          ('svc-x', 'fe', 20, 15), ('svc-z', 'aa', 7, 5);
+        CREATE TABLE ${S}.services (id text, owner_id text, _block_range int8range);
+        INSERT INTO ${S}.services VALUES ('svc-x', 'own-s', int8range(1, NULL)), ('svc-z', 'own-s', int8range(1, NULL)),
+          ('svc-y', 'own-s', int8range(1, 5)), ('svc-y', 'own-t', int8range(5, NULL));`);
       const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
       for (const [args, want] of [
-        ["", ["svc-x 2 2 1 2", "svc-y 1 1 0 0", "svc-z 0 0 1 1"]],
-        ["ARRAY['svc-y', 'svc-z', 'none']", ["svc-y 1 1 0 0", "svc-z 0 0 1 1"]],
+        ["", ["svc-x 2 2 1 2 30 fd 20", "svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        ["ARRAY['svc-y', 'svc-z', 'none']", ["svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        // the services an address owns now (svc-y was own-s's before)
+        ["owners => ARRAY['own-s']", ["svc-x 2 2 1 2 30 fd 20", "svc-z 0 0 1 1 7 aa 5"]],
+        ["ARRAY['svc-z', 'svc-y'], owners => ARRAY['own-s']", ["svc-z 0 0 1 1 7 aa 5"]],
+        ["owners => ARRAY['nobody']", []],
       ] as const)
         assert.deepEqual(
           [args, await rows(`SELECT service_id, staked_suppliers::text, suppliers::text, staked_applications::text,
-                               applications::text FROM ${S}.get_service_summary(${args})`)],
+                               applications::text, num_relays_ema::text, target_hash_hex, difficulty_updated_height::text
+                             FROM ${S}.get_service_summary(${args})`)],
           [args, want]
         );
       for (const [args, want] of [
@@ -1597,6 +1924,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         assert.deepEqual([d, stake, count], [d, old.stake, old.n]);
       }
       for (const [args, err] of [
+        ["row_limit => 0", /row_limit must be between 1 and 1000, or NULL/],
+        ["row_limit => 10, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
+        ["after_stake_upokt => 300, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
         ["owners => ARRAY['own-a'], domains => ARRAY['a.net']", /pass one of suppliers, owners/],
         ["operators => ARRAY['op-1'], operator_scope => 'past'", /operator_scope is now or ever \(has past\)/],
         ["operator_scope => 'ever'", /operator_scope ever applies to operators/],
@@ -1896,7 +2226,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         INSERT INTO ${S}.msg_claim_morse_application_services VALUES ('as1', 'app1', 'svc-b'), ('as2', 'app1', 'svc-a');
         INSERT INTO ${S}.msg_claim_morse_suppliers VALUES ('sup1', 'sign3', 'own3', 'op3', 'm3', 'NODE3', 'CLAIM_SIGNER_TYPE_OPERATOR', 900, 9, 300, 'tx3');
         INSERT INTO ${S}.msg_claim_morse_supplier_services VALUES ('ss1', 'sup1', 'svc-a'), ('ss2', 'sup1', 'svc-a');
-        INSERT INTO ${S}.msg_recover_morse_accounts VALUES ('rec1', 'dest1', 'm4', 40, true, 300, 'tx4');`);
+        INSERT INTO ${S}.msg_recover_morse_accounts VALUES ('rec1', 'dest1', 'm4', 40, true, 300, 'tx4');
+        -- the supplier claim's destination as the chain records it: its claimed account (here the operator, not the owner)
+        CREATE TABLE ${S}.morse_claimable_accounts (id text, claimed_msg_id text, shannon_dest_address text, _block_range int8range);
+        INSERT INTO ${S}.morse_claimable_accounts VALUES ('m3', NULL, NULL, int8range(1, 300)), ('m3', 'sup1', 'op3', int8range(300, NULL));`);
       const got = async (args: string) =>
         (
           await c.query(
@@ -1908,7 +2241,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           )
         ).rows.map((r) => String(r.k));
       const all = [
-        "300 supplier sup1 m3 own3 op3 9 900 svc-a CLAIM_SIGNER_TYPE_OPERATOR -",
+        "300 supplier sup1 m3 op3 op3 9 900 svc-a CLAIM_SIGNER_TYPE_OPERATOR -",
         "300 recover rec1 m4 dest1 - 40 - - - true",
         "200 application app1 m2 dest2 - 7 500 svc-a,svc-b - -",
         "100 account acc1 m1 dest1 - 100 - - - -",
@@ -2071,6 +2404,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const all = ["250 t3-0 s2 x4 3", "200 t2-1 s1 x3 2", "200 t2-0 s1 x2 1", "100 t1-0 s1 x1 5"];
       assert.deepEqual(await got("ARRAY['s1', 's2', 's1'], NULL, NULL"), all);
       assert.deepEqual(await got("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), all.slice(1, 3));
+      // the sessions ending at or after a height: 190 keeps x2, x3 and x4, and pages the same way
+      assert.deepEqual(await got("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), all.slice(0, 3));
+      assert.deepEqual(
+        await got("ARRAY['s1', 's2'], NULL, NULL, row_limit => 1, before_height => 200, before_id => 't2-1', from_session_end_height => 190"),
+        [all[2]]
+      );
       const paged: string[] = [];
       let page = await got("ARRAY['s1', 's2'], NULL, NULL, row_limit => 1");
       paged.push(...page);
@@ -2080,8 +2419,23 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         paged.push(...page);
       }
       assert.deepEqual(paged, all);
+      // the count of the same claims, per requested supplier, 0 for one that made none
+      const count = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', supplier_id, claims, first_height, last_height) k FROM ${S}.get_created_claims_count(${args})`)
+        ).rows.map((r) => String(r.k));
+      assert.deepEqual(await count("ARRAY['s2', 's1', 'nobody', 's1'], NULL, NULL"), ["nobody 0", "s1 3 100 200", "s2 1 250 250"]);
+      assert.deepEqual(await count("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), ["s1 2 200 200"]);
+      // the claims of sessions ending at or after 190, as the list gives them; a range past the last block counts none
+      assert.deepEqual(await count("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), ["s1 2 200 200", "s2 1 250 250"]);
+      assert.deepEqual(await count("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), ["s1 0"]);
+      assert.deepEqual(await got("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), []);
       const many = Array.from({ length: 21 }, (_, i) => `'s${i}'`).join(", ");
-      await assert.rejects(c.query(`SELECT * FROM ${S}.get_created_claims(ARRAY[${many}], NULL, NULL)`), /between 1 and 20 elements/);
+      for (const fn of ["get_created_claims", "get_created_claims_count"]) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(ARRAY[${many}], NULL, NULL)`), /between 1 and 20 elements/, fn);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
     } finally {
       await c.query("ROLLBACK");
     }
@@ -2273,6 +2627,27 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         { kind: "slashed", reason: "PROOF_INVALID", claimed: null, slashed: "30", relays: null },
         { kind: "slashed", reason: "unknown", claimed: null, slashed: "5", relays: null },
       ]);
+      // operator_scope ever: sup-x shared revenue with op-old in a closed config version only, and is no supplier now
+      await c.query(`
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range);
+        INSERT INTO ${S}.supplier_service_configs VALUES ('sup-x', 'svc-x', '[{"address": "op-new"}, {"address": "op-old"}]', int8range(1, 9)),
+          ('sup-x', 'svc-x', '[{"address": "op-new"}]', int8range(9, NULL)), ('sup-z', 'svc-x', '[{"address": "op-z"}]', int8range(1, NULL));
+        CREATE TABLE ${S}.suppliers (id text, stake_status text, _block_range int8range);`);
+      const scoped = async (args: string) =>
+        (
+          await c.query(`SELECT kind, reason, slashed_upokt::text slashed FROM ${S}.get_supplier_penalties(NULL, NULL, NULL,
+                           operators => ARRAY['op-old'], ${args}) ORDER BY kind, reason`)
+        ).rows;
+      assert.deepEqual(await scoped("operator_scope => 'ever'"), rows.map(({ kind, reason, slashed }) => ({ kind, reason, slashed })));
+      assert.deepEqual(await scoped("operator_scope => 'now'"), []);
+      for (const [args, err] of [
+        ["operator_scope => 'past'", /operator_scope is now or ever \(has past\)/],
+        ["operator_scope => 'ever', bucket => 'minute'", /invalid bucket: minute/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(scoped(args), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
     } finally {
       await c.query("ROLLBACK");
     }
@@ -2617,6 +2992,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("the smart tags find keyset state functions by an argument named after_ with the underscore escaped", () => {
+    // in the template literal a single backslash is lost: LIKE 'after_%' would match any argument starting "after"
+    const sql = createSettlementSmartTagsFn(S);
+    assert.ok(sql.includes("a LIKE 'after\\_%'"), "LIKE 'after\\_%' in the generated SQL");
+    assert.ok(!sql.includes("a LIKE 'after_%'"));
+  });
+
   it("GraphQL: every catalog function that returns rows is a plain list, and the helpers are hidden", async () => {
     // subql-query 2.22.2 adds a _block_range filter to every function connection, which the catalog rows lack
     const { rows } = await c.query(
@@ -2662,17 +3044,74 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         [S]
       )
     ).rows.map((r) => String(r.proname));
-    // ...but the functions over the current state, and get_last_settlement (one row, not set-returning, so it has no
+    // ...but the functions over the current state, and get_last_settlement and get_height_at (one row, not set-returning, so they have no
     // list or _json twin), published on purpose
     assert.deepEqual(
       shown.filter((n) => !catalog.includes(n.replace(/_json$/, "")) && !n.startsWith("legacy_")),
-      ["get_last_settlement", ...STATE_FUNCTIONS].sort()
+      ["get_height_at", "get_last_settlement", ...STATE_FUNCTIONS].sort()
     );
     const vrd = await c.query(
       `SELECT count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = '_vrd_range_start'`,
       [S]
     );
     assert.equal(vrd.rows[0].n, 0);
+  });
+
+  it("get_supplier_earnings keeps the claims of services, with and without by_service, from every source", async () => {
+    // the supplier and service with the most claims, among others of the supplier
+    const top = (
+      await c.query(`SELECT supplier_id, service_id FROM ${S}.claim_settlements
+                     WHERE supplier_id IN (SELECT supplier_id FROM ${S}.claim_settlements GROUP BY 1 HAVING count(DISTINCT service_id) > 1)
+                     GROUP BY 1, 2 ORDER BY count(*) DESC, 1, 2 LIMIT 1`)
+    ).rows[0];
+    assert.ok(top, "the fixtures hold a supplier with more than one service");
+    const cols = `bucket_start, claimed_upokt::text, settled_upokt::text, relays::text, compute_units::text, settled_claims::text,
+                  settled_claims_with_proof::text, first_settled_height::text, last_settled_height::text`;
+    for (const [from, to, bucket] of [
+      [null, null, "NULL"], // whole months: monthly_claims_by_supplier_service
+      [null, null, "'month'"],
+      ["2026-09-01T00:00:00Z", "2026-09-04T00:00:00Z", "'day'"], // rollup days: daily_claims_by_supplier_application_service
+      ["2026-09-01T11:00:00Z", "2026-09-01T13:00:00Z", "NULL"], // inside one day: claim_settlements
+    ]) {
+      const label = `${from} ${to} ${bucket}`;
+      const by = await c.query(
+        `SELECT ${cols} FROM ${S}.get_supplier_earnings(ARRAY[$1], $2, $3, ${bucket}, by_service => true) WHERE service_id = $4 ORDER BY 1`,
+        [top.supplier_id, from, to, top.service_id]
+      );
+      assert.ok(by.rows.length > 0, label);
+      const kept = await c.query(
+        `SELECT ${cols} FROM ${S}.get_supplier_earnings(ARRAY[$1], $2, $3, ${bucket}, services => ARRAY[$4]) ORDER BY 1`,
+        [top.supplier_id, from, to, top.service_id]
+      );
+      assert.deepEqual(kept.rows, by.rows, label);
+      const keptBy = await c.query(
+        `SELECT DISTINCT service_id FROM ${S}.get_supplier_earnings(ARRAY[$1], $2, $3, ${bucket}, by_service => true, services => ARRAY[$4])`,
+        [top.supplier_id, from, to, top.service_id]
+      );
+      assert.deepEqual(keptBy.rows, [{ service_id: top.service_id }], label);
+    }
+    await assert.rejects(
+      c.query(`SELECT * FROM ${S}.get_supplier_earnings(NULL, NULL, NULL, services => ARRAY[]::text[])`),
+      /services must have between 1 and 200 elements/
+    );
+    // by_application rows carry each application's gateways now; NULL without by_application
+    await c.query("BEGIN");
+    try {
+      const app = (await c.query(`SELECT application_id FROM ${S}.claim_settlements WHERE supplier_id = $1 LIMIT 1`, [top.supplier_id]))
+        .rows[0].application_id;
+      await c.query(`INSERT INTO ${S}.application_gateways VALUES ('gw-b', $1, int8range(1, NULL)), ('gw-a', $1, int8range(1, NULL)),
+                       ('gw-old', $1, int8range(1, 2))`, [app]);
+      const gws = await c.query(
+        `SELECT application_id, array_to_string(gateway_ids, ',') g FROM ${S}.get_supplier_earnings(ARRAY[$1], NULL, NULL, by_application => true)`,
+        [top.supplier_id]
+      );
+      assert.ok(gws.rows.length > 1);
+      for (const r of gws.rows) assert.equal(r.g, r.application_id === app ? "gw-a,gw-b" : "", String(r.application_id));
+      const none = await c.query(`SELECT DISTINCT gateway_ids FROM ${S}.get_supplier_earnings(ARRAY[$1], NULL, NULL)`, [top.supplier_id]);
+      assert.deepEqual(none.rows, [{ gateway_ids: null }]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
   });
 
   it("get_supplier_earnings counts settled claims with and without a proof, from the rollup and from the base", async () => {

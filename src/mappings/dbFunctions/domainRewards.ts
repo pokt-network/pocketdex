@@ -197,6 +197,13 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_service
       ON ${dbSchema}.supplier_service_configs (service_id, supplier_id)
       WHERE upper_inf(_block_range)`,
+    // get_supplier_fleet's per-supplier service count: the live configs of each supplier by supplier_id first. With only
+    // idx_ssc_live_service (service_id first), the planner inside the function scanned that whole index once per
+    // supplier: an owner of 230 suppliers took 1.4 s and 340k buffer reads (mainnet replica, 2026-10-14) for what an
+    // index led by supplier_id answers in ~25 ms.
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_supplier_service
+      ON ${dbSchema}.supplier_service_configs (supplier_id, service_id)
+      WHERE upper_inf(_block_range)`,
     // Indexes for the domain_service_daily_rewards summary table.
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dsdr_domain_day
       ON ${dbSchema}.domain_service_daily_rewards (domain, day)`,
@@ -248,5 +255,17 @@ export function getPerformanceIndexSqls(dbSchema: string): string[] {
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ssc_live_rev_share
       ON ${dbSchema}.supplier_service_configs USING GIN (rev_share jsonb_path_ops)
       WHERE upper_inf(_block_range)`,
+    // The newest relay mining difficulty update of a service (get_service_summary; get_relay_mining_difficulty's newest
+    // first per service): the GiST on (service_id, _block_range) finds a service's updates but cannot order them, so the
+    // summary of every service read all 1.06M and sorted them per service (2.2 s, mainnet replica 2026-10-14).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rmd_service_block
+      ON ${dbSchema}.event_relay_mining_difficulty_updateds (service_id, block_id)`,
+    // Morse claimable accounts by their Shannon destination and by their Morse address (/migration search,
+    // pnf-explorer): only GiST indexes on other columns, so each lookup scanned the table (57,764 rows, 53 MB on
+    // mainnet, 2026-10-14).
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_morse_claimable_accounts_shannon_dest
+      ON ${dbSchema}.morse_claimable_accounts (shannon_dest_address)`,
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_morse_claimable_accounts_morse_output
+      ON ${dbSchema}.morse_claimable_accounts (morse_output_address)`,
   ];
 }

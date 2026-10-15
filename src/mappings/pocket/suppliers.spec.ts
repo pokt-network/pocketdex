@@ -8,7 +8,7 @@
 // shapes needs this fake changed too:
 //   destroy  lower(_block_range) = height, optionally AND id IN (...)  -> drop the rows created at height
 //   update   id IN (...) AND __block_range @> height                  -> close those open rows at height
-//            (any other update, e.g. MorseClaimableAccount, is ignored)
+//            any other update: a MorseClaimableAccount one records its shannon_dest_address, the rest are ignored
 //   bulkCreate                                                        -> insert at [height, null)
 //   getByFields [field, "in", values]                                 -> the rows open at height
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await, @typescript-eslint/no-var-requires */
@@ -20,6 +20,8 @@ import type { CosmosEvent, CosmosMessage } from "@subql/types-cosmos";
 type Row = Record<string, unknown> & { lo: number | null; hi: number | null };
 
 const tables: Record<string, Array<Row>> = {};
+// Morse address -> the shannon_dest_address a claim wrote for it
+const morseDestinations: Record<string, unknown> = {};
 let height = 0;
 
 const openAt = (row: Row, block: number) => row.lo !== null && row.lo <= block && (row.hi === null || block < row.hi);
@@ -44,8 +46,11 @@ const model = (name: string) => {
         (row) => row.lo !== height || (ids !== null && !ids.includes(row.id as string))
       );
     },
-    update: async (_: unknown, { where }: { where: IdIn & { __block_range?: unknown } }) => {
-      if (!where.__block_range) return;
+    update: async (values: Record<string, unknown>, { where }: { where: IdIn & { __block_range?: unknown } }) => {
+      if (!where.__block_range) {
+        if (name === "MorseClaimableAccount") morseDestinations[where.id as unknown as string] = values.shannon_dest_address;
+        return;
+      }
       const ids = where.id[Symbol.for("in")];
       for (const row of tables[name]) {
         if (!ids.includes(row.id as string) || !openAt(row, height)) continue;
@@ -88,10 +93,11 @@ globals.store = {
 };
 
 const { indexSupplier } = require("./suppliers") as typeof import("./suppliers");
+const { Ed25519, pubKeyToAddress } = require("../utils/pub_key") as typeof import("../utils/pub_key");
 
 const S1 = "pokt139eww6ul8dxcfvgp9z5xtnnhc2n30vnka6pm3p";
 const S2 = "pokt1xgjlnqqmrmc7v2hp0sc6xx46lr7z4y6j406ue9";
-const block = (h: number) => ({ block: { header: { height: h } } });
+const block = (h: number, chainId = "pocket") => ({ block: { header: { height: h, chainId } } });
 
 const stake = (h: number, operator: string, services: Array<string>, txIdx = 0): CosmosMessage =>
   ({
@@ -292,6 +298,7 @@ const history = (operator: string, serviceId: string) =>
 
 const reset = () => {
   for (const name of Object.keys(tables)) delete tables[name];
+  for (const id of Object.keys(morseDestinations)) delete morseDestinations[id];
 };
 
 describe("indexSupplier service configs", () => {
@@ -699,5 +706,104 @@ describe("indexSupplier service configs", () => {
     assert.equal(supplierStatus(S1), "Staked");
     assert.equal(stakeOf(S1), BigInt("60000005000"));
     assert.deepEqual(open(S1), ["eth@-"]);
+  });
+});
+
+describe("Morse supplier claim destination", () => {
+  const OWNER = "pokt1ownerownerownerownerownerownerownerow";
+  const signerTypes = {
+    node: "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_NODE_ADDR",
+    owner: "MORSE_SUPPLIER_CLAIM_SIGNER_TYPE_NON_CUSTODIAL_SIGNED_BY_OWNER",
+  };
+  type Claim = { supplier: string; node: number; signer: keyof typeof signerTypes; stakedNothing?: boolean };
+
+  // one tx with these claims, all owned by OWNER, each event tagged with its message's msg_index; a claim that
+  // stakes nothing emits EventSupplierUnbondingEnd for its supplier in the tx (poktroll v0.1.20 short circuits)
+  const claimsTx = (h: number, claims: Array<Claim>, chainId = "pocket") => {
+    const events = claims.flatMap(({ signer, stakedNothing, supplier }, i) => [
+      {
+        type: "pocket.migration.EventMorseSupplierClaimed",
+        attributes: [
+          { key: "claim_signer_type", value: `"${signerTypes[signer]}"` },
+          { key: "claimed_balance", value: '"1000upokt"' },
+          { key: "claimed_supplier_stake", value: '"60000000000upokt"' },
+          { key: "msg_index", value: `${i}` },
+        ],
+      },
+      ...(stakedNothing
+        ? [
+            {
+              type: "pocket.supplier.EventSupplierUnbondingEnd",
+              attributes: [
+                { key: "operator_address", value: `"${supplier}"` },
+                { key: "reason", value: '"SUPPLIER_UNBONDING_REASON_MIGRATION"' },
+                { key: "msg_index", value: `${i}` },
+              ],
+            },
+          ]
+        : []),
+    ]);
+    const tx = { hash: `MORSE${h}`, idx: 0, tx: { code: 0, events } };
+    const msgs = claims.map(({ node, supplier }, i) => {
+      const claim = claimMorse(h, supplier, ["eth"]) as unknown as { msg: { decodedMsg: object } };
+      return {
+        ...claim,
+        idx: i,
+        block: block(h, chainId),
+        tx,
+        msg: {
+          ...claim.msg,
+          decodedMsg: { ...claim.msg.decodedMsg, shannonOwnerAddress: OWNER, morsePublicKey: new Uint8Array(32).fill(node) },
+        },
+      } as unknown as CosmosMessage;
+    });
+    const unbondingEnds = events
+      .filter(({ type }) => type === "pocket.supplier.EventSupplierUnbondingEnd")
+      .map((event, i) => ({ idx: 10 + i, kind: "tx", block: block(h, chainId), tx, event } as unknown as CosmosEvent));
+    return { msgs, unbondingEnds };
+  };
+
+  const destinationOf = (node: number) =>
+    morseDestinations[pubKeyToAddress(Ed25519, new Uint8Array(32).fill(node), undefined, true)];
+
+  const claimAt = async (h: number, claims: Array<Claim>) => {
+    reset();
+    const { msgs, unbondingEnds } = claimsTx(h, claims);
+    await index(h, msgs, unbondingEnds);
+  };
+
+  it("before v0.1.20 (mainnet 135,297) it is the supplier address, even for a claim the owner signed", async () => {
+    await claimAt(135296, [{ supplier: S1, node: 1, signer: "owner" }]);
+    assert.equal(destinationOf(1), S1);
+  });
+
+  it("since v0.1.20, a node-signed claim that stakes: the supplier address", async () => {
+    await claimAt(135297, [{ supplier: S1, node: 1, signer: "node" }]);
+    assert.equal(destinationOf(1), S1);
+  });
+
+  it("since v0.1.20, an owner-signed claim: the owner", async () => {
+    await claimAt(135297, [{ supplier: S1, node: 1, signer: "owner" }]);
+    assert.equal(destinationOf(1), OWNER);
+  });
+
+  it("since v0.1.20, a node-signed claim that stakes nothing: the owner", async () => {
+    await claimAt(553909, [{ supplier: S1, node: 1, signer: "node", stakedNothing: true }]);
+    assert.equal(destinationOf(1), OWNER);
+  });
+
+  it("claims in one tx each read their own unbonding end", async () => {
+    await claimAt(553909, [
+      { supplier: S1, node: 1, signer: "node", stakedNothing: true },
+      { supplier: S2, node: 2, signer: "node" },
+    ]);
+    assert.equal(destinationOf(1), OWNER);
+    assert.equal(destinationOf(2), S2);
+  });
+
+  it("a chain with no v0.1.20 height stops the block", async () => {
+    reset();
+    const { msgs } = claimsTx(150, [{ supplier: S1, node: 1, signer: "node" }], "unknown-chain");
+    await assert.rejects(index(150, msgs, []), /no v0\.1\.20 height for chain "unknown-chain"/);
   });
 });

@@ -1000,6 +1000,45 @@ function _claimKey(txHash: string | undefined, attributes: CosmosEvent["event"][
   return `${txHash}:${getTxEventMsgIndex(attributes) ?? operator}`;
 }
 
+// First height where the chain records a supplier claim's destination as the address the stake was minted to
+// (poktroll v0.1.20, msg_server_claim_morse_supplier.go: stakedTokensDestAddr); before it, the supplier address.
+// mainnet: AppliedPlan v0.1.20 = 135,297. beta has no applied v0.1.20 plan: it started on a later version.
+const MORSE_CLAIM_DEST_IS_STAKE_DEST_FROM: Record<string, number | undefined> = {
+  pocket: 135297,
+  "pocket-lego-testnet": 1,
+};
+
+// The Shannon address the chain stores as a supplier claim's MorseClaimableAccount.shannon_dest_address. Since
+// v0.1.20: the owner when the owner signed the claim or the claim staked nothing (its Morse unbonding had ended,
+// or the stake is below the minimum: the claim's own EventSupplierUnbondingEnd), else the supplier address
+// (shannon_operator_address). Before v0.1.20, always the supplier address. It reproduces the chain's state for
+// all 8,767 mainnet supplier claims (migration module at height 964,665).
+export function morseSupplierClaimDestination(
+  msg: CosmosMessage<MsgClaimMorseSupplier>,
+  claimSignerType: MorseSupplierClaimSignerType | undefined,
+  recordId: RecordGetId
+): string {
+  const { chainId, height } = msg.block.block.header;
+  const { shannonOperatorAddress: supplier, shannonOwnerAddress: owner } = msg.msg.decodedMsg;
+  const from = MORSE_CLAIM_DEST_IS_STAKE_DEST_FROM[chainId];
+
+  if (from === undefined) {
+    throw new Error(
+      `no v0.1.20 height for chain "${chainId}": add its AppliedPlan v0.1.20 height (1 if it started on a later ` +
+        "version) to MORSE_CLAIM_DEST_IS_STAKE_DEST_FROM in src/mappings/pocket/suppliers.ts"
+    );
+  }
+
+  if (Number(height) < from) return supplier;
+  if (claimSignerType === MorseSupplierClaimSignerType.MORSE_SUPPLIER_CLAIM_NON_CUSTODIAL_SIGNED_BY_OWNER) return owner;
+
+  const stakedNothing = msg.tx.tx.events.some(({ attributes, type }) =>
+    type === "pocket.supplier.EventSupplierUnbondingEnd" && isTxEventOfMessage(attributes, msg)
+    && _unbondingEndOperator(attributes, recordId) === supplier);
+
+  return stakedNothing ? owner : supplier;
+}
+
 // The end of an unbonding unstakes the supplier and closes its configs, except the one of such a claim. The
 // chain did emit that event, so it is recorded, even though it names a supplier that stays Staked; it is
 // computed on a copy of that operator's record, and no supplier is reported as changed.
@@ -1055,6 +1094,7 @@ function processSupplierEventsAndMessages(
   servicesToClose: Set<string>;
   stakeMsgs: Array<MsgStakeSupplierProps>;
   claimMsgs: Array<MsgClaimMorseSupplierProps>;
+  claimDestinations: Map<string, string>;
   unstakeMsgs: Array<MsgUnstakeSupplierProps>;
   serviceConfigActivatedEvents: Array<EventSupplierServiceConfigActivatedProps>;
   slashingEvents: Array<EventSupplierSlashedProps>;
@@ -1069,6 +1109,8 @@ function processSupplierEventsAndMessages(
   const claimsThatStakedNothing = new Set<string>();
   const stakeMsgs: Array<MsgStakeSupplierProps> = [];
   const claimMsgs: Array<MsgClaimMorseSupplierProps> = [];
+  // claim message id -> the destination the chain records for it
+  const claimDestinations = new Map<string, string>();
   const unstakeMsgs: Array<MsgUnstakeSupplierProps> = [];
   const serviceConfigActivatedEvents: Array<EventSupplierServiceConfigActivatedProps> = [];
   const slashingEvents: Array<EventSupplierSlashedProps> = [];
@@ -1141,12 +1183,15 @@ function processSupplierEventsAndMessages(
       const stakedNothingKey = _claimStakedNothingKey(eventOrMsg, record, recordId);
 
       if (stakedNothingKey !== undefined) {
-        claimMsgs.push(_handleClaimSupplier(eventOrMsg, record).msgClaimSupplier);
+        const { msgClaimSupplier } = _handleClaimSupplier(eventOrMsg, record);
+        claimMsgs.push(msgClaimSupplier);
+        claimDestinations.set(msgClaimSupplier.id, morseSupplierClaimDestination(eventOrMsg, msgClaimSupplier.claimSignerType, recordId));
         claimsThatStakedNothing.add(stakedNothingKey);
       } else if (eventOrMsg.msg.typeUrl === "/pocket.migration.MsgClaimMorseSupplier") {
         const { msgClaimSupplier, services, servicesToRemove, supplier } = _handleClaimSupplier(eventOrMsg, record);
 
         claimMsgs.push(msgClaimSupplier);
+        claimDestinations.set(msgClaimSupplier.id, morseSupplierClaimDestination(eventOrMsg, msgClaimSupplier.claimSignerType, recordId));
 
         if (!record[supplier.id]) {
           record[supplier.id] = { services: {} };
@@ -1182,6 +1227,7 @@ function processSupplierEventsAndMessages(
     servicesToClose,
     stakeMsgs,
     claimMsgs,
+    claimDestinations,
     unstakeMsgs,
     serviceConfigActivatedEvents,
     slashingEvents,
@@ -1244,6 +1290,7 @@ export async function indexSupplier(msgByType: MessageByType, eventByType: Event
   const record = await fetchSupplierData(suppliers, suppliersToFetchServices);
 
   const {
+    claimDestinations,
     claimMsgs,
     serviceConfigActivatedEvents,
     servicesToClose,
@@ -1265,6 +1312,7 @@ export async function indexSupplier(msgByType: MessageByType, eventByType: Event
     servicesToClose,
     stakeMsgs,
     claimMsgs,
+    claimDestinations,
     unstakeMsgs,
     serviceConfigActivatedEvents,
     slashingEvents,
@@ -1282,6 +1330,7 @@ async function performSupplierDatabaseOperations(data: {
   servicesToClose: Set<string>;
   stakeMsgs: Array<MsgStakeSupplierProps>;
   claimMsgs: Array<MsgClaimMorseSupplierProps>;
+  claimDestinations: Map<string, string>;
   unstakeMsgs: Array<MsgUnstakeSupplierProps>;
   serviceConfigActivatedEvents: Array<EventSupplierServiceConfigActivatedProps>;
   slashingEvents: Array<EventSupplierSlashedProps>;
@@ -1426,7 +1475,7 @@ async function performSupplierDatabaseOperations(data: {
     savePromises.push(updateMorseClaimableAccounts(
       data.claimMsgs.map((msg) => ({
         morseAddress: msg.morseSrcAddress,
-        destinationAddress: msg.shannonOwnerAddress,
+        destinationAddress: data.claimDestinations.get(msg.id)!,
         claimedMsgId: msg.messageId,
         transactionHash: msg.transactionId,
       }))

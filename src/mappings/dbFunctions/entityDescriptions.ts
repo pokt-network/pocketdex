@@ -266,7 +266,7 @@ export const ENTITY_DESCRIPTIONS: Record<string, { table: string; columns: Recor
       application_stake_amount: "Application stake claimable on Shannon, in application_stake_denom; 0 if none.",
       morse_output_address: "Morse output (owner) address of a node/supplier account; null when the account has none.",
       unstaking_time: "UTC time after which the Morse node/supplier unbonding period has elapsed; null when not set.",
-      shannon_dest_address: "Shannon address the claim went to (for a supplier claim, the owner address); null until claimed.",
+      shannon_dest_address: "Shannon address the claim went to, as the chain records it; for a supplier claim, the owner when the owner signed it or it staked nothing (its Morse unbonding had ended, or the stake was below the minimum), else the supplier address (before poktroll v0.1.20, always the supplier address); null until claimed.",
       claimed_at_id: "Height of the block where the account was claimed; null until claimed.",
       claimed: "True once the account has been claimed (as account, application or supplier) or recovered.",
       transaction_id: "Hash of the claim transaction; null until claimed.",
