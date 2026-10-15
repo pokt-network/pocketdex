@@ -274,9 +274,13 @@ export function createSettlementFunctionsFn(dbSchema: string): string {
   // nothing when it is not one
   const configDomains = (a: string) =>
     `jsonb_array_elements_text(CASE WHEN jsonb_typeof(${a}.domains) = 'array' THEN ${a}.domains ELSE '[]'::jsonb END)`;
-  // a config configDomains yields nothing for: domain '' in get_staked_domain_services and get_supplier_fleet
-  const noDomain = (a: string) =>
-    `coalesce(jsonb_array_length(CASE WHEN jsonb_typeof(${a}.domains) = 'array' THEN ${a}.domains END), 0) = 0`;
+  // the domain keys of a config (alias a) as rows x: each distinct domain, and '' for a null or '' element or when it
+  // has none, so every config has at least one; get_staked_domain_services' rows
+  const domainKeys = (a: string) =>
+    `(SELECT DISTINCT coalesce(e.x, '') x FROM (SELECT 1) z LEFT JOIN LATERAL ${configDomains(a)} e(x) ON true)`;
+  // a config on the row of domain '' of get_staked_domain_services, and so in get_supplier_fleet's domain '': the same
+  // keys (0.25-0.32 s over the live configs on mainnet, 2026-10-15, against 0.16 s for a length test that missed [null])
+  const noDomain = (a: string) => `'' IN (SELECT k.x FROM ${domainKeys(a)} k)`;
   // get_claims' current_owner_id: the supplier's owner now, from its live version (LIMIT 1: a scalar subquery must not
   // fail)
   const currentOwner = (alias: string) =>
@@ -1098,8 +1102,8 @@ ${OPERATOR_SCOPE_CHECK}
     IF services IS NULL THEN
       ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
                    WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
-      -- domain '' = a live config with no domain, the '' row of get_staked_domain_services (no index on it: 0.15 s over
-      -- the live configs on mainnet, none of which has no domain, 2026-10-15)
+      -- domain '' = a live config with no domain, the '' row of get_staked_domain_services (no index on it: 0.25-0.32 s
+      -- over the live configs on mainnet, none of which has no domain, 2026-10-15)
       IF '' = ANY(get_supplier_fleet.domains) THEN
         ids := ids || ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
                             WHERE upper_inf(c._block_range) AND ${noDomain("c")});
@@ -1563,9 +1567,7 @@ BEGIN
   FROM ${s}.supplier_service_configs c
   JOIN ${s}.suppliers su ON su.id = c.supplier_id AND upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
   -- each distinct domain of the config, or one '' when it has none (so every config is counted on some row)
-  CROSS JOIN LATERAL (
-    SELECT DISTINCT coalesce(e.x, '') x FROM (SELECT 1) z LEFT JOIN LATERAL ${configDomains("c")} e(x) ON true
-  ) d
+  CROSS JOIN LATERAL ${domainKeys("c")} d
   WHERE upper_inf(c._block_range)
     AND (after_domain IS NULL OR d.x >= after_domain)
     AND (after_domain IS NULL OR (d.x, c.service_id) > (after_domain, after_service_id))

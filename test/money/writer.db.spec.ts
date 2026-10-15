@@ -2188,6 +2188,14 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["domains => ARRAY['a.net'], services => ARRAY['svc-z']", ["s1 own-a Staked 300 3 1"]],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
+      // a null element counts as no domain in both functions: s3's svc-w config [null] is on get_staked_domain_services'
+      // '' row (s3 is the only Staked one there), and so in get_supplier_fleet's domain ''
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s3', 'svc-w', '[]', '[null]', int8range(1, NULL))`);
+      const staked = await c.query(`SELECT service_id || ' ' || configs k FROM ${S}.get_staked_domain_services() WHERE domain = '' ORDER BY 1`);
+      assert.deepEqual(staked.rows.map((r) => r.k), ["svc-w 1"]);
+      const nodomain = await c.query(`SELECT supplier_id FROM ${S}.get_supplier_fleet(domains => ARRAY[''], services => ARRAY['svc-w'])
+        UNION ALL SELECT '|' UNION ALL (SELECT supplier_id FROM ${S}.get_supplier_fleet(domains => ARRAY['']) ORDER BY 1)`);
+      assert.deepEqual(nodomain.rows.map((r) => r.supplier_id), ["s3", "|", "s2", "s3", "s4"]);
       await c.query("ROLLBACK TO SAVEPOINT nodomain");
       // with services, the domains of each supplier's live configs for them
       for (const [args, want] of [
