@@ -1614,6 +1614,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const m11 = ['11 {"height": "11"} {"round": 0} {"hash": "AB11"}'];
       assert.deepEqual(await meta("11"), m11);
       assert.deepEqual(await meta("hash => 'AB11'"), m11);
+      // with 0x (any case) and spaces around it
+      assert.deepEqual(await meta("hash => '0xab11'"), m11);
+      assert.deepEqual(await meta("hash => ' 0XAB11 '"), m11);
+      assert.deepEqual(await at("hash => '0xAB11'"), ["mact 7", "upokt 1005"]);
       assert.deepEqual(await meta("12"), []);
       for (const [fn, args] of [["get_block_supplies", "11, 'AB11'"], ["get_block_metadata", ""]] as const) {
         await c.query("SAVEPOINT e");

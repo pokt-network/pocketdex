@@ -768,8 +768,8 @@ BEGIN
   LIMIT 1;
 END $$;
 
--- The height of a block given by height or by hash (exactly one; the hash in any case, blocks.hash is uppercase hex):
--- NULL when no indexed block has that hash.
+-- The height of a block given by height or by hash (exactly one; the hash in any case, with or without 0x, spaces
+-- around it trimmed; blocks.hash is uppercase hex): NULL when no indexed block has that hash.
 CREATE OR REPLACE FUNCTION ${s}._block_height_of(height bigint, hash text) RETURNS bigint
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 DECLARE h bigint;
@@ -778,7 +778,8 @@ BEGIN
     RAISE EXCEPTION 'pass height or hash (exactly one)';
   END IF;
   IF height IS NOT NULL THEN RETURN height; END IF;
-  SELECT b.id::bigint INTO h FROM ${s}.blocks b WHERE b.hash = upper(_block_height_of.hash) LIMIT 1;
+  SELECT b.id::bigint INTO h FROM ${s}.blocks b
+  WHERE b.hash = upper(regexp_replace(btrim(_block_height_of.hash), '^0x', '', 'i')) LIMIT 1;
   RETURN h;
 END $$;
 
