@@ -845,7 +845,8 @@ describe("indexSupplier rev_share wallets", () => {
     await index(500, [stakeSharing(500, S1, ["akash", "eth"], ["w-a", "w-b"]), stakeSharing(500, S2, ["eth"], ["w-a"])], []);
     // one INSERT for the block (the rewind runs apart, at the start of a block after a gap, in indexer.manager.ts)
     assert.equal(queries.length, 1);
-    assert.match(queries[0].sql, /^INSERT INTO \S+\.supplier_rev_share_wallets [\s\S]*\sON CONFLICT \(wallet_address, supplier_id\) DO NOTHING$/);
+    // ORDER BY: the row locks in the order scripts/backfill_rev_share_wallets.sql takes them while it runs live
+    assert.match(queries[0].sql, /^INSERT INTO \S+\.supplier_rev_share_wallets [\s\S]*\nORDER BY 1, 2\nON CONFLICT \(wallet_address, supplier_id\) DO NOTHING$/);
     inBlockTx(queries[0].transaction);
     // a pair listed by two configs is sent twice; the INSERT keeps one (SELECT DISTINCT, ON CONFLICT)
     assert.deepEqual(pairs(), [

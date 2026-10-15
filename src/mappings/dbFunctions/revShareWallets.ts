@@ -36,13 +36,15 @@ export function rewindNeeded(last: number | undefined, height: number): boolean 
 
 // The statements the indexer runs on the table (src/mappings/pocket/rev_share_wallets.ts), here so the DB tests run the
 // same text. Bind parameters: rewind $1 = the block height; insert $1 = wallet addresses, $2 = their suppliers (pairs by
-// position), $3 = the block height.
+// position), $3 = the block height. The insert takes its row locks ORDER BY (wallet_address, supplier_id), as
+// scripts/backfill_rev_share_wallets.sql does, so a block's insert and a live backfill batch lock rows in one order.
 export const rewindRevShareWalletsSql = (s: string): string =>
   `DELETE FROM ${s}.supplier_rev_share_wallets WHERE first_seen_height >= $1::bigint`;
 
 export const insertRevShareWalletsSql = (s: string): string =>
   `INSERT INTO ${s}.supplier_rev_share_wallets (wallet_address, supplier_id, first_seen_height)
 SELECT DISTINCT p.wallet_address, p.supplier_id, $3::bigint FROM unnest($1::text[], $2::text[]) AS p(wallet_address, supplier_id)
+ORDER BY 1, 2
 ON CONFLICT (wallet_address, supplier_id) DO NOTHING`;
 
 export const markRevShareWalletsCoveredSql = (s: string): string =>
