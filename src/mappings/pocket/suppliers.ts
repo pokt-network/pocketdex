@@ -37,6 +37,7 @@ import {
   MsgUnstakeSupplier,
 } from "../../types/proto-interfaces/pocket/supplier/tx";
 import {
+  blockTransaction,
   fetchPaginatedRecords,
   getSequelize,
   getStoreModel,
@@ -1350,7 +1351,7 @@ async function performSupplierDatabaseOperations(data: {
       where: ids
         ? { [Symbol.for("and")]: [createdAtBlock, { id: { [Symbol.for("in")]: ids } }] }
         : createdAtBlock,
-      transaction: store.context.transaction,
+      transaction: blockTransaction(),
     });
   };
 
@@ -1405,7 +1406,7 @@ async function performSupplierDatabaseOperations(data: {
             __block_range: { [Symbol.for("contains")]: BigInt(block) },
           },
           hooks: false,
-          transaction: store.context.transaction,
+          transaction: blockTransaction(),
         }
       )
     );
@@ -1429,7 +1430,7 @@ async function performSupplierDatabaseOperations(data: {
             __block_range: { [Symbol.for("contains")]: BigInt(block) },
           },
           hooks: false,
-          transaction: store.context.transaction,
+          transaction: blockTransaction(),
         }
       )
     );

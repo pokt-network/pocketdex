@@ -11,7 +11,6 @@ def deploy_indexer(
   # start_block: ""
   # page_limit: ""
   # db_batch_size: ""
-  # db_bulk_concurrency: ""
   # pg_pool: {
   #   min: "",
   #   max: "",

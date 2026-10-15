@@ -55,7 +55,7 @@ export function getSequelize(name: string): Sequelize {
 // lastProcessedHeight. A write outside it commits before the block does, so readers would see a half-written block,
 // and a block that fails later would leave those rows behind. The transaction only exists with --enable-cache=false.
 // One transaction is one connection, so its queries run one at a time.
-function blockTransaction() {
+export function blockTransaction(): NonNullable<typeof store.context.transaction> {
   const transaction = store.context.transaction;
   if (!transaction) {
     throw new Error("[db] no block transaction: the indexer must run with --enable-cache=false");

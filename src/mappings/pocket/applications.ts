@@ -44,6 +44,7 @@ import { ApplicationSDKType } from "../../types/proto-interfaces/pocket/applicat
 import { MsgClaimMorseApplication } from "../../types/proto-interfaces/pocket/migration/tx";
 import { ApplicationServiceConfig as ApplicationServiceConfigType } from "../../types/proto-interfaces/pocket/shared/service";
 import {
+  blockTransaction,
   getSequelize,
   getStoreModel,
   optimizedBulkCreate,
@@ -847,7 +848,7 @@ export async function handleAppMsgStake(
           // in the range
           __block_range: { [Symbol.for("contains")]: blockHeight },
         },
-        transaction: store.context.transaction,
+        transaction: blockTransaction(),
       },
     ),
   ]);
@@ -918,7 +919,7 @@ export async function handleMsgClaimMorseApplication(
           // in the range
           __block_range: { [Symbol.for("contains")]: blockHeight },
         },
-        transaction: store.context.transaction,
+        transaction: blockTransaction(),
       },
     ),
     updateMorseClaimableAccounts(

@@ -9,6 +9,7 @@ import { AccountProps } from "../../types/models/Account";
 import type { BalanceProps } from "../../types/models/Balance";
 import { ModuleAccountProps } from "../../types/models/ModuleAccount";
 import {
+  blockTransaction,
   fetchPaginatedRecords,
   getSequelize,
   getStoreModel,
@@ -133,7 +134,7 @@ export async function updateBalances(
       // @ts-ignore
       last_updated_block_id: blockId,
     },
-    transaction: store.context.transaction,
+    transaction: blockTransaction(),
   })
 
   // 2. Reopen records that were closed for this block (restore them to active state)
@@ -153,7 +154,7 @@ export async function updateBalances(
         sequelize.fn("upper", sequelize.col("_block_range")),
         blockId
       ),
-      transaction: store.context.transaction,
+      transaction: blockTransaction(),
     }
   )
 
@@ -214,7 +215,7 @@ export async function updateBalances(
           id: { [Symbol.for("in")]: Object.keys(currentBalancesMap) },
           __block_range: { [Symbol.for("contains")]: blockId },
         },
-        transaction: store.context.transaction,
+        transaction: blockTransaction(),
       }
     )
   }

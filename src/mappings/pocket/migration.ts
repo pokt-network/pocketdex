@@ -16,7 +16,7 @@ import { MsgRecoverMorseAccountProps } from "../../types/models/MsgRecoverMorseA
 import type { CoinSDKType } from "../../types/proto-interfaces/cosmos/base/v1beta1/coin";
 import type { MsgClaimMorseAccount } from "../../types/proto-interfaces/pocket/migration/tx";
 import type { EncodedMsg } from "../types";
-import { getStoreModel } from "../utils/db";
+import { blockTransaction, getStoreModel } from "../utils/db";
 import { messageId } from "../utils/ids";
 import {
   getDenomAndAmount,
@@ -187,7 +187,7 @@ export async function updateMorseClaimableAccounts(
             true
           ),
         },
-        transaction: store.context.transaction,
+        transaction: blockTransaction(),
       },
     ))
   )

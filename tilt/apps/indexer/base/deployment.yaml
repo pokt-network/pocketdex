@@ -92,8 +92,6 @@ spec:
               value: "5000"
             - name: POCKETDEX_DB_PAGE_LIMIT
               value: "1000"
-            - name: POCKETDEX_DB_BULK_WRITE_CONCURRENCY
-              value: "5"
             - name: POCKETDEX_RECONCILE_APPLICATIONS_EVERY_BLOCK
               value: "false"
             - name: POCKETDEX_GENESIS
