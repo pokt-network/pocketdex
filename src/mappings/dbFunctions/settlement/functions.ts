@@ -1355,7 +1355,8 @@ END $$;
 -- difficulty (the Service entity's own difficulty columns are not written: mainnet 2026-10-13). Keyset paging on (height, service_id), like get_claims. Covers the indexed blocks. Each service's
 -- updates through the GiST index on (service_id, _block_range); 1.06M updates on mainnet (2026-10-13).
 -- row_offset skips that many rows of the order first (each service reads row_limit + row_offset of its newest), for a
--- page past the first 1000 in one call.
+-- page past the first 1000 in one call; up to 10,000,000 (the busiest service has 20,957 updates on mainnet,
+-- 2026-10-15: an offset past every row gives an empty page, an offset of 20,000 costs 6 ms).
 CREATE OR REPLACE FUNCTION ${s}.get_relay_mining_difficulty(services text[], range_start timestamptz,
   range_end timestamptz, row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL,
   before_service_id text DEFAULT NULL, row_offset integer DEFAULT 0)
@@ -1369,8 +1370,8 @@ BEGIN
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_service_id', row_limit;
   END IF;
-  IF row_offset IS NULL OR row_offset < 0 THEN
-    RAISE EXCEPTION 'row_offset must be 0 or more (has %)', row_offset;
+  IF row_offset IS NULL OR row_offset < 0 OR row_offset > 10000000 THEN
+    RAISE EXCEPTION 'row_offset must be between 0 and 10000000 (has %)', row_offset;
   END IF;
   IF (before_height IS NULL) <> (before_service_id IS NULL) THEN
     RAISE EXCEPTION 'pass both before_height and before_service_id (the last row of the previous page), or neither';
@@ -1388,7 +1389,7 @@ ${covered(null, true)}
     FROM ${s}.event_relay_mining_difficulty_updateds e
     WHERE e.service_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi
       AND (e.block_id < bh OR e.block_id = bh AND e.service_id < before_service_id)
-    ORDER BY e.block_id DESC LIMIT row_limit + row_offset) d
+    ORDER BY e.block_id DESC LIMIT row_limit::bigint + row_offset) d
   JOIN ${s}.blocks bl ON bl.id = d.block_id
   ORDER BY d.block_id DESC, d.service_id DESC LIMIT row_limit OFFSET row_offset;
 END $$;

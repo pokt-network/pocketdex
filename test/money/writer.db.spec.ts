@@ -2713,9 +2713,14 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // a page at any depth by row_offset
       for (const off of [0, 1, 2, 3, 4, 5])
         assert.deepEqual(await got(`ARRAY['svc-a', 'svc-b'], NULL, NULL, row_limit => 2, row_offset => ${off}`), all.slice(off, off + 2), String(off));
-      await c.query("SAVEPOINT e");
-      await assert.rejects(c.query(`SELECT * FROM ${S}.get_relay_mining_difficulty(ARRAY['svc-a'], NULL, NULL, row_offset => -1)`), /row_offset must be 0 or more/);
-      await c.query("ROLLBACK TO SAVEPOINT e");
+      // the deepest offset with the largest page: an empty page, not an integer overflow of row_limit + row_offset
+      assert.deepEqual(await got(`ARRAY['svc-a', 'svc-b'], NULL, NULL, row_limit => 1000, row_offset => 10000000`), []);
+      for (const off of ["-1", "10000001", "2147483647"]) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_relay_mining_difficulty(ARRAY['svc-a'], NULL, NULL, row_offset => ${off})`),
+          /row_offset must be between 0 and 10000000/, off);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_relay_mining_difficulty(NULL, NULL, NULL)`), /services must have between 1 and 200/);
     } finally {
       await c.query("ROLLBACK");
