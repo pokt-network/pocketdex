@@ -1,3 +1,4 @@
+import { isMainThread } from "worker_threads";
 import type { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
 import {
   insertRevShareWalletsSql,
@@ -14,11 +15,19 @@ import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
 // still list, and a pair the code no longer writes is gone. The next block of a run deletes nothing. It runs before
 // indexPrimitives, so before genesis writes the genesis configs' pairs, and in the block transaction (a seq scan of the
 // ~30k rows, ~2 ms on mainnet, 2026-10-15). The last height is this process's memory, which holds because one process
-// indexes the blocks in order: no deployment passes --workers (tilt, scripts/shared.sh, pnf-ops); with workers it would
-// have to be a persisted mark.
+// indexes the blocks in order: no deployment passes --workers (tilt, scripts/shared.sh, pnf-ops). With --workers each
+// worker thread sees blocks out of order, and every gap would read as a rewind and delete pairs other blocks wrote, so the
+// rewind refuses to run off the main thread (the sandbox runs the mappings in the worker threads then, see
+// sandbox.service.ts in node-core): the first block fails, before this table is touched.
 let lastHeight: number | undefined;
 
-export async function rewindRevShareWallets(height: number): Promise<void> {
+export async function rewindRevShareWallets(height: number, mainThread = isMainThread): Promise<void> {
+  if (!mainThread) {
+    throw new Error(
+      "[rev_share_wallets] the indexer runs with --workers: blocks arrive out of order, and the rewind of " +
+        "supplier_rev_share_wallets (a height that does not follow the last one) would delete pairs; run without --workers"
+    );
+  }
   // set before the DELETE: a block that fails and is retried at the same height deletes again
   const needed = rewindNeeded(lastHeight, height);
   lastHeight = height;

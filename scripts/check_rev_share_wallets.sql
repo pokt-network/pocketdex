@@ -1,7 +1,8 @@
 -- Compares supplier_rev_share_wallets with the pairs the config versions hold now. Read-only; runs on the replica
 -- (its pass over the versions took 3.6 s on mainnet, 2026-10-15). Expected after a backfill:
 --   pairs_in_table = pairs_in_configs, missing = 0, extra = 0, lower_height_in_configs = 0.
--- Between the release and the second backfill run, missing counts the pairs first listed in that window.
+-- After the release and before the backfill has finished, missing counts the pairs of the heights indexed before the
+-- release that no finished batch has filled yet.
 --   psql -d explorer-mainnet -v schema=mainnet -f scripts/check_rev_share_wallets.sql   (on the replica)
 SET jit = off;
 WITH cfg AS MATERIALIZED (

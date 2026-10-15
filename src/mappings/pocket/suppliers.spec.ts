@@ -883,6 +883,13 @@ describe("indexSupplier rev_share wallets", () => {
     assert.deepEqual(await deletes(69991), []);
   });
 
+  it("refuses to run in a worker thread (--workers), before it deletes anything from the table", async () => {
+    const { rewindRevShareWallets } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    queries.length = 0;
+    await assert.rejects(rewindRevShareWallets(80000, false), /runs with --workers: blocks arrive out of order/);
+    assert.equal(queries.length, 0);
+  });
+
   it("genesis marks the table covered, in the block transaction", async () => {
     const { markRevShareWalletsCovered } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
     queries.length = 0;
