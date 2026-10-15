@@ -520,7 +520,7 @@ BEGIN
                       , ('get_supplier_fleet', 'after_supplier_id')
                       , ('get_claims', 'current_owner_id')
                       , ('get_gateway_delegations', 'height')
-                      , ('get_staked_suppliers', 'stake_statuses')
+                      , ('get_staked_suppliers', 'at_height')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -1503,12 +1503,15 @@ END $$;
 -- the services and endpoint root domains of their live configs (empty arrays without one; for a supplier not Staked
 -- with none live, the configs closed at its last closing): the suppliers { serviceConfigs } walk consumers made.
 -- Keyset paging on supplier_id: a stable key, so a walk neither skips nor repeats a supplier whose stake changes
--- meanwhile. A page of 1000 takes 31-50 ms on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id,
+-- meanwhile; at_height (NULL = _metadata.lastProcessedHeight) reads the versions in force at one height, which every
+-- row carries, so all the pages of a walk read the same state. A page of 1000 takes 31-50 ms on mainnet (4,548 Staked suppliers, 2026-10-14), through idx_suppliers_live_id,
 -- idx_ssc_live_supplier_service and idx_ssc_live_supplier_domains.
 CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers(row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL,
-  stake_statuses text[] DEFAULT ARRAY['Staked'])
-RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[])
+  stake_statuses text[] DEFAULT ARRAY['Staked'], at_height bigint DEFAULT NULL)
+RETURNS TABLE(supplier_id text, owner_id text, operator_id text, stake_upokt numeric, service_ids text[], domains text[],
+  height bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
 BEGIN
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_supplier_id', row_limit;
@@ -1516,37 +1519,53 @@ BEGIN
   IF stake_statuses IS NULL OR cardinality(stake_statuses) < 1 OR NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
     RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
   END IF;
+  IF at_height < 1 THEN
+    RAISE EXCEPTION 'at_height must be a block height (has %)', at_height;
+  END IF;
+  -- as get_gateway_delegations: NULL = the last height the indexer finished, read here; every row carries it, so a walk
+  -- pins its next pages (and other functions) to the same height
+  h := at_height;
+  IF h IS NULL THEN
+    SELECT (m.value #>> '{}')::bigint INTO h FROM ${s}._metadata m WHERE m.key = 'lastProcessedHeight';
+  END IF;
+  IF h IS NULL THEN
+    RAISE EXCEPTION 'no lastProcessedHeight in _metadata: pass at_height';
+  END IF;
   IF stake_statuses <> ARRAY['Staked'] THEN
-    -- other statuses: a supplier not Staked with no live config gets the configs closed at its last closing (a Staked
-    -- one with none gets empty arrays; the newest upper of
-    -- its versions, through the GiST on (supplier_id, _block_range)): ~2.8 s a page of 1000 Unstaked suppliers on mainnet
+    -- other statuses: a supplier not Staked with no config at the height gets the configs closed at its last closing up
+    -- to it (a Staked one with none gets empty arrays; the newest upper of its versions, through the GiST on
+    -- (supplier_id, _block_range)): ~2.8 s a page of 1000 Unstaked suppliers on mainnet
     RETURN QUERY
     SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
            ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c WHERE c.supplier_id = su.id
-                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN upper_inf(c._block_range)
+                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN c._block_range @> h
                           ELSE upper(c._block_range) = m.last_upper END ORDER BY 1),
            ARRAY(SELECT DISTINCT e.x FROM ${s}.supplier_service_configs c, ${configDomains("c")} e(x) WHERE c.supplier_id = su.id
-                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN upper_inf(c._block_range)
-                          ELSE upper(c._block_range) = m.last_upper END ORDER BY 1)
+                 AND CASE WHEN m.live OR su.stake_status::text = 'Staked' THEN c._block_range @> h
+                          ELSE upper(c._block_range) = m.last_upper END ORDER BY 1),
+           h
     FROM ${s}.suppliers su
-    CROSS JOIN LATERAL (SELECT bool_or(upper_inf(c._block_range)) live, max(upper(c._block_range)) last_upper
+    CROSS JOIN LATERAL (SELECT bool_or(c._block_range @> h) live,
+                               max(upper(c._block_range)) FILTER (WHERE upper(c._block_range) <= h) last_upper
                         FROM ${s}.supplier_service_configs c WHERE c.supplier_id = su.id) m
-    WHERE upper_inf(su._block_range) AND su.stake_status::text = ANY(stake_statuses)
+    WHERE su._block_range @> h AND su.stake_status::text = ANY(stake_statuses)
       AND (after_supplier_id IS NULL OR su.id > after_supplier_id)
     ORDER BY su.id
     LIMIT row_limit;
     RETURN;
   END IF;
   RETURN QUERY
-  -- two array subqueries, each index-only: service_id from idx_ssc_live_supplier_service, domains from
-  -- idx_ssc_live_supplier_domains; one subquery for both reads the heap and took 0.35-0.44 s a page, against 31-50 ms
+  -- the versions in force at the height: suppliers through their GiST indexes, each supplier's configs through the
+  -- GiST on (supplier_id, _block_range); ~0.33 s a page of 1000 on mainnet, against ~0.16 s for the live rows, which a
+  -- block being written can show half-updated
   SELECT su.id, su.owner_id, su.operator_id, su.stake_amount::numeric,
          ARRAY(SELECT DISTINCT c.service_id FROM ${s}.supplier_service_configs c
-               WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1),
+               WHERE c.supplier_id = su.id AND c._block_range @> h ORDER BY 1),
          ARRAY(SELECT DISTINCT e.x FROM ${s}.supplier_service_configs c, ${configDomains("c")} e(x)
-               WHERE c.supplier_id = su.id AND upper_inf(c._block_range) ORDER BY 1)
+               WHERE c.supplier_id = su.id AND c._block_range @> h ORDER BY 1),
+         h
   FROM ${s}.suppliers su
-  WHERE upper_inf(su._block_range) AND su.stake_status::text = 'Staked'
+  WHERE su._block_range @> h AND su.stake_status::text = 'Staked'
     AND (after_supplier_id IS NULL OR su.id > after_supplier_id)
   ORDER BY su.id
   LIMIT row_limit;

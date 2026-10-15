@@ -1650,6 +1650,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`
         ALTER TABLE ${S}.suppliers ADD COLUMN operator_id text;
         UPDATE ${S}.suppliers SET operator_id = 'op-' || id;
+        CREATE TABLE ${S}._metadata (key varchar, value jsonb);
+        INSERT INTO ${S}._metadata VALUES ('lastProcessedHeight', '100');
         INSERT INTO ${S}.suppliers VALUES ('s5', 'own-c', 'Staked', 70, int8range(1, NULL), 'op-s5');`);
       const staked = async (args: string) =>
         (
@@ -1660,6 +1662,14 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const sup = ["s1 own-a op-s1 300 svc-x,svc-y a.net,b.io 2 2", "s3 own-b op-s3 500 svc-x,svc-y a.net 2 1", "s5 own-c op-s5 70   0 0"];
       assert.deepEqual(await staked(""), sup);
       assert.deepEqual(await staked("row_limit => 2, after_supplier_id => 's1'"), sup.slice(1));
+      // at a height: the versions in force then (s1 owned by own-x with 100 staked and svc-z live at 3), and the height
+      // on every row, lastProcessedHeight without at_height
+      const at3 = await staked("at_height => 3");
+      assert.deepEqual(at3[0], "s1 own-x op-s1 100 svc-x,svc-y,svc-z a.net,b.io,c.org 3 3");
+      const heights = async (args: string) =>
+        (await c.query(`SELECT DISTINCT height::text h FROM ${S}.get_staked_suppliers(${args})`)).rows.map((r) => r.h);
+      assert.deepEqual(await heights(""), ["100"]);
+      assert.deepEqual(await heights("at_height => 3"), ["3"]);
       // other statuses: s2 (Unstaked) keeps a live config; s6 has none, so the configs closed at its last closing (9)
       await c.query(`INSERT INTO ${S}.suppliers VALUES ('s6', 'own-d', 'Unstaked', 0, int8range(1, NULL), 'op-s6');
         INSERT INTO ${S}.supplier_service_configs VALUES ('s6', 'svc-a', '["x.io"]', 2, int8range(2, 9)),
