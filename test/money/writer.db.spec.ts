@@ -1950,6 +1950,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["row_limit => 1, after_stake_upokt => 500, after_supplier_id => 's3', stake_statuses => ARRAY['Staked']", ["s1 own-a Staked 300 2 1"]],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
+      // an empty version (created and closed in one block) shares revenue with nobody, on either path
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s2', 'svc-z', '[{"address": "op-4"}]', '["z.io"]', 'empty'::int8range)`);
+      assert.deepEqual(await fleet("operators => ARRAY['op-4'], operator_scope => 'ever'"), []);
+      await c.query(`DELETE FROM ${S}.supplier_service_configs WHERE service_id = 'svc-z'`);
       // once the backfill has filled supplier_rev_share_wallets, ever reads the pairs there and no longer the configs:
       // op-3 is in no config here, only in the table
       await c.query(`
