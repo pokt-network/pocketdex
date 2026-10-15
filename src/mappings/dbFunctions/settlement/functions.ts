@@ -3481,7 +3481,9 @@ ${blockTimeColumnsSql(s)}
 // written yet. A function with a table-row argument depends on the table's row type: SubQuery's migration adds and
 // drops columns around it, but its dropTable (no CASCADE) fails while the function exists, so removing one of these
 // entities from schema.graphql needs its function dropped first. Created only where the tables exist (the catalog's
-// test schema has none of them).
+// test schema has none of them). @omit filter: the field is not in the entity's filter (connection-filter makes computed
+// columns filterable by default), since a filter on a block time reads the whole table; not sortable either (no
+// @sortable), checked through subql-query 2.22.2 introspection.
 const BLOCK_TIME_COLUMNS: [string, string, string, string][] = [
   ["transactions_block_time", "transactions", "block_id", "Time of the block that includes the transaction (UTC); null until that block is written."],
   ["native_transfers_block_time", "native_transfers", "block_id", "Time of the block that includes the transfer (UTC); null until that block is written."],
@@ -3495,7 +3497,7 @@ BEGIN
     EXECUTE $f$CREATE OR REPLACE FUNCTION ${s}.${fn}(r ${s}.${table}) RETURNS timestamptz LANGUAGE sql STABLE AS $b$
       SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = r.${column} LIMIT 1
     $b$$f$;
-    EXECUTE $f$COMMENT ON FUNCTION ${s}.${fn}(${s}.${table}) IS '${what}'$f$;
+    EXECUTE $f$COMMENT ON FUNCTION ${s}.${fn}(${s}.${table}) IS E'@omit filter\n${what}'$f$;
   END IF;
 END $do$;`
   ).join("\n");

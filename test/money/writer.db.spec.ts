@@ -1540,7 +1540,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const d = await c.query(`SELECT p.proname, count(*) OVER (PARTITION BY p.proname) n, obj_description(p.oid, 'pg_proc') d FROM pg_proc p
         WHERE p.pronamespace = $1::regnamespace AND p.proname IN ('transactions_block_time', 'native_transfers_block_time',
           'balances_last_updated_time') ORDER BY 1`, [S]);
-      assert.deepEqual(d.rows.map((r) => [r.proname, String(r.n), /^Time of the block/.test(String(r.d))]), [
+      // @omit filter: GraphQL shows the field but no filter on it, which would scan the whole table (no index on the time)
+      assert.deepEqual(d.rows.map((r) => [r.proname, String(r.n), /^@omit filter\nTime of the block/.test(String(r.d))]), [
         ["balances_last_updated_time", "1", true],
         ["native_transfers_block_time", "1", true],
         ["transactions_block_time", "1", true],
