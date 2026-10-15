@@ -1,9 +1,36 @@
 import type { SupplierServiceConfigProps } from "../../types/models/SupplierServiceConfig";
-import { getDbSchema, getSequelize } from "../utils/db";
+import {
+  insertRevShareWalletsSql,
+  markRevShareWalletsCoveredSql,
+  rewindNeeded,
+  rewindRevShareWalletsSql,
+} from "../dbFunctions/revShareWallets";
+import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
 
-// The (wallet, supplier) pair of every rev_share entry of the service configs a block writes, into
-// supplier_rev_share_wallets (src/mappings/dbFunctions/revShareWallets.ts) at that height; a pair already there keeps
-// its height. One statement, in the block transaction, as the configs themselves.
+// supplier_rev_share_wallets (src/mappings/dbFunctions/revShareWallets.ts) is plain DDL that SubQuery does not manage,
+// like claims_by_block: its rewind does not touch it. A block that does not follow the last one this process started
+// (the first block after the process starts, a SubQuery rewind or reindex, or a retried block) first deletes the pairs
+// first seen at its height or above: first_seen_height is a minimum, so the replayed blocks write again the pairs they
+// still list, and a pair the code no longer writes is gone. The next block of a run deletes nothing. It runs before
+// indexPrimitives, so before genesis writes the genesis configs' pairs, and in the block transaction (a seq scan of the
+// ~30k rows, ~2 ms on mainnet, 2026-10-15). The last height is this process's memory, which holds because one process
+// indexes the blocks in order: no deployment passes --workers (tilt, scripts/shared.sh, pnf-ops); with workers it would
+// have to be a persisted mark.
+let lastHeight: number | undefined;
+
+export async function rewindRevShareWallets(height: number): Promise<void> {
+  // set before the DELETE: a block that fails and is retried at the same height deletes again
+  const needed = rewindNeeded(lastHeight, height);
+  lastHeight = height;
+  if (!needed) return;
+  await getSequelize("SupplierServiceConfig").query(rewindRevShareWalletsSql(getDbSchema()), {
+    bind: [height],
+    transaction: blockTransaction(),
+  });
+}
+
+// The (wallet, supplier) pair of every rev_share entry of the service configs a block writes, at that height; a pair
+// already there keeps its height. In the block transaction, as the configs themselves.
 export async function writeRevShareWallets(
   configs: Array<Pick<SupplierServiceConfigProps, "revShare" | "supplierId">>,
   height: number
@@ -20,10 +47,17 @@ export async function writeRevShareWallets(
 
   if (wallets.length === 0) return;
 
-  await getSequelize("SupplierServiceConfig").query(
-    `INSERT INTO ${getDbSchema()}.supplier_rev_share_wallets (wallet_address, supplier_id, first_seen_height)
-     SELECT DISTINCT p.wallet_address, p.supplier_id, $3::bigint FROM unnest($1::text[], $2::text[]) AS p(wallet_address, supplier_id)
-     ON CONFLICT (wallet_address, supplier_id) DO NOTHING`,
-    { bind: [wallets, suppliers, height], transaction: store.context.transaction }
-  );
+  await getSequelize("SupplierServiceConfig").query(insertRevShareWalletsSql(getDbSchema()), {
+    bind: [wallets, suppliers, height],
+    transaction: blockTransaction(),
+  });
+}
+
+// A database indexed from genesis has the pairs of every height: genesis marks the table covered, so
+// _operator_suppliers_ever reads it from the start (an existing database is marked by
+// scripts/set_rev_share_wallets_coverage.sql after its backfill). In the block transaction.
+export async function markRevShareWalletsCovered(): Promise<void> {
+  await getSequelize("SupplierServiceConfig").query(markRevShareWalletsCoveredSql(getDbSchema()), {
+    transaction: blockTransaction(),
+  });
 }

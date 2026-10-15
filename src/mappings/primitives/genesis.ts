@@ -60,7 +60,7 @@ import {
   PREFIX,
   VALIDATOR_PREFIX,
 } from "../constants";
-import { writeRevShareWallets } from "../pocket/rev_share_wallets";
+import { markRevShareWalletsCovered, writeRevShareWallets } from "../pocket/rev_share_wallets";
 import {
   Genesis,
   GenesisStakingValidator,
@@ -593,8 +593,9 @@ async function _handleGenesisSuppliers(genesis: Genesis, block: CosmosBlock): Pr
     optimizedBulkCreate("MsgStakeSupplier", supplierMsgStakes, 'block_id'),
     optimizedBulkCreate("MsgStakeSupplierService", servicesAndSupplierMsgStakes, 'omit'),
   ]);
-  // after the configs, as indexSupplier does: the rev_share wallets, for operator_scope ever
+  // after the configs, as indexSupplier does: the rev_share wallets, for operator_scope ever, which they cover from genesis
   await writeRevShareWallets(supplierServices, block.block.header.height);
+  await markRevShareWalletsCovered();
 
   return { transactions, messages: msgs };
 }

@@ -830,28 +830,23 @@ describe("indexSupplier rev_share wallets", () => {
     }
     return msg;
   };
+  const inserts = () => queries.filter(({ sql }) => sql.startsWith("INSERT"));
   // the (wallet, supplier, height) of every pair sent, sorted
   const pairs = () =>
-    queries.flatMap(({ bind: [wallets, suppliers, h] }) =>
-      (wallets as Array<string>).map((w, i) => `${w} ${(suppliers as Array<string>)[i]} ${h}`)
-    ).sort();
+    inserts()
+      .flatMap(({ bind: [wallets, suppliers, h] }) =>
+        (wallets as Array<string>).map((w, i) => `${w} ${(suppliers as Array<string>)[i]} ${h}`)
+      )
+      .sort();
 
   it("writes the pairs of the configs a block writes, in the block transaction, and nothing for a block that writes none", async () => {
     reset();
     queries.length = 0;
-    // a transaction of its own for this block, to tell it from no transaction
-    const context = (globals.store as { context: { transaction: unknown } }).context;
-    const before = context.transaction;
-    const tx = { block: 500 };
-    context.transaction = tx;
-    try {
-      await index(500, [stakeSharing(500, S1, ["akash", "eth"], ["w-a", "w-b"]), stakeSharing(500, S2, ["eth"], ["w-a"])], []);
-    } finally {
-      context.transaction = before;
-    }
+    await index(500, [stakeSharing(500, S1, ["akash", "eth"], ["w-a", "w-b"]), stakeSharing(500, S2, ["eth"], ["w-a"])], []);
+    // one INSERT for the block (the rewind runs apart, at the start of a block after a gap, in indexer.manager.ts)
     assert.equal(queries.length, 1);
-    assert.match(queries[0].sql, /INSERT INTO \S+\.supplier_rev_share_wallets [\s\S]* ON CONFLICT \(wallet_address, supplier_id\) DO NOTHING/);
-    assert.equal(queries[0].transaction, tx);
+    assert.match(queries[0].sql, /^INSERT INTO \S+\.supplier_rev_share_wallets [\s\S]*\sON CONFLICT \(wallet_address, supplier_id\) DO NOTHING$/);
+    inBlockTx(queries[0].transaction);
     // a pair listed by two configs is sent twice; the INSERT keeps one (SELECT DISTINCT, ON CONFLICT)
     assert.deepEqual(pairs(), [
       `w-a ${S1} 500`, `w-a ${S1} 500`, `w-a ${S2} 500`, `w-b ${S1} 500`, `w-b ${S1} 500`,
@@ -865,6 +860,48 @@ describe("indexSupplier rev_share wallets", () => {
     // a restake that changes the wallets: the pairs of the configs it writes, at its height
     await index(520, [stakeSharing(520, S1, ["akash"], ["w-c"])], []);
     assert.deepEqual(pairs(), [`w-c ${S1} 520`]);
+  });
+
+  it("deletes the pairs at or above a block's height only when it does not follow the last one: start, rewind, retry", async () => {
+    const { rewindRevShareWallets } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    const deletes = async (h: number) => {
+      queries.length = 0;
+      await rewindRevShareWallets(h);
+      for (const { transaction } of queries) inBlockTx(transaction);
+      return queries.map(({ bind, sql }) => `${sql.replace(/^DELETE FROM \S+\./, "DELETE FROM ")} [${bind.join(",")}]`);
+    };
+    const del = (h: number) => [`DELETE FROM supplier_rev_share_wallets WHERE first_seen_height >= $1::bigint [${h}]`];
+    // the first block this process sees (nothing in this file calls the rewind before)
+    assert.deepEqual(await deletes(70000), del(70000));
+    // normal consecutive blocks: nothing
+    assert.deepEqual(await deletes(70001), []);
+    assert.deepEqual(await deletes(70002), []);
+    // the same height again (a retried block), then a rewind to an earlier height: delete
+    assert.deepEqual(await deletes(70002), del(70002));
+    assert.deepEqual(await deletes(69990), del(69990));
+    assert.deepEqual(await deletes(69991), []);
+  });
+
+  it("genesis marks the table covered, in the block transaction", async () => {
+    const { markRevShareWalletsCovered } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    queries.length = 0;
+    await markRevShareWalletsCovered();
+    assert.equal(queries.length, 1);
+    assert.match(queries[0].sql, /^INSERT INTO \S+\.supplier_rev_share_wallets_coverage \(backfilled_at\) VALUES \(now\(\)\) ON CONFLICT \(singleton\) DO NOTHING$/);
+    inBlockTx(queries[0].transaction);
+  });
+
+  it("writes nothing without the block transaction", async () => {
+    const { writeRevShareWallets } = require("./rev_share_wallets") as typeof import("./rev_share_wallets");
+    const context = (globals.store as { context: { transaction: unknown } }).context;
+    context.transaction = undefined;
+    queries.length = 0;
+    try {
+      await assert.rejects(writeRevShareWallets([{ supplierId: S1, revShare: [{ address: "w-a", revSharePercentage: "100" }] }], 600), /no block transaction/);
+    } finally {
+      context.transaction = BLOCK_TX;
+    }
+    assert.equal(queries.length, 0);
   });
 });
 

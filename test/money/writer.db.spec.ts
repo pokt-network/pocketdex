@@ -13,7 +13,12 @@ import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
 import { createEntityDescriptionsFn } from "../../src/mappings/dbFunctions/entityDescriptions";
 import { createDeprecationsFn, DEPRECATED_RELATION, deprecatedTag } from "../../src/mappings/dbFunctions/deprecations";
-import { createSupplierRevShareWalletsFn } from "../../src/mappings/dbFunctions/revShareWallets";
+import {
+  createSupplierRevShareWalletsFn,
+  insertRevShareWalletsSql,
+  rewindNeeded,
+  rewindRevShareWalletsSql,
+} from "../../src/mappings/dbFunctions/revShareWallets";
 import { getSupplierStatsByDomainsFn } from "../../src/mappings/dbFunctions/rewards";
 import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementTablesFn, ROLLUP_TABLES } from "../../src/mappings/dbFunctions/settlement/schema";
@@ -1693,6 +1698,43 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         "supplier_rev_share_wallets rsw_indexer_ci @omit",
         "supplier_rev_share_wallets_coverage rsw_indexer_ci @omit",
       ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("supplier_rev_share_wallets: a reindex from a height drops the pairs the replayed blocks no longer write", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`CREATE SCHEMA rsw_rw; ${createSupplierRevShareWalletsFn("rsw_rw")}`);
+      // the indexer's statements, as src/mappings/pocket/rev_share_wallets.ts sends them: a block that does not follow
+      // the last one starts with the rewind; a block that writes configs then inserts their pairs
+      let last: number | undefined;
+      let rewinds: Array<number> = [];
+      const block = async (h: number, pairs: Array<[string, string]>) => {
+        if (rewindNeeded(last, h)) {
+          rewinds.push(h);
+          await c.query(rewindRevShareWalletsSql("rsw_rw"), [h]);
+        }
+        last = h;
+        if (pairs.length > 0) await c.query(insertRevShareWalletsSql("rsw_rw"), [pairs.map((p) => p[0]), pairs.map((p) => p[1]), h]);
+      };
+      const rows = async () =>
+        (await c.query(`SELECT wallet_address || ' ' || supplier_id || ' ' || first_seen_height k FROM rsw_rw.supplier_rev_share_wallets ORDER BY 1`))
+          .rows.map((r) => String(r.k));
+      // the first run, every block from 10 to 16: pairs at 10, 12 and 15; a pair seen again keeps its first height
+      for (let h = 10; h <= 16; h++) {
+        await block(h, h === 10 ? [["a", "s1"]] : h === 12 ? [["b", "s1"], ["c", "s2"], ["a", "s1"]] : h === 15 ? [["d", "s3"]] : []);
+      }
+      assert.deepEqual(await rows(), ["a s1 10", "b s1 12", "c s2 12", "d s3 15"]);
+      // consecutive blocks rewind nothing: only the first block of the run did
+      assert.deepEqual(rewinds, [10]);
+      rewinds = [];
+      // rewound to 11 and replayed from 12 by code that no longer writes c for s2: 12 does not follow 16, so it runs the
+      // rewind first, at the height of the pair to drop (a rewind of "above" would keep it); 13..16 follow and do not
+      for (let h = 12; h <= 16; h++) await block(h, h === 12 ? [["b", "s1"]] : h === 15 ? [["d", "s3"]] : []);
+      assert.deepEqual(await rows(), ["a s1 10", "b s1 12", "d s3 15"]);
+      assert.deepEqual(rewinds, [12]);
     } finally {
       await c.query("ROLLBACK");
     }
