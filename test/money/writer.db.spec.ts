@@ -1748,6 +1748,15 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s5', 'svc-q', '["q.io"]', 1, int8range(1, 3))`);
       assert.deepEqual(await staked("stake_statuses => ARRAY['Staked', 'Unstaked'], after_supplier_id => 's3'"),
         ["s5 own-c op-s5 70   0 0", "s6 own-d op-s6 0 svc-a x.io 1 1"]);
+      // other statuses at a height: s6's configs in force then (both at 4), else those closed at its last closing up to
+      // the height (svc-a at 9, before svc-c, live 10 to 12, closed after it), and the height on every row
+      await c.query(`INSERT INTO ${S}.supplier_service_configs VALUES ('s6', 'svc-c', '["z.io"]', 2, int8range(10, 12))`);
+      const s6 = "stake_statuses => ARRAY['Unstaked'], after_supplier_id => 's5'";
+      assert.deepEqual(await staked(`${s6}, at_height => 4`), ["s6 own-d op-s6 0 svc-a,svc-b x.io,y.io 2 2"]);
+      assert.deepEqual(await staked(`${s6}, at_height => 9`), ["s6 own-d op-s6 0 svc-a x.io 1 1"]);
+      assert.deepEqual(await staked(`${s6}, at_height => 11`), ["s6 own-d op-s6 0 svc-c z.io 1 1"]);
+      assert.deepEqual(await staked(s6), ["s6 own-d op-s6 0 svc-c z.io 1 1"]);
+      assert.deepEqual(await heights(`${s6}, at_height => 9`), ["9"]);
       await c.query("SAVEPOINT e");
       await assert.rejects(c.query(`SELECT * FROM ${S}.get_staked_suppliers(stake_statuses => ARRAY['Bonded'])`), /stake_statuses takes Staked/);
       await c.query("ROLLBACK TO SAVEPOINT e");
