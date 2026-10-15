@@ -1000,8 +1000,18 @@ export async function handleApplicationUnbondingBeginEvent(
 // end events were indexed before the unbonding-end handler closed delegations (dd64251).
 export async function removeApplicationDelegationsAndServices(
   applicationIds: Array<string>,
-  read?: { services: Array<{ id: string }>; gateways: Array<{ id: string }> },
+  read?: { services: Array<{ id: string; applicationId: string }>; gateways: Array<{ id: string; applicationId: string }> },
 ): Promise<void> {
+  // rows read by the caller must be those of the applications closed: a wrong list would remove another one's rows
+  if (read) {
+    const ids = new Set(applicationIds);
+    const stray = [...read.services, ...read.gateways].find((row) => !ids.has(row.applicationId));
+    if (stray) {
+      throw new Error(
+        `[removeApplicationDelegationsAndServices] row ${stray.id} belongs to ${stray.applicationId}, not to ${applicationIds.join(", ")}`,
+      );
+    }
+  }
   const rows = read ?? {
     services: (await Promise.all(applicationIds.map(fetchAllApplicationServiceByApplicationId))).flat(),
     gateways: (await Promise.all(applicationIds.map(fetchAllApplicationGatewayByApplicationId))).flat(),
