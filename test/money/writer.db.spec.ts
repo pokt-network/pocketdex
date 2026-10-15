@@ -1600,12 +1600,32 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(await at("11"), ["mact 7", "upokt 1005"]);
       assert.deepEqual(await at("10"), ["mact 7", "upokt 1000"]);
       assert.deepEqual(await at("12"), []);
+      // by hash (any case), the same rows; and the block's metadata record, by height or by hash
+      await c.query(`
+        ALTER TABLE ${S}.blocks ADD COLUMN hash text;
+        INSERT INTO ${S}.blocks (id, timestamp, hash) VALUES (11, '2026-01-02', 'AB11');
+        CREATE TABLE ${S}.block_metadata (id numeric, block_id jsonb, header jsonb, last_commit jsonb, _block_range int8range);
+        INSERT INTO ${S}.block_metadata VALUES (11, '{"hash": "AB11"}', '{"height": "11"}', '{"round": 0}', int8range(11, NULL));`);
+      assert.deepEqual(await at("hash => 'ab11'"), ["mact 7", "upokt 1005"]);
+      assert.deepEqual(await at("hash => 'NONE'"), []);
+      const meta = async (args: string) =>
+        (await c.query(`SELECT block_height || ' ' || header::text || ' ' || last_commit::text || ' ' || block_id::text k
+                        FROM ${S}.get_block_metadata(${args})`)).rows.map((r) => r.k);
+      const m11 = ['11 {"height": "11"} {"round": 0} {"hash": "AB11"}'];
+      assert.deepEqual(await meta("11"), m11);
+      assert.deepEqual(await meta("hash => 'AB11'"), m11);
+      assert.deepEqual(await meta("12"), []);
+      for (const [fn, args] of [["get_block_supplies", "11, 'AB11'"], ["get_block_metadata", ""]] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.${fn}(${args})`), /pass height or hash \(exactly one\)/, fn);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
       // each denomination in its own unit: not the upokt note of the other state functions
-      const d = await c.query(`SELECT obj_description('${S}.get_block_supplies(bigint)'::regprocedure, 'pg_proc') d`);
+      const d = await c.query(`SELECT obj_description('${S}.get_block_supplies(bigint, text)'::regprocedure, 'pg_proc') d`);
       assert.match(String(d.rows[0].d), /^@simpleCollections only\nSupply at a block/);
       assert.doesNotMatch(String(d.rows[0].d), /Amounts in upokt/);
       await c.query("SAVEPOINT e");
-      await assert.rejects(c.query(`SELECT * FROM ${S}.get_block_supplies(NULL)`), /height is required/);
+      await assert.rejects(c.query(`SELECT * FROM ${S}.get_block_supplies(NULL)`), /pass height or hash \(exactly one\)/);
       await c.query("ROLLBACK TO SAVEPOINT e");
     } finally {
       await c.query("ROLLBACK");

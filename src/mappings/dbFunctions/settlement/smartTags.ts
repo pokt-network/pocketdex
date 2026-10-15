@@ -111,6 +111,7 @@ const OMITTED_FUNCTIONS = [
   "_legacy_series",
   "_operator_suppliers",
   "_operator_suppliers_ever",
+  "_block_height_of",
   "_supplier_ids",
   // writers of the money tables, which GraphQL would publish as mutations (scripts/fill_claims_paid.sql and
   // scripts/fill_monthly_claims.sql run them)
@@ -238,7 +239,9 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
   get_supplier_config_history:
     "Service configs of one supplier over time (supplier_id; services keeps those, up to 200), one row per stretch of heights in which a config declared the same content: a row starts at the config's first height, after a gap (the supplier unstaked, or dropped the service and took it back) and when its rev_share or endpoints change; restakes and activations that change nothing add no row. first_height and last_height bound the stretch (last_height NULL while the supplier declares it now). rev_share is sorted by address (the chain stores it in the order of the stake message, which changes with no change of content); domains are the endpoint root domains. Configs are what the supplier declared, from its stake height; the chain activates them at the next session start. Ordered by service_id, then first_height; for the next page pass the last row's as after_service_id and after_first_height. Stake, unstake and unbonding events: get_actor_lifecycle.",
   get_block_supplies:
-    "Supply at a block: one row per denomination with its amount in that denomination's own base unit (upokt for upokt, mact for mact; not converted), as the indexer recorded it for that height; no row for a height it has no supply for.",
+    "Supply at a block, given by height or by hash (exactly one; the hash in any case): one row per denomination with its amount in that denomination's own base unit (upokt for upokt, mact for mact; not converted), as the indexer recorded it for that block; no row for a block it has no supply for.",
+  get_block_metadata:
+    "A block's metadata record, given by height or by hash (exactly one; the hash in any case): block_height, and the CometBFT block_id, header and last_commit as JSON, as the indexer received them; no row for a block it has no record for.",
   get_active_accounts:
     "Accounts active since each time of since_times (up to 20, timestamptz with an explicit zone): accounts = the live upokt balances last updated in a block at or after the time (null when beyond_tip: no indexed block that late yet); height = the newest block before the time (an account counts when its last update is above it).",
   get_morse_claim_summary:
@@ -247,7 +250,7 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
 export const STATE_FUNCTIONS = Object.keys(STATE_DESCRIPTIONS);
 const STATE_ROWS_NOTE = `'Rows paged by GraphQL (first / offset) up to the query limit (1000); page in this order for longer answers. Amounts in upokt.'`;
 // get_block_supplies gives each denomination's amount in its own base unit: the rows note without the unit
-const STATE_UNIT_FREE = ["get_block_supplies"];
+const STATE_UNIT_FREE = ["get_block_supplies", "get_block_metadata"];
 const STATE_ROWS_NOTE_NO_UNIT = `'Rows paged by GraphQL (first / offset) up to the query limit (1000); page in this order for longer answers.'`;
 // the state functions that page by keyset only (an input argument named after_*, and row_limit 1000 by default;
 // get_supplier_fleet, whose row_limit defaults to every row, says how it pages in its own description)

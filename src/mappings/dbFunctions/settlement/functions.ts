@@ -522,6 +522,7 @@ BEGIN
                       , ('get_application_fleet', 'row_offset')
                       , ('get_gateway_delegations', 'height')
                       , ('get_staked_suppliers', 'at_height')
+                      , ('get_block_supplies', 'hash')
                       , ('get_relay_mining_difficulty', 'row_offset')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
@@ -736,18 +737,48 @@ BEGIN
 END $$;
 
 -- The supply of each denomination at a block (the indexer's block_supplies rows of that height and their supplies):
--- what a block page read in two requests, block_supplies then supplies by id. Two index probes (0.2 ms on mainnet,
--- 2026-10-14); no row for a height the indexer has no supply for.
-CREATE OR REPLACE FUNCTION ${s}.get_block_supplies(height bigint)
+-- what a block page read in two requests, block_supplies then supplies by id. The block by height or by hash (exactly
+-- one; blocks.hash through its GiST index), so a page that has only the hash reads it beside the block row. Index
+-- probes only (1 ms by hash on mainnet, 2026-10-15); no row for a block the indexer has no supply for.
+CREATE OR REPLACE FUNCTION ${s}.get_block_supplies(height bigint DEFAULT NULL, hash text DEFAULT NULL)
 RETURNS TABLE(denom text, amount numeric)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
 BEGIN
-  IF height IS NULL THEN RAISE EXCEPTION 'height is required'; END IF;
+  h := ${s}._block_height_of(get_block_supplies.height, get_block_supplies.hash);
   RETURN QUERY
   SELECT sp.denom::text, sp.amount::numeric FROM ${s}.block_supplies bs
   JOIN ${s}.supplies sp ON sp.id = bs.supply_id AND upper_inf(sp._block_range)
-  WHERE bs.block_id = get_block_supplies.height AND upper_inf(bs._block_range)
+  WHERE bs.block_id = h AND upper_inf(bs._block_range)
   ORDER BY 1;
+END $$;
+
+-- A block's metadata record (the CometBFT block id, header and last commit the indexer received), by height or by
+-- hash, as get_block_supplies, so a block page reads its extras beside the block row (0.1-0.3 ms on mainnet).
+CREATE OR REPLACE FUNCTION ${s}.get_block_metadata(height bigint DEFAULT NULL, hash text DEFAULT NULL)
+RETURNS TABLE(block_height bigint, header jsonb, last_commit jsonb, block_id jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
+BEGIN
+  h := ${s}._block_height_of(get_block_metadata.height, get_block_metadata.hash);
+  RETURN QUERY
+  SELECT m.id::bigint, m.header, m.last_commit, m.block_id FROM ${s}.block_metadata m
+  WHERE m.id = h AND upper_inf(m._block_range)
+  LIMIT 1;
+END $$;
+
+-- The height of a block given by height or by hash (exactly one; the hash in any case, blocks.hash is uppercase hex):
+-- NULL when no indexed block has that hash.
+CREATE OR REPLACE FUNCTION ${s}._block_height_of(height bigint, hash text) RETURNS bigint
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE h bigint;
+BEGIN
+  IF num_nonnulls(height, hash) <> 1 THEN
+    RAISE EXCEPTION 'pass height or hash (exactly one)';
+  END IF;
+  IF height IS NOT NULL THEN RETURN height; END IF;
+  SELECT b.id::bigint INTO h FROM ${s}.blocks b WHERE b.hash = upper(_block_height_of.hash) LIMIT 1;
+  RETURN h;
 END $$;
 
 -- Written settlement heights in [range_start, range_end), the settlement heights the chain has there (distinct
