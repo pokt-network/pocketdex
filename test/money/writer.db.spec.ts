@@ -1905,6 +1905,40 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
+  it("supplier_rev_share_wallets: a backfill attempt that runs out of its statement timeout rolls back and is retried", async () => {
+    const holder = new Client({ connectionString: URL });
+    await holder.connect();
+    const watcher = new Client({ connectionString: URL });
+    await watcher.connect();
+    try {
+      await rswSchema("rsw_to", `('s0', 'svc', '[{"address": "w0"}]', int8range(10, NULL)), ('s1', 'svc', '[{"address": "w1"}]', int8range(20, NULL))`);
+      // a block holds w0 longer than the batch's 1.5 s (a retry's 1 s pause counts in it too): the statement timeout ends the
+      // attempt before lock_timeout (2 s)
+      await holder.query("BEGIN");
+      await holder.query(insertRevShareWalletsSql("rsw_to"), [["w0"], ["s0"], 50]);
+      const run = psqlScript("backfill_rev_share_wallets.sql", "rsw_to", ["batch_timeout=1500ms"]);
+      for (const until = Date.now() + 20_000; ; await new Promise((r) => setTimeout(r, 50))) {
+        const { rows } = await watcher.query(
+          `SELECT 1 FROM pg_stat_activity WHERE application_name = 'psql' AND query LIKE '%rsw_to.supplier_rev_share_wallets AS w%'
+             AND wait_event = 'PgSleep'`
+        );
+        if (rows.length > 0) break;
+        assert.ok(Date.now() < until, "the backfill batch never slept before a retry");
+      }
+      await holder.query("COMMIT");
+      const { code, stderr } = await run;
+      assert.equal(code, 0, stderr);
+      assert.match(stderr, /batch 1\/1 attempt 1: canceling statement due to statement timeout, retrying in 1 s/);
+      assert.match(stderr, /batch 1\/1: 2 pairs inserted or lowered \(attempt [2-9]\)/);
+      assert.deepEqual(await rswRows("rsw_to"), ["w0 s0 10", "w1 s1 20"]);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await holder.end();
+      await watcher.end();
+      await c.query("DROP SCHEMA IF EXISTS rsw_to CASCADE");
+    }
+  });
+
   it("supplier_rev_share_wallets: the coverage mark refuses while a pair is missing, extra or above its first height, and writes nothing", async () => {
     try {
       await rswSchema("rsw_cov", `('s1', 'svc', '[{"address": "w1"}, {"address": "w2"}]', int8range(10, NULL))`);
