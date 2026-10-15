@@ -6,6 +6,7 @@
 // (.local/ab/money/make_ci_fixtures.py in the author's checkout), not by the code under test.
 /* eslint-disable @typescript-eslint/no-floating-promises */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -1737,6 +1738,95 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(rewinds, [12]);
     } finally {
       await c.query("ROLLBACK");
+    }
+  });
+
+  // scripts/*_rev_share_wallets.sql as the runbook runs them: psql (the CI image has postgresql-client and scripts/) in its
+  // own session, so over a schema the test commits, not one inside c's transaction
+  const psqlScript = (script: string, schema: string, vars: Array<string> = []) =>
+    new Promise<{ code: number | null; stderr: string; stdout: string }>((resolve, reject) => {
+      const args = [URL as string, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", `schema=${schema}`, ...vars.flatMap((v) => ["-v", v])];
+      const p = spawn("psql", [...args, "-f", path.join(__dirname, "..", "..", "scripts", script)]);
+      let stderr = "";
+      let stdout = "";
+      p.stderr.on("data", (d) => (stderr += String(d)));
+      p.stdout.on("data", (d) => (stdout += String(d)));
+      p.on("error", reject);
+      p.on("close", (code) => resolve({ code, stderr, stdout }));
+    });
+  const rswSchema = async (schema: string, configs: string) => {
+    await c.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; CREATE SCHEMA ${schema}; ${createSupplierRevShareWalletsFn(schema)}
+      CREATE TABLE ${schema}.supplier_service_configs (supplier_id text, service_id text, rev_share jsonb, _block_range int8range);
+      INSERT INTO ${schema}.supplier_service_configs VALUES ${configs};`);
+  };
+  const rswRows = async (schema: string) =>
+    (await c.query(`SELECT wallet_address || ' ' || supplier_id || ' ' || first_seen_height k FROM ${schema}.supplier_rev_share_wallets ORDER BY 1`))
+      .rows.map((r) => String(r.k));
+
+  it("supplier_rev_share_wallets: a live backfill batch waits for a block's uncommitted pairs, retries, and does not deadlock", async () => {
+    const holder = new Client({ connectionString: URL });
+    await holder.connect();
+    try {
+      // 4 suppliers in batches of 2: two ranges, the first and the last open
+      await rswSchema("rsw_bf", `('s0', 'svc', '[{"address": "w0"}]', int8range(10, 20)), ('s1', 'svc', '[{"address": "w1"}]', int8range(20, NULL)),
+        ('s2', 'svc', '[{"address": "w2"}]', int8range(30, NULL)), ('s3', 'svc', '[{"address": "w3"}]', int8range(40, NULL)),
+        ('s3', 'svc', '[{"address": "w9"}]', 'empty'::int8range)`);
+      // a block at 50 writes s1's and s0's pairs, given out of order, and has not committed
+      await holder.query("BEGIN");
+      await holder.query(insertRevShareWalletsSql("rsw_bf"), [["w1", "w0"], ["s1", "s0"], 50]);
+      // the block took its row locks in key order, as the batches do: inserted, and so locked, w0 before w1
+      const order = await holder.query(`SELECT wallet_address FROM rsw_bf.supplier_rev_share_wallets ORDER BY ctid`);
+      assert.deepEqual(order.rows.map((r) => r.wallet_address), ["w0", "w1"]);
+      const run = psqlScript("backfill_rev_share_wallets.sql", "rsw_bf", ["batch_size=2"]);
+      // the first batch (s0, s1) waits on the block's w0 until lock_timeout (2 s), rolls back, and retries
+      await new Promise((r) => setTimeout(r, 2600));
+      await holder.query("COMMIT");
+      const { code, stderr } = await run;
+      assert.equal(code, 0, stderr);
+      assert.match(stderr, /batch 1\/2 attempt 1: canceling statement due to lock timeout, retrying in 1 s/);
+      assert.match(stderr, /batch 1\/2: 2 pairs inserted or lowered \(attempt [2-9]\)/);
+      assert.match(stderr, /batch 2\/2: 2 pairs inserted or lowered \(attempt 1\)/);
+      assert.doesNotMatch(stderr, /deadlock/);
+      // the block's pairs are lowered to the configs' first heights; the empty version adds nothing
+      assert.deepEqual(await rswRows("rsw_bf"), ["w0 s0 10", "w1 s1 20", "w2 s2 30", "w3 s3 40"]);
+      // a second run changes nothing
+      const again = await psqlScript("backfill_rev_share_wallets.sql", "rsw_bf", ["batch_size=2"]);
+      assert.equal(again.code, 0, again.stderr);
+      assert.equal((again.stderr.match(/: 0 pairs inserted or lowered \(attempt 1\)/g) ?? []).length, 2, again.stderr);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await holder.end();
+      await c.query("DROP SCHEMA IF EXISTS rsw_bf CASCADE");
+    }
+  });
+
+  it("supplier_rev_share_wallets: the coverage mark refuses while a pair is missing or extra, and writes nothing", async () => {
+    try {
+      await rswSchema("rsw_cov", `('s1', 'svc', '[{"address": "w1"}, {"address": "w2"}]', int8range(10, NULL))`);
+      const covered = async () => Number((await c.query(`SELECT count(*) n FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows[0].n);
+      // w2 missing, and an extra pair no config version lists (a rewind racing a backfill batch)
+      await c.query(`INSERT INTO rsw_cov.supplier_rev_share_wallets VALUES ('w1', 's1', 10), ('w8', 's1', 12)`);
+      let r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.notEqual(r.code, 0);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 1 pairs missing .*, 1 extra/);
+      assert.equal(await covered(), 0);
+      // extra alone still refuses
+      await c.query(`INSERT INTO rsw_cov.supplier_rev_share_wallets VALUES ('w2', 's1', 10)`);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.notEqual(r.code, 0);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 0 pairs missing .*, 1 extra/);
+      assert.equal(await covered(), 0);
+      // complete: marked, and a second run keeps the first row
+      await c.query(`DELETE FROM rsw_cov.supplier_rev_share_wallets WHERE wallet_address = 'w8'`);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.equal(r.code, 0, r.stderr);
+      const first = (await c.query(`SELECT backfilled_at FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows;
+      assert.equal(first.length, 1);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.equal(r.code, 0, r.stderr);
+      assert.deepEqual((await c.query(`SELECT backfilled_at FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows, first);
+    } finally {
+      await c.query("DROP SCHEMA IF EXISTS rsw_cov CASCADE");
     }
   });
 

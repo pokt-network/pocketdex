@@ -14,7 +14,7 @@
 -- Not with psql -1 / --single-transaction: each batch must commit on its own.
 --
 -- The suppliers are split into batches of 1,000 by supplier_id range (mainnet, 2026-10-14: 10,252 suppliers, 11
--- batches); the first and last ranges are open, so a supplier added meanwhile falls in one. Each batch is one DO
+-- batches; -v batch_size=N changes the size, the DB test uses 2); the first and last ranges are open, so a supplier added meanwhile falls in one. Each batch is one DO
 -- statement, so its own short transaction: no table lock, no temporary table, and no snapshot outlives a batch (psql
 -- \gexec reads the list of batches whole, then runs them one by one). A batch inserts its pairs ORDER BY
 -- (wallet_address, supplier_id), as the indexer's insert does, so the two take their row locks in the same order and
@@ -25,6 +25,10 @@
 -- one batch's INSERT.
 \set ON_ERROR_STOP on
 \unset FETCH_COUNT
+\if :{?batch_size}
+\else
+  \set batch_size 1000
+\endif
 SET jit = off;
 SET lock_timeout = '2s';
 SELECT format($batch$
@@ -62,9 +66,9 @@ $batch$, :'schema',
   n, count(*) OVER ())
 FROM (
   SELECT CASE WHEN n = 1 THEN NULL ELSE supplier_id END AS lo, lead(supplier_id) OVER (ORDER BY supplier_id) AS hi, n
-  FROM (SELECT supplier_id, row_number() OVER (ORDER BY supplier_id) AS rn, (row_number() OVER (ORDER BY supplier_id) - 1) / 1000 + 1 AS n
+  FROM (SELECT supplier_id, row_number() OVER (ORDER BY supplier_id) AS rn, (row_number() OVER (ORDER BY supplier_id) - 1) / :batch_size + 1 AS n
         FROM (SELECT DISTINCT supplier_id FROM :"schema".supplier_service_configs WHERE supplier_id IS NOT NULL) d) s
-  WHERE (rn - 1) % 1000 = 0
+  WHERE (rn - 1) % :batch_size = 0
 ) b
 ORDER BY n
 \gexec
