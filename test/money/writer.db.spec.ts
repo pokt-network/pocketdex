@@ -1904,7 +1904,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
-  it("supplier_rev_share_wallets: the coverage mark refuses while a pair is missing or extra, and writes nothing", async () => {
+  it("supplier_rev_share_wallets: the coverage mark refuses while a pair is missing, extra or above its first height, and writes nothing", async () => {
     try {
       await rswSchema("rsw_cov", `('s1', 'svc', '[{"address": "w1"}, {"address": "w2"}]', int8range(10, NULL))`);
       const covered = async () => Number((await c.query(`SELECT count(*) n FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows[0].n);
@@ -1912,16 +1912,22 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       await c.query(`INSERT INTO rsw_cov.supplier_rev_share_wallets VALUES ('w1', 's1', 10), ('w8', 's1', 12)`);
       let r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
       assert.notEqual(r.code, 0);
-      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 1 pairs missing .*, 1 extra/);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 1 pairs missing .*, 1 extra .*, 0 above their first height/);
       assert.equal(await covered(), 0);
-      // extra alone still refuses
-      await c.query(`INSERT INTO rsw_cov.supplier_rev_share_wallets VALUES ('w2', 's1', 10)`);
+      // extra alone still refuses (w2 is in, but at 15: a block wrote it before the backfill lowered it to 10)
+      await c.query(`INSERT INTO rsw_cov.supplier_rev_share_wallets VALUES ('w2', 's1', 15)`);
       r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
       assert.notEqual(r.code, 0);
-      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 0 pairs missing .*, 1 extra/);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 0 pairs missing .*, 1 extra .*, 1 above their first height/);
+      assert.equal(await covered(), 0);
+      // a pair above the first height a version lists it at refuses alone too: a rewind to 12 would delete w2 for good
+      await c.query(`DELETE FROM rsw_cov.supplier_rev_share_wallets WHERE wallet_address = 'w8'`);
+      r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
+      assert.notEqual(r.code, 0);
+      assert.match(r.stderr, /supplier_rev_share_wallets is not complete: 0 pairs missing .*, 0 extra .*, 1 above their first height/);
       assert.equal(await covered(), 0);
       // complete: marked, and a second run keeps the first row
-      await c.query(`DELETE FROM rsw_cov.supplier_rev_share_wallets WHERE wallet_address = 'w8'`);
+      await c.query(`UPDATE rsw_cov.supplier_rev_share_wallets SET first_seen_height = 10 WHERE wallet_address = 'w2'`);
       r = await psqlScript("set_rev_share_wallets_coverage.sql", "rsw_cov");
       assert.equal(r.code, 0, r.stderr);
       const first = (await c.query(`SELECT backfilled_at FROM rsw_cov.supplier_rev_share_wallets_coverage`)).rows;
