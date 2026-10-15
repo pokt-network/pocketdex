@@ -1391,18 +1391,22 @@ ${covered(null, true)}
   rg := ${s}._block_heights(range_start, range_end);
   IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
   bh := coalesce(before_height, 9223372036854775807);
+  -- the page (OFFSET, LIMIT) is cut before the join to blocks, so only its rows look up their block time (offset 1M
+  -- over the 188 services with updates on mainnet, 2026-10-15: 1.58 s against 2.86 s joining every row read)
   RETURN QUERY
   SELECT d.block_id::bigint, bl.timestamp AT TIME ZONE 'UTC', d.service_id, d.prev_num_relays_ema, d.new_num_relays_ema,
          d.prev_target_hash_hex_encoded, d.new_target_hash_hex_encoded, cv.covered_from, cv.covered_to, cv.gaps
-  FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
-    SELECT e.block_id, e.service_id, e.prev_num_relays_ema, e.new_num_relays_ema, e.prev_target_hash_hex_encoded,
-           e.new_target_hash_hex_encoded
-    FROM ${s}.event_relay_mining_difficulty_updateds e
-    WHERE e.service_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi
-      AND (e.block_id < bh OR e.block_id = bh AND e.service_id < before_service_id)
-    ORDER BY e.block_id DESC LIMIT row_limit::bigint + row_offset) d
+  FROM (
+    SELECT p.* FROM (SELECT DISTINCT unnest(services) id) u CROSS JOIN LATERAL (
+      SELECT e.block_id, e.service_id, e.prev_num_relays_ema, e.new_num_relays_ema, e.prev_target_hash_hex_encoded,
+             e.new_target_hash_hex_encoded
+      FROM ${s}.event_relay_mining_difficulty_updateds e
+      WHERE e.service_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi
+        AND (e.block_id < bh OR e.block_id = bh AND e.service_id < before_service_id)
+      ORDER BY e.block_id DESC LIMIT row_limit::bigint + row_offset) p
+    ORDER BY p.block_id DESC, p.service_id DESC LIMIT row_limit OFFSET row_offset) d
   JOIN ${s}.blocks bl ON bl.id = d.block_id
-  ORDER BY d.block_id DESC, d.service_id DESC LIMIT row_limit OFFSET row_offset;
+  ORDER BY d.block_id DESC, d.service_id DESC;
 END $$;
 
 -- Supplier domains ranked by what their suppliers claimed: domain_service_daily_rewards summed over the UTC days that
