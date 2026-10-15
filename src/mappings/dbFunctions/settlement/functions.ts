@@ -517,8 +517,9 @@ BEGIN
                       , ('get_created_claims_count', 'from_session_end_height')
                       , ('get_service_summary', 'owners')
                       , ('get_height_at', 'beyond_tip')
-                      , ('get_supplier_fleet', 'after_supplier_id')
                       , ('get_claims', 'current_owner_id')
+                      , ('get_supplier_fleet', 'row_offset')
+                      , ('get_application_fleet', 'row_offset')
                       , ('get_gateway_delegations', 'height')
                       , ('get_staked_suppliers', 'at_height')
                       , ('get_relay_mining_difficulty', 'row_offset')
@@ -1028,12 +1029,13 @@ END $$;
 -- service_domains: the endpoint root domains of its live configs for those services. row_limit (up to 1000) pages by
 -- keyset on (stake_upokt descending, supplier_id) with after_stake_upokt / after_supplier_id, and counts services for
 -- that page only: a page of 100 of the 4,548 Staked suppliers in 34 ms on mainnet, where every row takes 0.17-0.23 s
--- (2026-10-14). NULL = every row, as before.
+-- (2026-10-14). NULL = every row, as before. row_offset skips that many rows of the order first, so a page at any depth
+-- counts services for its own rows only.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_fleet(suppliers text[] DEFAULT NULL, owners text[] DEFAULT NULL,
   operators text[] DEFAULT NULL, domains text[] DEFAULT NULL, services text[] DEFAULT NULL,
   stake_statuses text[] DEFAULT NULL, by_supplier boolean DEFAULT true, operator_scope text DEFAULT 'now',
   max_stake_upokt numeric DEFAULT NULL, row_limit integer DEFAULT NULL, after_stake_upokt numeric DEFAULT NULL,
-  after_supplier_id text DEFAULT NULL)
+  after_supplier_id text DEFAULT NULL, row_offset integer DEFAULT 0)
 RETURNS TABLE(supplier_id text, owner_id text, stake_status text, stake_upokt numeric, service_count bigint,
   supplier_count bigint, service_domains text[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
@@ -1044,6 +1046,9 @@ BEGIN
   END IF;
   IF row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000, or NULL for every row (has %)', row_limit;
+  END IF;
+  IF row_offset IS NULL OR row_offset < 0 THEN
+    RAISE EXCEPTION 'row_offset must be 0 or more (has %)', row_offset;
   END IF;
   IF (after_stake_upokt IS NULL) <> (after_supplier_id IS NULL) OR (after_supplier_id IS NOT NULL AND row_limit IS NULL) THEN
     RAISE EXCEPTION 'pass both after_stake_upokt and after_supplier_id (the last row of the previous page) with row_limit, or neither';
@@ -1089,7 +1094,7 @@ ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
     SELECT f.* FROM f
     WHERE by_supplier AND (after_supplier_id IS NULL OR f.stake_amount < after_stake_upokt
                            OR f.stake_amount = after_stake_upokt AND f.id > after_supplier_id)
-    ORDER BY f.stake_amount DESC, f.id LIMIT row_limit
+    ORDER BY f.stake_amount DESC, f.id LIMIT row_limit OFFSET row_offset
   ), sv AS (
     SELECT c.supplier_id, c.service_id, c.domains FROM ${s}.supplier_service_configs c
     WHERE upper_inf(c._block_range) AND c.supplier_id IN (SELECT p.id FROM p)
@@ -1169,15 +1174,23 @@ END $$;
 -- those with a live service row for one of services and to those delegating to one of gateways now (all combined; none
 -- = every application), and to some stake statuses. by_application: one row each (status, stake, how many services and
 -- gateways it has now), largest stake first; false: one row for all ('all' in application_id and stake_status, NULL
--- counts).
+-- counts). row_limit (up to 1000; NULL = every row) and row_offset return one page of that order, counted for its own
+-- rows only.
 CREATE OR REPLACE FUNCTION ${s}.get_application_fleet(applications text[] DEFAULT NULL, services text[] DEFAULT NULL,
-  gateways text[] DEFAULT NULL, stake_statuses text[] DEFAULT NULL, by_application boolean DEFAULT true)
+  gateways text[] DEFAULT NULL, stake_statuses text[] DEFAULT NULL, by_application boolean DEFAULT true,
+  row_limit integer DEFAULT NULL, row_offset integer DEFAULT 0)
 RETURNS TABLE(application_id text, stake_status text, stake_upokt numeric, service_count bigint, gateway_count bigint,
   application_count bigint)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   IF stake_statuses IS NOT NULL AND NOT stake_statuses <@ ARRAY['Staked', 'Unstaking', 'Unstaked'] THEN
     RAISE EXCEPTION 'stake_statuses takes Staked, Unstaking and Unstaked (has %)', stake_statuses;
+  END IF;
+  IF row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000, or NULL for every row (has %)', row_limit;
+  END IF;
+  IF row_offset IS NULL OR row_offset < 0 THEN
+    RAISE EXCEPTION 'row_offset must be 0 or more (has %)', row_offset;
   END IF;
   IF applications IS NOT NULL THEN PERFORM ${s}._validate(applications, 'applications', NULL, NULL, NULL); END IF;
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
@@ -1193,13 +1206,16 @@ BEGIN
              AND a.service_id = ANY(services) AND a._block_range @> 9223372036854775807::bigint))
       AND (gateways IS NULL OR EXISTS (SELECT 1 FROM ${s}.application_gateways g WHERE g.application_id = ap.id
              AND g.gateway_id = ANY(gateways) AND g._block_range @> 9223372036854775807::bigint))
+  ), p AS (
+    -- the rows of this call, in order, before their counts: every application, or one page (row_limit, row_offset)
+    SELECT f.* FROM f WHERE by_application ORDER BY f.stake_amount DESC, f.id LIMIT row_limit OFFSET row_offset
   )
-  SELECT f.id, f.st, f.stake_amount,
+  SELECT p.id, p.st, p.stake_amount,
          (SELECT count(DISTINCT a.service_id) FROM ${s}.application_services a
-          WHERE a.application_id = f.id AND a._block_range @> 9223372036854775807::bigint),
+          WHERE a.application_id = p.id AND a._block_range @> 9223372036854775807::bigint),
          (SELECT count(DISTINCT g.gateway_id) FROM ${s}.application_gateways g
-          WHERE g.application_id = f.id AND g._block_range @> 9223372036854775807::bigint), 1::bigint
-  FROM f WHERE by_application
+          WHERE g.application_id = p.id AND g._block_range @> 9223372036854775807::bigint), 1::bigint
+  FROM p
   UNION ALL
   SELECT 'all', 'all', coalesce((SELECT sum(f.stake_amount) FROM f), 0), NULL, NULL, (SELECT count(*) FROM f)
   WHERE NOT by_application

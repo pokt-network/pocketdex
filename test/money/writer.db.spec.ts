@@ -2095,6 +2095,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["row_limit => 2", ["s3 own-b Staked 500 1 1", "s1 own-a Staked 300 2 1"]],
         ["row_limit => 2, after_stake_upokt => 300, after_supplier_id => 's1'", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
         ["row_limit => 1, after_stake_upokt => 500, after_supplier_id => 's3', stake_statuses => ARRAY['Staked']", ["s1 own-a Staked 300 2 1"]],
+        // row_offset: a page at any depth of the same order
+        ["row_limit => 2, row_offset => 1", ["s1 own-a Staked 300 2 1", "s2 own-a Unstaking 100 0 1"]],
+        ["row_offset => 3", ["s4 own-b Unstaked 50 0 1"]],
       ] as const)
         assert.deepEqual([args, await fleet(args)], [args, want]);
       // an empty version (created and closed in one block) shares revenue with nobody, on either path
@@ -2201,6 +2204,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["applications => ARRAY['a2', 'a3'], stake_statuses => ARRAY['Staked']", ["a3 Staked 70 0 2 1"]],
         ["stake_statuses => ARRAY['Staked'], by_application => false", ["all all 90   2"]],
         ["applications => ARRAY['none'], by_application => false", ["all all 0   0"]],
+        // one page of the order, counted for its own rows
+        ["row_limit => 1, row_offset => 1", ["a1 Staked 20 2 1 1"]],
       ] as const)
         assert.deepEqual(
           [args, await rows(`SELECT application_id, stake_status, stake_upokt::text, service_count::text, gateway_count::text,
@@ -2222,6 +2227,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       }
       for (const [args, err] of [
         ["row_limit => 0", /row_limit must be between 1 and 1000, or NULL/],
+        ["row_offset => -1", /row_offset must be 0 or more/],
         ["row_limit => 10, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
         ["after_stake_upokt => 300, after_supplier_id => 's1'", /pass both after_stake_upokt and after_supplier_id/],
         ["owners => ARRAY['own-a'], domains => ARRAY['a.net']", /pass one of suppliers, owners/],
