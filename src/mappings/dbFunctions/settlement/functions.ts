@@ -521,6 +521,7 @@ BEGIN
                       , ('get_claims', 'current_owner_id')
                       , ('get_gateway_delegations', 'height')
                       , ('get_staked_suppliers', 'at_height')
+                      , ('get_relay_mining_difficulty', 'row_offset')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -1302,9 +1303,11 @@ END $$;
 -- service), with the relays EMA and the target hash before and after it; the newest row of a service is its current
 -- difficulty (the Service entity's own difficulty columns are not written: mainnet 2026-10-13). Keyset paging on (height, service_id), like get_claims. Covers the indexed blocks. Each service's
 -- updates through the GiST index on (service_id, _block_range); 1.06M updates on mainnet (2026-10-13).
+-- row_offset skips that many rows of the order first (each service reads row_limit + row_offset of its newest), for a
+-- page past the first 1000 in one call.
 CREATE OR REPLACE FUNCTION ${s}.get_relay_mining_difficulty(services text[], range_start timestamptz,
   range_end timestamptz, row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL,
-  before_service_id text DEFAULT NULL)
+  before_service_id text DEFAULT NULL, row_offset integer DEFAULT 0)
 RETURNS TABLE(height bigint, block_time timestamptz, service_id text, prev_num_relays_ema numeric,
   new_num_relays_ema numeric, prev_target_hash_hex text, new_target_hash_hex text, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
@@ -1314,6 +1317,9 @@ BEGIN
   PERFORM ${s}._validate(services, 'services', range_start, range_end, NULL);
   IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
     RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height / before_service_id', row_limit;
+  END IF;
+  IF row_offset IS NULL OR row_offset < 0 THEN
+    RAISE EXCEPTION 'row_offset must be 0 or more (has %)', row_offset;
   END IF;
   IF (before_height IS NULL) <> (before_service_id IS NULL) THEN
     RAISE EXCEPTION 'pass both before_height and before_service_id (the last row of the previous page), or neither';
@@ -1331,9 +1337,9 @@ ${covered(null, true)}
     FROM ${s}.event_relay_mining_difficulty_updateds e
     WHERE e.service_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi
       AND (e.block_id < bh OR e.block_id = bh AND e.service_id < before_service_id)
-    ORDER BY e.block_id DESC LIMIT row_limit) d
+    ORDER BY e.block_id DESC LIMIT row_limit + row_offset) d
   JOIN ${s}.blocks bl ON bl.id = d.block_id
-  ORDER BY d.block_id DESC, d.service_id DESC LIMIT row_limit;
+  ORDER BY d.block_id DESC, d.service_id DESC LIMIT row_limit OFFSET row_offset;
 END $$;
 
 -- Supplier domains ranked by what their suppliers claimed: domain_service_daily_rewards summed over the UTC days that
