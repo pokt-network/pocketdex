@@ -1107,7 +1107,8 @@ END $$;
 -- which get_relay_mining_difficulty lists one by one (the Service entity's own difficulty columns are not written).
 -- SubQuery's GiST on (service_id, _block_range) cannot order: it read every update of every service (1.06M) and took
 -- 2.2 s for the 174 live services (mainnet replica, 2026-10-14); idx_rmd_service_block reads one per service.
--- owners keeps the services those addresses own now (the Service entity's owner_id).
+-- owners keeps the services those addresses own now (the Service entity's owner_id), each with its row, zeros when it
+-- has no supplier config or application now.
 CREATE OR REPLACE FUNCTION ${s}.get_service_summary(services text[] DEFAULT NULL, owners text[] DEFAULT NULL)
 RETURNS TABLE(service_id text, staked_suppliers bigint, suppliers bigint, staked_applications bigint,
   applications bigint, num_relays_ema numeric, target_hash_hex text, difficulty_updated_height bigint)
@@ -1135,14 +1136,18 @@ BEGIN
     LEFT JOIN ${s}.applications ap ON ap.id = a.application_id AND ap._block_range @> 9223372036854775807::bigint
     WHERE a._block_range @> 9223372036854775807::bigint AND (services IS NULL OR a.service_id = ANY(services))
     GROUP BY 1
+  ), os AS (
+    -- with owners, every service they own, also one with no supplier config or application now (zeros)
+    SELECT u.id service_id FROM unnest(get_service_summary.services) u(id) WHERE owners IS NOT NULL
   )
-  SELECT coalesce(sc.service_id, ac.service_id), coalesce(sc.staked, 0), coalesce(sc.n, 0), coalesce(ac.staked, 0),
+  SELECT coalesce(sc.service_id, ac.service_id, os.service_id), coalesce(sc.staked, 0), coalesce(sc.n, 0), coalesce(ac.staked, 0),
          coalesce(ac.n, 0), d.new_num_relays_ema::numeric, d.new_target_hash_hex_encoded::text, d.block_id::bigint
   FROM sc FULL JOIN ac ON ac.service_id = sc.service_id
+  FULL JOIN os ON os.service_id = coalesce(sc.service_id, ac.service_id)
   -- the newest difficulty update of the service (idx_rmd_service_block)
   LEFT JOIN LATERAL (
     SELECT e.new_num_relays_ema, e.new_target_hash_hex_encoded, e.block_id FROM ${s}.event_relay_mining_difficulty_updateds e
-    WHERE e.service_id = coalesce(sc.service_id, ac.service_id) ORDER BY e.block_id DESC LIMIT 1
+    WHERE e.service_id = coalesce(sc.service_id, ac.service_id, os.service_id) ORDER BY e.block_id DESC LIMIT 1
   ) d ON true
   ORDER BY 1;
 END $$;
