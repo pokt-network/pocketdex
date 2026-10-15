@@ -2811,13 +2811,21 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       // the count of the same claims, per requested supplier, 0 for one that made none
       const count = async (args: string) =>
         (
-          await c.query(`SELECT concat_ws(' ', supplier_id, claims, first_height, last_height) k FROM ${S}.get_created_claims_count(${args})`)
+          await c.query(`SELECT concat_ws(' ', supplier_id, claims, first_height, last_height, beyond_tip) k FROM ${S}.get_created_claims_count(${args})`)
         ).rows.map((r) => String(r.k));
-      assert.deepEqual(await count("ARRAY['s2', 's1', 'nobody', 's1'], NULL, NULL"), ["nobody 0", "s1 3 100 200", "s2 1 250 250"]);
-      assert.deepEqual(await count("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), ["s1 2 200 200"]);
-      // the claims of sessions ending at or after 190, as the list gives them; a range past the last block counts none
-      assert.deepEqual(await count("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), ["s1 2 200 200", "s2 1 250 250"]);
-      assert.deepEqual(await count("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), ["s1 0"]);
+      assert.deepEqual(await count("ARRAY['s2', 's1', 'nobody', 's1'], NULL, NULL"), [
+        "nobody 0 f", "s1 3 100 200 f", "s2 1 250 250 f",
+      ]);
+      assert.deepEqual(await count("ARRAY['s1'], '2026-03-01T03:00:00Z', NULL"), ["s1 2 200 200 f"]);
+      // the claims of sessions ending at or after 190, as the list gives them
+      assert.deepEqual(await count("ARRAY['s1', 's2'], NULL, NULL, from_session_end_height => 190"), [
+        "s1 2 200 200 f", "s2 1 250 250 f",
+      ]);
+      // a range past the last block (300, at 05:00) counts none and says beyond_tip; one ending past it counts what is
+      // indexed and says it too; one ending at the last block's time is final
+      assert.deepEqual(await count("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), ["s1 0 t"]);
+      assert.deepEqual(await count("ARRAY['s1'], NULL, '2030-01-01T00:00:00Z'"), ["s1 3 100 200 t"]);
+      assert.deepEqual(await count("ARRAY['s1'], NULL, '2026-03-01T05:00:00Z'"), ["s1 3 100 200 f"]);
       assert.deepEqual(await got("ARRAY['s1'], '2030-01-01T00:00:00Z', NULL, from_session_end_height => 190"), []);
       const many = Array.from({ length: 21 }, (_, i) => `'s${i}'`).join(", ");
       for (const fn of ["get_created_claims", "get_created_claims_count"]) {

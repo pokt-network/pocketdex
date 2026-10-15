@@ -515,7 +515,7 @@ BEGIN
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
            JOIN (VALUES ('get_supplier_earnings', 'gateway_ids')
                       , ('get_created_claims', 'from_session_end_height')
-                      , ('get_created_claims_count', 'from_session_end_height')
+                      , ('get_created_claims_count', 'beyond_tip')
                       , ('get_service_summary', 'owners')
                       , ('get_height_at', 'beyond_tip')
                       , ('get_claims', 'current_owner_id')
@@ -1632,13 +1632,15 @@ END $$;
 -- Created claims (MsgCreateClaim) counted per supplier, for up to 20 suppliers, in [range_start, range_end): what
 -- msgCreateClaims { totalCount } answered, which get_created_claims can only list row by row. One row per requested
 -- supplier, 0 when it made none, with the first and last height counted. Covers the indexed blocks (_block_heights of
--- the range). msg_create_claims has only GiST indexes: the busiest mainnet supplier's 30 days in 830 ms on the replica
+-- the range). beyond_tip = no indexed block at or after range_end yet (range_end NULL: range_start), as get_height_at:
+-- the indexer has not reached the end of the range, so the count may still grow, and a 0 there says nothing (a range
+-- past the tip counted 0, as an idle supplier does). One probe of idx_blocks_timestamp_id. msg_create_claims has only GiST indexes: the busiest mainnet supplier's 30 days in 830 ms on the replica
 -- (2026-10-14), hence the cap.
 CREATE OR REPLACE FUNCTION ${s}.get_created_claims_count(suppliers text[], range_start timestamptz,
   range_end timestamptz, from_session_end_height bigint DEFAULT NULL)
-RETURNS TABLE(supplier_id text, claims bigint, first_height bigint, last_height bigint)
+RETURNS TABLE(supplier_id text, claims bigint, first_height bigint, last_height bigint, beyond_tip boolean)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record;
+DECLARE rg record; bt boolean;
 BEGIN
   IF suppliers IS NULL OR cardinality(suppliers) < 1 OR cardinality(suppliers) > 20 THEN
     RAISE EXCEPTION 'suppliers must have between 1 and 20 elements (has %)', coalesce(cardinality(suppliers), 0);
@@ -1647,8 +1649,10 @@ BEGIN
   rg := ${s}._block_heights(range_start, range_end);
   -- as get_created_claims: the claims of sessions ending at or after it, read from that height
   rg.lo := CASE WHEN rg.lo IS NOT NULL THEN greatest(rg.lo, from_session_end_height) END;
+  bt := coalesce(range_end, range_start) IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM ${s}.blocks bl WHERE bl.timestamp >= (coalesce(range_end, range_start) AT TIME ZONE 'UTC'));
   RETURN QUERY
-  SELECT u.sid, coalesce(c.n, 0)::bigint, c.lo::bigint, c.hi::bigint
+  SELECT u.sid, coalesce(c.n, 0)::bigint, c.lo::bigint, c.hi::bigint, bt
   FROM (SELECT DISTINCT unnest(suppliers) sid) u
   LEFT JOIN LATERAL (
     SELECT count(*) n, min(m.block_id) lo, max(m.block_id) hi FROM ${s}.msg_create_claims m
