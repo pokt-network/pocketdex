@@ -2203,7 +2203,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           ('svc-y', 'own-s', int8range(1, 5)), ('svc-y', 'own-t', int8range(5, NULL));`);
       const rows = async (sql: string) => (await c.query(sql)).rows.map((r) => Object.values(r).join(" "));
       for (const [args, want] of [
-        ["", ["svc-x 2 2 1 2 30 fd 20", "svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        // every live service, svc-w (no config or application now) with zeros
+        ["", ["svc-w 0 0 0 0   ", "svc-x 2 2 1 2 30 fd 20", "svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
+        ["ARRAY['svc-w', 'svc-x']", ["svc-w 0 0 0 0   ", "svc-x 2 2 1 2 30 fd 20"]],
         ["ARRAY['svc-y', 'svc-z', 'none']", ["svc-y 1 1 0 0   ", "svc-z 0 0 1 1 7 aa 5"]],
         // the services an address owns now (svc-y was own-s's before)
         ["owners => ARRAY['own-s']", ["svc-w 0 0 0 0   ", "svc-x 2 2 1 2 30 fd 20", "svc-z 0 0 1 1 7 aa 5"]],
