@@ -21,7 +21,11 @@ import {
   rewindRevShareWalletsSql,
 } from "../../src/mappings/dbFunctions/revShareWallets";
 import { getSupplierStatsByDomainsFn } from "../../src/mappings/dbFunctions/rewards";
-import { CATALOG_FUNCTIONS, createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
+import {
+  blockTimeColumnsSql,
+  CATALOG_FUNCTIONS,
+  createSettlementFunctionsFn,
+} from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementTablesFn, ROLLUP_TABLES } from "../../src/mappings/dbFunctions/settlement/schema";
 import {
   createSettlementSmartTagsFn,
@@ -1508,6 +1512,42 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
     const d = await c.query(`SELECT obj_description('${S}.get_height_at(timestamptz)'::regprocedure, 'pg_proc') d`);
     assert.match(String(d.rows[0].d), /^The last indexed block at or before at_time/);
+  });
+
+  it("the block-time computed columns give each row its block's time, and stay published", async () => {
+    await c.query("BEGIN");
+    try {
+      // blocks 1 (2026-01-01) and 999999999 (2026-09-01 12:00); a row at a height with no block row yet gets NULL
+      await c.query(`
+        CREATE TABLE ${S}.transactions (id text, block_id numeric);
+        CREATE TABLE ${S}.native_transfers (id text, block_id numeric);
+        CREATE TABLE ${S}.balances (id text, last_updated_block_id numeric);
+        INSERT INTO ${S}.transactions VALUES ('t1', 999999999), ('t2', 5);
+        INSERT INTO ${S}.native_transfers VALUES ('n1', 1);
+        INSERT INTO ${S}.balances VALUES ('b1', 999999999);`);
+      // the startup DDL, twice (idempotent), then the smart tags, which must not hide them
+      await c.query(blockTimeColumnsSql(S));
+      await c.query(blockTimeColumnsSql(S));
+      await c.query(createSettlementSmartTagsFn(S));
+      const { rows } = await c.query(`
+        SELECT 'tx ' || t.id || ' ' || coalesce(to_char(${S}.transactions_block_time(t) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), '-') k
+        FROM ${S}.transactions t
+        UNION ALL SELECT 'nt ' || n.id || ' ' || to_char(${S}.native_transfers_block_time(n) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI')
+        FROM ${S}.native_transfers n
+        UNION ALL SELECT 'bal ' || b.id || ' ' || to_char(${S}.balances_last_updated_time(b) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI')
+        FROM ${S}.balances b ORDER BY 1`);
+      assert.deepEqual(rows.map((r) => r.k), ["bal b1 2026-09-01 12:00", "nt n1 2026-01-01 00:00", "tx t1 2026-09-01 12:00", "tx t2 -"]);
+      const d = await c.query(`SELECT p.proname, count(*) OVER (PARTITION BY p.proname) n, obj_description(p.oid, 'pg_proc') d FROM pg_proc p
+        WHERE p.pronamespace = $1::regnamespace AND p.proname IN ('transactions_block_time', 'native_transfers_block_time',
+          'balances_last_updated_time') ORDER BY 1`, [S]);
+      assert.deepEqual(d.rows.map((r) => [r.proname, String(r.n), /^Time of the block/.test(String(r.d))]), [
+        ["balances_last_updated_time", "1", true],
+        ["native_transfers_block_time", "1", true],
+        ["transactions_block_time", "1", true],
+      ]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
   });
 
   it("get_active_accounts counts the live upokt balances updated since each time", async () => {

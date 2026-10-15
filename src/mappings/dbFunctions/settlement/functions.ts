@@ -3336,5 +3336,32 @@ BEGIN
       f.blocks::text);
   END LOOP;
 END $$;
+${blockTimeColumnsSql(s)}
 `;
 }
+
+// PostGraphile computed columns: the block time of a row that carries a height, now that the block relations are
+// gone (pnf-explorer /txs, /tx, the account view: one request less a page). Transaction.blockTime,
+// NativeTransfer.blockTime, Balance.lastUpdatedTime, checked through subql-query 2.22.2 in lists, by id and with
+// blockHeight. One idx_blocks_id probe per row (3-12 µs on mainnet, 2026-10-14); NULL while the block row is not
+// written yet. A function with a table-row argument depends on the table's row type: SubQuery's migration adds and
+// drops columns around it, but its dropTable (no CASCADE) fails while the function exists, so removing one of these
+// entities from schema.graphql needs its function dropped first. Created only where the tables exist (the catalog's
+// test schema has none of them).
+const BLOCK_TIME_COLUMNS: [string, string, string, string][] = [
+  ["transactions_block_time", "transactions", "block_id", "Time of the block that includes the transaction (UTC); null until that block is written."],
+  ["native_transfers_block_time", "native_transfers", "block_id", "Time of the block that includes the transfer (UTC); null until that block is written."],
+  ["balances_last_updated_time", "balances", "last_updated_block_id", "Time of the block where the balance last changed (UTC); null until that block is written."],
+];
+export const blockTimeColumnsSql = (s: string): string =>
+  BLOCK_TIME_COLUMNS.map(
+    ([fn, table, column, what]) => `DO $do$
+BEGIN
+  IF to_regclass('${s}.${table}') IS NOT NULL AND to_regclass('${s}.blocks') IS NOT NULL THEN
+    EXECUTE $f$CREATE OR REPLACE FUNCTION ${s}.${fn}(r ${s}.${table}) RETURNS timestamptz LANGUAGE sql STABLE AS $b$
+      SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = r.${column} LIMIT 1
+    $b$$f$;
+    EXECUTE $f$COMMENT ON FUNCTION ${s}.${fn}(${s}.${table}) IS '${what}'$f$;
+  END IF;
+END $do$;`
+  ).join("\n");
