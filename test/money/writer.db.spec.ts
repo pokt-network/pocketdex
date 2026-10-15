@@ -2032,6 +2032,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["owners => ARRAY['nobody']", []],
         ["services => ARRAY['svc-y']", ["s1 own-a Staked 300 2 1"]],
         ["owners => ARRAY['own-b'], services => ARRAY['svc-x']", ["s3 own-b Staked 500 1 1"]],
+        // domains with services: one config with both (s1 has b.io on svc-y and svc-x on a.net only)
+        ["domains => ARRAY['b.io'], services => ARRAY['svc-x']", ["s3 own-b Staked 500 1 1"]],
+        ["domains => ARRAY['a.net'], services => ARRAY['svc-y'], by_supplier => false", ["all  all 300  1"]],
         // a ceiling on the stake, exclusive
         ["max_stake_upokt => 300", ["s2 own-a Unstaking 100 0 1", "s4 own-b Unstaked 50 0 1"]],
         // keyset pages by stake descending, then id

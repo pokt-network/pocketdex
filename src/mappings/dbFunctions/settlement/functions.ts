@@ -1053,8 +1053,20 @@ ${OPERATOR_SCOPE_CHECK}
       RAISE EXCEPTION 'pass one of suppliers, owners (the suppliers they own now), operators (the suppliers that share revenue with them now) or domains (the suppliers with a live endpoint on them)';
     END IF;
     PERFORM ${s}._validate(domains, 'domains', NULL, NULL, NULL);
-    ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
-                 WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
+    IF services IS NULL THEN
+      ids := ARRAY(SELECT DISTINCT c.supplier_id FROM ${s}.supplier_service_configs c
+                   WHERE c.domains ?| get_supplier_fleet.domains AND upper_inf(c._block_range));
+    ELSE
+      PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL);
+      -- with services, ONE live config for one of the services with an endpoint on one of the domains (not a domain on
+      -- one config and the service on another): the services' live configs through idx_ssc_live_service, then their
+      -- domains; the fence keeps the planner off the all-versions GIN on domains (0.11 s against 0.38 s for
+      -- nodefleet.net eth+base on mainnet, 2026-10-14)
+      ids := ARRAY(SELECT DISTINCT x.supplier_id
+                   FROM (SELECT c.supplier_id, c.domains FROM ${s}.supplier_service_configs c
+                         WHERE c.service_id = ANY(get_supplier_fleet.services) AND upper_inf(c._block_range) OFFSET 0) x
+                   WHERE x.domains ?| get_supplier_fleet.domains);
+    END IF;
   ELSE
 ${scopedSupplierIds(s, "suppliers", false, "NULL", "NULL", "    ")}
   END IF;
