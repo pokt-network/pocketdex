@@ -1853,6 +1853,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
   it("supplier_rev_share_wallets: a live backfill batch waits for a block's uncommitted pairs, retries, and does not deadlock", async () => {
     const holder = new Client({ connectionString: URL });
     await holder.connect();
+    // outside any transaction, so each pg_stat_activity read is fresh
+    const watcher = new Client({ connectionString: URL });
+    await watcher.connect();
     try {
       // 4 suppliers in batches of 2: two ranges, the first and the last open
       await rswSchema("rsw_bf", `('s0', 'svc', '[{"address": "w0"}]', int8range(10, 20)), ('s1', 'svc', '[{"address": "w1"}]', int8range(20, NULL)),
@@ -1865,8 +1868,21 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const order = await holder.query(`SELECT wallet_address FROM rsw_bf.supplier_rev_share_wallets ORDER BY ctid`);
       assert.deepEqual(order.rows.map((r) => r.wallet_address), ["w0", "w1"]);
       const run = psqlScript("backfill_rev_share_wallets.sql", "rsw_bf", ["batch_size=2"]);
-      // the first batch (s0, s1) waits on the block's w0 until lock_timeout (2 s), rolls back, and retries
-      await new Promise((r) => setTimeout(r, 2600));
+      // the first batch (s0, s1) waits on the block's w0 until lock_timeout (2 s), rolls back, and retries: the block
+      // commits only once the batch has been seen waiting on the lock and then sleeping before its retry, not after a
+      // fixed delay, which a slow psql start could outrun (the batch then ran after the commit, on attempt 1)
+      const batchIn = async (waitEvent: string) => {
+        for (const until = Date.now() + 20_000; Date.now() < until; await new Promise((r) => setTimeout(r, 50))) {
+          const { rows } = await watcher.query(
+            `SELECT 1 FROM pg_stat_activity WHERE application_name = 'psql' AND query LIKE '%rsw_bf.supplier_rev_share_wallets AS w%'
+               AND ${waitEvent}`
+          );
+          if (rows.length > 0) return;
+        }
+        assert.fail(`the backfill batch never showed ${waitEvent}`);
+      };
+      await batchIn("wait_event_type = 'Lock'");
+      await batchIn("wait_event = 'PgSleep'");
       await holder.query("COMMIT");
       const { code, stderr } = await run;
       assert.equal(code, 0, stderr);
@@ -1883,6 +1899,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     } finally {
       await holder.query("ROLLBACK").catch(() => undefined);
       await holder.end();
+      await watcher.end();
       await c.query("DROP SCHEMA IF EXISTS rsw_bf CASCADE");
     }
   });
