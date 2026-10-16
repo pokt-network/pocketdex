@@ -3101,6 +3101,241 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     );
   });
 
+  it("get_service_usage: by_service false with no list is the network total, and row_offset pages the ranking", async () => {
+    const all = (await c.query(`SELECT array_agg(DISTINCT service_id) s FROM ${S}.claim_settlements`)).rows[0]
+      .s as unknown as string[];
+    assert.ok(all.length >= 3);
+    // the network total is every service summed: the same rows as naming every service, by bucket or not
+    const total = (list: string, params: unknown[], range: string) =>
+      c.query(
+        `SELECT bucket_start, bucket_end, service_id, claimed_upokt::text, settled_upokt::text, relays::text, claims,
+           rank_by_settled, total_services
+         FROM ${S}.get_service_usage(${list}, ${range}, by_service => false) ORDER BY bucket_start`,
+        params
+      );
+    for (const range of [
+      "range_start => NULL, range_end => NULL",
+      "range_start => '2026-09-01T11:00:00Z', range_end => '2026-09-01T14:00:00Z', bucket => 'hour'",
+    ]) {
+      const network = (await total("services => NULL", [], range)).rows;
+      assert.ok(network.length > 0);
+      assert.deepEqual(network, (await total("services => $1::text[]", [all], range)).rows);
+    }
+    const sum = (await c.query(`SELECT sum(settled_upokt)::text s FROM ${S}.claim_settlements`)).rows[0].s;
+    assert.deepEqual(
+      (await total("services => NULL", [], "range_start => NULL, range_end => NULL")).rows.map((r) => r.settled_upokt),
+      [sum]
+    );
+    // pages of the ranking: rank_by_settled is the place in the whole ranking, total_services its length
+    const ranking = (
+      await c.query(
+        `SELECT service_id FROM ${S}.claim_settlements GROUP BY 1 ORDER BY sum(settled_upokt) DESC, service_id COLLATE "C"`
+      )
+    ).rows.map((r) => r.service_id as string);
+    const page = async (offset: string) =>
+      (
+        await c.query(
+          `SELECT DISTINCT service_id, rank_by_settled r, total_services t FROM ${S}.get_service_usage(services => NULL,
+             range_start => NULL, range_end => NULL, top_by_settled => 2, row_offset => ${offset}) ORDER BY r`
+        )
+      ).rows;
+    const pages: unknown[] = [];
+    for (let offset = 0; offset < ranking.length; offset += 2) pages.push(...(await page(String(offset))));
+    assert.deepEqual(
+      pages,
+      ranking.map((service_id, i) => ({ service_id, r: i + 1, t: ranking.length }))
+    );
+    assert.deepEqual(await page("NULL"), await page("0"));
+    assert.deepEqual(await page(String(ranking.length)), []);
+    // named services without a top: no ranking, so no total either
+    const named = await c.query(
+      `SELECT DISTINCT total_services t FROM ${S}.get_service_usage(services => $1::text[], range_start => NULL,
+         range_end => NULL)`,
+      [all]
+    );
+    assert.deepEqual(named.rows, [{ t: null }]);
+    await assert.rejects(
+      c.query(`SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, by_service => true)`),
+      /pass services, top_by_settled, or both/
+    );
+    await assert.rejects(
+      c.query(`SELECT * FROM ${S}.get_service_usage($1::text[], NULL, NULL, row_offset => 1)`, [all]),
+      /row_offset pages the ranking: pass top_by_settled/
+    );
+    for (const offset of [-1, 10000001]) {
+      await assert.rejects(
+        c.query(`SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, top_by_settled => 2, row_offset => ${offset})`),
+        /row_offset must be between 0 and 10000000/
+      );
+    }
+  });
+
+  it("get_service_usage: row_limit pages the services in order_by, with search, a previous window and with_details", async () => {
+    await c.query("BEGIN");
+    try {
+      const all = (await c.query(`SELECT array_agg(DISTINCT service_id ORDER BY service_id) s FROM ${S}.claim_settlements`))
+        .rows[0].s as unknown as string[];
+      assert.ok(all.length >= 3);
+      const q = (ids: string[]) => ids.map((id) => `'${id}'`);
+      // all[0] was renamed (only the live row counts) and all[1] has no Service row; s1 is Staked on all[0] and all[2], s2
+      // is Unstaking, s3's config is closed; a1 Staked and a2 Unstaked both use all[0]
+      await c.query(`
+        DROP TABLE IF EXISTS ${S}.services, ${S}.suppliers, ${S}.supplier_service_configs, ${S}.applications,
+          ${S}.application_services;
+        CREATE TABLE ${S}.services (id text, name text, _block_range int8range);
+        CREATE TABLE ${S}.suppliers (id text, stake_status text, _block_range int8range);
+        CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, _block_range int8range);
+        CREATE TABLE ${S}.applications (id text, stake_status text, _block_range int8range);
+        CREATE TABLE ${S}.application_services (application_id text, service_id text, _block_range int8range);
+        INSERT INTO ${S}.services SELECT id, 'Name ' || upper(id), int8range(5, NULL)
+          FROM unnest(ARRAY[${q(all)}]) id WHERE id <> '${all[1]}';
+        INSERT INTO ${S}.services VALUES ('${all[0]}', 'Old', int8range(1, 5));
+        INSERT INTO ${S}.suppliers VALUES ('s1', 'Staked', int8range(1, NULL)), ('s2', 'Unstaking', int8range(1, NULL)),
+          ('s3', 'Staked', int8range(1, NULL));
+        INSERT INTO ${S}.supplier_service_configs VALUES ('s1', '${all[0]}', int8range(1, NULL)),
+          ('s1', '${all[2]}', int8range(1, NULL)), ('s2', '${all[0]}', int8range(1, NULL)), ('s3', '${all[0]}', int8range(1, 3));
+        INSERT INTO ${S}.applications VALUES ('a1', 'Staked', int8range(1, NULL)), ('a2', 'Unstaked', int8range(1, NULL));
+        INSERT INTO ${S}.application_services VALUES ('a1', '${all[0]}', int8range(1, NULL)), ('a2', '${all[0]}', int8range(1, NULL));`);
+      // the range starts at the first settlement, compared with the covered window before it (no usage there: 0)
+      const t = (
+        await c.query(
+          `SELECT (SELECT covered_from FROM ${S}._coverage(NULL, NULL))::text f, (SELECT min(block_time) FROM ${S}.claim_settlements)::text m,
+             (SELECT covered_from FROM ${S}._coverage(NULL, NULL)) < (SELECT min(block_time) FROM ${S}.claim_settlements) ok`
+        )
+      ).rows[0] as unknown as { f: string; m: string; ok: boolean };
+      assert.ok(t.ok, JSON.stringify(t));
+      const range = `range_start => '${t.m}', range_end => NULL`;
+      const compare = `compare_start => '${t.f}'`;
+      const cols = `service_id, name, claimed_upokt::float8 claimed_upokt, settled_upokt::float8 settled_upokt, relays::float8 relays,
+        estimated_relays::float8 estimated_relays, compute_units::float8 compute_units,
+        estimated_compute_units::float8 estimated_compute_units, staked_suppliers::int staked_suppliers,
+        staked_applications::int staked_applications, previous_estimated_compute_units::float8 prev, change::float8 change,
+        rank_by_settled, total_services`;
+      const call = async (args: string) =>
+        (await c.query(`SELECT ${cols} FROM ${S}.get_service_usage(${args})`)).rows as Record<string, unknown>[];
+      // the services with usage in the range (a named service without any has no row)
+      const used = await call(`ARRAY[${q(all)}], ${range}, with_details => true, ${compare}`);
+      assert.ok(used.length >= 2);
+      // the details: the live name, the Staked actors configured now
+      const byId = Object.fromEntries(
+        (await call(`ARRAY[${q(all)}], NULL, NULL, with_details => true`)).map((r) => [r.service_id, r])
+      );
+      assert.deepEqual(
+        [all[0], all[1], all[2]].map((id) => [byId[id].name, byId[id].staked_suppliers, byId[id].staked_applications]),
+        [[`Name ${all[0].toUpperCase()}`, 1, 1], [null, 0, 0], [`Name ${all[2].toUpperCase()}`, 1, 0]]
+      );
+      const before = await call(`ARRAY[${q(all)}], '${t.f}', '${t.m}'`);
+      // the previous window as the same function sums it; change by the old resolver's rule
+      for (const r of used) {
+        const p = Number(before.find((b) => b.service_id === r.service_id)?.estimated_compute_units ?? 0);
+        assert.deepEqual([r.service_id, r.prev], [r.service_id, p]);
+        const want = p ? (Number(r.estimated_compute_units ?? 0) - p) / p : 1;
+        assert.ok(Math.abs(Number(r.change) - want) < 1e-12, `${r.service_id} change ${r.change} vs ${want}`);
+      }
+      // a previous window the money tables do not cover (before their history) has no previous and no change, not 0 and 1
+      assert.deepEqual(
+        [...new Set((await call(`ARRAY[${q(all)}], ${range}, compare_start => '2000-01-01', compare_end => '${t.f}'`))
+          .map((r) => [r.prev, r.change].join()))],
+        [","]
+      );
+      // every order and direction: pages of 2 from row_offset are the services with usage in that order (NULLs last, ties
+      // by service_id), each with its details, rank_by_settled NULL and total_services = how many there are
+      const sorted = (by: string, dir: string, rows: Record<string, unknown>[]) =>
+        [...rows].sort((a, b) => {
+          const key = (r: Record<string, unknown>) => (by === "name" && r.name !== null ? String(r.name).toLowerCase() : r[by]);
+          const [x, y] = [key(a), key(b)];
+          if (x !== y) {
+            if (x === null) return 1;
+            if (y === null) return -1;
+            const cmp = (x as number | string) < (y as number | string) ? -1 : 1;
+            return dir === "asc" ? cmp : -cmp;
+          }
+          return String(a.service_id) < String(b.service_id) ? -1 : String(a.service_id) > String(b.service_id) ? 1 : 0;
+        });
+      const strip = (rows: Record<string, unknown>[], total: number) =>
+        rows.map((r) => ({ ...r, rank_by_settled: null, total_services: total }));
+      for (const by of ["estimated_compute_units", "estimated_relays", "relays", "compute_units", "settled_upokt",
+        "claimed_upokt", "service_id", "name", "staked_suppliers", "change"])
+        for (const dir of ["asc", "desc"]) {
+          const pages: Record<string, unknown>[] = [];
+          for (let offset = 0; offset < used.length; offset += 2)
+            pages.push(...(await call(`NULL, ${range}, row_limit => 2, row_offset => ${offset}, order_by => '${by}',
+              order_dir => '${dir}', with_details => true, ${compare}`)));
+          assert.deepEqual([by, dir, pages], [by, dir, strip(sorted(by, dir, used), used.length)]);
+        }
+      // the default order: estimated_compute_units, descending; without with_details and compare_start those are NULL
+      const plain = (await call(`NULL, ${range}, row_limit => 200`)).map((r) => r.service_id);
+      assert.deepEqual(plain, sorted("estimated_compute_units", "desc", used).map((r) => r.service_id));
+      assert.deepEqual(
+        [...new Set((await call(`NULL, ${range}, row_limit => 200`)).map((r) => [r.name, r.staked_suppliers, r.prev, r.change].join()))],
+        [",,,"]
+      );
+      // search: case-insensitive, in the id or the name; total_services counts the matches
+      for (const search of ["NAME", all[1].toUpperCase().slice(1), `name ${all[0]}`, "no-such-text"]) {
+        const want = used.filter((r) =>
+          `${r.service_id} ${r.name ?? ""}`.toLowerCase().includes(search.toLowerCase())
+        );
+        const got = await call(`NULL, ${range}, row_limit => 200, search_text => '${search}', with_details => true, ${compare}`);
+        assert.deepEqual([search, got], [search, strip(sorted("estimated_compute_units", "desc", want), want.length)]);
+      }
+      // the network total with details: staked counts summed over the services with usage in the range, previous
+      // over every service in the previous window
+      const total = await call(`NULL, ${range}, by_service => false, with_details => true, ${compare}`);
+      const prevTotal = (await call(`NULL, '${t.f}', '${t.m}', by_service => false`))[0];
+      assert.deepEqual(
+        total.map((r) => [r.service_id, r.name, r.staked_suppliers, r.staked_applications, r.prev]),
+        [["all", null, used.reduce((n, r) => n + Number(r.staked_suppliers), 0),
+          used.reduce((n, r) => n + Number(r.staked_applications), 0), Number(prevTotal?.estimated_compute_units ?? 0)]]
+      );
+      // a bucketed page is the same series as naming those services, in the page's order
+      const series = async (args: string) =>
+        (
+          await c.query(
+            `SELECT bucket_start, service_id, settled_upokt::text, estimated_compute_units::text FROM ${S}.get_service_usage(${args})`
+          )
+        ).rows;
+      const top = sorted("estimated_compute_units", "desc", used).slice(0, 2).map((r) => r.service_id as string);
+      // a day of the range: bucket => 'day' allows at most 92 days
+      const day = `range_start => '${t.m}', range_end => '${t.m}'::timestamptz + interval '1 day'`;
+      const bucketed = await series(`NULL, ${day}, bucket => 'day', row_limit => 2`);
+      assert.ok(bucketed.length > 0);
+      assert.deepEqual(
+        bucketed,
+        (await series(`ARRAY[${q(top)}], ${day}, bucket => 'day'`)).sort(
+          (a, b) => top.indexOf(String(a.service_id)) - top.indexOf(String(b.service_id))
+        )
+      );
+      // each error inside the test's transaction: a savepoint keeps the next statement from "transaction is aborted"
+      const rejects = async (sql: string, error: RegExp) => {
+        await c.query("SAVEPOINT expect_error");
+        await assert.rejects(c.query(sql), error);
+        await c.query("ROLLBACK TO SAVEPOINT expect_error");
+      };
+      for (const [args, error] of [
+        ["top_by_settled => 2, row_limit => 2", /pass top_by_settled or row_limit, not both/],
+        ["row_limit => 201", /row_limit must be between 1 and 200, or 20 with a bucket/],
+        ["row_limit => 21, bucket => 'day'", /row_limit must be between 1 and 200, or 20 with a bucket/],
+        ["row_limit => 0", /row_limit must be between 1 and 200/],
+        ["top_by_settled => 2, order_by => 'relays'", /order_by, order_dir and search_text page the ranking: pass row_limit/],
+        ["top_by_settled => 2, search_text => 'x'", /order_by, order_dir and search_text page the ranking: pass row_limit/],
+        ["row_limit => 2, order_by => 'bogus'", /order_by must be estimated_compute_units/],
+        ["row_limit => 2, order_dir => 'up'", /order_dir must be asc or desc/],
+        ["row_limit => 2, order_by => 'change'", /order_by change needs compare_start/],
+        ["row_limit => 2, bucket => 'day', compare_start => '2026-01-01'", /compare_start compares the whole range/],
+        ["row_limit => 2, compare_end => '2026-01-01'", /compare_end needs compare_start/],
+        ["row_limit => 2, compare_start => '2100-01-01'", /compare_start must be before compare_end/],
+        ["row_limit => 2, compare_start => '2026-08-01', compare_end => '2026-09-02'", /compare_end \(default range_start\) not after range_start/],
+      ] as const)
+        await rejects(`SELECT * FROM ${S}.get_service_usage(NULL, '2026-09-01', NULL, ${args})`, error);
+      await rejects(
+        `SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, row_limit => 2, compare_start => '2026-08-01')`,
+        /compare_start compares with the window before range_start: pass range_start/
+      );
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
   it("get_supplier_penalties gives a slash its claim's expiration reason and NULL where a kind has no value", async () => {
     await c.query("BEGIN");
     try {

@@ -1,15 +1,19 @@
 // Service performance and supplier analytics functions
 
 export function getAmountOfBlocksAndSuppliersByTimesFn(dbSchema: string): string {
-  return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_amount_of_blocks_and_suppliers_by_times(
-    start_date TIMESTAMP,
-    end_date TIMESTAMP
-)
-RETURNS jsonb
-LANGUAGE sql
+  return `-- The rows of get_amount_of_blocks_and_suppliers_by_times. A LANGUAGE sql function that returns a scalar runs its
+-- query with a row count, and PostgreSQL launches no parallel worker for such a run: the parallel plan ran in one
+-- process (Workers Launched: 0), 2.4-2.9 s over 30 days on mainnet against 0.74-0.82 s with its 4 workers (2026-10-16,
+-- replica). RETURN QUERY runs it without a count, so the scan lives here and the SQL function only builds the jsonb.
+CREATE OR REPLACE FUNCTION ${dbSchema}._blocks_and_suppliers_by_service(start_date TIMESTAMP, end_date TIMESTAMP)
+RETURNS TABLE(service_id text, blocks bigint, suppliers_staked bigint)
+LANGUAGE plpgsql
 STABLE
 SET jit = off
 AS $$
+#variable_conflict use_column
+BEGIN
+  RETURN QUERY
   -- the range's first and last block, then the ids between them less the missing ones (see services_performance_between_times)
   WITH range_blocks AS MATERIALIZED (
     SELECT ends.lo, ends.hi, ARRAY(
@@ -23,19 +27,36 @@ AS $$
   )
   -- A block has one row per service (upsert_staked_suppliers_by_block_and_services deletes and regroups it), so
   -- count(*) is the distinct block count, without sorting every row by block; the sort that COUNT(DISTINCT) needed
-  -- returned the services in service_id order, which the ORDER BY keeps. No constraint enforces it: on 2026-10-05 no
-  -- (block_id, service_id) repeated on mainnet or beta, and COUNT(DISTINCT) took 3.9 s instead of 0.6 s over 30 days
-  -- (9.6 s instead of 1.3 s over 89). A duplicate would count its block twice.
+  -- returned the services in service_id order, which get_amount_of_blocks_and_suppliers_by_times's ORDER BY keeps.
+  -- No constraint enforces it: on 2026-10-05 no (block_id, service_id) repeated on mainnet or beta, and
+  -- COUNT(DISTINCT) took 3.9 s instead of 0.6 s over 30 days (9.6 s instead of 1.3 s over 89). A duplicate would
+  -- count its block twice.
+  SELECT
+      ss.service_id,
+      COUNT(*) blocks,
+      -- amount is integer on mainnet and beta (bigint sum); the cast keeps the declared type where a copy has numeric
+      SUM(ss.amount)::bigint suppliers_staked
+  FROM ${dbSchema}.staked_suppliers_by_block_and_services ss
+  WHERE ss.block_id BETWEEN (SELECT lo FROM range_blocks) AND (SELECT hi FROM range_blocks)
+    AND ss.block_id <> ALL ((SELECT missing FROM range_blocks)::numeric[])
+  GROUP BY ss.service_id;
+END $$;
+
+COMMENT ON FUNCTION ${dbSchema}._blocks_and_suppliers_by_service(timestamp without time zone, timestamp without time zone) IS '@omit';
+
+CREATE OR REPLACE FUNCTION ${dbSchema}.get_amount_of_blocks_and_suppliers_by_times(
+    start_date TIMESTAMP,
+    end_date TIMESTAMP
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SET jit = off
+AS $$
   SELECT jsonb_agg(to_jsonb(row)) FROM (
-    SELECT
-        ss.service_id,
-        COUNT(*) blocks,
-        SUM(ss.amount) suppliers_staked
-    FROM ${dbSchema}.staked_suppliers_by_block_and_services ss
-    WHERE ss.block_id BETWEEN (SELECT lo FROM range_blocks) AND (SELECT hi FROM range_blocks)
-      AND ss.block_id <> ALL ((SELECT missing FROM range_blocks)::numeric[])
-    GROUP BY ss.service_id
-    ORDER BY ss.service_id
+    SELECT r.service_id, r.blocks, r.suppliers_staked
+    FROM ${dbSchema}._blocks_and_suppliers_by_service(start_date, end_date) r
+    ORDER BY r.service_id
   ) row;
 $$;
 

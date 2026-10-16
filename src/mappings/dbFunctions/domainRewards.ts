@@ -14,6 +14,21 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.domain_service_daily_rewards (
   suppliers_count           INT     NOT NULL DEFAULT 0,
   PRIMARY KEY (domain, service_id, day)
 );
+-- The settlement heights that formed each row: the lowest and the highest whose claims it holds. The refresh adds each
+-- settlement block to its day and uses last_height to know the day already holds every earlier one. NULL on rows written
+-- before these columns existed (no default, so the ALTER only changes the catalog): the refresh then rebuilds the day.
+-- Altered only when a column is missing: ALTER TABLE takes its ACCESS EXCLUSIVE lock even when IF NOT EXISTS then changes
+-- nothing, which every start would queue behind the readers of this table. Hidden from the API, which keeps its fields.
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM pg_attribute WHERE attrelid = '${dbSchema}.domain_service_daily_rewards'::regclass
+        AND attname IN ('first_height', 'last_height') AND NOT attisdropped) < 2 THEN
+    ALTER TABLE ${dbSchema}.domain_service_daily_rewards
+      ADD COLUMN IF NOT EXISTS first_height BIGINT, ADD COLUMN IF NOT EXISTS last_height BIGINT;
+    COMMENT ON COLUMN ${dbSchema}.domain_service_daily_rewards.first_height IS E'@omit';
+    COMMENT ON COLUMN ${dbSchema}.domain_service_daily_rewards.last_height IS E'@omit';
+  END IF;
+END $$;
 `;
 }
 
@@ -23,10 +38,15 @@ CREATE OR REPLACE FUNCTION ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}
 RETURNS void
 LANGUAGE plpgsql
 SET jit = off
+-- planned for each call: the claims read is one block or the whole day, and a generic plan would serve both alike
+SET plan_cache_mode = force_custom_plan
 AS $$
 DECLARE
   v_day DATE;
   v_block_range int8range;
+  v_known BOOLEAN;
+  v_last BIGINT;
+  v_full BOOLEAN;
 BEGIN
   SELECT b.timestamp::date
   INTO v_day
@@ -37,15 +57,43 @@ BEGIN
     RETURN;
   END IF;
 
+  -- the day's blocks through the (timestamp, id) index (10 ms): MIN/MAX over the table walk the id index from its
+  -- first block until one is in the day (0.6 s on mainnet, 883k buffers), so the fence keeps them on the day's rows
   SELECT int8range(MIN(id)::bigint, MAX(id)::bigint, '[]')
   INTO v_block_range
-  FROM ${dbSchema}.blocks
-  WHERE timestamp::date = v_day;
+  FROM (
+    SELECT id FROM ${dbSchema}.blocks
+    WHERE timestamp >= v_day AND timestamp < v_day + 1
+    OFFSET 0
+  ) b;
 
-  DELETE FROM ${dbSchema}.domain_service_daily_rewards
+  -- Each settlement block adds its own claims to its day's rows, so the cost of a block does not grow through the day
+  -- (recomputing the day took 0.9 s at the first settlement block and 16 s at the last, mainnet replica 2026-10-16).
+  -- That holds the day exactly when the rows already hold every settlement height of the day below this one and none
+  -- at or above it: every row has its heights, the highest is below this block, and no claim of the day settled after
+  -- it other than this block's (the rows' heights are the settlement blocks that credited a domain). Otherwise the day
+  -- is rebuilt from its claims: a block indexed again after a rewind (SubQuery's rewind does not touch this table, and
+  -- the rewound claims are gone), rows written before the height columns, or a call for any other block, such as a
+  -- manual call for a day whose rows were deleted.
+  SELECT bool_and(last_height IS NOT NULL), max(last_height)
+  INTO v_known, v_last
+  FROM ${dbSchema}.domain_service_daily_rewards
   WHERE day = v_day;
+  v_last := coalesce(v_last, lower(v_block_range) - 1);
+  v_full := NOT coalesce(v_known, true) OR v_last >= p_block_id OR EXISTS (
+    SELECT 1 FROM ${dbSchema}.event_claim_settleds
+    WHERE block_id > v_last AND block_id < p_block_id
+  ) OR EXISTS (
+    SELECT 1 FROM ${dbSchema}.event_claim_settleds
+    WHERE block_id > p_block_id AND block_id < upper(v_block_range)
+  );
 
-  -- Recompute and insert the full day's data.
+  IF v_full THEN
+    DELETE FROM ${dbSchema}.domain_service_daily_rewards
+    WHERE day = v_day;
+  END IF;
+
+  -- The claims of the day (rebuild) or of this block, added to the day's rows.
   -- claims: relay/reward aggregates from event_claim_settleds, each attributed to the config its supplier had
   --   declared for the service before the claim's session started (the block before the session start), which is
   --   the config that served the session: a stake in the session's first block activates at the next session, and
@@ -62,8 +110,6 @@ BEGIN
   --   that carries one). Without either (no session heights), the settlement block is used, as before.
   --   Settlement comes sessions after the claim, so the config live at the settlement block can be another one,
   --   or none after an unstake.
-  -- staked: distinct suppliers staked at any point during the day per (domain, service_id),
-  --   uses _block_range && v_block_range; COUNT(DISTINCT) deduplicates across restakes.
   -- A row can carry rewards with suppliers_count 0 (or fewer suppliers than earned): a supplier that unstaked before
   --   the day its claims settled earns on it without being staked on it. No pocketdex function divides by it; the one
   --   consumer that does (igniter shareCalculations.ts, staked_suppliers) already skips a zero.
@@ -75,9 +121,11 @@ BEGIN
       SUM(e.num_estimated_relays)        AS estimated_relays,
       SUM(e.num_claimed_computed_units)  AS computed_units,
       SUM(e.num_estimated_computed_units) AS estimated_computed_units,
-      SUM(e.claimed_amount)              AS gross_rewards
+      SUM(e.claimed_amount)              AS gross_rewards,
+      MIN(e.block_id)                    AS first_height,
+      MAX(e.block_id)                    AS last_height
     FROM (
-      SELECT e.supplier_id, e.service_id, e.num_relays, e.num_estimated_relays, e.num_claimed_computed_units,
+      SELECT e.block_id, e.supplier_id, e.service_id, e.num_relays, e.num_estimated_relays, e.num_claimed_computed_units,
              e.num_estimated_computed_units, e.claimed_amount,
              -- without session heights (or a derived start that is not a height), the settlement block, as before
              coalesce(s.start - 1, e.block_id::bigint) AS declared_at
@@ -97,6 +145,9 @@ BEGIN
                       0) AS start
       ) s
       WHERE b.timestamp::date = v_day
+        -- this block only, unless the day is rebuilt: the day's blocks are within v_block_range
+        AND e.block_id BETWEEN CASE WHEN v_full THEN lower(v_block_range) ELSE p_block_id END
+                           AND CASE WHEN v_full THEN upper(v_block_range) - 1 ELSE p_block_id END
       -- a fence: the config lookup below then probes the index with declared_at as one column
       OFFSET 0
     ) e
@@ -122,8 +173,35 @@ BEGIN
     -- no row for a claim whose version has no domain (NULL, JSON null or []): the has-domain rule of the staked part
     CROSS JOIN jsonb_array_elements_text(CASE WHEN jsonb_typeof(d.domains) = 'array' THEN d.domains END) AS domain
     GROUP BY domain, e.service_id
-  ),
-  staked AS (
+  )
+  INSERT INTO ${dbSchema}.domain_service_daily_rewards AS t
+    (domain, service_id, day, relays, estimated_relays,
+     computed_units, estimated_computed_units, gross_rewards, first_height, last_height)
+  SELECT
+    c.domain,
+    c.service_id,
+    v_day,
+    c.relays,
+    c.estimated_relays,
+    c.computed_units,
+    c.estimated_computed_units,
+    c.gross_rewards,
+    c.first_height,
+    c.last_height
+  FROM claims c
+  ON CONFLICT (domain, service_id, day) DO UPDATE SET
+    relays                   = t.relays + EXCLUDED.relays,
+    estimated_relays         = t.estimated_relays + EXCLUDED.estimated_relays,
+    computed_units           = t.computed_units + EXCLUDED.computed_units,
+    estimated_computed_units = t.estimated_computed_units + EXCLUDED.estimated_computed_units,
+    gross_rewards            = t.gross_rewards + EXCLUDED.gross_rewards,
+    first_height             = LEAST(t.first_height, EXCLUDED.first_height),
+    last_height              = GREATEST(t.last_height, EXCLUDED.last_height);
+
+  -- staked: distinct suppliers staked at any point during the day so far per (domain, service_id), on every row of the
+  --   day, as the day's blocks grow; uses _block_range && v_block_range; COUNT(DISTINCT) deduplicates across restakes.
+  --   It is not a sum over blocks, so it is recounted, which costs the same at every block (0.5 s, mainnet replica).
+  WITH staked AS (
     SELECT
       domain,
       ssc.service_id,
@@ -137,21 +215,16 @@ BEGIN
       AND jsonb_array_length(ssc.domains) > 0
     GROUP BY domain, ssc.service_id
   )
-  INSERT INTO ${dbSchema}.domain_service_daily_rewards
-    (domain, service_id, day, relays, estimated_relays,
-     computed_units, estimated_computed_units, gross_rewards, suppliers_count)
-  SELECT
-    c.domain,
-    c.service_id,
-    v_day,
-    c.relays,
-    c.estimated_relays,
-    c.computed_units,
-    c.estimated_computed_units,
-    c.gross_rewards,
-    COALESCE(s.suppliers_count, 0)
-  FROM claims c
-  LEFT JOIN staked s ON s.domain = c.domain AND s.service_id = c.service_id;
+  UPDATE ${dbSchema}.domain_service_daily_rewards r
+  SET suppliers_count = x.suppliers_count
+  FROM (
+    SELECT d.domain, d.service_id, COALESCE(s.suppliers_count, 0) AS suppliers_count
+    FROM ${dbSchema}.domain_service_daily_rewards d
+    LEFT JOIN staked s ON s.domain = d.domain AND s.service_id = d.service_id
+    WHERE d.day = v_day
+  ) x
+  WHERE r.day = v_day AND r.domain = x.domain AND r.service_id = x.service_id
+    AND r.suppliers_count IS DISTINCT FROM x.suppliers_count;
 END;
 $$;
 `;

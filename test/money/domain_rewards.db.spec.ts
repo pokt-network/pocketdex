@@ -159,6 +159,220 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
     ]);
   });
 
+  // A second day, 2026-10-02 (blocks 1500..1600), settled at 1520, 1540, 1560 and 1580: the indexer's calls add each
+  // block to the day, which must equal rebuilding the day from its claims, column by column.
+  describe("each settlement block added to its day", () => {
+    const DAY = "2026-10-02";
+    const rows = async () =>
+      (
+        await c.query(
+          `SELECT domain, service_id, relays::text, estimated_relays::text, computed_units::text,
+                  estimated_computed_units::text, gross_rewards::text, suppliers_count::text,
+                  first_height::text, last_height::text
+           FROM ${S}.domain_service_daily_rewards WHERE day = '${DAY}' ORDER BY domain, service_id`
+        )
+      ).rows;
+    const refresh = async (...heights: number[]) => {
+      for (const h of heights) await c.query(`SELECT ${S}.refresh_domain_service_daily_rewards(${h})`);
+    };
+    // the day rebuilt from its claims: a call for a block the day already holds
+    const rebuilt = async (head: number) => {
+      await refresh(head);
+      return rows();
+    };
+    const claim = (supplier: string, service: string, block: number, relays: number) =>
+      `('${supplier}', '${service}', ${block}, ${block - 15}, ${block - 6}, ${relays}, ${relays + 1}, ${relays * 10},
+        ${relays * 10 + 1}, ${relays * 1000})`;
+    // the claims settled at each block
+    const settled: Record<number, string[]> = {
+      1520: [claim("d1", "akash", 1520, 1), claim("d2", "akash", 1520, 2), claim("d1", "eth", 1520, 4)],
+      1540: [claim("d1", "akash", 1540, 8), claim("d3", "akash", 1540, 16)],
+      // d2's claim is under c.org (its config from 1530); d4 is staked from 1550 and has no config before it (its
+      // earliest serves): the a.org row of 1520 counts it from then on
+      1560: [claim("d2", "akash", 1560, 32), claim("d4", "akash", 1560, 64)],
+      1580: [claim("d3", "akash", 1580, 128), claim("d1", "eth", 1580, 256), claim("d5", "akash", 1580, 512)],
+    };
+    const settle = (block: number) =>
+      c.query(`INSERT INTO ${S}.event_claim_settleds VALUES ${settled[block].join(", ")}`);
+    const blocks = (from: number, to: number) =>
+      c.query(`INSERT INTO ${S}.blocks SELECT g, '2026-10-01 00:00'::timestamp + g * interval '1 minute'
+               FROM generate_series(${from}, ${to}) g`);
+    // SubQuery's rewind: the blocks above the height and the claims they settled are gone, this table is not touched
+    const rewind = (height: number) =>
+      c.query(
+        `DELETE FROM ${S}.blocks WHERE id > ${height}; DELETE FROM ${S}.event_claim_settleds WHERE block_id > ${height}`
+      );
+
+    before(async () => {
+      await c.query(`
+        INSERT INTO ${S}.suppliers VALUES ('d1', 'Staked', int8range(1400, NULL)), ('d2', 'Staked', int8range(1400, NULL)),
+          ('d3', 'Staked', int8range(1400, 1530)), ('d3', 'Unstaking', int8range(1530, NULL)),
+          ('d4', 'Staked', int8range(1550, NULL)), ('d5', 'Staked', int8range(1400, NULL));
+        INSERT INTO ${S}.supplier_service_configs (supplier_id, service_id, domains, _block_range) VALUES
+          ('d1', 'akash', '["a.org", "b.org"]', int8range(1400, NULL)),
+          ('d1', 'eth', '["a.org"]', int8range(1400, NULL)),
+          ('d2', 'akash', '["a.org"]', int8range(1400, 1530)),
+          ('d2', 'akash', '["c.org"]', int8range(1530, NULL)),
+          ('d3', 'akash', '["b.org"]', int8range(1400, 1530)),
+          ('d4', 'akash', '["a.org"]', int8range(1550, NULL)),
+          -- no domain: its claims credit none
+          ('d5', 'akash', '[]', int8range(1400, NULL));`);
+    });
+
+    it("equals the day rebuilt from its claims after every block, with each row's settlement heights", async () => {
+      await blocks(1500, 1520);
+      await settle(1520);
+      await refresh(1520);
+      // the blocks are added one after another, as the indexer does; each is compared with a rebuild that is undone,
+      // so the next block is added to the added rows, not to rebuilt ones
+      await c.query("BEGIN");
+      for (const [to, block] of [
+        [1540, 1540],
+        [1560, 1560],
+        [1580, 1580],
+      ]) {
+        await blocks(block - 19, to);
+        await settle(block);
+        await refresh(block);
+        const added = await rows();
+        await c.query("SAVEPOINT rebuild");
+        assert.deepEqual(await rebuilt(block), added, `after ${block}`);
+        await c.query("ROLLBACK TO SAVEPOINT rebuild");
+      }
+      await c.query("COMMIT");
+      assert.deepEqual(await rows(), [
+        {
+          domain: "a.org",
+          service_id: "akash",
+          relays: "75",
+          estimated_relays: "79",
+          computed_units: "750",
+          estimated_computed_units: "754",
+          gross_rewards: "75000",
+          suppliers_count: "3",
+          first_height: "1520",
+          last_height: "1560",
+        },
+        {
+          domain: "a.org",
+          service_id: "eth",
+          relays: "260",
+          estimated_relays: "262",
+          computed_units: "2600",
+          estimated_computed_units: "2602",
+          gross_rewards: "260000",
+          suppliers_count: "1",
+          first_height: "1520",
+          last_height: "1580",
+        },
+        {
+          domain: "b.org",
+          service_id: "akash",
+          relays: "153",
+          estimated_relays: "157",
+          computed_units: "1530",
+          estimated_computed_units: "1534",
+          gross_rewards: "153000",
+          suppliers_count: "2",
+          first_height: "1520",
+          last_height: "1580",
+        },
+        {
+          domain: "c.org",
+          service_id: "akash",
+          relays: "32",
+          estimated_relays: "33",
+          computed_units: "320",
+          estimated_computed_units: "321",
+          gross_rewards: "32000",
+          suppliers_count: "1",
+          first_height: "1560",
+          last_height: "1560",
+        },
+      ]);
+    });
+
+    it("adds only the block's claims while the day holds every earlier settlement block", async () => {
+      await c.query("BEGIN");
+      try {
+        // a mark on a row: a block added to the day keeps it, a rebuild would drop it
+        await c.query(`UPDATE ${S}.domain_service_daily_rewards SET relays = relays + 1000000
+                       WHERE day = '${DAY}' AND domain = 'c.org'`);
+        await blocks(1581, 1600);
+        await c.query(`INSERT INTO ${S}.event_claim_settleds VALUES ${claim("d2", "akash", 1600, 1024)}`);
+        await refresh(1600);
+        const r = (await rows()).find((x) => x.domain === "c.org");
+        assert.equal(r?.relays, String(32 + 1024 + 1000000));
+        assert.equal(r?.last_height, "1600");
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+
+    it("rebuilds the day when it holds a later block, as after a rewind", async () => {
+      const before = await rows();
+      await c.query("BEGIN");
+      try {
+        // rewound to 1550 and indexed again: 1560 finds the day holding 1580, rebuilds it to 1560, then adds 1580
+        await rewind(1550);
+        await blocks(1551, 1560);
+        await settle(1560);
+        await refresh(1560);
+        assert.equal((await rows()).find((x) => x.domain === "a.org" && x.service_id === "eth")?.last_height, "1520");
+        await blocks(1561, 1580);
+        await settle(1580);
+        await refresh(1580);
+        assert.deepEqual(await rows(), before);
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+
+    it("rebuilds the day when it has claims after the block, as a manual call for a day whose rows were deleted", async () => {
+      const before = await rows();
+      await c.query("BEGIN");
+      try {
+        await c.query(`DELETE FROM ${S}.domain_service_daily_rewards WHERE day = '${DAY}'`);
+        await refresh(1520);
+        assert.deepEqual(await rows(), before);
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+
+    it("rebuilds the day when a claim settled after its last height, or a row has no heights", async () => {
+      const before = await rows();
+      await c.query("BEGIN");
+      try {
+        // 1580's claims never added (an image without the incremental refresh): 1600 rebuilds the day
+        await c.query(`UPDATE ${S}.domain_service_daily_rewards t SET relays = t.relays - x.relays, last_height = 1560
+          FROM (VALUES ('a.org', 'eth', 256), ('b.org', 'akash', 128)) x(domain, service_id, relays)
+          WHERE t.day = '${DAY}' AND t.domain = x.domain AND t.service_id = x.service_id`);
+        await blocks(1581, 1600);
+        await refresh(1600);
+        assert.deepEqual(await rows(), before);
+        // rows written before the height columns: rebuilt
+        await c.query(`UPDATE ${S}.domain_service_daily_rewards SET relays = 0, first_height = NULL, last_height = NULL
+                       WHERE day = '${DAY}'`);
+        await c.query(`INSERT INTO ${S}.event_claim_settleds VALUES ${claim("d1", "eth", 1600, 2048)}`);
+        await refresh(1600);
+        const r = (await rows()).find((x) => x.domain === "a.org" && x.service_id === "eth");
+        assert.equal(r?.relays, String(260 + 2048));
+        assert.deepEqual(
+          (await rows()).map((x) => [x.domain, x.service_id, x.relays]),
+          [
+            ["a.org", "akash", "75"],
+            ["a.org", "eth", "2308"],
+            ["b.org", "akash", "153"],
+            ["c.org", "akash", "32"],
+          ]
+        );
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+  });
+
   it("without the session length, a claim is attributed at its settlement block", async () => {
     await c.query("BEGIN");
     try {
