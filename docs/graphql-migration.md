@@ -24,13 +24,12 @@ GraphiQL and generated clients show it. Some removals cannot be marked: the rela
 entity (`supplier { serviceConfigs }`), aggregates and filters through a relation.
 
 Old functions that are not in the table below stay exposed for now, because a client still calls them:
-`getAmountOfBlocksAndSuppliersByTimes`, `getClaimProofsDataByDelegatorsAndTime`, `getClaimProofsDataByTime`,
-`getComputeUnitsToTokensMultiplierEvolution`, `getDaoBalanceAtHeight`, `getDataByDelegatorAddressesAndBlocks`,
-`getDataByDelegatorAddressesAndTimes`, `getLatestBlocksByDay`, `getMissingValidatorBlocks`,
-`getOverservicedByAddressesAndTime`, `getProducedBlocksByValidator`, `getRelaysByServicePerPointJson`,
-`getRewardsByDate`, `getRewardsByDomainsAndTimeGroupByService`, `getSuppliersStakedAndBlocksByPointJson`,
-`getSupplyCompositionBetweenDates`, `getTotalSupplyBetweenDates`, `getTotalSupplyByDay` and
-`servicesPerformanceBetweenTimes`. They will move to the catalog; there is no date yet.
+`getAmountOfBlocksAndSuppliersByTimes`, `getClaimProofsDataByTime`,
+`getComputeUnitsToTokensMultiplierEvolution`, `getDaoBalanceAtHeight`, `getLatestBlocksByDay`,
+`getMissingValidatorBlocks`, `getOverservicedByAddressesAndTime`, `getProducedBlocksByValidator`,
+`getRelaysByServicePerPointJson`, `getRewardsByDate`, `getRewardsByDomainsAndTimeGroupByService`,
+`getSuppliersStakedAndBlocksByPointJson`, `getSupplyCompositionBetweenDates`, `getTotalSupplyBetweenDates` and
+`getTotalSupplyByDay`. They will move to the catalog; there is no date yet.
 
 Functions that return rows come as `<name>List` (paged with `first` / `offset`, at most 1000 rows) and, where they sum
 over a time range, as `<name>Json` too: `{range, data}` with every row in one call and the part of the range the data
@@ -71,6 +70,8 @@ functions have no `...Json`. Amounts are in upokt. In `...Json` every number is 
 | `morseClaimableAccounts { groupedAggregates(groupBy: CLAIMED) }` | `getMorseClaimSummaryList`; the accounts stay as `morseClaimableAccounts` |
 | `modToAcctTransfers`, `modToAcctTransfersSummarizeds` | `getIncomeJson`, `getSupplierEarningsJson`, `getSupplierDistributionJson` |
 | `getRewardsByAddressesAndTime*`, `getRewardsBySuppliersAndTime*`, `getMintBreakdownBetweenDates*` and the other functions over the raw transfers table | the `legacy*` function of the same name (`get` becomes `legacy`): same arguments, the old JSON under `data` |
+| `getClaimProofsDataByDelegatorsAndTime`, `getDataByDelegatorAddressesAndTimes`, `getDataByDelegatorAddressesAndBlocks` | `getSupplierEarningsJson`, `getSupplierProofsJson` and `getSupplierPenaltiesJson` with `operators` |
+| `servicesPerformanceBetweenTimes` | `getServiceUsageJson` with `rangeStart` / `rangeEnd` the current window and `compareStart` the start of the previous one |
 | `transactions(filter: {nativeTransfersExist ...})` and the other message filters | `transactions(filter: {amountOfMessages: {contains: [{type: "/cosmos.bank.v1beta1.MsgSend"}]}})` |
 | a nested entity (`supplier { stakeAmount }` inside another list) | a second query on that entity: `suppliers(filter: {id: {in: [...]}})` |
 
