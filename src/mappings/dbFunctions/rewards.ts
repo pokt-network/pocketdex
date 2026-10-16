@@ -34,7 +34,11 @@ BEGIN
         ) subquery
     );
 END;
-$$ LANGUAGE plpgsql STABLE;`
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION ${dbSchema}.get_rewards_by_date(timestamp, timestamp, text) IS
+'Network totals per time bucket between two block times, from the per-block relay totals of the claims. Arguments: start_date and end_date = UTC times without a zone, trunc_interval = day or hour. Returns a JSON array ordered by date: date_truncated, relays, estimated_relays, computed_units, estimated_computed_units and claimed_amount (in upokt). Null when the range holds no block with relays.';
+`
 }
 
 // Used to get supplier count and total staked tokens for a list of domains
@@ -117,6 +121,9 @@ SELECT jsonb_build_object(
 FROM reward_data rd
 LEFT JOIN latest_staked ls ON ls.service_id = rd.service_id;
 $$;
+
+COMMENT ON FUNCTION ${dbSchema}.get_rewards_by_domains_and_time_group_by_service(text[], timestamp, timestamp) IS
+'Rewards of the suppliers that serve the given endpoint domains, per service, from the daily domain summaries. Arguments: domains = endpoint root domains, start_ts and end_ts = UTC times without a zone; whole days from the date of start_ts to the date of end_ts are read. Returns a JSON object {services: [...]}: service_id; staked_suppliers, the suppliers of the domains on the last day of the range; relays, estimated_relays, computed_units, estimated_computed_units; gross_rewards, in upokt.';
 `
 }
 

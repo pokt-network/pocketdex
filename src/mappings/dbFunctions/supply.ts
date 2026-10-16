@@ -91,7 +91,11 @@ BEGIN
         ) subquery
     );
 END;
-$$ LANGUAGE plpgsql STABLE SET jit = off;`
+$$ LANGUAGE plpgsql STABLE SET jit = off;
+
+COMMENT ON FUNCTION ${dbSchema}.get_total_supply_by_day(timestamp, timestamp) IS
+'The upokt supply at the last block of each day, with the Morse balances still to claim at that block. Arguments: start_date and end_date = UTC times without a zone. Returns a JSON array ordered by day: day; last_block_id, the height read; shannon_supply, the upokt supply recorded at that block; unstaked_balance_amount, supplier_stake_amount and application_stake_amount, the Morse accounts balances not claimed at that block; total_supply, their sum with shannon_supply. Amounts in upokt. Null for a null bound or when no block is indexed.';
+`
 }
 
 export function getBurnBreakdownBetweenDatesFn(dbSchema: string): string {

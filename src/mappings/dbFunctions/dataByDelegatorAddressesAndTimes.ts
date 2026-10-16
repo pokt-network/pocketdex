@@ -92,5 +92,8 @@ AS $$
   LEFT JOIN slashed_agg s ON s.supplier_id = ms.supplier_id
   GROUP BY ms.address);
 $$;
+
+COMMENT ON FUNCTION ${dbSchema}.get_data_by_delegator_addresses_and_times(text[], timestamp, timestamp) IS
+'Claims, settlements and slashes of the Staked suppliers that share revenue with each address (an address in the rev_share of a live service config), between two block times, both inclusive. Arguments: addresses = Shannon addresses, start_ts and end_ts = UTC times without a zone (2026-10-01T00:00:00). Returns a JSON array with one element per address: address; claim_amount, claim_relays, claim_computed_units and claim_upokt, summed over the claims the suppliers created (msg_create_claims); proof_amount, proof_relays, proof_computed_units and proof_upokt, summed over their settled claims (event_claim_settleds); slashed, the stake they lost to slashing. Amounts in upokt. Null when no address matches a supplier.';
 `
 }
