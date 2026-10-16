@@ -532,6 +532,7 @@ BEGIN
                       , ('get_staked_suppliers', 'at_height')
                       , ('get_block_supplies', 'hash')
                       , ('get_relay_mining_difficulty', 'row_offset')
+                      , ('get_service_usage', 'total_services')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -2748,36 +2749,52 @@ END $$;
 -- Service: the total usage of a set of services (a service owner resolves its own through services.owner_id).
 -- Pass services, top_by_settled, or both: top_by_settled = N picks the N services (among services, when given) with the most settled_upokt in
 -- the whole range (ties by service_id), and a series then covers those N; rank_by_settled is their place (1 = most),
--- NULL when the caller names the services. Rows come ordered by rank, then bucket.
+-- NULL when the caller names the services. Rows come ordered by rank, then bucket. row_offset skips that many services
+-- of the ranking first (NULL = 0), so top_by_settled is a page of it and rank_by_settled stays the place in the whole
+-- ranking; total_services is the number of services ranked (those with settled claims in the range, among services
+-- when given), on every row of a top_by_settled call (NULL without one). With neither services nor top_by_settled,
+-- by_service => false is the network total: every service summed in one row per bucket.
 CREATE OR REPLACE FUNCTION ${s}.get_service_usage(services text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, top_by_settled int DEFAULT NULL, by_service boolean DEFAULT true,
-  fill_empty_buckets boolean DEFAULT false)
+  fill_empty_buckets boolean DEFAULT false, row_offset int DEFAULT NULL)
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, service_id text, claimed_upokt numeric, settled_upokt numeric,
   overservicing_loss_upokt numeric, relays numeric, estimated_relays numeric, compute_units numeric,
-  estimated_compute_units numeric, claims bigint, rank_by_settled int, covered_from timestamptz,
+  estimated_compute_units numeric, claims bigint, rank_by_settled int, total_services int, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE rg record; sp record; cv record; fb timestamptz;
+DECLARE rg record; sp record; cv record; fb timestamptz; all_services boolean; ranked int;
 BEGIN
-  IF services IS NULL AND top_by_settled IS NULL THEN
-    RAISE EXCEPTION 'pass services, top_by_settled, or both (the top among those services)';
+  IF services IS NULL AND top_by_settled IS NULL AND by_service THEN
+    RAISE EXCEPTION 'pass services, top_by_settled, or both (the top among those services); or by_service => false for the network total';
   END IF;
   IF top_by_settled IS NOT NULL AND (top_by_settled < 1 OR top_by_settled > 200) THEN
     RAISE EXCEPTION 'top_by_settled must be between 1 and 200 (is %)', top_by_settled;
   END IF;
+  IF row_offset IS NOT NULL AND (row_offset < 0 OR row_offset > 10000000) THEN
+    RAISE EXCEPTION 'row_offset must be between 0 and 10000000 (has %)', row_offset;
+  END IF;
+  IF row_offset IS NOT NULL AND top_by_settled IS NULL THEN
+    RAISE EXCEPTION 'row_offset pages the ranking: pass top_by_settled (the page size) with it';
+  END IF;
   PERFORM ${s}._validate(services, CASE WHEN services IS NULL THEN '' ELSE 'services' END, range_start, range_end, bucket);
+  -- the network total: no service list, every service summed (by_service is false here)
+  all_services := services IS NULL AND top_by_settled IS NULL;
 ${covered("settled")}
   IF top_by_settled IS NOT NULL THEN
     rg := ${s}._ranges(range_start, range_end, NULL);
-    services := ARRAY(
-      SELECT t.service_id FROM (
-        SELECT d.service_id, d.settled_upokt FROM ${s}.daily_claims_by_application_service d
-        WHERE d.day BETWEEN rg.d1 AND rg.d2 AND (services IS NULL OR d.service_id = ANY(services))
-        UNION ALL
-        SELECT c.service_id, c.settled_upokt FROM ${s}.settlement_claims_by_application_service c
-        WHERE (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
-          AND (services IS NULL OR c.service_id = ANY(services))) t
-      GROUP BY t.service_id ORDER BY sum(t.settled_upokt) DESC, t.service_id COLLATE "C" LIMIT top_by_settled);
+    SELECT coalesce(array_agg(p.service_id ORDER BY p.rn), '{}'), max(p.ranked) INTO services, ranked FROM (
+      SELECT g.service_id, g.rn, g.ranked FROM (
+        SELECT t.service_id, row_number() OVER (ORDER BY sum(t.settled_upokt) DESC, t.service_id COLLATE "C") rn,
+               (count(*) OVER ())::int ranked
+        FROM (
+          SELECT d.service_id, d.settled_upokt FROM ${s}.daily_claims_by_application_service d
+          WHERE d.day BETWEEN rg.d1 AND rg.d2 AND (services IS NULL OR d.service_id = ANY(services))
+          UNION ALL
+          SELECT c.service_id, c.settled_upokt FROM ${s}.settlement_claims_by_application_service c
+          WHERE (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
+            AND (services IS NULL OR c.service_id = ANY(services))) t
+        GROUP BY t.service_id) g
+      ORDER BY g.rn LIMIT top_by_settled OFFSET coalesce(row_offset, 0)) p;
   END IF;
   rg := ${s}._ranges(range_start, range_end, bucket);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
@@ -2786,12 +2803,12 @@ ${covered("settled")}
   WITH r AS (
     SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.service_id, d.claimed_upokt, d.settled_upokt, d.overservicing_loss_upokt,
            d.relays, d.estimated_relays, d.claimed_compute_units, d.estimated_compute_units, d.claim_count claims
-    FROM ${s}.daily_claims_by_application_service d WHERE d.service_id = ANY(services) AND d.day BETWEEN rg.d1 AND rg.d2
+    FROM ${s}.daily_claims_by_application_service d WHERE (all_services OR d.service_id = ANY(services)) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
     SELECT c.block_time, c.service_id, c.claimed_upokt, c.settled_upokt, c.overservicing_loss_upokt,
            c.relays, c.estimated_relays, c.claimed_compute_units, c.estimated_compute_units, c.claim_count
     FROM ${s}.settlement_claims_by_application_service c
-    WHERE c.service_id = ANY(services) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
+    WHERE (all_services OR c.service_id = ANY(services)) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
   )
   SELECT ${s}._bucket(bucket, r.block_time, sp.f), ${s}._bucket_end(bucket, r.block_time, sp.t), CASE WHEN by_service THEN r.service_id ELSE 'all' END, sum(r.claimed_upokt)::numeric, sum(r.settled_upokt)::numeric,
          sum(r.overservicing_loss_upokt)::numeric, sum(r.relays)::numeric, sum(r.estimated_relays)::numeric,
@@ -2808,12 +2825,12 @@ ${covered("settled")}
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
   SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::numeric, 0::bigint
-  WHERE fill_empty_buckets AND NOT by_service AND fb IS NOT NULL AND cardinality(services) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
+  WHERE fill_empty_buckets AND NOT by_service AND fb IS NOT NULL AND (all_services OR cardinality(services) > 0) AND NOT EXISTS (SELECT 1 FROM res0)
   )
-  SELECT r.*, CASE WHEN top_by_settled IS NOT NULL THEN array_position(services, r.service_id) END FROM res r
+  SELECT r.*, CASE WHEN top_by_settled IS NOT NULL THEN coalesce(row_offset, 0) + array_position(services, r.service_id) END, ranked FROM res r
   WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
-  SELECT b.bucket_start, b.bucket_end, k.service_id, CASE WHEN k.claimed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.settled_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overservicing_loss_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END, CASE WHEN top_by_settled IS NOT NULL THEN array_position(services, k.service_id) END
+  SELECT b.bucket_start, b.bucket_end, k.service_id, CASE WHEN k.claimed_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.settled_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.overservicing_loss_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.relays_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_relays_na THEN NULL ELSE 0 END, CASE WHEN k.compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.estimated_compute_units_na THEN NULL ELSE 0 END, CASE WHEN k.claims_na THEN NULL ELSE 0 END, CASE WHEN top_by_settled IS NOT NULL THEN coalesce(row_offset, 0) + array_position(services, k.service_id) END, ranked
   FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.covered) b
   CROSS JOIN (SELECT r.service_id, bool_and(r.claimed_upokt IS NULL) claimed_upokt_na, bool_and(r.settled_upokt IS NULL) settled_upokt_na, bool_and(r.overservicing_loss_upokt IS NULL) overservicing_loss_upokt_na, bool_and(r.relays IS NULL) relays_na, bool_and(r.estimated_relays IS NULL) estimated_relays_na, bool_and(r.compute_units IS NULL) compute_units_na, bool_and(r.estimated_compute_units IS NULL) estimated_compute_units_na, bool_and(r.claims IS NULL) claims_na FROM res r GROUP BY r.service_id) k
   WHERE bucket IS NOT NULL AND fill_empty_buckets

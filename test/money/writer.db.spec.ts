@@ -3101,6 +3101,75 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     );
   });
 
+  it("get_service_usage: by_service false with no list is the network total, and row_offset pages the ranking", async () => {
+    const all = (await c.query(`SELECT array_agg(DISTINCT service_id) s FROM ${S}.claim_settlements`)).rows[0]
+      .s as unknown as string[];
+    assert.ok(all.length >= 3);
+    // the network total is every service summed: the same rows as naming every service, by bucket or not
+    const total = (list: string, params: unknown[], range: string) =>
+      c.query(
+        `SELECT bucket_start, bucket_end, service_id, claimed_upokt::text, settled_upokt::text, relays::text, claims,
+           rank_by_settled, total_services
+         FROM ${S}.get_service_usage(${list}, ${range}, by_service => false) ORDER BY bucket_start`,
+        params
+      );
+    for (const range of [
+      "range_start => NULL, range_end => NULL",
+      "range_start => '2026-09-01T11:00:00Z', range_end => '2026-09-01T14:00:00Z', bucket => 'hour'",
+    ]) {
+      const network = (await total("services => NULL", [], range)).rows;
+      assert.ok(network.length > 0);
+      assert.deepEqual(network, (await total("services => $1::text[]", [all], range)).rows);
+    }
+    const sum = (await c.query(`SELECT sum(settled_upokt)::text s FROM ${S}.claim_settlements`)).rows[0].s;
+    assert.deepEqual(
+      (await total("services => NULL", [], "range_start => NULL, range_end => NULL")).rows.map((r) => r.settled_upokt),
+      [sum]
+    );
+    // pages of the ranking: rank_by_settled is the place in the whole ranking, total_services its length
+    const ranking = (
+      await c.query(
+        `SELECT service_id FROM ${S}.claim_settlements GROUP BY 1 ORDER BY sum(settled_upokt) DESC, service_id COLLATE "C"`
+      )
+    ).rows.map((r) => r.service_id as string);
+    const page = async (offset: string) =>
+      (
+        await c.query(
+          `SELECT DISTINCT service_id, rank_by_settled r, total_services t FROM ${S}.get_service_usage(services => NULL,
+             range_start => NULL, range_end => NULL, top_by_settled => 2, row_offset => ${offset}) ORDER BY r`
+        )
+      ).rows;
+    const pages: unknown[] = [];
+    for (let offset = 0; offset < ranking.length; offset += 2) pages.push(...(await page(String(offset))));
+    assert.deepEqual(
+      pages,
+      ranking.map((service_id, i) => ({ service_id, r: i + 1, t: ranking.length }))
+    );
+    assert.deepEqual(await page("NULL"), await page("0"));
+    assert.deepEqual(await page(String(ranking.length)), []);
+    // named services without a top: no ranking, so no total either
+    const named = await c.query(
+      `SELECT DISTINCT total_services t FROM ${S}.get_service_usage(services => $1::text[], range_start => NULL,
+         range_end => NULL)`,
+      [all]
+    );
+    assert.deepEqual(named.rows, [{ t: null }]);
+    await assert.rejects(
+      c.query(`SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, by_service => true)`),
+      /pass services, top_by_settled, or both/
+    );
+    await assert.rejects(
+      c.query(`SELECT * FROM ${S}.get_service_usage($1::text[], NULL, NULL, row_offset => 1)`, [all]),
+      /row_offset pages the ranking: pass top_by_settled/
+    );
+    for (const offset of [-1, 10000001]) {
+      await assert.rejects(
+        c.query(`SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, top_by_settled => 2, row_offset => ${offset})`),
+        /row_offset must be between 0 and 10000000/
+      );
+    }
+  });
+
   it("get_supplier_penalties gives a slash its claim's expiration reason and NULL where a kind has no value", async () => {
     await c.query("BEGIN");
     try {

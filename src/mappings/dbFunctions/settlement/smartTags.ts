@@ -178,7 +178,7 @@ const DESCRIPTIONS: Record<string, string> = {
   get_supplier_penalties:
     "Supplier penalties: expired claims by reason, discarded claims and slashes with their amount; suppliers NULL = every supplier; by_service, by_supplier; owners or operators (the Staked suppliers whose service configs share revenue with them now; operator_scope ever = every supplier any of whose service configs shared revenue with them at any time, in any stake status; ever reads an index of the rev_share wallets once it covers every height (indexed from genesis, or backfilled): ~25 ms for 7 wallets shared by 4,092 suppliers on mainnet; before that it takes seconds for a large operator) in place of suppliers.",
   get_service_usage:
-    "Service usage: claimed and settled upokt, relays, compute units and claims per service; services, or top_by_settled = N for the N services that settled the most (rank_by_settled); by_service.",
+    "Service usage: claimed and settled upokt, relays, compute units and claims per service; services, or top_by_settled = N for the N services that settled the most (rank_by_settled); by_service. row_offset (with top_by_settled, at most 10,000,000) skips that many services of the ranking first, so top_by_settled is a page of it; total_services = the services ranked (those with settled claims in the range), on every row of a top_by_settled call. Neither services nor top_by_settled with by_service false = the network total, every service summed.",
   get_app_auto_unstakes:
     "Applications the chain unstaked because their stake fell below the minimum; applications NULL = every application.",
   get_supplier_proofs:
