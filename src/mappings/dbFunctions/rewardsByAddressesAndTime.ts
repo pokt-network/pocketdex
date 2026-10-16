@@ -1,3 +1,10 @@
+// The get_rewards_* functions kept their names, arguments and return types, and now answer from the money tables:
+// each returns the data of its legacy_* twin (settlement/functions.ts), which holds what the function returned while it
+// read mod_to_acct_transfers (that table is no longer written). They are plpgsql so that they resolve the legacy_*
+// function when called, not when created. A scalar reads 0 where the twin has nothing covered, as it did with no rows.
+// Only the twin's data is returned, not its range: a part of the range the money tables do not cover reads as nothing, as
+// the unwritten part of mod_to_acct_transfers would. The money tables cover mainnet from height 1 to the tip (checked
+// 2026-10-16), so this is the same answer there; call the legacy_* function for the range and the gaps.
 export function getRewardsByAddressesAndTimeGroupByDate(dbSchema: string): string {
   return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_rewards_by_addresses_and_time_group_by_date(
     addresses TEXT[],
@@ -7,26 +14,7 @@ export function getRewardsByAddressesAndTimeGroupByDate(dbSchema: string): strin
 )
 RETURNS JSON AS $$
 BEGIN
-    RETURN (
-        SELECT json_agg(
-            json_build_object(
-                'date_truncated', date_truncated,
-                'total_amount', total_amount
-            )
-            ORDER BY date_truncated
-        )
-        FROM (
-            SELECT 
-                date_trunc(trunc_interval, b.timestamp) AS date_truncated,
-                SUM(t.amount)::NUMERIC AS total_amount
-            FROM ${dbSchema}.mod_to_acct_transfers t
-            INNER JOIN ${dbSchema}.blocks b ON b.id = t.block_id
-            WHERE t.recipient_id = ANY(addresses) 
-                AND b.timestamp BETWEEN start_date AND end_date
-            GROUP BY date_truncated
-            ORDER BY date_truncated
-        ) subquery
-    );
+    RETURN (${dbSchema}.legacy_rewards_by_addresses_and_time_group_by_date(addresses, start_date, end_date, trunc_interval)->>'data')::json;
 END;
 $$ LANGUAGE plpgsql STABLE;`
 }
@@ -39,13 +27,7 @@ export function getRewardsByAddressesAndTime(dbSchema: string): string {
 )
 RETURNS NUMERIC AS $$
 BEGIN
-    RETURN (
-        SELECT COALESCE(SUM(t.amount), 0)::NUMERIC
-        FROM ${dbSchema}.mod_to_acct_transfers t
-        INNER JOIN ${dbSchema}.blocks b ON b.id = t.block_id
-        WHERE t.recipient_id = ANY(addresses) 
-            AND b.timestamp BETWEEN start_date AND end_date
-    );
+    RETURN COALESCE((${dbSchema}.legacy_rewards_by_addresses_and_time(addresses, start_date, end_date)->>'data')::NUMERIC, 0);
 END;
 $$ LANGUAGE plpgsql STABLE;`
 }
@@ -59,28 +41,7 @@ export function getRewardsByAddressesAndTimeGroupByDateAndAddress(dbSchema: stri
 )
 RETURNS JSON AS $$
 BEGIN
-    RETURN (
-        SELECT json_agg(
-            json_build_object(
-                'address', address,
-                'date_truncated', date_truncated,
-                'total_amount', total_amount
-            )
-            ORDER BY date_truncated
-        )
-        FROM (
-            SELECT 
-                t.recipient_id as address,
-                date_trunc(trunc_interval, b.timestamp) AS date_truncated,
-                SUM(t.amount)::NUMERIC AS total_amount
-            FROM ${dbSchema}.mod_to_acct_transfers t
-            INNER JOIN ${dbSchema}.blocks b ON b.id = t.block_id
-            WHERE t.recipient_id = ANY(addresses) 
-                AND b.timestamp BETWEEN start_date AND end_date
-            GROUP BY address, date_truncated
-            ORDER BY date_truncated
-        ) subquery
-    );
+    RETURN (${dbSchema}.legacy_rewards_by_addresses_and_time_group_by_address_and_date(addresses, start_date, end_date, trunc_interval)->>'data')::json;
 END;
 $$ LANGUAGE plpgsql STABLE;`
 }
@@ -88,21 +49,13 @@ $$ LANGUAGE plpgsql STABLE;`
 export function getRewardsBySuppliersAndTime(dbSchema: string): string {
   return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_rewards_of_addresses_by_suppliers_and_time(
     addresses TEXT[],
-	  supplier_addresses TEXT[],
+    supplier_addresses TEXT[],
     start_date TIMESTAMP,
     end_date TIMESTAMP
 )
 RETURNS NUMERIC AS $$
 BEGIN
-    RETURN (
-        SELECT COALESCE(SUM(t.amount), 0)::NUMERIC
-        FROM ${dbSchema}.event_claim_settleds e
-        INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
-		    INNER JOIN ${dbSchema}.mod_to_acct_transfers t ON e.id = t.event_claim_settled_id
-        WHERE e.supplier_id = ANY(supplier_addresses) AND
-			    t.recipient_id = ANY(addresses) AND 
-			    b.timestamp BETWEEN start_date AND end_date
-    );
+    RETURN COALESCE((${dbSchema}.legacy_rewards_of_addresses_by_suppliers_and_time(addresses, supplier_addresses, start_date, end_date)->>'data')::NUMERIC, 0);
 END;
 $$ LANGUAGE plpgsql STABLE;`
 }
@@ -117,30 +70,7 @@ export function getRewardsBySuppliersAndTimeGroupByDateAndAddress(dbSchema: stri
 )
 RETURNS JSON AS $$
 BEGIN
-    RETURN (
-        SELECT json_agg(
-            json_build_object(
-                'address', address,
-                'date_truncated', date_truncated,
-                'total_amount', total_amount
-            )
-            ORDER BY date_truncated
-        )
-        FROM (
-            SELECT 
-                t.recipient_id as address,
-                date_trunc(trunc_interval, b.timestamp) AS date_truncated,
-                SUM(t.amount)::NUMERIC AS total_amount
-            FROM ${dbSchema}.event_claim_settleds e
-            INNER JOIN ${dbSchema}.blocks b ON b.id = e.block_id
-            INNER JOIN ${dbSchema}.mod_to_acct_transfers t ON e.id = t.event_claim_settled_id
-            WHERE e.supplier_id = ANY(supplier_addresses) AND
-                t.recipient_id = ANY(addresses) AND
-                b.timestamp BETWEEN start_date AND end_date
-              GROUP BY address, date_truncated
-              ORDER BY date_truncated
-        ) subquery
-    );
+    RETURN (${dbSchema}.legacy_rewards_by_suppliers_and_time_group_by_address_and_date(addresses, supplier_addresses, start_date, end_date, trunc_interval)->>'data')::json;
 END;
 $$ LANGUAGE plpgsql STABLE;`
 }
