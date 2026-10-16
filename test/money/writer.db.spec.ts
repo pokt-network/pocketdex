@@ -3196,15 +3196,14 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           ('s1', '${all[2]}', int8range(1, NULL)), ('s2', '${all[0]}', int8range(1, NULL)), ('s3', '${all[0]}', int8range(1, 3));
         INSERT INTO ${S}.applications VALUES ('a1', 'Staked', int8range(1, NULL)), ('a2', 'Unstaked', int8range(1, NULL));
         INSERT INTO ${S}.application_services VALUES ('a1', '${all[0]}', int8range(1, NULL)), ('a2', '${all[0]}', int8range(1, NULL));`);
-      // the range is the second half of the settlement times, compared with the first half
+      // the range starts at the first settlement, compared with the covered window before it (no usage there: 0)
       const t = (
         await c.query(
-          `WITH d AS (SELECT DISTINCT block_time b FROM ${S}.claim_settlements)
-           SELECT (SELECT min(b) FROM d)::text f, (SELECT b FROM d ORDER BY b OFFSET (SELECT count(*) / 2 FROM d) LIMIT 1)::text m,
-             (SELECT count(*) FROM d)::int n`
+          `SELECT (SELECT covered_from FROM ${S}._coverage(NULL, NULL))::text f, (SELECT min(block_time) FROM ${S}.claim_settlements)::text m,
+             (SELECT covered_from FROM ${S}._coverage(NULL, NULL)) < (SELECT min(block_time) FROM ${S}.claim_settlements) ok`
         )
-      ).rows[0] as { f: string; m: string; n: number };
-      assert.ok(t.n >= 2, JSON.stringify(t));
+      ).rows[0] as unknown as { f: string; m: string; ok: boolean };
+      assert.ok(t.ok, JSON.stringify(t));
       const range = `range_start => '${t.m}', range_end => NULL`;
       const compare = `compare_start => '${t.f}'`;
       const cols = `service_id, name, claimed_upokt::float8 claimed_upokt, settled_upokt::float8 settled_upokt, relays::float8 relays,
@@ -3214,9 +3213,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         rank_by_settled, total_services`;
       const call = async (args: string) =>
         (await c.query(`SELECT ${cols} FROM ${S}.get_service_usage(${args})`)).rows as Record<string, unknown>[];
-      const named = await call(`ARRAY[${q(all)}], ${range}, with_details => true, ${compare}`);
       // the services with usage in the range (a named service without any has no row)
-      const used = named;
+      const used = await call(`ARRAY[${q(all)}], ${range}, with_details => true, ${compare}`);
       assert.ok(used.length >= 2);
       // the details: the live name, the Staked actors configured now
       const byId = Object.fromEntries(
@@ -3228,18 +3226,23 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       );
       const before = await call(`ARRAY[${q(all)}], '${t.f}', '${t.m}'`);
       // the previous window as the same function sums it; change by the old resolver's rule
-      for (const r of named) {
+      for (const r of used) {
         const p = Number(before.find((b) => b.service_id === r.service_id)?.estimated_compute_units ?? 0);
         assert.deepEqual([r.service_id, r.prev], [r.service_id, p]);
         const want = p ? (Number(r.estimated_compute_units ?? 0) - p) / p : 1;
         assert.ok(Math.abs(Number(r.change) - want) < 1e-12, `${r.service_id} change ${r.change} vs ${want}`);
       }
+      // a previous window the money tables do not cover (before their history) has no previous and no change, not 0 and 1
+      assert.deepEqual(
+        [...new Set((await call(`ARRAY[${q(all)}], ${range}, compare_start => '2000-01-01', compare_end => '${t.f}'`))
+          .map((r) => [r.prev, r.change].join()))],
+        [","]
+      );
       // every order and direction: pages of 2 from row_offset are the services with usage in that order (NULLs last, ties
       // by service_id), each with its details, rank_by_settled NULL and total_services = how many there are
       const sorted = (by: string, dir: string, rows: Record<string, unknown>[]) =>
         [...rows].sort((a, b) => {
-          const key = (r: Record<string, unknown>) =>
-            by === "name" ? (r.name === null ? null : String(r.name).toLowerCase()) : by === "staked_suppliers" ? r.staked_suppliers : r[by === "change" ? "change" : by];
+          const key = (r: Record<string, unknown>) => (by === "name" && r.name !== null ? String(r.name).toLowerCase() : r[by]);
           const [x, y] = [key(a), key(b)];
           if (x !== y) {
             if (x === null) return 1;
@@ -3282,7 +3285,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(
         total.map((r) => [r.service_id, r.name, r.staked_suppliers, r.staked_applications, r.prev]),
         [["all", null, used.reduce((n, r) => n + Number(r.staked_suppliers), 0),
-          used.reduce((n, r) => n + Number(r.staked_applications), 0), Number(prevTotal.estimated_compute_units)]]
+          used.reduce((n, r) => n + Number(r.staked_applications), 0), Number(prevTotal?.estimated_compute_units ?? 0)]]
       );
       // a bucketed page is the same series as naming those services, in the page's order
       const series = async (args: string) =>
@@ -3313,8 +3316,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["row_limit => 2, bucket => 'day', compare_start => '2026-01-01'", /compare_start compares the whole range/],
         ["row_limit => 2, compare_end => '2026-01-01'", /compare_end needs compare_start/],
         ["row_limit => 2, compare_start => '2100-01-01'", /compare_start must be before compare_end/],
+        ["row_limit => 2, compare_start => '2026-08-01', compare_end => '2026-09-02'", /compare_end \(default range_start\) not after range_start/],
       ] as const)
         await assert.rejects(c.query(`SELECT * FROM ${S}.get_service_usage(NULL, '2026-09-01', NULL, ${args})`), error);
+      await assert.rejects(
+        c.query(`SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, row_limit => 2, compare_start => '2026-08-01')`),
+        /compare_start compares with the window before range_start: pass range_start/
+      );
     } finally {
       await c.query("ROLLBACK");
     }
