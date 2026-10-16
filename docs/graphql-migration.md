@@ -6,8 +6,10 @@ reduced to a small, documented surface:
 - The basic entities stay as plain lists: filters on their own columns, `orderBy`, `first` / `offset`, `totalCount`,
   and the lookup by key (`block(id:)`, `supplier(id:)`, ...).
 - Relations go: no nested entities (`supplier { serviceConfigs { ... } }`), no filters through a relation
-  (`serviceConfigs: { some: ... }`), no `node` / `nodeId` / `...ByNodeId`.
-- Aggregates go: no `aggregates`, no `groupedAggregates`.
+  (`serviceConfigs: { some: ... }`). `node`, `nodeId` and `...ByNodeId` stay for now, because the indexer cannot hide
+  them; do not use them.
+- Aggregates go: no `aggregates`, no `groupedAggregates`, no `distinctCount` (the query service runs with
+  `--aggregate=false`).
 - Event, message and internal tables are hidden.
 - Anything that combines or sums rows is a function. Every function and argument is described in the schema
   (introspection).
@@ -16,10 +18,18 @@ The entities that stay: `accounts`, `balances`, `blocks`, `blockMetadata`, `bloc
 `nativeTransfers`, `params`, `services`, `suppliers`, `supplierServiceConfigs`, `applications`, `applicationServices`,
 `applicationGateways`, `gateways`, `validators`, `authzs` and `morseClaimableAccounts`.
 
-What goes is marked `@deprecated` in the schema, with its replacement in the reason: the lists and functions in the
-table below and the relations from one entity to another (`supplier { owner }`). Introspection, GraphiQL and generated
-clients show it. Some removals cannot be marked: the relations to the many rows of another entity
-(`supplier { serviceConfigs }`), aggregates, filters through a relation, and `node` / `nodeId`.
+Until the cut-off, what goes is marked `@deprecated` in the schema, with its replacement in the reason: the lists and
+functions in the table below and the relations from one entity to another (`supplier { owner }`). Introspection,
+GraphiQL and generated clients show it. Some removals cannot be marked: the relations to the many rows of another
+entity (`supplier { serviceConfigs }`), aggregates and filters through a relation.
+
+Old functions that are not in the table below stay exposed for now, because a client still calls them:
+`getAmountOfBlocksAndSuppliersByTimes`, `getClaimProofsDataByTime`,
+`getComputeUnitsToTokensMultiplierEvolution`, `getDaoBalanceAtHeight`, `getLatestBlocksByDay`,
+`getMissingValidatorBlocks`, `getOverservicedByAddressesAndTime`, `getProducedBlocksByValidator`,
+`getRelaysByServicePerPointJson`, `getRewardsByDate`, `getRewardsByDomainsAndTimeGroupByService`,
+`getSuppliersStakedAndBlocksByPointJson`, `getSupplyCompositionBetweenDates`, `getTotalSupplyBetweenDates` and
+`getTotalSupplyByDay`. They will move to the catalog; there is no date yet.
 
 Functions that return rows come as `<name>List` (paged with `first` / `offset`, at most 1000 rows) and, where they sum
 over a time range, as `<name>Json` too: `{range, data}` with every row in one call and the part of the range the data
@@ -60,11 +70,14 @@ functions have no `...Json`. Amounts are in upokt. In `...Json` every number is 
 | `morseClaimableAccounts { groupedAggregates(groupBy: CLAIMED) }` | `getMorseClaimSummaryList`; the accounts stay as `morseClaimableAccounts` |
 | `modToAcctTransfers`, `modToAcctTransfersSummarizeds` | `getIncomeJson`, `getSupplierEarningsJson`, `getSupplierDistributionJson` |
 | `getRewardsByAddressesAndTime*`, `getRewardsBySuppliersAndTime*`, `getMintBreakdownBetweenDates*` and the other functions over the raw transfers table | the `legacy*` function of the same name (`get` becomes `legacy`): same arguments, the old JSON under `data` |
+| `getClaimProofsDataByDelegatorsAndTime`, `getDataByDelegatorAddressesAndTimes`, `getDataByDelegatorAddressesAndBlocks` | `getSupplierEarningsJson`, `getSupplierProofsJson` and `getSupplierPenaltiesJson` with `operators` |
+| `servicesPerformanceBetweenTimes` | `getServiceUsageJson` with `rangeStart` / `rangeEnd` the current window and `compareStart` the start of the previous one |
 | `transactions(filter: {nativeTransfersExist ...})` and the other message filters | `transactions(filter: {amountOfMessages: {contains: [{type: "/cosmos.bank.v1beta1.MsgSend"}]}})` |
 | a nested entity (`supplier { stakeAmount }` inside another list) | a second query on that entity: `suppliers(filter: {id: {in: [...]}})` |
 
 ## Timeline
 
 1. Now: the functions above are live next to the current schema. Move to them.
-2. Monday 2026-10-19 (UTC): relations, aggregates and the hidden tables are removed from the schema.
+2. Monday 2026-10-19 (UTC): relations, aggregates and the hidden tables are removed from the schema; so are the
+   functions replaced by a `legacy*` one or by the catalog.
    Clients still using them will get `Cannot query field` errors.

@@ -5,6 +5,7 @@ import {
   getClaimProofsDataByDelegatorsAndTimeFn,
   getClaimProofsDataByTimeFn,
 } from "./claimProofs";
+import { createClosedSchemaFn } from "./closedSchema";
 import { getDaoBalanceAtHeightFn } from "./dao";
 import { getDataByDelegatorAddressesAndBlocksFn } from "./dataByDelegatorAddressesAndBlocks";
 import {
@@ -16,7 +17,6 @@ import {
   refreshDomainServiceDailyRewardsFn,
 } from "./domainRewards";
 import { addEntityColumnsFn } from "./entityColumns";
-import { createDeprecationsFn } from "./deprecations";
 import { createEntityDescriptionsFn } from "./entityDescriptions";
 import { createModToAcctTransfersTableFn, createModToAcctTransfersSummarizedTableFn } from "./modToAcctTransfers";
 import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
@@ -62,6 +62,12 @@ import {
   getTotalSupplyBetweenDatesFn,
   getTotalSupplyByDay,
 } from "./supply";
+import {
+  createTxCountsDailyTableFn,
+  createTxCountsOfBlocksFn,
+  rebuildTxCountsDailyFn,
+  refreshTxCountsDailyFn,
+} from "./txCounts";
 import { getMissingValidatorBlocksFn, getProducedBlocksByValidatorFn } from "./validators";
 
 const functionsCreatedCacheKey = 'functionsCreated';
@@ -141,6 +147,11 @@ export async function createDbFunctions(): Promise<void> {
     createModToAcctTransfersSummarizedTableFn,
     createDomainServiceDailyRewardsTableFn,
     refreshDomainServiceDailyRewardsFn,
+    // the transactions per day, message type and status that get_tx_counts reads, and their writers
+    createTxCountsDailyTableFn,
+    createTxCountsOfBlocksFn,
+    rebuildTxCountsDailyFn,
+    refreshTxCountsDailyFn,
     // the per-block claim counts get_claim_proofs_data_by_time reads, and their writer
     createClaimsByBlockFn,
     // the (wallet, supplier) pairs of every rev_share, which operator_scope ever reads
@@ -192,10 +203,9 @@ export async function createDbFunctions(): Promise<void> {
     getTotalSupplyBetweenDatesFn,
     getOverservicedsByDelegatorAddressesAndTimesFn,
     getComputeUnitsToTokensMultiplierEvolutionFn,
-    // the @deprecated marks of the tables and functions above that leave the GraphQL schema (docs/graphql-migration.md):
-    // in the same transaction as the functions that rewrite their own comments (supply.ts), so no start publishes
-    // them unmarked
-    createDeprecationsFn,
+    // hides what the GraphQL schema no longer exposes and removes the relations (docs/graphql-migration.md): in the
+    // same transaction as the functions that rewrite their own comments (supply.ts), so no start publishes them
+    createClosedSchemaFn,
   )
 
   logger.info(`[createDbFunctions] db functions were saved successfully to schema=${schema}.`)

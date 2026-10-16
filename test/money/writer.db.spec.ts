@@ -13,7 +13,7 @@ import { after, before, describe, it } from "node:test";
 import * as zlib from "node:zlib";
 import { fromBech32, toBech32 } from "@cosmjs/encoding";
 import { createEntityDescriptionsFn } from "../../src/mappings/dbFunctions/entityDescriptions";
-import { createDeprecationsFn, DEPRECATED_RELATION, deprecatedTag } from "../../src/mappings/dbFunctions/deprecations";
+import { createClosedSchemaFn } from "../../src/mappings/dbFunctions/closedSchema";
 import {
   createSupplierRevShareWalletsFn,
   insertRevShareWalletsSql,
@@ -2710,7 +2710,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       const t = (await c.query(`SELECT obj_description('${S}.suppliers'::regclass, 'pg_class') d`)).rows[0].d as string;
       assert.equal(
         t,
-        `@foreignKey (owner_id) REFERENCES accounts (id)|${DEPRECATED_RELATION}\n@omit create\nOne row per supplier, keyed by operator address, ` +
+        `@foreignKey (owner_id) REFERENCES accounts (id)\n@omit create\nOne row per supplier, keyed by operator address, ` +
           "with its stake and unstaking state. SubQuery keeps its history; GraphQL lists show the current version of each " +
           "row unless asked for an earlier height."
       );
@@ -2730,42 +2730,89 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     }
   });
 
-  it("the deprecations mark the tables and functions that go, first in their comment, once, and skip what is missing", async () => {
+  it("the closed schema hides every table and old function it does not name, drops the relations, and writes nothing twice", async () => {
     await c.query("BEGIN");
     try {
       await c.query(`
+        CREATE TABLE IF NOT EXISTS ${S}.suppliers (id text, owner_id text);
+        COMMENT ON TABLE ${S}.suppliers IS E'@foreignKey (owner_id) REFERENCES accounts (id)\n@omit create\nits description';
+        CREATE TABLE IF NOT EXISTS ${S}.blocks (id text);
         CREATE TABLE IF NOT EXISTS ${S}.event_claim_settleds (block_id numeric);
         COMMENT ON TABLE ${S}.event_claim_settleds IS E'@deprecated an older mark\n@foreignKey (supplier_id) REFERENCES suppliers (id)\nold text';
         CREATE TABLE IF NOT EXISTS ${S}.relays (id text);
+        CREATE TABLE IF NOT EXISTS ${S}._metadata (key text);
+        CREATE TABLE IF NOT EXISTS ${S}.a_new_table (id text);
         CREATE FUNCTION ${S}.get_rewards_by_addresses_and_time(a text) RETURNS int LANGUAGE sql AS 'SELECT 1';
         CREATE FUNCTION ${S}.get_rewards_by_addresses_and_time(a text, b text) RETURNS int LANGUAGE sql AS 'SELECT 2';
-        COMMENT ON FUNCTION ${S}.get_rewards_by_addresses_and_time(text, text) IS 'its description';`);
-      await c.query(createDeprecationsFn(S));
+        COMMENT ON FUNCTION ${S}.get_rewards_by_addresses_and_time(text, text) IS 'its description';
+        CREATE FUNCTION ${S}.get_total_supply_by_day(a text) RETURNS int LANGUAGE sql AS 'SELECT 1';`);
+      await c.query(createClosedSchemaFn(S));
       const comments = async () =>
         (
           await c.query(
             `SELECT 'table ' || k.relname n, obj_description(k.oid, 'pg_class') d FROM pg_class k
-             WHERE k.relnamespace = $1::regnamespace AND k.relname IN ('event_claim_settleds', 'relays')
-             UNION ALL SELECT 'function ' || pronargs, obj_description(p.oid, 'pg_proc') FROM pg_proc p
-             WHERE p.pronamespace = $1::regnamespace AND p.proname = 'get_rewards_by_addresses_and_time' ORDER BY 1`,
+             WHERE k.relnamespace = $1::regnamespace AND k.relkind = 'r'
+               AND k.relname IN ('suppliers', 'blocks', 'event_claim_settleds', 'relays', '_metadata', 'a_new_table')
+             UNION ALL SELECT 'function ' || p.proname || pronargs, obj_description(p.oid, 'pg_proc') FROM pg_proc p
+             WHERE p.pronamespace = $1::regnamespace AND p.proname IN ('get_rewards_by_addresses_and_time', 'get_total_supply_by_day')
+             ORDER BY 1`,
             [S]
           )
         ).rows.map((r) => [r.n, r.d]);
-      const fn = deprecatedTag("legacyRewardsByAddressesAndTime (same arguments, the old JSON under data)");
       const want = [
-        ["function 1", fn],
-        ["function 2", `${fn}\nits description`],
-        ["table event_claim_settleds", `${deprecatedTag("getClaimsList or getClaimsJson; sums in getSupplierEarningsJson, getApplicationSpendJson, getGatewaySpendJson, getServiceUsageJson")}\n@foreignKey (supplier_id) REFERENCES suppliers (id)\nold text`],
-        ["table relays", deprecatedTag("nothing: the table is empty")],
+        ["function get_rewards_by_addresses_and_time1", "@omit"],
+        ["function get_rewards_by_addresses_and_time2", "@omit"],
+        ["function get_total_supply_by_day1", null],
+        ["table _metadata", null],
+        ["table a_new_table", "@omit"],
+        ["table blocks", null],
+        ["table event_claim_settleds", "@omit\nold text"],
+        ["table relays", "@omit"],
+        ["table suppliers", "@omit create\nits description"],
       ];
       assert.deepEqual(await comments(), want);
       // a second start writes nothing: same pg_description tuples
       const tuples = async () =>
-        (await c.query(`SELECT objoid::text, ctid::text FROM pg_description WHERE description ~ '^@deprecated' ORDER BY 1`)).rows;
+        (await c.query(`SELECT objoid::text, ctid::text FROM pg_description WHERE description ~ '^@omit' ORDER BY 1`)).rows;
       const before = await tuples();
-      await c.query(createDeprecationsFn(S));
+      await c.query(createClosedSchemaFn(S));
       assert.deepEqual(await comments(), want);
       assert.deepEqual(await tuples(), before);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("the closed schema skips what the indexer's role does not own, with a warning, instead of failing the start", async () => {
+    await c.query("BEGIN");
+    try {
+      await c.query(`
+        CREATE ROLE cs_t_owner NOLOGIN; CREATE ROLE cs_t_indexer NOLOGIN;
+        CREATE TABLE IF NOT EXISTS ${S}.relays (id text); ALTER TABLE ${S}.relays OWNER TO cs_t_indexer;
+        CREATE TABLE IF NOT EXISTS ${S}.event_claim_settleds (block_id numeric); ALTER TABLE ${S}.event_claim_settleds OWNER TO cs_t_owner;
+        CREATE FUNCTION ${S}.get_monetary_base_by_date(a text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+        ALTER FUNCTION ${S}.get_monetary_base_by_date(text) OWNER TO cs_t_owner;
+        CREATE FUNCTION ${S}.get_burn_breakdown_between_dates(a text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+        ALTER FUNCTION ${S}.get_burn_breakdown_between_dates(text) OWNER TO cs_t_indexer;
+        GRANT USAGE ON SCHEMA ${S} TO cs_t_indexer;
+        SET LOCAL ROLE cs_t_indexer;`);
+      await c.query(createClosedSchemaFn(S));
+      await c.query("RESET ROLE");
+      const got = (
+        await c.query(
+          `SELECT 'table ' || relname n, obj_description(oid, 'pg_class') d FROM pg_class
+           WHERE relnamespace = $1::regnamespace AND relname IN ('relays', 'event_claim_settleds')
+           UNION ALL SELECT 'function ' || proname, obj_description(oid, 'pg_proc') FROM pg_proc
+           WHERE pronamespace = $1::regnamespace AND proname IN ('get_monetary_base_by_date', 'get_burn_breakdown_between_dates') ORDER BY 1`,
+          [S]
+        )
+      ).rows.map((r) => [r.n, r.d]);
+      assert.deepEqual(got, [
+        ["function get_burn_breakdown_between_dates", "@omit"],
+        ["function get_monetary_base_by_date", null],
+        ["table event_claim_settleds", null],
+        ["table relays", "@omit"],
+      ]);
     } finally {
       await c.query("ROLLBACK");
     }
@@ -3747,7 +3794,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_native_transfers",
       "get_param_history",
       "get_relay_mining_difficulty", "get_service_usage", "get_supplier_distribution", "get_supplier_earnings",
-      "get_supplier_penalties", "get_supplier_proofs", "get_supply_flows", "get_validator_rewards", "money_coverage",
+      "get_supplier_penalties", "get_supplier_proofs", "get_supply_flows", "get_tx_counts", "get_validator_rewards", "money_coverage",
     ]);
     for (const n of catalog) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     // the same functions have a description (smartTags.ts) and a _json twin (functions.ts)
@@ -4096,6 +4143,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_created_claims: "ARRAY['sup-l'], NULL, NULL",
         get_native_transfers: "ARRAY['acc-s']",
         get_morse_claims: "NULL, NULL, NULL, NULL",
+        get_tx_counts: "NULL, NULL",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
@@ -4293,6 +4341,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_created_claims: "ARRAY['sup-l'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_native_transfers: "ARRAY['acc-r'], NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_morse_claims: "NULL, NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_tx_counts: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
@@ -4302,6 +4351,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         "get_native_transfers",
       ];
       for (const [fn, args] of Object.entries(calls)) {
+        // rows by message type and status: no time or height to order by
+        if (fn === "get_tx_counts") continue;
         const col = byHeight.includes(fn) ? "height" : fn === "money_coverage" ? "first_height" : "bucket_start";
         // get_service_usage orders by its top rank first: newest first within each service
         const group = fn === "get_service_usage" ? "service_id" : "''";

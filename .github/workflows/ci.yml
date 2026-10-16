@@ -73,3 +73,51 @@ jobs:
           -v "$PWD/test:/home/app/test:ro"
           -e MONEY_TEST_PG=postgres://postgres:postgres@127.0.0.1:5432/postgres
           pocketdex-ci test:money
+
+  graphql-schema:
+    # The closed GraphQL schema as subql-query serves it: the entity tables (test/graphql/entities.sql), the release's
+    # startup DDL run for real (twice, a start and a restart), and a subql-query 2.22.2 with the flag that changes the
+    # schema in production (--aggregate=false). The request limits of production (--query-depth-limit and the
+    # like) are left out: they refuse the introspection query itself.
+    name: 'Closed GraphQL schema (PostgreSQL + subql-query)'
+    needs: draft
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: recursive
+      - name: Build the development image
+        run: docker build -f tilt/docker/indexer.dockerfile --build-arg BUILD_MODE=development -t pocketdex-ci .
+      - name: Prepare the database (codegen for the types the startup code imports)
+        run: >-
+          docker run --rm --network host --entrypoint sh
+          -v "$PWD/test:/home/app/test:ro"
+          -e GRAPHQL_PG=postgres://postgres:postgres@127.0.0.1:5432/postgres
+          -e TS_NODE_FILES=true -e CHAIN_ID=pocket -e ENDPOINT=http://127.0.0.1:26657
+          pocketdex-ci -c "yarn exec subql codegen && node -r ts-node/register test/graphql/setup.ts"
+      - name: Start subql-query
+        run: |
+          docker run -d --name subql-query --network host \
+            -e DB_USER=postgres -e DB_PASS=postgres -e DB_DATABASE=postgres -e DB_HOST=127.0.0.1 -e DB_PORT=5432 \
+            subquerynetwork/subql-query:v2.22.2 --name=mainnet --port=3000 --query-limit=1000 --unsafe=false --aggregate=false
+          for i in $(seq 1 60); do
+            curl -sf -m 2 -o /dev/null -H 'content-type: application/json' -d '{"query":"{__typename}"}' http://127.0.0.1:3000/graphql && exit 0
+            sleep 2
+          done
+          docker logs subql-query
+          exit 1
+      - name: Run the closed schema test
+        run: >-
+          docker run --rm --network host --entrypoint yarn
+          -v "$PWD/test:/home/app/test:ro"
+          -e GRAPHQL_URL=http://127.0.0.1:3000/graphql
+          pocketdex-ci test:graphql
