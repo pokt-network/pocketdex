@@ -1,3 +1,5 @@
+import { createTxCountsDailyTableFn, createTxCountsOfBlocksFn } from "../../src/mappings/dbFunctions/txCounts";
+
 // The entity tables the newer catalog functions read (get_actor_lifecycle, get_relay_mining_difficulty, get_claims,
 // get_created_claims, get_block_stats, get_morse_claims), reduced to their columns, with one row per height that the heights query
 // returns (each height needs its blocks row): supplier sup-l, application app-l, service svc-d; and the blocks' report
@@ -49,7 +51,8 @@ export const entityStubsSql = (S: string, heights: string): string => `
         transaction_id text, block_id numeric, _block_range int8range);
       CREATE TABLE IF NOT EXISTS ${S}.transactions (id text, _block_range int8range);
       ALTER TABLE ${S}.transactions ADD COLUMN IF NOT EXISTS code integer, ADD COLUMN IF NOT EXISTS codespace text,
-        ADD COLUMN IF NOT EXISTS fees jsonb, ADD COLUMN IF NOT EXISTS signer_address text, ADD COLUMN IF NOT EXISTS memo text;
+        ADD COLUMN IF NOT EXISTS fees jsonb, ADD COLUMN IF NOT EXISTS signer_address text, ADD COLUMN IF NOT EXISTS memo text,
+        ADD COLUMN IF NOT EXISTS block_id numeric, ADD COLUMN IF NOT EXISTS amount_of_messages jsonb;
       -- get_morse_claims' supplier destination
       CREATE TABLE IF NOT EXISTS ${S}.morse_claimable_accounts (id text, _block_range int8range);
       ALTER TABLE ${S}.morse_claimable_accounts ADD COLUMN IF NOT EXISTS claimed_msg_id text,
@@ -70,8 +73,12 @@ export const entityStubsSql = (S: string, heights: string): string => `
         'tx' || b.id, b.id FROM (${heights}) b(id);
       INSERT INTO ${S}.native_transfers SELECT 'nt' || b.id, 'acc-s', 'acc-r', 'upokt', '[{"denom": "upokt", "amount": "5"}]',
         'Success', 'tx' || b.id, b.id, int8range(b.id::bigint, NULL) FROM (${heights}) b(id);
-      INSERT INTO ${S}.transactions (id, code, codespace, fees, signer_address, memo, _block_range)
-        SELECT 'tx' || b.id, 0, '', '[{"denom": "upokt", "amount": "1"}]', 'acc-s', 'm', int8range(b.id::bigint, NULL)
+      INSERT INTO ${S}.transactions (id, code, codespace, fees, signer_address, memo, block_id, amount_of_messages, _block_range)
+        SELECT 'tx' || b.id, 0, '', '[{"denom": "upokt", "amount": "1"}]', 'acc-s', 'm', b.id,
+          '[{"type": "/cosmos.bank.v1beta1.MsgSend", "amount": 1}]', int8range(b.id::bigint, NULL)
         FROM (${heights}) b(id);
+      -- get_tx_counts: the rollup (empty here: every day is a gap) and the helper that reads the edges
+      ${createTxCountsDailyTableFn(S)}
+      ${createTxCountsOfBlocksFn(S)}
       INSERT INTO ${S}.msg_claim_morse_accounts SELECT 'mm' || b.id, 'pokt-sign', 'pokt-dest', 'MORSE' || b.id, 100, b.id,
         'tx' || b.id FROM (${heights}) b(id);`;
