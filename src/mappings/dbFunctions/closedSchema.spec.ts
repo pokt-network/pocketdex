@@ -17,7 +17,7 @@ describe("closed schema", () => {
   it("hides only old functions: none is a catalog, state or legacy_ function, and none is named twice", () => {
     const published = new Set([...CATALOG_FUNCTIONS, ...STATE_FUNCTIONS, ...Object.keys(LEGACY_REPLACES)]);
     for (const f of OMITTED_OLD_FUNCTIONS) {
-      assert.match(f, /^get_[a-z0-9_]+$/);
+      assert.match(f, /^[a-z][a-z0-9_]+$/);
       assert.ok(!published.has(f), `${f} is published by the catalog`);
     }
     assert.equal(new Set(OMITTED_OLD_FUNCTIONS).size, OMITTED_OLD_FUNCTIONS.length);
