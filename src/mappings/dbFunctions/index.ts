@@ -62,6 +62,12 @@ import {
   getTotalSupplyBetweenDatesFn,
   getTotalSupplyByDay,
 } from "./supply";
+import {
+  createTxCountsDailyTableFn,
+  createTxCountsOfBlocksFn,
+  rebuildTxCountsDailyFn,
+  refreshTxCountsDailyFn,
+} from "./txCounts";
 import { getMissingValidatorBlocksFn, getProducedBlocksByValidatorFn } from "./validators";
 
 const functionsCreatedCacheKey = 'functionsCreated';
@@ -141,6 +147,11 @@ export async function createDbFunctions(): Promise<void> {
     createModToAcctTransfersSummarizedTableFn,
     createDomainServiceDailyRewardsTableFn,
     refreshDomainServiceDailyRewardsFn,
+    // the transactions per day, message type and status that get_tx_counts reads, and their writers
+    createTxCountsDailyTableFn,
+    createTxCountsOfBlocksFn,
+    rebuildTxCountsDailyFn,
+    refreshTxCountsDailyFn,
     // the per-block claim counts get_claim_proofs_data_by_time reads, and their writer
     createClaimsByBlockFn,
     // the (wallet, supplier) pairs of every rev_share, which operator_scope ever reads
