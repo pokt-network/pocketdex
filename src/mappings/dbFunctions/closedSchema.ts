@@ -54,6 +54,10 @@ export const OMITTED_OLD_FUNCTIONS = [
   "get_data_by_delegator_addresses_and_times_v2",
   "get_monetary_base_by_date",
   "get_rewards_group_by_address_and_date",
+  "get_data_by_delegator_addresses_and_times",
+  "get_data_by_delegator_addresses_and_blocks",
+  "get_claim_proofs_data_by_delegators_and_time",
+  "services_performance_between_times",
 ];
 
 export function createClosedSchemaFn(dbSchema: string): string {
