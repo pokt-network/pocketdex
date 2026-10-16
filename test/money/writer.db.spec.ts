@@ -3305,6 +3305,12 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           (a, b) => top.indexOf(String(a.service_id)) - top.indexOf(String(b.service_id))
         )
       );
+      // each error inside the test's transaction: a savepoint keeps the next statement from "transaction is aborted"
+      const rejects = async (sql: string, error: RegExp) => {
+        await c.query("SAVEPOINT expect_error");
+        await assert.rejects(c.query(sql), error);
+        await c.query("ROLLBACK TO SAVEPOINT expect_error");
+      };
       for (const [args, error] of [
         ["top_by_settled => 2, row_limit => 2", /pass top_by_settled or row_limit, not both/],
         ["row_limit => 201", /row_limit must be between 1 and 200, or 20 with a bucket/],
@@ -3320,9 +3326,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["row_limit => 2, compare_start => '2100-01-01'", /compare_start must be before compare_end/],
         ["row_limit => 2, compare_start => '2026-08-01', compare_end => '2026-09-02'", /compare_end \(default range_start\) not after range_start/],
       ] as const)
-        await assert.rejects(c.query(`SELECT * FROM ${S}.get_service_usage(NULL, '2026-09-01', NULL, ${args})`), error);
-      await assert.rejects(
-        c.query(`SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, row_limit => 2, compare_start => '2026-08-01')`),
+        await rejects(`SELECT * FROM ${S}.get_service_usage(NULL, '2026-09-01', NULL, ${args})`, error);
+      await rejects(
+        `SELECT * FROM ${S}.get_service_usage(NULL, NULL, NULL, row_limit => 2, compare_start => '2026-08-01')`,
         /compare_start compares with the window before range_start: pass range_start/
       );
     } finally {
