@@ -18,8 +18,8 @@ import {
   getRewardsByAddressesAndTimeGroupByDateAndAddress,
   getRewardsBySuppliersAndTime,
   getRewardsBySuppliersAndTimeGroupByDateAndAddress,
-} from "../../src/mappings/dbFunctions/rewardsByAddressesAndTime";
-import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "../../src/mappings/dbFunctions/rewardsByServicesAddressesAndTime";
+} from "./rawRewards";
+import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rawRewardsByService";
 import { getRewardsByOperatorAddressesAndTimesGroupByServiceFn } from "../../src/mappings/dbFunctions/rewards";
 import {
   CATALOG_FUNCTIONS,
