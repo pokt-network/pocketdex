@@ -42,7 +42,7 @@ import {
   settlementOpReasonFromJSON,
   SettlementOpReasonSDKType,
 } from "../../types/proto-interfaces/pocket/tokenomics/types";
-import { getDbSchema, optimizedBulkCreate, rawBulkInsert } from "../utils/db";
+import { optimizedBulkCreate } from "../utils/db";
 import {
   getBlockId,
   getEventId,
@@ -65,17 +65,6 @@ type ModToAcctTransferRecord = {
   recipientId: string;
   amount: bigint;
   denom: string;
-};
-
-type SummarizedTransferRecord = {
-  id: string;
-  blockId: bigint;
-  recipientId: string;
-  opReason: string;
-  denom: string;
-  serviceId: string;
-  amount: bigint;
-  transferCount: bigint;
 };
 
 // this can return undefined because older events do not have this attribute
@@ -971,7 +960,7 @@ function _handleEventClaimSettled(
   event: CosmosEvent,
   getMintRatioFromParams: () => number,
   getEffectiveBurn: (application: string, supplier: string) => string | null
-): [EventClaimSettledProps, Array<ModToAcctTransferRecord>] {
+): EventClaimSettledProps {
   const attributes = getAttributes(event.event.attributes);
   const { claim, claimed, mintRatioStr, settledUpokt } = attributes;
 
@@ -990,7 +979,7 @@ function _handleEventClaimSettled(
   const settlement = _resolveSettlementParts(attributes, eventId, blockId, effectiveBurn, mintRatio);
   const props = _buildClaimSettledProps(event, attributes, settlement, effectiveBurn, mintRatio);
 
-  return [props, settlement.modToAcctTransfers];
+  return props;
 }
 
 function _handleEventClaimExpired(event: CosmosEvent): EventClaimExpiredProps {
@@ -1403,74 +1392,6 @@ function _handleEventProofValidityChecked(event: CosmosEvent): EventProofValidit
   };
 }
 
-async function bulkInsertModToAcctTransfers(records: ModToAcctTransferRecord[]): Promise<void> {
-  if (records.length === 0) return;
-
-  const schema = getDbSchema();
-  const blockId = records[0].blockId;
-
-  await rawBulkInsert({
-    table: `${schema}.mod_to_acct_transfers`,
-    columns: ['id', 'event_claim_settled_id', 'block_id', 'op_reason', 'recipient_id', 'amount', 'denom', '_block_range'],
-    rows: records.map(r =>
-      `('${r.id}', '${r.eventClaimSettledId}', ${r.blockId}, '${r.opReason}', '${r.recipientId}', ${r.amount}, '${r.denom}', int8range(${r.blockId}, null))`
-    ),
-    conflictCol: 'id',
-    blockId,
-  });
-}
-
-function summarizeTransfers(
-  records: ModToAcctTransferRecord[],
-  serviceIdByEventSettledId: Map<string, string>,
-): SummarizedTransferRecord[] {
-  if (records.length === 0) return [];
-
-  const grouped = new Map<string, SummarizedTransferRecord>();
-  const blockId = records[0].blockId;
-
-  for (const r of records) {
-    const serviceId = serviceIdByEventSettledId.get(r.eventClaimSettledId) || '';
-    const key = `${r.recipientId}|${r.opReason}|${r.denom}|${serviceId}`;
-
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.amount += r.amount;
-      existing.transferCount += BigInt(1);
-    } else {
-      grouped.set(key, {
-        id: `${blockId}-${r.recipientId}-${r.opReason}-${r.denom}-${serviceId}`,
-        blockId,
-        recipientId: r.recipientId,
-        opReason: r.opReason,
-        denom: r.denom,
-        serviceId,
-        amount: r.amount,
-        transferCount: BigInt(1),
-      });
-    }
-  }
-
-  return Array.from(grouped.values());
-}
-
-async function bulkInsertSummarizedTransfers(records: SummarizedTransferRecord[]): Promise<void> {
-  if (records.length === 0) return;
-
-  const schema = getDbSchema();
-  const blockId = records[0].blockId;
-
-  await rawBulkInsert({
-    table: `${schema}.mod_to_acct_transfers_summarized`,
-    columns: ['id', 'block_id', 'recipient_id', 'op_reason', 'denom', 'service_id', 'amount', 'transfer_count', '_block_range'],
-    rows: records.map(r =>
-      `('${r.id}', ${r.blockId}, '${r.recipientId}', '${r.opReason}', '${r.denom}', '${r.serviceId}', ${r.amount}, ${r.transferCount}, int8range(${r.blockId}, null))`
-    ),
-    conflictCol: 'id',
-    blockId,
-  });
-}
-
 export async function handleMsgCreateClaim(messages: Array<CosmosMessage<MsgCreateClaim>>): Promise<void> {
   await optimizedBulkCreate("MsgCreateClaim", messages.map(_handleMsgCreateClaim), 'block_id');
 }
@@ -1483,16 +1404,11 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
   await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired), 'block_id');
 }
 
-// handleEventClaimSettled is the ONLY writer of mod_to_acct_transfers and
-// mod_to_acct_transfers_summarized. rawBulkInsert deletes every row of the block
-// before inserting, so with a second writer (EventSettlementBatch used to have
-// its own handler) whichever finished last wiped the other's rows for that
-// height. The staker rows are therefore merged here and each table is written
-// once per block.
+// mod_to_acct_transfers and mod_to_acct_transfers_summarized are no longer written (release 2): the tables and their rows
+// stay, hidden from the API, until they are dropped. The money tables (src/mappings/money) hold what they held.
 export async function handleEventClaimSettled(
   events: Array<CosmosEvent>,
   overservices: Array<CosmosEvent>,
-  settlementBatches: Array<CosmosEvent>,
 ): Promise<void> {
   // Events carry their own mint_ratio attribute since v0.1.33; only those that do
   // not fall back to the tokenomics mint_ratio param, loaded only then.
@@ -1514,8 +1430,6 @@ export async function handleEventClaimSettled(
   };
 
   const eventsSettled = [];
-  const modToAcctTransfersToSave = [];
-  const serviceIdByEventSettledId = new Map<string, string>();
 
   const effectiveBurnPerAppAndSupplier = overservices.reduce((acc, overservice) => {
     let effectiveBurn: CoinSDKType | undefined, application = '', supplier = '';
@@ -1546,25 +1460,10 @@ export async function handleEventClaimSettled(
   }
 
   for (const event of events) {
-    const [eventSettled, modToAcctTransfers] = _handleEventClaimSettled(event, getMintRatioFromParams, getEffectiveBurn);
-    eventsSettled.push(eventSettled);
-    serviceIdByEventSettledId.set(eventSettled.id as string, eventSettled.serviceId as string);
-
-    if (modToAcctTransfers.length) {
-      modToAcctTransfersToSave.push(...modToAcctTransfers);
-    }
+    eventsSettled.push(_handleEventClaimSettled(event, getMintRatioFromParams, getEffectiveBurn));
   }
 
-  // Staker rows have no eventClaimSettledId, so they summarize with serviceId ''.
-  modToAcctTransfersToSave.push(...buildSettlementBatchTransfers(settlementBatches));
-
-  const summarized = summarizeTransfers(modToAcctTransfersToSave, serviceIdByEventSettledId);
-
-  await Promise.all([
-    optimizedBulkCreate("EventClaimSettled", eventsSettled, 'block_id'),
-    bulkInsertModToAcctTransfers(modToAcctTransfersToSave),
-    bulkInsertSummarizedTransfers(summarized),
-  ]);
+  await optimizedBulkCreate("EventClaimSettled", eventsSettled, 'block_id');
 }
 
 export async function handleEventClaimUpdated(events: Array<CosmosEvent>): Promise<void> {
@@ -1589,49 +1488,6 @@ export async function handleEventApplicationReimbursementRequest(events: Array<C
 
 export async function handleEventProofValidityChecked(events: Array<CosmosEvent>): Promise<void> {
   await optimizedBulkCreate("EventProofValidityChecked", events.map(_handleEventProofValidityChecked), 'block_id');
-}
-
-const VALIDATOR_REWARD_OP_REASONS = new Set([
-  "TLM_RELAY_BURN_EQUALS_MINT_VALIDATOR_REWARD_DISTRIBUTION",
-  "TLM_RELAY_BURN_EQUALS_MINT_DELEGATOR_REWARD_DISTRIBUTION",
-  "TLM_GLOBAL_MINT_VALIDATOR_REWARD_DISTRIBUTION",
-  "TLM_GLOBAL_MINT_DELEGATOR_REWARD_DISTRIBUTION",
-]);
-
-// Pure builder for the validator/delegator reward rows of EventSettlementBatch.
-// Written only by handleEventClaimSettled, never on their own (see there).
-export function buildSettlementBatchTransfers(events: Array<CosmosEvent>): ModToAcctTransferRecord[] {
-  const modToAcctTransfers: ModToAcctTransferRecord[] = [];
-
-  for (const event of events) {
-    let opType = '', opReason = '', recipient = '', totalAmount = '';
-
-    for (const attr of event.event.attributes) {
-      if (attr.key === 'op_type') opType = parseAttribute(attr.value);
-      if (attr.key === 'op_reason') opReason = parseAttribute(attr.value);
-      if (attr.key === 'recipient') recipient = parseAttribute(attr.value);
-      if (attr.key === 'total_amount') totalAmount = attr.value as string;
-    }
-
-    // Only process mod_to_acct transfers for validator/delegator rewards
-    if (opType !== 'mod_to_acct' || !VALIDATOR_REWARD_OP_REASONS.has(opReason)) continue;
-
-    const coin = getDenomAndAmount(totalAmount);
-    const eventId = getEventId(event);
-    const blockId = getBlockId(event.block);
-
-    modToAcctTransfers.push({
-      id: eventId,
-      eventClaimSettledId: '',
-      blockId,
-      opReason: getSettlementOpReasonFromSDK(opReason),
-      recipientId: recipient,
-      amount: BigInt(coin.amount),
-      denom: coin.denom,
-    });
-  }
-
-  return modToAcctTransfers;
 }
 
 // EventValidatorRewardDistribution (v0.1.34+) is emitted once per bonded
