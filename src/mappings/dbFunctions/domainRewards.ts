@@ -70,10 +70,11 @@ BEGIN
   -- Each settlement block adds its own claims to its day's rows, so the cost of a block does not grow through the day
   -- (recomputing the day took 0.9 s at the first settlement block and 16 s at the last, mainnet replica 2026-10-16).
   -- That holds the day exactly when the rows already hold every settlement height of the day below this one and none
-  -- at or above it: every row has its heights, the highest is below this block, and no claim settled between the two
-  -- (the rows' heights are the settlement blocks that credited a domain). Otherwise the day is rebuilt from its claims:
-  -- a block indexed again after a rewind (SubQuery's rewind does not touch this table, and the rewound claims are gone),
-  -- rows written before the height columns, or a call for any other block.
+  -- at or above it: every row has its heights, the highest is below this block, and no claim of the day settled after
+  -- it other than this block's (the rows' heights are the settlement blocks that credited a domain). Otherwise the day
+  -- is rebuilt from its claims: a block indexed again after a rewind (SubQuery's rewind does not touch this table, and
+  -- the rewound claims are gone), rows written before the height columns, or a call for any other block, such as a
+  -- manual call for a day whose rows were deleted.
   SELECT bool_and(last_height IS NOT NULL), max(last_height)
   INTO v_known, v_last
   FROM ${dbSchema}.domain_service_daily_rewards
@@ -82,6 +83,9 @@ BEGIN
   v_full := NOT coalesce(v_known, true) OR v_last >= p_block_id OR EXISTS (
     SELECT 1 FROM ${dbSchema}.event_claim_settleds
     WHERE block_id > v_last AND block_id < p_block_id
+  ) OR EXISTS (
+    SELECT 1 FROM ${dbSchema}.event_claim_settleds
+    WHERE block_id > p_block_id AND block_id < upper(v_block_range)
   );
 
   IF v_full THEN

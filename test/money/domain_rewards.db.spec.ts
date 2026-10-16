@@ -223,6 +223,9 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
       await blocks(1500, 1520);
       await settle(1520);
       await refresh(1520);
+      // the blocks are added one after another, as the indexer does; each is compared with a rebuild that is undone,
+      // so the next block is added to the added rows, not to rebuilt ones
+      await c.query("BEGIN");
       for (const [to, block] of [
         [1540, 1540],
         [1560, 1560],
@@ -232,8 +235,11 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         await settle(block);
         await refresh(block);
         const added = await rows();
+        await c.query("SAVEPOINT rebuild");
         assert.deepEqual(await rebuilt(block), added, `after ${block}`);
+        await c.query("ROLLBACK TO SAVEPOINT rebuild");
       }
+      await c.query("COMMIT");
       assert.deepEqual(await rows(), [
         {
           domain: "a.org",
@@ -316,6 +322,18 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         await blocks(1561, 1580);
         await settle(1580);
         await refresh(1580);
+        assert.deepEqual(await rows(), before);
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+
+    it("rebuilds the day when it has claims after the block, as a manual call for a day whose rows were deleted", async () => {
+      const before = await rows();
+      await c.query("BEGIN");
+      try {
+        await c.query(`DELETE FROM ${S}.domain_service_daily_rewards WHERE day = '${DAY}'`);
+        await refresh(1520);
         assert.deepEqual(await rows(), before);
       } finally {
         await c.query("ROLLBACK");
