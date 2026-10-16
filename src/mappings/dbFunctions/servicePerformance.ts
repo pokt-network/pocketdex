@@ -34,7 +34,8 @@ BEGIN
   SELECT
       ss.service_id,
       COUNT(*) blocks,
-      SUM(ss.amount) suppliers_staked
+      -- amount is integer on mainnet and beta (bigint sum); the cast keeps the declared type where a copy has numeric
+      SUM(ss.amount)::bigint suppliers_staked
   FROM ${dbSchema}.staked_suppliers_by_block_and_services ss
   WHERE ss.block_id BETWEEN (SELECT lo FROM range_blocks) AND (SELECT hi FROM range_blocks)
     AND ss.block_id <> ALL ((SELECT missing FROM range_blocks)::numeric[])

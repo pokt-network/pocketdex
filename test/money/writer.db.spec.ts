@@ -3295,11 +3295,13 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
           )
         ).rows;
       const top = sorted("estimated_compute_units", "desc", used).slice(0, 2).map((r) => r.service_id as string);
-      const bucketed = await series(`NULL, ${range}, bucket => 'day', row_limit => 2`);
+      // a day of the range: bucket => 'day' allows at most 92 days
+      const day = `range_start => '${t.m}', range_end => '${t.m}'::timestamptz + interval '1 day'`;
+      const bucketed = await series(`NULL, ${day}, bucket => 'day', row_limit => 2`);
       assert.ok(bucketed.length > 0);
       assert.deepEqual(
         bucketed,
-        (await series(`ARRAY[${q(top)}], ${range}, bucket => 'day'`)).sort(
+        (await series(`ARRAY[${q(top)}], ${day}, bucket => 'day'`)).sort(
           (a, b) => top.indexOf(String(a.service_id)) - top.indexOf(String(b.service_id))
         )
       );
