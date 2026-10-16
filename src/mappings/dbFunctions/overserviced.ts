@@ -51,5 +51,8 @@ WITH range_blocks AS MATERIALIZED (
     )
   ) FROM overserviced
 $$;
+
+COMMENT ON FUNCTION ${dbSchema}.get_overserviced_by_addresses_and_time(text[], timestamp, timestamp, text) IS
+'Overservice of the Staked suppliers that share revenue with the addresses (an address in the rev_share of a live service config): the application overservicing events (event_application_overserviceds) of those suppliers, per time bucket. Arguments: addresses = Shannon addresses, start_ts and end_ts = UTC times without a zone, trunc_interval = a date_trunc unit such as day or hour. Returns a JSON array ordered by date, one element per bucket with an event: date_truncated; expected_burn and effective_burn, summed over the events, in upokt. Null when nothing matches.';
 `
 }

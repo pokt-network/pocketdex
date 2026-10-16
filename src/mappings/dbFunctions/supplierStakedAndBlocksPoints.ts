@@ -33,5 +33,9 @@ BEGIN
         ) subquery
     );
 END;
-$$ LANGUAGE plpgsql STABLE;`
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION ${dbSchema}.get_suppliers_staked_and_blocks_by_point_json(timestamp, timestamp, text) IS
+'Staked suppliers per service and time bucket between two block times, from the per-block staked-supplier counts. Arguments: start_timestamp and end_timestamp = UTC times without a zone, trunc_interval = day or hour. Returns a JSON array as text, newest bucket first: date_truncated, service_id, amount and tokens, the number of staked suppliers and their stake in upokt summed over the blocks of the bucket, and blocks, the number of blocks in it (divide by blocks for an average per block). Null when the range holds no such block.';
+`
 }
