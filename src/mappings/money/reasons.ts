@@ -73,7 +73,7 @@ export const REASONS: Readonly<Record<string, ReasonInfo>> = {
     role: "validator",
     family: "relay",
     detailed: false,
-    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
+    batchOpTypes: ["mod_to_acct"],
   },
   // map_proposer_consensus and map_proposer_operator (poktroll v0.1.27–v0.1.28): the block proposer's relay share
   // (tlm_relay_burn_equals_mint.go:205-215 at v0.1.27), read from the bank legs.
@@ -81,13 +81,13 @@ export const REASONS: Readonly<Record<string, ReasonInfo>> = {
     role: "validator",
     family: "relay",
     detailed: false,
-    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
+    batchOpTypes: ["mod_to_acct"],
   },
   TLM_RELAY_BURN_EQUALS_MINT_DELEGATOR_REWARD_DISTRIBUTION: {
     role: "delegator",
     family: "relay",
     detailed: false,
-    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
+    batchOpTypes: ["mod_to_acct"],
   },
 
   // global mint family: mint ceil(settlement × global_inflation_per_claim), distribute it
@@ -128,13 +128,13 @@ export const REASONS: Readonly<Record<string, ReasonInfo>> = {
     role: "validator",
     family: "global",
     detailed: false,
-    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
+    batchOpTypes: ["mod_to_acct"],
   },
   TLM_GLOBAL_MINT_DELEGATOR_REWARD_DISTRIBUTION: {
     role: "delegator",
     family: "global",
     detailed: false,
-    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
+    batchOpTypes: ["mod_to_acct"],
   },
 
   // reimbursement: the application pays the global mint into escrow, which goes to the DAO

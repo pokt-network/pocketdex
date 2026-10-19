@@ -827,42 +827,37 @@ BEGIN
     RAISE EXCEPTION 'height %: the claims settled with more than one mint_ratio', h;
   END IF;
 
-  -- I1: the claims' detailed legs, per (op_reason, recipient), are exactly the batch mod_to_acct rows. The
-  -- settlement_result era has no batch: E0 below checks its legs against the claims instead. The map eras' batch rows
-  -- are only their staker legs, aggregated from the bank: M1 below checks the global family instead.
-  -- From poktroll v0.1.36 a leg whose recipient cannot receive funds (a bank-blocked module account) is paid to the
-  -- DAO reward address instead (a mod_to_acct row to the DAO under the leg's op_reason), or, if the DAO address cannot
-  -- receive funds either, stays in the sender module (a mod_to_acct_retained row). The detailed legs keep the original
-  -- recipient. So per op_reason, what the legs list but the batch does not pay must equal what the batch pays the DAO
-  -- beyond its own legs plus what it retains, and the batch may pay no other address beyond its legs.
+  -- From poktroll v0.1.36 a payout whose recipient cannot receive funds (a bank-blocked module account) is paid to the
+  -- DAO reward address instead, or, when the DAO address cannot receive funds either, stays in the sender module: a
+  -- mod_to_acct_retained batch row whose recipient is the module. The claims' detailed legs keep the original recipient,
+  -- and the bank refuses an address for every payout, so such a recipient gets no batch row at all under the leg's
+  -- op_reason. Point those legs at where the money went before anything reads them: the module for a reason with a
+  -- retained row, else the DAO reward address in the tokenomics params at this height. I1 then checks them strictly.
+  IF v_era <> 'settlement_result' AND left(v_era, 4) <> 'map_' AND EXISTS (
+    SELECT 1 FROM _stg_detailed d WHERE NOT EXISTS (
+      SELECT 1 FROM _stg_batch b WHERE b.op_type = 'mod_to_acct' AND b.op_reason = d.op_reason AND b.recipient_id = d.recipient_id))
+  THEN
+    v_dao := (SELECT p.value FROM ${s}.params p
+              WHERE p.namespace = 'tokenomics' AND p.key = 'dao_reward_address' AND p._block_range @> h::bigint);
+    UPDATE _stg_detailed d
+    SET recipient_id = coalesce((SELECT min(b.recipient_id) FROM _stg_batch b
+                                 WHERE b.op_type = 'mod_to_acct_retained' AND b.op_reason = d.op_reason), v_dao)
+    WHERE NOT EXISTS (SELECT 1 FROM _stg_batch b WHERE b.op_type = 'mod_to_acct' AND b.op_reason = d.op_reason
+                        AND b.recipient_id = d.recipient_id);
+  END IF;
+
+  -- I1: the claims' detailed legs, per (op_reason, recipient), are exactly the batch mod_to_acct rows (and, from
+  -- v0.1.36, the mod_to_acct_retained rows). The settlement_result era has no batch: E0 below checks its legs against
+  -- the claims instead. The map eras' batch rows are only their staker legs, aggregated from the bank: M1 below checks
+  -- the global family instead.
   IF v_era <> 'settlement_result' AND left(v_era, 4) <> 'map_' THEN
-    v_dao := coalesce((SELECT min(recipient_id) FROM _stg_detailed WHERE role = 'dao'),
-                      (SELECT min(recipient_id) FROM _stg_batch WHERE role = 'dao' AND op_type = 'mod_to_acct'));
-    WITH j AS (
-      SELECT coalesce(dd.op_reason, bb.op_reason) AS op_reason, coalesce(dd.recipient_id, bb.recipient_id) AS recipient_id,
-             coalesce(dd.amount_upokt, 0) AS legs, coalesce(bb.amount_upokt, 0) AS paid
-      FROM (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_detailed GROUP BY 1, 2) dd
-      FULL JOIN (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_batch
-                 WHERE op_type = 'mod_to_acct' AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
-        ON bb.op_reason = dd.op_reason AND bb.recipient_id = dd.recipient_id
-    ), retained AS (
-      SELECT op_reason, sum(amount_upokt) AS amount_upokt FROM _stg_batch
-      WHERE op_type = 'mod_to_acct_retained' AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1
-    ), per_reason AS (
-      SELECT coalesce(u.op_reason, r.op_reason) AS op_reason, coalesce(u.unpaid, 0) AS unpaid,
-             coalesce(u.to_dao, 0) + coalesce(r.amount_upokt, 0) AS rerouted
-      FROM (SELECT op_reason, sum(greatest(legs - paid, 0)) AS unpaid,
-                   sum(CASE WHEN recipient_id = v_dao THEN greatest(paid - legs, 0) ELSE 0 END) AS to_dao
-            FROM j GROUP BY 1) u
-      FULL JOIN retained r ON r.op_reason = u.op_reason
-    )
-    SELECT string_agg(x, ', ') INTO v_bad FROM (
-      SELECT op_reason || ' ' || recipient_id AS x FROM j
-      WHERE paid > legs AND recipient_id IS DISTINCT FROM v_dao
-      UNION ALL
-      SELECT op_reason || ' (unpaid ' || unpaid || ', to the DAO or retained ' || rerouted || ')' FROM per_reason
-      WHERE unpaid <> rerouted
-    ) bad;
+    SELECT string_agg(coalesce(dd.op_reason, bb.op_reason) || ' ' || coalesce(dd.recipient_id, bb.recipient_id, '(no DAO address)'), ', ')
+    INTO v_bad
+    FROM (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_detailed GROUP BY 1, 2) dd
+    FULL JOIN (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_batch
+               WHERE op_type IN ('mod_to_acct', 'mod_to_acct_retained') AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
+      ON bb.op_reason = dd.op_reason AND bb.recipient_id = dd.recipient_id
+    WHERE dd.amount_upokt IS DISTINCT FROM bb.amount_upokt;
     IF v_bad IS NOT NULL THEN
       RAISE EXCEPTION 'height %: detailed legs differ from the settlement batch for %', h, left(v_bad, 500);
     END IF;

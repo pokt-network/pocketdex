@@ -168,7 +168,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 1e-06,
+    "global_inflation_per_claim": 0.000001,
     "mint_equals_burn_claim_distribution": {
      "dao": 0,
      "proposer": 0,
@@ -512,7 +512,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 1e-06,
+    "global_inflation_per_claim": 0.000001,
     "mint_equals_burn_claim_distribution": {
      "dao": 0.05,
      "proposer": 0.14,
@@ -1018,7 +1018,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 1e-06,
+    "global_inflation_per_claim": 0.000001,
     "mint_equals_burn_claim_distribution": {
      "dao": 0.045,
      "proposer": 0.14,
@@ -1558,7 +1558,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 1e-06,
+    "global_inflation_per_claim": 0.000001,
     "mint_equals_burn_claim_distribution": {
      "dao": 0.045,
      "proposer": 0.14,

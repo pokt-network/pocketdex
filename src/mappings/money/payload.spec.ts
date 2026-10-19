@@ -125,6 +125,11 @@ describe("buildSettlementPayload", () => {
       () => buildSettlementPayload(1, TS, "batched_vrd", [batch("mod_to_acct_retained", "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN")]),
       /op_type mod_to_acct_retained is not expected/
     );
+    // validator and delegator payouts have no retained form: staker_payouts and I3b only read mod_to_acct
+    assert.throws(
+      () => buildSettlementPayload(1, TS, "batched_vrd", [batch("mod_to_acct_retained", "TLM_RELAY_BURN_EQUALS_MINT_VALIDATOR_REWARD_DISTRIBUTION")]),
+      /op_type mod_to_acct_retained is not expected/
+    );
   });
 
   it("rejects a reason in the wrong place: staker reasons never appear in the claim's detailed list", () => {
