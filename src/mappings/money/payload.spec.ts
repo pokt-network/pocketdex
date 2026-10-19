@@ -113,6 +113,20 @@ describe("buildSettlementPayload", () => {
     );
   });
 
+  it("reads a payout kept in the sender module (poktroll v0.1.36 mod_to_acct_retained) and still rejects other op types", () => {
+    const p = buildSettlementPayload(1, TS, "batched_vrd", [
+      batch("mod_to_acct_retained", "TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION"),
+    ])!;
+    assert.deepEqual(
+      p.batch.map((b) => [b.op_type, b.role, b.amount]),
+      [["mod_to_acct_retained", "source_owner", "10"]]
+    );
+    assert.throws(
+      () => buildSettlementPayload(1, TS, "batched_vrd", [batch("mod_to_acct_retained", "TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_STAKE_BURN")]),
+      /op_type mod_to_acct_retained is not expected/
+    );
+  });
+
   it("rejects a reason in the wrong place: staker reasons never appear in the claim's detailed list", () => {
     assert.throws(
       () =>

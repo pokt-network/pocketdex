@@ -762,6 +762,7 @@ DECLARE
   v_month_held boolean;
   v_bounds_held boolean;
   v_bad text;
+  v_dao text;
   v_lock_timeout text := current_setting('lock_timeout');
 BEGIN
   -- One writer at a time: the indexer and the history jobs share this procedure. The wait is bounded so a
@@ -829,14 +830,39 @@ BEGIN
   -- I1: the claims' detailed legs, per (op_reason, recipient), are exactly the batch mod_to_acct rows. The
   -- settlement_result era has no batch: E0 below checks its legs against the claims instead. The map eras' batch rows
   -- are only their staker legs, aggregated from the bank: M1 below checks the global family instead.
+  -- From poktroll v0.1.36 a leg whose recipient cannot receive funds (a bank-blocked module account) is paid to the
+  -- DAO reward address instead (a mod_to_acct row to the DAO under the leg's op_reason), or, if the DAO address cannot
+  -- receive funds either, stays in the sender module (a mod_to_acct_retained row). The detailed legs keep the original
+  -- recipient. So per op_reason, what the legs list but the batch does not pay must equal what the batch pays the DAO
+  -- beyond its own legs plus what it retains, and the batch may pay no other address beyond its legs.
   IF v_era <> 'settlement_result' AND left(v_era, 4) <> 'map_' THEN
-    SELECT string_agg(coalesce(dd.op_reason, bb.op_reason) || ' ' || coalesce(dd.recipient_id, bb.recipient_id), ', ')
-    INTO v_bad
-    FROM (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_detailed GROUP BY 1, 2) dd
-    FULL JOIN (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_batch
-               WHERE op_type = 'mod_to_acct' AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
-      ON bb.op_reason = dd.op_reason AND bb.recipient_id = dd.recipient_id
-    WHERE dd.amount_upokt IS DISTINCT FROM bb.amount_upokt;
+    v_dao := coalesce((SELECT min(recipient_id) FROM _stg_detailed WHERE role = 'dao'),
+                      (SELECT min(recipient_id) FROM _stg_batch WHERE role = 'dao' AND op_type = 'mod_to_acct'));
+    WITH j AS (
+      SELECT coalesce(dd.op_reason, bb.op_reason) AS op_reason, coalesce(dd.recipient_id, bb.recipient_id) AS recipient_id,
+             coalesce(dd.amount_upokt, 0) AS legs, coalesce(bb.amount_upokt, 0) AS paid
+      FROM (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_detailed GROUP BY 1, 2) dd
+      FULL JOIN (SELECT op_reason, recipient_id, sum(amount_upokt) AS amount_upokt FROM _stg_batch
+                 WHERE op_type = 'mod_to_acct' AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1, 2) bb
+        ON bb.op_reason = dd.op_reason AND bb.recipient_id = dd.recipient_id
+    ), retained AS (
+      SELECT op_reason, sum(amount_upokt) AS amount_upokt FROM _stg_batch
+      WHERE op_type = 'mod_to_acct_retained' AND role NOT IN (${STAKER_ROLES_SQL}) GROUP BY 1
+    ), per_reason AS (
+      SELECT coalesce(u.op_reason, r.op_reason) AS op_reason, coalesce(u.unpaid, 0) AS unpaid,
+             coalesce(u.to_dao, 0) + coalesce(r.amount_upokt, 0) AS rerouted
+      FROM (SELECT op_reason, sum(greatest(legs - paid, 0)) AS unpaid,
+                   sum(CASE WHEN recipient_id = v_dao THEN greatest(paid - legs, 0) ELSE 0 END) AS to_dao
+            FROM j GROUP BY 1) u
+      FULL JOIN retained r ON r.op_reason = u.op_reason
+    )
+    SELECT string_agg(x, ', ') INTO v_bad FROM (
+      SELECT op_reason || ' ' || recipient_id AS x FROM j
+      WHERE paid > legs AND recipient_id IS DISTINCT FROM v_dao
+      UNION ALL
+      SELECT op_reason || ' (unpaid ' || unpaid || ', to the DAO or retained ' || rerouted || ')' FROM per_reason
+      WHERE unpaid <> rerouted
+    ) bad;
     IF v_bad IS NOT NULL THEN
       RAISE EXCEPTION 'height %: detailed legs differ from the settlement batch for %', h, left(v_bad, 500);
     END IF;
