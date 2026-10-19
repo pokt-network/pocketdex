@@ -47,25 +47,25 @@ export const REASONS: Readonly<Record<string, ReasonInfo>> = {
     role: "rev_share",
     family: "relay",
     detailed: true,
-    batchOpTypes: ["mod_to_mod", "mod_to_acct"],
+    batchOpTypes: ["mod_to_mod", "mod_to_acct", "mod_to_acct_retained"],
   },
   TLM_RELAY_BURN_EQUALS_MINT_DAO_REWARD_DISTRIBUTION: {
     role: "dao",
     family: "relay",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   TLM_RELAY_BURN_EQUALS_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION: {
     role: "source_owner",
     family: "relay",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   TLM_RELAY_BURN_EQUALS_MINT_APPLICATION_REWARD_DISTRIBUTION: {
     role: "application",
     family: "relay",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   // A bonded validator's account receives everything under VALIDATOR, including what it earns as a
   // delegator of other validators; DELEGATOR only reaches accounts that are not bonded validators.
@@ -96,25 +96,25 @@ export const REASONS: Readonly<Record<string, ReasonInfo>> = {
     role: "rev_share",
     family: "global",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   TLM_GLOBAL_MINT_DAO_REWARD_DISTRIBUTION: {
     role: "dao",
     family: "global",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   TLM_GLOBAL_MINT_SOURCE_OWNER_REWARD_DISTRIBUTION: {
     role: "source_owner",
     family: "global",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   TLM_GLOBAL_MINT_APPLICATION_REWARD_DISTRIBUTION: {
     role: "application",
     family: "global",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   // settlement_result era: the block proposer's global share, paid to the account of its consensus address. A
   // claim leg (detailed) there; staker income as role validator.
@@ -142,7 +142,7 @@ export const REASONS: Readonly<Record<string, ReasonInfo>> = {
     role: "dao",
     family: "reimb_escrow",
     detailed: true,
-    batchOpTypes: ["mod_to_acct"],
+    batchOpTypes: ["mod_to_acct", "mod_to_acct_retained"],
   },
   // mod_to_mod with two uses: application → tokenomics (the escrow) and tokenomics → supplier (the global
   // supplier slice, emitted under this reason instead of ..._SUPPLIER_SHAREHOLDER_REWARD_MODULE_TRANSFER)

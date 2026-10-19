@@ -24,7 +24,7 @@
 // indexer at that height instead of leaving a silently missing row.
 //
 // Field numbers and declaration order come from the protos the chain runs:
-// poktroll a109dd0b (v0.1.35), cosmos-sdk v0.53.7, cometbft v0.38.21.
+// poktroll v0.1.36-rc1 (f36b62e6), cosmos-sdk v0.53.8, cometbft v0.38.26.
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { sanitize } from "./json";
 
@@ -113,6 +113,9 @@ const schemas: Record<string, MessageSchema> = {
   supplier: [
     { no: 1, name: "min_stake", type: coin, nullable: true },
     { no: 2, name: "staking_fee", type: coin, nullable: true },
+    // poktroll v0.1.36: supplier service cap.
+    { no: 3, name: "min_stake_included_services", type: "uint64" },
+    { no: 4, name: "stake_per_additional_service", type: coin, nullable: true },
   ],
   tokenomics: [
     { no: 6, name: "dao_reward_address", type: "string" },

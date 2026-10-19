@@ -131,7 +131,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {
@@ -406,7 +408,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {
@@ -823,7 +827,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {
@@ -1246,7 +1252,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {

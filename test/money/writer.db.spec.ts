@@ -5115,6 +5115,80 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.equal(await md5All(), before);
   });
 
+  // poktroll v0.1.36: a payout whose recipient cannot receive funds is paid to the DAO reward address, or stays in the
+  // sender module (mod_to_acct_retained) when the DAO address cannot receive funds either. The legs keep the recipient.
+  // rerouteSourceOwner treats one source owner address as such a recipient: every batch row paying it moves.
+  function rerouteSourceOwner(payload: SettlementPayload, to: "dao" | "retained" | "other"): { owner: string; dao: string } {
+    const first = payload.batch.find((b) => b.op_type === "mod_to_acct" && b.role === "source_owner");
+    const dao = payload.batch.find((b) => b.op_type === "mod_to_acct" && b.role === "dao");
+    assert.ok(first && dao);
+    const owner = first.recipient_id;
+    for (const row of payload.batch.filter((b) => b.op_type === "mod_to_acct" && b.recipient_id === owner)) {
+      if (to === "dao") row.recipient_id = dao.recipient_id;
+      if (to === "other") row.recipient_id = "pokt1someoneelse";
+      if (to === "retained") {
+        row.op_type = "mod_to_acct_retained";
+        row.recipient_id = row.sender_module;
+      }
+    }
+    return { owner, dao: dao.recipient_id };
+  }
+  const withDaoParam = async (dao: string | null, fn: () => Promise<void>) => {
+    if (dao) await c.query(`INSERT INTO ${S}.params VALUES ('tokenomics-dao_reward_address', 'tokenomics', 'dao_reward_address', $1, NULL, '[1,)')`, [dao]);
+    try {
+      await fn();
+    } finally {
+      await c.query(`DELETE FROM ${S}.params WHERE id = 'tokenomics-dao_reward_address'`);
+    }
+  };
+  const income = async (height: number, address: string) =>
+    BigInt(
+      (
+        await c.query(
+          `SELECT coalesce(sum(amount_upokt), 0)::text AS n FROM ${S}.settlement_income_by_address WHERE height = $1 AND address = $2`,
+          [height, address]
+        )
+      ).rows[0].n
+    );
+  const sourceOwners = async (height: number) =>
+    (await c.query(`SELECT DISTINCT source_owner_id FROM ${S}.claim_settlements WHERE height = $1`, [height])).rows.map(
+      (r) => r.source_owner_id as string
+    );
+
+  for (const to of ["dao", "retained"] as const) {
+    it(`credits a source owner payout ${to === "dao" ? "redirected to the DAO to the DAO" : "kept in the sender module to the module"}`, async () => {
+      const before = await md5All();
+      const { height, payload } = payloadOf("899713", true);
+      const { owner, dao } = rerouteSourceOwner(payload, to);
+      const target = to === "dao" ? dao : "tokenomics";
+      const [ownerBefore, targetBefore] = [await income(height, owner), await income(height, target)];
+      assert.ok(ownerBefore > BigInt(0));
+      await withDaoParam(dao, () => write(height, payload));
+      const owners = await sourceOwners(height);
+      assert.ok(!owners.includes(owner), "the blocked owner is no longer credited");
+      assert.ok(owners.includes(target));
+      // settlement_income_by_address moves the owner's income to where the money went, nothing more
+      assert.equal(await income(height, owner), BigInt(0));
+      assert.equal(await income(height, target), targetBefore + ownerBefore);
+      // writing the height as the chain emitted it puts every table back
+      await write(height, payloadOf("899713", true).payload);
+      assert.equal(await md5All(), before);
+    });
+  }
+
+  it("rejects a redirected payout when the DAO address at the height is unknown or another address got it", async () => {
+    const before = await md5All();
+    const redirected = payloadOf("899713", true);
+    const { dao } = rerouteSourceOwner(redirected.payload, "dao");
+    await withDaoParam(null, () =>
+      assert.rejects(write(redirected.height, redirected.payload), /detailed legs differ from the settlement batch/)
+    );
+    const other = payloadOf("899713", true);
+    rerouteSourceOwner(other.payload, "other");
+    await withDaoParam(dao, () => assert.rejects(write(other.height, other.payload), /detailed legs differ from the settlement batch/));
+    assert.equal(await md5All(), before);
+  });
+
   it("rejects a detailed_batch payload whose delegator rows differ from the batch, and keeps the height as it was", async () => {
     const before = await md5All();
     const { height, payload } = payloadOf("710013", false);

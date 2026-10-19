@@ -220,3 +220,34 @@ describe("decoder edge cases", () => {
     }
   });
 });
+
+describe("supplier params across poktroll v0.1.35 and v0.1.36", () => {
+  const coinBytes = (amount: string) => new BinaryWriter().uint32(10).string("upokt").uint32(18).string(amount).finish();
+  // v0.1.35 holds fields 1-2; v0.1.36 adds min_stake_included_services (3) and stake_per_additional_service (4).
+  const supplierBytes = (withServiceCap: boolean) => {
+    const w = new BinaryWriter().uint32(10).bytes(coinBytes("59500000000")).uint32(18).bytes(coinBytes("1"));
+    if (withServiceCap) w.uint32(24).uint64(1).uint32(34).bytes(coinBytes("0"));
+    return w.finish();
+  };
+
+  it("reads v0.1.35 params with no unknown field and the new fields at their defaults", () => {
+    const out = normalizeParams("supplier", supplierBytes(false));
+    assert.deepEqual(out.unknown, []);
+    const m = asMap("supplier", supplierBytes(false));
+    assert.equal(m.min_stake, '{"denom":"upokt","amount":"59500000000"}');
+    assert.equal(m.min_stake_included_services, "0");
+    assert.equal(m.stake_per_additional_service, "null");
+  });
+
+  it("reads v0.1.36 params with no unknown field and matches the REST shape", () => {
+    const out = normalizeParams("supplier", supplierBytes(true));
+    assert.deepEqual(out.unknown, []);
+    const rest = {
+      min_stake: { denom: "upokt", amount: "59500000000" },
+      staking_fee: { denom: "upokt", amount: "1" },
+      min_stake_included_services: "1",
+      stake_per_additional_service: { denom: "upokt", amount: "0" },
+    };
+    assert.deepEqual(out.params, normalizeParams("supplier", rest).params);
+  });
+});
