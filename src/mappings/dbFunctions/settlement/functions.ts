@@ -97,6 +97,7 @@ export const CATALOG_FUNCTIONS = [
   "get_claims",
   "get_actor_lifecycle",
   "get_block_stats",
+  "get_tx_counts",
   "get_relay_mining_difficulty",
   "get_created_claims",
   "get_morse_claims",
@@ -2169,6 +2170,91 @@ ${covered("blocks", true)}
   ) q ORDER BY 1 DESC;
 END $$;
 
+-- Transactions per message type and status over a range, without counting the transactions table (tx_counts_daily,
+-- txCounts.ts): msg_type is a message type URL (a transaction counts under each one it holds) or '*', every
+-- transaction; status is success (code 0) or failed. msg_types and statuses filter (NULL: every row). The UTC days
+-- inside the range come from the rollup (one PK range read), the partial days at its ends from their blocks (the
+-- blocks' own totals when only '*' is asked, else their transactions: up to two days of them, 250 ms a day on the mainnet
+-- replica, 2026-10-10). A full day the rollup does not hold is a gap, not a zero (covered_gaps), until the backfill has
+-- written it (scripts/fill_tx_counts_daily.sql): its rows are the rollup's, which holds the blocks first_height..last_height
+-- of each day. A range with nothing in the rollup and gaps answers one row of NULLs that carries them. Covers the
+-- indexed blocks (covered(..., true)).
+CREATE OR REPLACE FUNCTION ${s}.get_tx_counts(range_start timestamptz, range_end timestamptz, msg_types text[] DEFAULT NULL,
+  statuses text[] DEFAULT NULL)
+RETURNS TABLE(msg_type text, status text, txs bigint, first_height bigint, last_height bigint, covered_from timestamptz,
+  covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE cv record; f timestamp; t timestamp; d1 date; d2 date; gp jsonb := '[]'; star_only boolean;
+  ea timestamp[]; eb timestamp[];
+BEGIN
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
+  IF msg_types IS NOT NULL THEN PERFORM ${s}._validate(msg_types, 'msg_types', NULL, NULL, NULL); END IF;
+  IF statuses IS NOT NULL AND (cardinality(statuses) < 1 OR NOT statuses <@ ARRAY['success', 'failed']) THEN
+    RAISE EXCEPTION 'statuses must be a list of success and failed';
+  END IF;
+  -- what is not written is not read: the covered part of the range only (_coverage)
+  cv := ${s}._coverage(range_start, range_end, true);
+  IF cv.empty THEN RETURN; END IF;
+  range_start := cv.data_from;
+  range_end := least(range_end, cv.covered_to);
+  f := range_start AT TIME ZONE 'UTC'; t := range_end AT TIME ZONE 'UTC';
+  -- the full UTC days [d1, d2) come from the rollup; the ends of the range (or all of it) from the blocks
+  d1 := (date_trunc('day', f) + CASE WHEN f = date_trunc('day', f) THEN interval '0' ELSE interval '1 day' END)::date;
+  d2 := date_trunc('day', t)::date;
+  IF d1 < d2 THEN
+    ea := ARRAY[f, d2::timestamp]; eb := ARRAY[d1::timestamp, t];
+    SELECT coalesce(jsonb_agg(jsonb_build_object('from', g.a AT TIME ZONE 'UTC', 'to', g.b AT TIME ZONE 'UTC') ORDER BY g.a), '[]')
+    INTO gp
+    FROM (SELECT min(m.day)::timestamp a, (max(m.day) + 1)::timestamp b
+          FROM (SELECT d::date AS day, d::date - (row_number() OVER (ORDER BY d))::int AS grp
+                FROM generate_series(d1, d2 - 1, interval '1 day') d
+                WHERE NOT EXISTS (SELECT 1 FROM ${s}.tx_counts_daily x WHERE x.day = d::date)) m
+          GROUP BY m.grp) g;
+  ELSE
+    ea := ARRAY[f]; eb := ARRAY[t];
+  END IF;
+  gp := coalesce(cv.gaps, '[]'::jsonb) || gp;
+  star_only := msg_types IS NOT NULL AND msg_types <@ ARRAY['*'];
+  RETURN QUERY
+  WITH edges AS (SELECT u.a, u.b FROM unnest(ea, eb) u(a, b) WHERE u.a < u.b),
+  rolled AS (
+    SELECT d.msg_type, d.status, d.txs, d.first_height, d.last_height
+    FROM ${s}.tx_counts_daily d
+    WHERE d1 < d2 AND d.day >= d1 AND d.day < d2
+      AND (get_tx_counts.msg_types IS NULL OR d.msg_type = ANY(get_tx_counts.msg_types))
+      AND (get_tx_counts.statuses IS NULL OR d.status = ANY(get_tx_counts.statuses))
+  ),
+  edge_all AS (
+    SELECT c.msg_type, c.status, c.txs, q.lo first_height, q.hi last_height
+    FROM edges e
+    CROSS JOIN LATERAL (SELECT min(bl.id)::bigint lo, max(bl.id)::bigint hi
+                        FROM (SELECT id FROM ${s}.blocks WHERE timestamp >= e.a AND timestamp < e.b OFFSET 0) bl) q
+    CROSS JOIN LATERAL ${s}._tx_counts_of_blocks(q.lo, q.hi) c
+    WHERE NOT star_only AND q.lo IS NOT NULL
+      AND (get_tx_counts.msg_types IS NULL OR c.msg_type = ANY(get_tx_counts.msg_types))
+      AND (get_tx_counts.statuses IS NULL OR c.status = ANY(get_tx_counts.statuses))
+  ),
+  edge_star AS (
+    SELECT '*'::text msg_type, s.status, sum(CASE s.status WHEN 'success' THEN bl.successful_txs ELSE bl.failed_txs END)::bigint txs,
+           min(bl.id)::bigint first_height, max(bl.id)::bigint last_height
+    FROM edges e
+    JOIN ${s}.blocks bl ON bl.timestamp >= e.a AND bl.timestamp < e.b
+    CROSS JOIN (VALUES ('success'), ('failed')) s(status)
+    WHERE star_only AND (get_tx_counts.statuses IS NULL OR s.status = ANY(get_tx_counts.statuses))
+    GROUP BY s.status
+  ),
+  parts AS (SELECT * FROM rolled UNION ALL SELECT * FROM edge_all UNION ALL SELECT * FROM edge_star)
+  SELECT p.msg_type, p.status, sum(p.txs)::bigint, min(p.first_height)::bigint, max(p.last_height)::bigint,
+         cv.covered_from, cv.covered_to, gp
+  FROM parts p
+  GROUP BY p.msg_type, p.status
+  ORDER BY p.msg_type, p.status;
+  IF NOT FOUND AND jsonb_array_length(gp) > 0 THEN
+    -- nothing to read but gaps: one row of NULLs, which carries them (an empty answer would report the range as covered)
+    RETURN QUERY SELECT NULL::text, NULL::text, NULL::bigint, NULL::bigint, NULL::bigint, cv.covered_from, cv.covered_to, gp;
+  END IF;
+END $$;
+
 -- Supplier: what it generated, and the first and last settlement height of the claims of each row (the rollups'
 -- first_height / last_height and the edge claims' heights; NULL when a rollup row of the group has a height whose bounds
 -- it may not hold yet). By service without application, with no bucket or a month or year one, each UTC month
@@ -3657,8 +3743,10 @@ BEGIN
                      WHEN ''array'' THEN ${s}._json_strings(e.v) WHEN ''object'' THEN ${s}._json_strings(e.v)
                      ELSE e.v END)
                    FROM jsonb_each(to_jsonb(r) - ''ordinality'' - ''covered_from'' - ''covered_to'' - ''covered_gaps'') e(k, v))
-                   ORDER BY r.ordinality), ''[]''::jsonb) FROM r)) $f$', f.proname || '_json', f.args, f.proname, f.call,
-      f.blocks::text);
+                   ORDER BY r.ordinality), ''[]''::jsonb) FROM r %s)) $f$', f.proname || '_json', f.args, f.proname, f.call,
+      f.blocks::text,
+      -- get_tx_counts answers one row of NULLs when only gaps are left: it carries them to the range, it is no data
+      CASE WHEN f.proname = 'get_tx_counts' THEN 'WHERE r.msg_type IS NOT NULL' ELSE '' END);
   END LOOP;
 END $$;
 ${blockTimeColumnsSql(s)}

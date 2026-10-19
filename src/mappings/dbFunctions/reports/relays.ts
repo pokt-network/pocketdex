@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.relay_by_block_and_services
     CONSTRAINT relay_by_block_and_services_pkey PRIMARY KEY (_id)
 );
 
--- set once: createDeprecationsFn adds its @deprecated line to this comment on every start
+-- set once, on a database that has none: closedSchema.ts, which runs last at every start, then hides the table
 DO $$
 BEGIN
   IF obj_description('${dbSchema}.relay_by_block_and_services'::regclass, 'pg_class') IS NULL THEN

@@ -126,8 +126,7 @@ export const EventHandlers: Record<string, (events: Array<CosmosEvent>) => Promi
   "pocket.tokenomics.EventSupplierSlashed": noOp, // - now handled in indexSupplier
   "pocket.tokenomics.EventApplicationOverserviced": handleEventApplicationOverserviced,
   "pocket.tokenomics.EventApplicationReimbursementRequest": handleEventApplicationReimbursementRequest,
-  // EventSettlementBatch is handled inside handleEventClaimSettled: both write mod_to_acct_transfers.
-  // Keep this entry: it is what makes indexingHandler fill eventByType for this type.
+  // Keep this entry: it is what makes indexingHandler fill eventByType for this type (read by indexMoney).
   "pocket.tokenomics.EventSettlementBatch": noOp,
   "pocket.tokenomics.EventValidatorRewardDistribution": handleEventValidatorRewardDistribution,
   "pocket.proof.EventClaimUpdated": handleEventClaimUpdated,

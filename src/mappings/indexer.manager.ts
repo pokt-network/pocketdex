@@ -226,7 +226,6 @@ async function indexRelays(msgByType: MessageByType, eventByType: EventByType): 
     handleEventClaimSettled(
       eventByType['pocket.tokenomics.EventClaimSettled'],
       eventByType['pocket.tokenomics.EventApplicationOverserviced'],
-      eventByType['pocket.tokenomics.EventSettlementBatch'],
     )
   ]);
 }
