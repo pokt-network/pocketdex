@@ -131,7 +131,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {
@@ -166,7 +168,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 0.000001,
+    "global_inflation_per_claim": 1e-06,
     "mint_equals_burn_claim_distribution": {
      "dao": 0,
      "proposer": 0,
@@ -406,7 +408,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {
@@ -508,7 +512,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 0.000001,
+    "global_inflation_per_claim": 1e-06,
     "mint_equals_burn_claim_distribution": {
      "dao": 0.05,
      "proposer": 0.14,
@@ -823,7 +827,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {
@@ -1012,7 +1018,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 0.000001,
+    "global_inflation_per_claim": 1e-06,
     "mint_equals_burn_claim_distribution": {
      "dao": 0.045,
      "proposer": 0.14,
@@ -1246,7 +1252,9 @@
    },
    "rest": {
     "min_stake": "{\"denom\":\"upokt\",\"amount\":\"59500000000\"}",
-    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}"
+    "staking_fee": "{\"denom\":\"upokt\",\"amount\":\"1\"}",
+    "min_stake_included_services": "0",
+    "stake_per_additional_service": "null"
    },
    "json": {
     "min_stake": {
@@ -1550,7 +1558,7 @@
      "source_owner": 0.1,
      "application": 0
     },
-    "global_inflation_per_claim": 0.000001,
+    "global_inflation_per_claim": 1e-06,
     "mint_equals_burn_claim_distribution": {
      "dao": 0.045,
      "proposer": 0.14,
