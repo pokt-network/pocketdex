@@ -2178,9 +2178,9 @@ END $$;
 -- transaction; status is success (code 0) or failed. msg_types and statuses filter (NULL: every row). The UTC days
 -- inside the range come from the rollup (one PK range read), the partial days at its ends from their blocks (the
 -- blocks' own totals when only '*' is asked, else their transactions: up to two days of them, 250 ms a day on the mainnet
--- replica, 2026-10-10). A full day the rollup does not hold is a gap, not a zero (covered_gaps), until the backfill has
--- written it (scripts/fill_tx_counts_daily.sql): its rows are the rollup's, which holds the blocks first_height..last_height
--- of each day. A range with nothing in the rollup and gaps answers one row of NULLs that carries them. Covers the
+-- replica, 2026-10-10). A full day with blocks the rollup does not hold is a gap, not a zero (covered_gaps; a day without
+-- blocks has nothing to hold, mainnet 2025-05-01..06), until the backfill has written it (scripts/fill_tx_counts_daily.sql):
+-- its rows are the rollup's, which holds the blocks first_height..last_height of each day. A range with nothing in the rollup and gaps answers one row of NULLs that carries them. Covers the
 -- indexed blocks (covered(..., true)).
 CREATE OR REPLACE FUNCTION ${s}.get_tx_counts(range_start timestamptz, range_end timestamptz, msg_types text[] DEFAULT NULL,
   statuses text[] DEFAULT NULL)
@@ -2211,7 +2211,9 @@ BEGIN
     FROM (SELECT min(m.day)::timestamp a, (max(m.day) + 1)::timestamp b
           FROM (SELECT d::date AS day, d::date - (row_number() OVER (ORDER BY d))::int AS grp
                 FROM generate_series(d1, d2 - 1, interval '1 day') d
-                WHERE NOT EXISTS (SELECT 1 FROM ${s}.tx_counts_daily x WHERE x.day = d::date)) m
+                WHERE NOT EXISTS (SELECT 1 FROM ${s}.tx_counts_daily x WHERE x.day = d::date)
+                  -- a day without blocks has nothing to hold (mainnet 2025-05-01..06): no gap
+                  AND EXISTS (SELECT 1 FROM ${s}.blocks bl WHERE bl.timestamp >= d AND bl.timestamp < d + interval '1 day')) m
           GROUP BY m.grp) g;
   ELSE
     ea := ARRAY[f]; eb := ARRAY[t];
