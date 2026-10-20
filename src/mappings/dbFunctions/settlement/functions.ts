@@ -101,6 +101,10 @@ export const CATALOG_FUNCTIONS = [
   "get_staked_suppliers_by_service",
   "get_supply",
   "get_supply_composition",
+  "get_network_rewards",
+  "get_network_claims",
+  "get_overserviced",
+  "get_domain_service_rewards",
   "get_relay_mining_difficulty",
   "get_created_claims",
   "get_morse_claims",
@@ -2349,7 +2353,8 @@ END $$;
 -- The supply per bucket at its point, the bucket's last block with an upokt supply inside the range (supplyDaily.ts):
 -- height and block_time; network_supply_upokt, the upokt supply recorded at that block; unmigrated_upokt, the Morse
 -- balances not claimed at that block; total_supply_upokt, their sum; as get_supply_composition_between_dates and
--- get_total_supply_by_day give them. bucket = day (default), week, month or year, in UTC. A bucket whose point is a full
+-- get_total_supply_by_day give them. bucket = day (default), week, month or year, in UTC; NULL = one row at the range's
+-- last point, get_total_supply_between_dates' snapshot (bucket_start / bucket_end = the range). A bucket whose point is a full
 -- day inside the range reads it from supply_daily; the partial days at the ends of the range are computed live by
 -- _supply_at, the computation the rollup is written with. A full day the rollup does not hold is a gap (covered_gaps):
 -- its bucket has no row, never an earlier point, until the backfill has written it (scripts/fill_supply_daily.sql). A
@@ -2361,8 +2366,8 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, height bigint, b
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE cv record; f timestamp; t timestamp; gp jsonb;
 BEGIN
-  IF bucket IS NULL OR bucket NOT IN ('day', 'week', 'month', 'year') THEN
-    RAISE EXCEPTION 'bucket must be day, week, month or year (got %)', coalesce(bucket, 'NULL');
+  IF bucket IS NOT NULL AND bucket NOT IN ('day', 'week', 'month', 'year') THEN
+    RAISE EXCEPTION 'bucket must be day, week, month, year or NULL (got %)', bucket;
   END IF;
   PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
   -- what is not written is not read: the covered part of the range only (_coverage)
@@ -2373,7 +2378,8 @@ BEGIN
   f := range_start AT TIME ZONE 'UTC'; t := range_end AT TIME ZONE 'UTC';
   gp := coalesce(cv.gaps, '[]'::jsonb) || ${s}._supply_gaps(f, t, bucket);
   RETURN QUERY
-  SELECT ${s}._bucket(bucket, p.bucket_start AT TIME ZONE 'UTC', NULL), ${s}._bucket_end(bucket, p.bucket_start AT TIME ZONE 'UTC', NULL),
+  SELECT ${s}._bucket(bucket, p.bucket_start AT TIME ZONE 'UTC', coalesce(cv.requested_from, cv.covered_from)),
+         ${s}._bucket_end(bucket, p.bucket_start AT TIME ZONE 'UTC', range_end),
          p.height, (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = p.height LIMIT 1),
          CASE p.kind WHEN 'rollup' THEN sd.network_supply_upokt ELSE l.network_supply_upokt END,
          CASE p.kind WHEN 'rollup' THEN sd.unmigrated_upokt ELSE l.unmigrated_upokt END,
@@ -2452,6 +2458,195 @@ BEGIN
   FROM ${s}._supply_at(h) a
   LEFT JOIN LATERAL jsonb_each_text(a.composition) e ON true
   ORDER BY e.key;
+END $$;
+
+-- Network totals of the settled claims per bucket, from relay_by_block_and_services (the per-block, per-service sums of
+-- event_claim_settleds that get_rewards_by_date reads): relays, compute units and claimed_upokt, and the first and last
+-- height summed. The range's blocks are an id range (_block_heights), so the rows are read by block_id and only joined to
+-- their block for the bucket; get_rewards_by_date joined every block of the range by time (30 days by day: 141 ms against
+-- ~280 ms on the mainnet replica, 2026-10-20). Covers the indexed blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_network_rewards(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL)
+RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, relays numeric, estimated_relays numeric,
+  compute_units numeric, estimated_compute_units numeric, claimed_upokt numeric, first_height bigint, last_height bigint,
+  covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE sp record; cv record; rg record;
+BEGIN
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, bucket);
+${covered("blocks", true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  RETURN QUERY
+  SELECT ${s}._bucket(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.f), ${s}._bucket_end(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.t),
+         sum(r.relays), sum(r.estimated_relays), sum(r.computed_units), sum(r.estimated_computed_units), sum(r.claimed_upokt),
+         min(r.block_id)::bigint, max(r.block_id)::bigint, cv.covered_from, cv.covered_to, cv.gaps
+  FROM ${s}.relay_by_block_and_services r
+  JOIN ${s}.blocks bl ON bl.id = r.block_id
+  WHERE r.block_id BETWEEN rg.lo AND rg.hi
+  GROUP BY 1, 2
+  ORDER BY 1 DESC;
+END $$;
+
+-- Network claims per bucket, from claims_by_block (one row per block with claims created, settled or expired, as
+-- get_claim_proofs_data_by_time sums them; claimProofs.ts): claims created (claims, claimed_*), settled (settled_*: the
+-- old function's proof_*) and expired (expired_*), each with relays, compute units and upokt, and the first and last
+-- height summed. The heights below claims_by_block_coverage.covered_from_height are not written yet (the history fill
+-- walks down to them): they are a gap in covered_gaps, never zeros (get_claim_proofs_data_by_time read the raw tables
+-- then; on mainnet the table holds every height, 2026-10-20). A range with nothing written but that gap answers one row
+-- of NULLs that carries it. Covers the indexed blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_network_claims(range_start timestamptz, range_end timestamptz, bucket text DEFAULT NULL)
+RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, claims bigint, claimed_relays numeric,
+  claimed_estimated_relays numeric, claimed_compute_units numeric, claimed_estimated_compute_units numeric,
+  claimed_upokt numeric, settled_claims bigint, settled_relays numeric, settled_estimated_relays numeric,
+  settled_compute_units numeric, settled_estimated_compute_units numeric, settled_upokt numeric, expired_claims bigint,
+  expired_relays numeric, expired_estimated_relays numeric, expired_compute_units numeric,
+  expired_estimated_compute_units numeric, expired_upokt numeric, first_height bigint, last_height bigint,
+  covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE sp record; cv record; gp jsonb; ch bigint; ct timestamptz; head numeric;
+BEGIN
+  PERFORM ${s}._validate(NULL, '', range_start, range_end, bucket);
+${covered("blocks", true)}
+  gp := cv.gaps;
+  -- the first written height's block: what is before it in the range is not written
+  SELECT c.covered_from_height INTO ch FROM ${s}.claims_by_block_coverage c;
+  SELECT bl.timestamp AT TIME ZONE 'UTC' INTO ct FROM ${s}.blocks bl WHERE bl.id >= coalesce(ch, 9223372036854775807)
+  ORDER BY bl.id LIMIT 1;
+  IF ct IS NULL OR ct > range_start THEN
+    gp := gp || jsonb_build_array(jsonb_build_object('from', range_start, 'to', least(coalesce(ct, range_end), range_end)));
+    range_start := least(coalesce(ct, range_end), range_end);
+  END IF;
+  SELECT max(bl.id) INTO head FROM ${s}.blocks bl;
+  RETURN QUERY
+  SELECT ${s}._bucket(bucket, cb.timestamp AT TIME ZONE 'UTC', sp.f), ${s}._bucket_end(bucket, cb.timestamp AT TIME ZONE 'UTC', sp.t),
+         sum(cb.claim_count)::bigint, sum(cb.claim_relays), sum(cb.claim_estimated_relays), sum(cb.claim_computed_units),
+         sum(cb.claim_estimated_computed_units), sum(cb.claim_upokt), sum(cb.settled_count)::bigint, sum(cb.settled_relays),
+         sum(cb.settled_estimated_relays), sum(cb.settled_computed_units), sum(cb.settled_estimated_computed_units),
+         sum(cb.settled_upokt), sum(cb.expired_count)::bigint, sum(cb.expired_relays), sum(cb.expired_estimated_relays),
+         sum(cb.expired_computed_units), sum(cb.expired_estimated_computed_units), sum(cb.expired_upokt),
+         min(cb.block_id)::bigint, max(cb.block_id)::bigint, cv.covered_from, cv.covered_to, gp
+  FROM ${s}.claims_by_block cb
+  WHERE range_start < range_end
+    AND cb.timestamp >= range_start AT TIME ZONE 'UTC' AND cb.timestamp < range_end AT TIME ZONE 'UTC'
+    -- not the rows of heights a rewind removed, until the next write deletes them
+    AND cb.block_id <= head
+  GROUP BY 1, 2
+  ORDER BY 1 DESC;
+  IF NOT FOUND AND jsonb_array_length(gp) > 0 THEN
+    RETURN QUERY SELECT NULL::timestamptz, NULL::timestamptz, NULL::bigint, NULL::numeric, NULL::numeric, NULL::numeric,
+      NULL::numeric, NULL::numeric, NULL::bigint, NULL::numeric, NULL::numeric, NULL::numeric, NULL::numeric, NULL::numeric,
+      NULL::bigint, NULL::numeric, NULL::numeric, NULL::numeric, NULL::numeric, NULL::numeric, NULL::bigint, NULL::bigint,
+      cv.covered_from, cv.covered_to, gp;
+  END IF;
+END $$;
+
+-- Overservicing of the suppliers that share revenue with the operators now (_operator_suppliers: an address in the
+-- rev_share of a live service config of a Staked supplier, as get_overserviced_by_addresses_and_time), per bucket:
+-- expected_burn_upokt and effective_burn_upokt summed over their application overservicing events
+-- (event_application_overserviceds), the events and the first and last height. These are the events' own amounts:
+-- get_supplier_earnings.overservicing_loss_upokt comes from the settlements and differs from them by ~1 ppm. Each
+-- supplier's events through the GiST index on (supplier_id, _block_range) within the range's heights. Covers the indexed
+-- blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_overserviced(operators text[], range_start timestamptz, range_end timestamptz,
+  bucket text DEFAULT NULL)
+RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, expected_burn_upokt numeric, effective_burn_upokt numeric,
+  events bigint, first_height bigint, last_height bigint, covered_from timestamptz, covered_to timestamptz,
+  covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE sp record; cv record; rg record; sup text[];
+BEGIN
+  PERFORM ${s}._validate(operators, 'operators', range_start, range_end, bucket);
+${covered("blocks", true)}
+  rg := ${s}._block_heights(range_start, range_end);
+  IF rg.lo IS NULL OR rg.hi IS NULL OR rg.lo > rg.hi THEN RETURN; END IF;
+  sup := ${s}._operator_suppliers(operators);
+  RETURN QUERY
+  SELECT ${s}._bucket(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.f), ${s}._bucket_end(bucket, bl.timestamp AT TIME ZONE 'UTC', sp.t),
+         sum(o.expected_burn), sum(o.effective_burn), count(*)::bigint, min(o.block_id)::bigint, max(o.block_id)::bigint,
+         cv.covered_from, cv.covered_to, cv.gaps
+  FROM unnest(sup) u(id)
+  CROSS JOIN LATERAL (SELECT e.expected_burn, e.effective_burn, e.block_id FROM ${s}.event_application_overserviceds e
+                      WHERE e.supplier_id = u.id AND e.block_id BETWEEN rg.lo AND rg.hi) o
+  JOIN ${s}.blocks bl ON bl.id = o.block_id
+  GROUP BY 1, 2
+  ORDER BY 1 DESC;
+END $$;
+
+-- What the suppliers serving the domains (up to 200 endpoint root domains) earned per service, from
+-- domain_service_daily_rewards (domainRewards.ts) summed over the UTC days that start inside [range_start, range_end), as
+-- get_supplier_domains reads it: relays, compute units, claimed_upokt (the table's gross_rewards), staked_suppliers = the
+-- suppliers of the service's last day read, summed over the domains that have that day (a supplier on two of the
+-- domains counts in both), first_day / last_day, and the first and last height of those days. The old function took
+-- the count of one of those domains, whichever its DISTINCT ON met first (with several domains on the last day it
+-- differed for 32 of 100 services over 7 days for 3 domains on mainnet, 2026-10-20; equal for one domain). get_rewards_by_domains_and_time_group_by_service read the days from the date of start_ts to the date of end_ts,
+-- both included: the same days as range_start = that first midnight and range_end = the midnight after the last day.
+-- Covers the indexed blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_domain_service_rewards(domains text[], range_start timestamptz, range_end timestamptz)
+RETURNS TABLE(service_id text, staked_suppliers bigint, relays numeric, estimated_relays numeric, compute_units numeric,
+  estimated_compute_units numeric, claimed_upokt numeric, first_day date, last_day date, first_height bigint,
+  last_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE cv record; d1 date; d2 date;
+BEGIN
+  PERFORM ${s}._validate(domains, 'domains', range_start, range_end, NULL);
+${covered(null, true)}
+  -- the days that start inside the range: [d1, d2]; from the requested start, as the first indexed block is later than
+  -- the start of its day (the end is the covered one: the day of the latest block starts before it)
+  d1 := coalesce((date_trunc('day', cv.requested_from AT TIME ZONE 'UTC')
+         + CASE WHEN cv.requested_from AT TIME ZONE 'UTC' = date_trunc('day', cv.requested_from AT TIME ZONE 'UTC') THEN interval '0' ELSE interval '1 day' END)::date,
+         '-infinity'::date);
+  d2 := (date_trunc('day', (range_end AT TIME ZONE 'UTC') - interval '1 microsecond'))::date;
+  IF d1 > d2 THEN RETURN; END IF;
+  RETURN QUERY
+  SELECT d.service_id,
+         (sum(d.suppliers_count) FILTER (WHERE d.day = d.last_day))::bigint,
+         sum(d.relays)::numeric, sum(d.estimated_relays)::numeric, sum(d.computed_units)::numeric,
+         sum(d.estimated_computed_units)::numeric, sum(d.gross_rewards), min(d.day), max(d.day), min(d.first_height)::bigint,
+         max(d.last_height)::bigint, cv.covered_from, cv.covered_to, cv.gaps
+  FROM (SELECT x.*, max(x.day) OVER (PARTITION BY x.service_id) last_day FROM ${s}.domain_service_daily_rewards x
+        WHERE x.domain = ANY(get_domain_service_rewards.domains) AND x.day BETWEEN d1 AND d2) d
+  GROUP BY d.service_id
+  ORDER BY d.service_id;
+END $$;
+
+-- The blocks a validator produced (kind produced: blocks.proposer_address, as get_produced_blocks_by_validator) or
+-- missed (kind missed: a block_metadata last_commit whose signatures lack it, as get_missing_validator_blocks) between
+-- from_height and to_height (NULL = the latest), newest first, with the block's time (NULL while the block row is not
+-- written). validator_address is the address the old functions took (the consensus address in hex). At most row_limit
+-- rows (default 100, up to 1000) per call: for the next page pass the last row's height as before_height. Each candidate
+-- block is read backwards from the newest by its id index, so a page costs its rows (and, for missed, the blocks it
+-- passes); from_height bounds the walk.
+CREATE OR REPLACE FUNCTION ${s}.get_validator_blocks(validator_address text, from_height bigint, to_height bigint DEFAULT NULL,
+  kind text DEFAULT 'produced', row_limit integer DEFAULT 100, before_height bigint DEFAULT NULL)
+RETURNS TABLE(height bigint, block_time timestamptz)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE hi numeric;
+BEGIN
+  IF validator_address IS NULL OR from_height IS NULL THEN
+    RAISE EXCEPTION 'validator_address and from_height are required';
+  END IF;
+  IF kind IS NULL OR kind NOT IN ('produced', 'missed') THEN
+    RAISE EXCEPTION 'kind must be produced or missed (got %)', coalesce(kind, 'NULL');
+  END IF;
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with before_height', row_limit;
+  END IF;
+  hi := least(coalesce(to_height, 9223372036854775807), coalesce(before_height - 1, 9223372036854775807));
+  IF kind = 'produced' THEN
+    RETURN QUERY
+    SELECT b.id::bigint, b.timestamp AT TIME ZONE 'UTC'
+    FROM ${s}.blocks b
+    WHERE b.id >= from_height AND b.id <= hi AND b.proposer_address = validator_address
+    ORDER BY b.id DESC LIMIT row_limit;
+  ELSE
+    RETURN QUERY
+    SELECT m.id::bigint, (SELECT b.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks b WHERE b.id = m.id LIMIT 1)
+    FROM ${s}.block_metadata m
+    WHERE m.id >= from_height AND m.id <= hi
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(m.last_commit->'signatures') AS sig
+                      WHERE sig->>'validatorAddress' = validator_address)
+    ORDER BY m.id DESC LIMIT row_limit;
+  END IF;
 END $$;
 
 -- Supplier: what it generated, and the first and last settlement height of the claims of each row (the rollups'
@@ -3948,7 +4143,8 @@ BEGIN
       CASE f.proname WHEN 'get_tx_counts' THEN 'WHERE r.msg_type IS NOT NULL'
                      WHEN 'get_staked_suppliers_by_service' THEN 'WHERE r.service_id IS NOT NULL'
                      WHEN 'get_supply' THEN 'WHERE r.height IS NOT NULL'
-                     WHEN 'get_supply_composition' THEN 'WHERE r.height IS NOT NULL' ELSE '' END);
+                     WHEN 'get_supply_composition' THEN 'WHERE r.height IS NOT NULL'
+                     WHEN 'get_network_claims' THEN 'WHERE r.bucket_start IS NOT NULL' ELSE '' END);
   END LOOP;
 END $$;
 ${blockTimeColumnsSql(s)}

@@ -11,6 +11,7 @@ import { getDataByDelegatorAddressesAndBlocksFn } from "./dataByDelegatorAddress
 import {
   getDataByDelegatorAddressesAndTimesFn,
 } from "./dataByDelegatorAddressesAndTimes";
+import { createDeprecationsFn } from "./deprecations";
 import {
   createDomainServiceDailyRewardsTableFn,
   getPerformanceIndexSqls,
@@ -228,6 +229,8 @@ export async function createDbFunctions(): Promise<void> {
     getTotalSupplyBetweenDatesFn,
     getOverservicedsByDelegatorAddressesAndTimesFn,
     getComputeUnitsToTokensMultiplierEvolutionFn,
+    // @deprecated, with its replacement, on the old functions above (after them: they rewrite their own comments)
+    createDeprecationsFn,
     // hides what the GraphQL schema no longer exposes and removes the relations (docs/graphql-migration.md): in the
     // same transaction as the functions that rewrite their own comments (supply.ts), so no start publishes them
     createClosedSchemaFn,

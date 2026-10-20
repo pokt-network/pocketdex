@@ -19,7 +19,11 @@ import {
   rebuildStakedSuppliersDailyFn,
   refreshStakedSuppliersDailyFn,
 } from "../../src/mappings/dbFunctions/stakedSuppliersDaily";
-import { getSupplyCompositionBetweenDatesFn, getTotalSupplyByDay } from "../../src/mappings/dbFunctions/supply";
+import {
+  getSupplyCompositionBetweenDatesFn,
+  getTotalSupplyBetweenDatesFn,
+  getTotalSupplyByDay,
+} from "../../src/mappings/dbFunctions/supply";
 import {
   createSupplyAtFn,
   createSupplyDailyTablesFn,
@@ -142,6 +146,7 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
     await c.query(getAmountOfBlocksAndSuppliersByTimesFn(S));
     await c.query(getSupplyCompositionBetweenDatesFn(S));
     await c.query(getTotalSupplyByDay(S));
+    await c.query(getTotalSupplyBetweenDatesFn(S));
   });
   after(async () => {
     await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE`);
@@ -555,9 +560,30 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
     assert.deepEqual(await all(), want);
   });
 
-  it("refuses a bucket other than day, week, month or year", async () => {
+  it("gives get_total_supply_between_dates' snapshot without a bucket: one row at the range's last point", async () => {
+    for (const [a, b] of [
+      ["2026-09-04T00:00:00Z", "2026-09-10T00:00:00Z"],
+      ["2026-09-04T05:00:00Z", "2026-09-06T00:00:00Z"],
+      ["2026-09-07T03:00:00Z", "2026-09-07T15:00:00Z"],
+      ["2026-09-04T00:00:00Z", "2026-09-05T23:00:00Z"],
+    ]) {
+      const o = JSON.parse(
+        String((await q(`SELECT ${S}.get_total_supply_between_dates($1, $2)::text j`, [oldStart(a), oldEnd(b)]))[0].j)
+      ) as Record<string, number>;
+      const n = await supply(a, b, null as unknown as string);
+      assert.equal(n.length, 1, `${a} ${b}`);
+      // the range clipped to what is indexed: up to the latest block (09-09 22:50) + 1 µs
+      assert.deepEqual(
+        [n[0].height, num(n[0].n), num(n[0].u), num(n[0].t), ms(n[0].bucket_start)],
+        [String(o.latest_block), num(o.network_supply), num(o.unmigrated_supply), num(o.total_supply), Date.parse(a)],
+        `${a} ${b}`
+      );
+    }
+  });
+
+  it("refuses a bucket other than day, week, month or year (or NULL for get_supply)", async () => {
+    await assert.rejects(supply("2026-09-04T00:00:00Z", "2026-09-05T00:00:00Z", "hour"), /bucket must be/);
     for (const bucket of ["hour", null]) {
-      await assert.rejects(supply("2026-09-04T00:00:00Z", "2026-09-05T00:00:00Z", bucket as string), /bucket must be/);
       await assert.rejects(
         composition("2026-09-04T00:00:00Z", "2026-09-05T00:00:00Z", bucket as string),
         /bucket must be/

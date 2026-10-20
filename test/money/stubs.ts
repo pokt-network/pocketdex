@@ -1,3 +1,5 @@
+import { createClaimsByBlockFn } from "../../src/mappings/dbFunctions/claimProofs";
+import { createDomainServiceDailyRewardsTableFn } from "../../src/mappings/dbFunctions/domainRewards";
 import { upsertSuppliersByBlockAndServiceFn } from "../../src/mappings/dbFunctions/reports/suppliers";
 import {
   createStakedSuppliersDailyTableFn,
@@ -110,5 +112,29 @@ export const entityStubsSql = (S: string, heights: string): string => `
       ${createSupplyDailyTablesFn(S)}
       ${createSupplyAtFn(S)}
       ${createSupplyPointsFn(S)}
+      -- get_network_rewards, get_network_claims, get_overserviced (operator op-l: sup-l shares revenue with it) and
+      -- get_domain_service_rewards (domain dom-l, the day of each height and the next): one row per height or day
+      CREATE TABLE ${S}.relay_by_block_and_services (relays numeric, estimated_relays numeric, computed_units numeric,
+        estimated_computed_units numeric, claimed_upokt numeric, amount integer, block_id numeric, service_id text, _id uuid);
+      INSERT INTO ${S}.relay_by_block_and_services SELECT 5, 6, 7, 8, 9, 1, b.id, 'svc-d', gen_random_uuid() FROM (${heights}) b(id);
+      ${createClaimsByBlockFn(S)}
+      UPDATE ${S}.claims_by_block_coverage SET covered_from_height = 1;
+      INSERT INTO ${S}.claims_by_block SELECT bl.id, bl.timestamp, 2, 5, 6, 7, 8, 9, 1, 5, 6, 7, 8, 9, 1, 1, 1, 1, 1, 1
+        FROM ${S}.blocks bl WHERE bl.id IN (${heights});
+      CREATE TABLE ${S}.event_application_overserviceds (id text, application_id text, supplier_id text, expected_burn numeric,
+        effective_burn numeric, block_id numeric, _block_range int8range);
+      INSERT INTO ${S}.event_application_overserviceds SELECT 'ov' || b.id, 'app-l', 'sup-l', 10, 7, b.id, int8range(b.id::bigint, NULL)
+        FROM (${heights}) b(id);
+      CREATE TABLE IF NOT EXISTS ${S}.supplier_service_configs (supplier_id text, service_id text, _block_range int8range);
+      ALTER TABLE ${S}.supplier_service_configs ADD COLUMN IF NOT EXISTS rev_share jsonb;
+      INSERT INTO ${S}.supplier_service_configs (supplier_id, service_id, rev_share, _block_range)
+        VALUES ('sup-l', 'svc-d', '[{"address": "op-l", "revSharePercentage": 100}]', '[1,)');
+      ALTER TABLE ${S}.suppliers ADD COLUMN IF NOT EXISTS stake_status text;
+      INSERT INTO ${S}.suppliers (id, _block_range, owner_id, stake_status) VALUES ('sup-l', '[1,)', 'own-l', 'Staked');
+      ${createDomainServiceDailyRewardsTableFn(S)}
+      INSERT INTO ${S}.domain_service_daily_rewards
+        SELECT 'dom-l', 'svc-d', x.day, 1, 2, 3, 4, 5, 6, min(x.id), max(x.id)
+        FROM (SELECT bl.id, bl.timestamp::date + o AS day FROM ${S}.blocks bl, (VALUES (0), (1)) v(o) WHERE bl.id IN (${heights})) x
+        GROUP BY x.day ON CONFLICT DO NOTHING;
       INSERT INTO ${S}.msg_claim_morse_accounts SELECT 'mm' || b.id, 'pokt-sign', 'pokt-dest', 'MORSE' || b.id, 100, b.id,
         'tx' || b.id FROM (${heights}) b(id);`;

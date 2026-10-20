@@ -3791,7 +3791,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     for (const n of STATE_FUNCTIONS) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     assert.deepEqual(catalog, [
       "get_actor_lifecycle", "get_app_auto_unstakes", "get_application_spend", "get_block_stats", "get_claims",
-      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_native_transfers",
+      "get_created_claims", "get_delegator_income", "get_domain_service_rewards", "get_gateway_spend", "get_income",
+      "get_morse_claims", "get_native_transfers", "get_network_claims", "get_network_rewards", "get_overserviced",
       "get_param_history",
       "get_relay_mining_difficulty", "get_service_usage", "get_staked_suppliers_by_service", "get_supplier_distribution",
       "get_supplier_earnings", "get_supplier_penalties", "get_supplier_proofs", "get_supply", "get_supply_composition",
@@ -4148,6 +4149,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_staked_suppliers_by_service: "NULL, NULL",
         get_supply: "NULL, NULL",
         get_supply_composition: "NULL, NULL",
+        get_network_rewards: "NULL, NULL",
+        get_network_claims: "NULL, NULL",
+        get_overserviced: "ARRAY['op-l'], NULL, NULL",
+        get_domain_service_rewards: "ARRAY['dom-l'], NULL, NULL",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
@@ -4349,6 +4354,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_staked_suppliers_by_service: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_supply: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_supply_composition: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_network_rewards: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
+        get_network_claims: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
+        get_overserviced: "ARRAY['op-l'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
+        get_domain_service_rewards: "ARRAY['dom-l'], NULL, NULL",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
@@ -4359,7 +4368,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       ];
       for (const [fn, args] of Object.entries(calls)) {
         // rows by message type and status, or by service: no time or height to order by
-        if (fn === "get_tx_counts" || fn === "get_staked_suppliers_by_service") continue;
+        if (fn === "get_tx_counts" || fn === "get_staked_suppliers_by_service" || fn === "get_domain_service_rewards") continue;
         // one point per day bucket, from a rollup empty here: one bucket in this range (old_fn_rollups.db.spec.ts orders them)
         if (fn === "get_supply" || fn === "get_supply_composition") continue;
         const col = byHeight.includes(fn) ? "height" : fn === "money_coverage" ? "first_height" : "bucket_start";
@@ -5075,6 +5084,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_app_auto_unstakes: ["NULL, ", "unstakes"],
         get_supplier_proofs: ["NULL, ", "proofs_submitted"],
         get_block_stats: ["", "blocks"],
+        get_network_rewards: ["", "relays"],
+        get_network_claims: ["", "claims"],
+        get_overserviced: ["ARRAY['op-l'], ", "events"],
       };
       await stubEntityTables();
       const bucketed = (

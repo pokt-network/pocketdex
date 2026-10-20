@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createClosedSchemaFn, EXPOSED_ENTITY_TABLES, OMITTED_OLD_FUNCTIONS } from "./closedSchema";
+import { createDeprecationsFn, DEPRECATED_OLD_FUNCTIONS } from "./deprecations";
 import { ENTITY_DESCRIPTIONS } from "./entityDescriptions";
 import { CATALOG_FUNCTIONS } from "./settlement/functions";
 import { LEGACY_REPLACES, STATE_FUNCTIONS } from "./settlement/smartTags";
@@ -21,6 +22,18 @@ describe("closed schema", () => {
       assert.ok(!published.has(f), `${f} is published by the catalog`);
     }
     assert.equal(new Set(OMITTED_OLD_FUNCTIONS).size, OMITTED_OLD_FUNCTIONS.length);
+  });
+
+  it("deprecates only old functions that stay exposed, each with its replacement", () => {
+    const published = new Set([...CATALOG_FUNCTIONS, ...STATE_FUNCTIONS, ...Object.keys(LEGACY_REPLACES)]);
+    for (const [f, use] of Object.entries(DEPRECATED_OLD_FUNCTIONS)) {
+      assert.ok(!published.has(f), `${f} is published by the catalog`);
+      assert.ok(!OMITTED_OLD_FUNCTIONS.includes(f), `${f} is hidden: a deprecation would not show`);
+      assert.match(use, /^get[A-Z]|^balances /, f);
+    }
+    const sql = createDeprecationsFn("beta");
+    assert.match(sql, /'beta'::regnamespace/);
+    assert.ok(!sql.includes("mainnet"));
   });
 
   it("keeps SubQuery's _metadata and writes in the given schema only", () => {
