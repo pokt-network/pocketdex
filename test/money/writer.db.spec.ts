@@ -3793,8 +3793,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       "get_actor_lifecycle", "get_app_auto_unstakes", "get_application_spend", "get_block_stats", "get_claims",
       "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_native_transfers",
       "get_param_history",
-      "get_relay_mining_difficulty", "get_service_usage", "get_supplier_distribution", "get_supplier_earnings",
-      "get_supplier_penalties", "get_supplier_proofs", "get_supply_flows", "get_tx_counts", "get_validator_rewards", "money_coverage",
+      "get_relay_mining_difficulty", "get_service_usage", "get_staked_suppliers_by_service", "get_supplier_distribution",
+      "get_supplier_earnings", "get_supplier_penalties", "get_supplier_proofs", "get_supply", "get_supply_composition",
+      "get_supply_flows", "get_tx_counts", "get_validator_rewards", "money_coverage",
     ]);
     for (const n of catalog) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     // the same functions have a description (smartTags.ts) and a _json twin (functions.ts)
@@ -4144,6 +4145,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_native_transfers: "ARRAY['acc-s']",
         get_morse_claims: "NULL, NULL, NULL, NULL",
         get_tx_counts: "NULL, NULL",
+        get_staked_suppliers_by_service: "NULL, NULL",
+        get_supply: "NULL, NULL",
+        get_supply_composition: "NULL, NULL",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
@@ -4342,6 +4346,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_native_transfers: "ARRAY['acc-r'], NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_morse_claims: "NULL, NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_tx_counts: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_staked_suppliers_by_service: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_supply: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_supply_composition: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
       };
       await stubEntityTables();
       assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
@@ -4351,8 +4358,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         "get_native_transfers",
       ];
       for (const [fn, args] of Object.entries(calls)) {
-        // rows by message type and status: no time or height to order by
-        if (fn === "get_tx_counts") continue;
+        // rows by message type and status, or by service: no time or height to order by
+        if (fn === "get_tx_counts" || fn === "get_staked_suppliers_by_service") continue;
+        // one point per day bucket, from a rollup empty here: one bucket in this range (old_fn_rollups.db.spec.ts orders them)
+        if (fn === "get_supply" || fn === "get_supply_composition") continue;
         const col = byHeight.includes(fn) ? "height" : fn === "money_coverage" ? "first_height" : "bucket_start";
         // get_service_usage orders by its top rank first: newest first within each service
         const group = fn === "get_service_usage" ? "service_id" : "''";
@@ -5074,7 +5083,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
              AND proname = ANY($2::text[]) ORDER BY 1`,
           [S, [...CATALOG_FUNCTIONS]]
         )
-      ).rows.map((r) => String(r.proname));
+      ).rows.map((r) => String(r.proname))
+        // a point per bucket (its last block's supply), not a sum, and no NULL or hour bucket: old_fn_rollups.db.spec.ts
+        .filter((f) => f !== "get_supply" && f !== "get_supply_composition");
       assert.deepEqual(bucketed, Object.keys(calls).sort());
       const end = "2026-09-02T00:00:00Z";
       const before = (days: number, extraSeconds = 0) =>

@@ -1,8 +1,15 @@
+import { upsertSuppliersByBlockAndServiceFn } from "../../src/mappings/dbFunctions/reports/suppliers";
+import {
+  createStakedSuppliersDailyTableFn,
+  createStakedSuppliersOfBlocksFn,
+} from "../../src/mappings/dbFunctions/stakedSuppliersDaily";
+import { createSupplyAtFn, createSupplyDailyTablesFn, createSupplyPointsFn } from "../../src/mappings/dbFunctions/supplyDaily";
 import { createTxCountsDailyTableFn, createTxCountsOfBlocksFn } from "../../src/mappings/dbFunctions/txCounts";
 
 // The entity tables the newer catalog functions read (get_actor_lifecycle, get_relay_mining_difficulty, get_claims,
-// get_created_claims, get_block_stats, get_morse_claims), reduced to their columns, with one row per height that the heights query
-// returns (each height needs its blocks row): supplier sup-l, application app-l, service svc-d; and the blocks' report
+// get_created_claims, get_block_stats, get_morse_claims, get_staked_suppliers_by_service, get_supply,
+// get_supply_composition), reduced to their columns, with one row per height that the heights query returns (each
+// height needs its blocks row): supplier sup-l, application app-l, service svc-d; and the blocks' report
 // columns. Run inside the test's transaction.
 export const entityStubsSql = (S: string, heights: string): string => `
       ALTER TABLE ${S}.blocks ADD COLUMN size int, ADD COLUMN time_to_block numeric, ADD COLUMN total_txs int,
@@ -80,5 +87,28 @@ export const entityStubsSql = (S: string, heights: string): string => `
       -- get_tx_counts: the rollup (empty here: every day is a gap) and the helper that reads the edges
       ${createTxCountsDailyTableFn(S)}
       ${createTxCountsOfBlocksFn(S)}
+      -- get_staked_suppliers_by_service: its rollup (empty here: every full day is a gap) and the per-block rows the edges
+      -- read, one service with three staked suppliers per height
+      ${upsertSuppliersByBlockAndServiceFn(S)}
+      INSERT INTO ${S}.staked_suppliers_by_block_and_services SELECT 30, 3, b.id, 'svc-d', gen_random_uuid() FROM (${heights}) b(id);
+      ${createStakedSuppliersDailyTableFn(S)}
+      ${createStakedSuppliersOfBlocksFn(S)}
+      -- get_supply and get_supply_composition: their rollups (empty: the partial days are read live), an upokt supply per
+      -- height, a module account's and an address' balance, and the Morse accounts' amounts
+      CREATE TABLE ${S}.supplies (id text, denom text, amount numeric);
+      CREATE TABLE ${S}.block_supplies (block_id numeric, supply_id text, _block_range int8range);
+      INSERT INTO ${S}.supplies SELECT 'upokt-' || b.id, 'upokt', 1000 + b.id FROM (${heights}) b(id);
+      INSERT INTO ${S}.block_supplies SELECT b.id, 'upokt-' || b.id, int8range(b.id::bigint, NULL) FROM (${heights}) b(id);
+      CREATE TABLE ${S}.module_accounts (id text, name text, _block_range int8range);
+      INSERT INTO ${S}.module_accounts VALUES ('acc-m', 'bonded_tokens_pool', '[1,)');
+      CREATE TABLE ${S}.balances (id text, account_id text, denom text, amount numeric, last_updated_block_id numeric,
+        _block_range int8range);
+      INSERT INTO ${S}.balances VALUES ('acc-m-upokt', 'acc-m', 'upokt', 70, 1, '[1,)'), ('acc-s-upokt', 'acc-s', 'upokt', 30, 1, '[1,)');
+      ALTER TABLE ${S}.morse_claimable_accounts ADD COLUMN IF NOT EXISTS claimed boolean, ADD COLUMN IF NOT EXISTS claimed_at_id numeric,
+        ADD COLUMN IF NOT EXISTS unstaked_balance_amount numeric, ADD COLUMN IF NOT EXISTS supplier_stake_amount numeric,
+        ADD COLUMN IF NOT EXISTS application_stake_amount numeric;
+      ${createSupplyDailyTablesFn(S)}
+      ${createSupplyAtFn(S)}
+      ${createSupplyPointsFn(S)}
       INSERT INTO ${S}.msg_claim_morse_accounts SELECT 'mm' || b.id, 'pokt-sign', 'pokt-dest', 'MORSE' || b.id, 100, b.id,
         'tx' || b.id FROM (${heights}) b(id);`;

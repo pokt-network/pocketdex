@@ -117,6 +117,16 @@ const OMITTED_FUNCTIONS = [
   "_tx_counts_of_blocks",
   "rebuild_tx_counts_daily",
   "refresh_tx_counts_daily",
+  // the staked suppliers' and the supply's daily rollups: helpers and writers (stakedSuppliersDaily.ts, supplyDaily.ts)
+  "_staked_suppliers_of_blocks",
+  "rebuild_staked_suppliers_daily",
+  "refresh_staked_suppliers_daily",
+  "_supply_at",
+  "_supply_height",
+  "_supply_points",
+  "_supply_gaps",
+  "rebuild_supply_daily",
+  "refresh_supply_daily",
   // writers of the money tables, which GraphQL would publish as mutations (scripts/fill_claims_paid.sql and
   // scripts/fill_monthly_claims.sql run them)
   "fill_claims_paid_day",
@@ -195,6 +205,12 @@ const DESCRIPTIONS: Record<string, string> = {
     "Block statistics per bucket: blocks and the first and last height, transactions (total, successful, failed), relays and compute units (claimed and estimated) as the indexer reports them per block, the time between blocks in milliseconds (average, minimum, maximum; a block whose previous one is not indexed is left out of the average and minimum) and the average block size in bytes. Covers the indexed blocks; NULL range = the whole chain.",
   get_tx_counts:
     "Transactions per message type and status over a range, from a daily rollup, without counting the transactions table: msg_type is a message type URL (a transaction counts once under each type it holds, so the types do not add up to '*') or '*' for every transaction; status is success (code 0) or failed. msg_types (up to 200, '*' included) and statuses (success, failed) filter; NULL = every row. The full UTC days come from the rollup, the partial days at the ends of the range from their blocks. first_height and last_height are the blocks the counts span. A full day the rollup does not hold yet is a gap (covered_gaps), not a zero; when nothing in the range is held, one row of NULLs carries the gaps (the _json twin leaves it out of data and puts the gaps in range). Covers the indexed blocks.",
+  get_staked_suppliers_by_service:
+    "Staked suppliers per service over a range, from a daily rollup: blocks = the blocks with staked suppliers of the service, suppliers_staked = the staked suppliers summed over those blocks (divide by blocks for the average per block), as getAmountOfBlocksAndSuppliersByTimes gives them; service_id '*' = every block of the range and every service. services (up to 200, '*' included) filters; NULL = every row. The full UTC days come from the rollup, the partial days at the ends of the range from their blocks. first_height and last_height are the blocks the sums span. A full day with blocks the rollup does not hold yet is a gap (covered_gaps), not a zero; when nothing in the range is held, one row of NULLs carries the gaps (the _json twin leaves it out of data and puts the gaps in range). Covers the indexed blocks.",
+  get_supply:
+    "Supply per bucket at its point, the bucket's last block with an upokt supply inside the range (height, block_time): network_supply_upokt = the upokt supply recorded at that block, unmigrated_upokt = the Morse balances not claimed at that block (unstaked balance, supplier and application stake), total_supply_upokt = their sum; as getSupplyCompositionBetweenDates gives them. bucket = day (default), week, month or year (not NULL nor hour). Full UTC days come from a daily rollup, the partial days at the ends of the range are computed live. A full day the rollup does not hold yet is a gap (covered_gaps): its bucket has no row, never an earlier point; when no bucket has a row, one row of NULLs carries the gaps (the _json twin leaves it out of data). Covers the indexed blocks.",
+  get_supply_composition:
+    "Supply composition per bucket at the point get_supply reads (height, block_time): one row per label, the upokt balances at that block by module account name, dao (the tokenomics dao_reward_address at that block), wrapped (the bridge address) or others; as network_supply_composition of getSupplyCompositionBetweenDates. bucket = day (default), week, month or year. Full UTC days from a daily rollup, the partial days at the ends live; a full day the rollup does not hold yet is a gap (covered_gaps), as in get_supply. Covers the indexed blocks.",
   get_relay_mining_difficulty:
     "Relay mining difficulty history of the services listed (up to 200): each update newest first (by height, then service_id), with the relays EMA and the target hash before and after it. The current difficulty of a service is its newest row (row_limit 1 with that one service). row_limit (default 100, at most 1000) rows per call; for the next page pass the last row's height and service_id as before_height and before_service_id, or skip row_offset rows of the order (default 0, at most 10,000,000) for a page at any depth in one call. Covers the indexed blocks.",
   get_morse_claims:
@@ -252,6 +268,8 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
     "A block's metadata record, given by height or by hash (exactly one; the hash in any case): block_height, and the CometBFT block_id, header and last_commit as JSON, as the indexer received them; no row for a block it has no record for.",
   get_active_accounts:
     "Accounts active since each time of since_times (up to 20, timestamptz with an explicit zone): accounts = the live upokt balances last updated in a block at or after the time (null when beyond_tip: no indexed block that late yet); height = the newest block before the time (an account counts when its last update is above it).",
+  get_supply_composition_at:
+    "Supply at one block, computed live: the last block at or below at_height (NULL = the latest) with an upokt supply, whose height and block_time every row carries; network_supply_upokt, unmigrated_upokt (the Morse balances not claimed at that block) and total_supply_upokt as get_supply gives them, repeated on each row; and one row per composition label (module account name, dao, wrapped, others) with its amount_upokt, as get_supply_composition.",
   get_morse_claim_summary:
     "Morse migration now: the Morse accounts imported for claiming on Shannon, one row for the claimed ones and one for the unclaimed: accounts, and the sums of their liquid balance (unstaked_balance_upokt) and of the supplier and application stakes they carry. The accounts one by one: morseClaimableAccounts.",
 };

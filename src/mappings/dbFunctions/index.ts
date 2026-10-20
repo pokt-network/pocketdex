@@ -54,6 +54,12 @@ import { createSettlementFunctionsFn } from "./settlement/functions";
 import { createSettlementTablesFn } from "./settlement/schema";
 import { createSettlementSmartTagsFn } from "./settlement/smartTags";
 import { createSettlementWriterFn } from "./settlement/writer";
+import {
+  createStakedSuppliersDailyTableFn,
+  createStakedSuppliersOfBlocksFn,
+  rebuildStakedSuppliersDailyFn,
+  refreshStakedSuppliersDailyFn,
+} from "./stakedSuppliersDaily";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
 import {
   getBurnBreakdownBetweenDatesFn,
@@ -62,6 +68,13 @@ import {
   getTotalSupplyBetweenDatesFn,
   getTotalSupplyByDay,
 } from "./supply";
+import {
+  createSupplyAtFn,
+  createSupplyDailyTablesFn,
+  createSupplyPointsFn,
+  rebuildSupplyDailyFn,
+  refreshSupplyDailyFn,
+} from "./supplyDaily";
 import {
   createTxCountsDailyTableFn,
   createTxCountsOfBlocksFn,
@@ -152,6 +165,18 @@ export async function createDbFunctions(): Promise<void> {
     createTxCountsOfBlocksFn,
     rebuildTxCountsDailyFn,
     refreshTxCountsDailyFn,
+    // the staked suppliers per day and service that get_staked_suppliers_by_service reads, and their writers
+    createStakedSuppliersDailyTableFn,
+    createStakedSuppliersOfBlocksFn,
+    rebuildStakedSuppliersDailyFn,
+    refreshStakedSuppliersDailyFn,
+    // the supply at the last block of each day that get_supply / get_supply_composition read, the one computation they
+    // and the writers share (_supply_at), and the writers
+    createSupplyDailyTablesFn,
+    createSupplyAtFn,
+    createSupplyPointsFn,
+    rebuildSupplyDailyFn,
+    refreshSupplyDailyFn,
     // the per-block claim counts get_claim_proofs_data_by_time reads, and their writer
     createClaimsByBlockFn,
     // the (wallet, supplier) pairs of every rev_share, which operator_scope ever reads

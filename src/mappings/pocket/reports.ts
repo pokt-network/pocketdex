@@ -4,6 +4,7 @@ import { updateBlockReportsFnName } from "../dbFunctions/reports";
 import { upsertAppsByBlockAndServicesFnName } from "../dbFunctions/reports/apps";
 import { upsertRelaysByBlockAndServicesFnName } from "../dbFunctions/reports/relays";
 import { upsertSuppliersByBlockAndServicesFnName } from "../dbFunctions/reports/suppliers";
+import { refreshSupplyDailyFnName } from "../dbFunctions/supplyDaily";
 import { refreshTxCountsDailyFnName } from "../dbFunctions/txCounts";
 import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
 
@@ -40,6 +41,8 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       sequelize.query(`SELECT ${dbSchema}.write_claims_by_block(${height}::bigint, ${height}::bigint);`, defaultOptions),
       // add this block's transactions to its day's counts by message type and status (get_tx_counts)
       sequelize.query(`SELECT ${dbSchema}.${refreshTxCountsDailyFnName}(${height}::bigint);`, defaultOptions),
+      // write the days that closed before this block at their last block (get_supply, get_supply_composition)
+      sequelize.query(`SELECT ${dbSchema}.${refreshSupplyDailyFnName}(${height}::bigint);`, defaultOptions),
       // refresh domain+service daily rewards summary — only on blocks with settlements
       hasClaimSettled && sequelize.query(`SELECT ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}(${height}::bigint);`, defaultOptions),
     ].filter(Boolean))
