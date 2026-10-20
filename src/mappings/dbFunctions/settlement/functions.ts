@@ -2261,17 +2261,22 @@ END $$;
 -- Staked suppliers per service over a range, without summing staked_suppliers_by_block_and_services
 -- (staked_suppliers_daily, stakedSuppliersDaily.ts): blocks = the blocks with a row for the service, suppliers_staked = the
 -- staked suppliers summed over them (divide by blocks for the average per block), as
--- get_amount_of_blocks_and_suppliers_by_times gives them; service_id '*' = every block of the range and every service.
--- services filters (NULL: every row). The UTC days inside the range come from the rollup, the partial days at its ends
--- from their blocks' rows; a full day with blocks the rollup does not hold is a gap, not a zero (covered_gaps), until the backfill
--- has written it (scripts/fill_staked_suppliers_daily.sql). A range with nothing in the rollup and gaps answers one row of
--- NULLs that carries them. Covers the indexed blocks (covered(..., true)), as get_tx_counts.
+-- get_amount_of_blocks_and_suppliers_by_times gives them (the rollup's '*' rows only mark a day as held). services
+-- filters (NULL: every service). The UTC days inside the range come from the rollup, the partial days at its ends from
+-- their blocks' rows, read as _blocks_and_suppliers_by_service reads them: each end's first and last block by two probes
+-- of idx_blocks_timestamp_id, then count(*) / sum over that id range inside RETURN QUERY, where the scan can run
+-- parallel (24 hours: 40-60 ms with 4 workers on the mainnet replica, 2026-10-20, against ~100 ms in one process and
+-- ~290 ms through _staked_suppliers_of_blocks' materialized rows); a full day with blocks the rollup does not hold is a
+-- gap, not a zero (covered_gaps), until the backfill has written it (scripts/fill_staked_suppliers_daily.sql). A range
+-- with nothing in the rollup and gaps answers one row of NULLs that carries them. Covers the indexed blocks
+-- (covered(..., true)), as get_tx_counts.
 CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers_by_service(range_start timestamptz, range_end timestamptz,
   services text[] DEFAULT NULL)
 RETURNS TABLE(service_id text, blocks bigint, suppliers_staked bigint, first_height bigint, last_height bigint,
   covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE cv record; f timestamp; t timestamp; d1 date; d2 date; gp jsonb := '[]'; ea timestamp[]; eb timestamp[];
+  lo1 bigint; hi1 bigint; lo2 bigint; hi2 bigint;
 BEGIN
   PERFORM ${s}._validate(NULL, '', range_start, range_end, NULL);
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
@@ -2299,21 +2304,34 @@ BEGIN
     ea := ARRAY[f]; eb := ARRAY[t];
   END IF;
   gp := coalesce(cv.gaps, '[]'::jsonb) || gp;
+  -- each end's first and last block (NULL: no block there)
+  IF ea[1] < eb[1] THEN
+    SELECT bl.id INTO lo1 FROM ${s}.blocks bl WHERE bl.timestamp >= ea[1] AND bl.timestamp < eb[1] ORDER BY bl.timestamp, bl.id LIMIT 1;
+    SELECT bl.id INTO hi1 FROM ${s}.blocks bl WHERE bl.timestamp >= ea[1] AND bl.timestamp < eb[1] ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
+  END IF;
+  IF cardinality(ea) > 1 AND ea[2] < eb[2] THEN
+    SELECT bl.id INTO lo2 FROM ${s}.blocks bl WHERE bl.timestamp >= ea[2] AND bl.timestamp < eb[2] ORDER BY bl.timestamp, bl.id LIMIT 1;
+    SELECT bl.id INTO hi2 FROM ${s}.blocks bl WHERE bl.timestamp >= ea[2] AND bl.timestamp < eb[2] ORDER BY bl.timestamp DESC, bl.id DESC LIMIT 1;
+  END IF;
   RETURN QUERY
-  WITH edges AS (SELECT u.a, u.b FROM unnest(ea, eb) u(a, b) WHERE u.a < u.b),
-  parts AS (
+  WITH parts AS (
     SELECT d.service_id, d.blocks, d.suppliers_staked, d.first_height, d.last_height
     FROM ${s}.staked_suppliers_daily d
-    WHERE d1 < d2 AND d.day >= d1 AND d.day < d2
+    WHERE d1 < d2 AND d.day >= d1 AND d.day < d2 AND d.service_id <> '*'
       AND (get_staked_suppliers_by_service.services IS NULL OR d.service_id = ANY(get_staked_suppliers_by_service.services))
     UNION ALL
-    SELECT c.service_id, c.blocks, c.suppliers_staked, q.lo, q.hi
-    FROM edges e
-    CROSS JOIN LATERAL (SELECT min(bl.id)::bigint lo, max(bl.id)::bigint hi
-                        FROM (SELECT id FROM ${s}.blocks WHERE timestamp >= e.a AND timestamp < e.b OFFSET 0) bl) q
-    CROSS JOIN LATERAL ${s}._staked_suppliers_of_blocks(q.lo, q.hi) c
-    WHERE q.lo IS NOT NULL
-      AND (get_staked_suppliers_by_service.services IS NULL OR c.service_id = ANY(get_staked_suppliers_by_service.services))
+    -- one row per block and service (upsert_staked_suppliers_by_block_and_services), so count(*) counts blocks
+    SELECT ss.service_id, count(*)::bigint, sum(ss.amount)::bigint, lo1, hi1
+    FROM ${s}.staked_suppliers_by_block_and_services ss
+    WHERE ss.block_id BETWEEN lo1 AND hi1
+      AND (get_staked_suppliers_by_service.services IS NULL OR ss.service_id = ANY(get_staked_suppliers_by_service.services))
+    GROUP BY ss.service_id
+    UNION ALL
+    SELECT ss.service_id, count(*)::bigint, sum(ss.amount)::bigint, lo2, hi2
+    FROM ${s}.staked_suppliers_by_block_and_services ss
+    WHERE ss.block_id BETWEEN lo2 AND hi2
+      AND (get_staked_suppliers_by_service.services IS NULL OR ss.service_id = ANY(get_staked_suppliers_by_service.services))
+    GROUP BY ss.service_id
   )
   SELECT p.service_id, sum(p.blocks)::bigint, sum(p.suppliers_staked)::bigint, min(p.first_height)::bigint,
          max(p.last_height)::bigint, cv.covered_from, cv.covered_to, gp
@@ -2361,8 +2379,8 @@ BEGIN
          cv.covered_from, cv.covered_to, gp
   FROM ${s}._supply_points(f, t, bucket) p
   LEFT JOIN ${s}.supply_daily sd ON p.kind = 'rollup' AND sd.day = p.day
-  -- computed only for the live points (a one-time filter), without the composition
-  LEFT JOIN LATERAL (SELECT * FROM ${s}._supply_at(p.height, false) WHERE p.kind = 'live') l ON true
+  -- computed only for the live points (a one-time filter), without the composition and from the rollup's nearest day
+  LEFT JOIN LATERAL (SELECT * FROM ${s}._supply_at(p.height, false, true) WHERE p.kind = 'live') l ON true
   WHERE p.kind <> 'gap'
   ORDER BY 1 DESC;
   IF NOT FOUND AND jsonb_array_length(gp) > 0 THEN

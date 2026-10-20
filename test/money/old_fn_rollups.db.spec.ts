@@ -49,7 +49,10 @@ const BLOCKS: Array<{ id: number; at: string }> = [];
 DAYS.forEach((day, d) => {
   for (let i = 0; i < 10; i++) {
     const m = 10 + i * 140;
-    BLOCKS.push({ id: 100 + d * 10 + i, at: `${day} ${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}:00` });
+    BLOCKS.push({
+      id: 100 + d * 10 + i,
+      at: `${day} ${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}:00`,
+    });
   }
 });
 
@@ -65,7 +68,9 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
   before(async () => {
     await c.connect();
     await c.query("SET statement_timeout = '30s'");
-    await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE; CREATE SCHEMA ${S}; CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;`);
+    await c.query(
+      `DROP SCHEMA IF EXISTS ${S} CASCADE; CREATE SCHEMA ${S}; CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;`
+    );
     await c.query(`SET search_path = ${S}, public`);
     await c.query(createSettlementTablesFn(S));
     await c.query(createSettlementWriterFn(S));
@@ -145,14 +150,17 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
 
   // ---- staked suppliers ----
   const index = async (from: number, to: number) => {
-    for (let id = from; id <= to; id++) await c.query(`SELECT ${S}.upsert_staked_suppliers_by_block_and_services($1)`, [id]);
+    for (let id = from; id <= to; id++)
+      await c.query(`SELECT ${S}.upsert_staked_suppliers_by_block_and_services($1)`, [id]);
   };
   type Svc = Array<[string, string, string]>; // service_id, blocks, suppliers_staked
   const old = async (a: string, b: string): Promise<Svc> => {
-    const j = (await q(`SELECT ${S}.get_amount_of_blocks_and_suppliers_by_times($1, $2)::text j`, [oldStart(a), oldEnd(b)]))[0].j;
-    return ((JSON.parse(String(j)) ?? []) as Array<{ service_id: string; blocks: number; suppliers_staked: number }>).map(
-      (r) => [r.service_id, String(r.blocks), String(r.suppliers_staked)]
-    );
+    const j = (
+      await q(`SELECT ${S}.get_amount_of_blocks_and_suppliers_by_times($1, $2)::text j`, [oldStart(a), oldEnd(b)])
+    )[0].j;
+    return (
+      (JSON.parse(String(j)) ?? []) as Array<{ service_id: string; blocks: number; suppliers_staked: number }>
+    ).map((r) => [r.service_id, String(r.blocks), String(r.suppliers_staked)]);
   };
   const staked = async (a: string | null, b: string | null, services: string[] | null = null) =>
     q(
@@ -161,7 +169,9 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
       [a, b, services]
     );
   const svc = (rows: Row[]): Svc =>
-    rows.filter((r) => r.service_id !== "*").map((r) => [String(r.service_id), String(r.blocks), String(r.suppliers_staked)]);
+    rows
+      .filter((r) => r.service_id !== "*")
+      .map((r) => [String(r.service_id), String(r.blocks), String(r.suppliers_staked)]);
   const dayRows = async (day: string) =>
     q(
       `SELECT service_id, blocks::text, suppliers_staked::text, first_height::text f, last_height::text l
@@ -202,13 +212,17 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
       assert.deepEqual(svc(rows), await old(a, b), `${a} ${b}`);
       assert.deepEqual(rows[0].covered_gaps, [], `${a} ${b}`);
     }
-    // services filters, '*' included
-    const two = await staked(WINDOWS[1][0], WINDOWS[1][1], ["svc-1", "*"]);
+    // services filters; the rollup's '*' rows only mark a day as held, they are no answer row
+    const two = await staked(WINDOWS[1][0], WINDOWS[1][1], ["svc-1", "svc-x"]);
     assert.deepEqual(
       two.map((r) => r.service_id),
-      ["*", "svc-1"]
+      ["svc-1", "svc-x"]
     );
-    assert.deepEqual(svc(two), (await old(WINDOWS[1][0], WINDOWS[1][1])).filter((r) => r[0] === "svc-1"));
+    for (const [a, b] of WINDOWS) assert.ok(!(await staked(a, b)).some((r) => r.service_id === "*"), `${a} ${b}`);
+    assert.deepEqual(
+      svc(two),
+      (await old(WINDOWS[1][0], WINDOWS[1][1])).filter((r) => r[0] === "svc-1" || r[0] === "svc-x")
+    );
   });
 
   it("rebuilds a day to the rows the per-block refresh wrote, and is idempotent on a rewind and mid-day", async () => {
@@ -242,7 +256,8 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
       await old("2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z")
     );
     const summed = new Map<string, [number, number]>();
-    for (const [s, b, n] of without) summed.set(s, [(summed.get(s)?.[0] ?? 0) + Number(b), (summed.get(s)?.[1] ?? 0) + Number(n)]);
+    for (const [s, b, n] of without)
+      summed.set(s, [(summed.get(s)?.[0] ?? 0) + Number(b), (summed.get(s)?.[1] ?? 0) + Number(n)]);
     assert.deepEqual(
       svc(rows),
       [...summed].sort((x, y) => (x[0] < y[0] ? -1 : 1)).map(([s, [b, n]]) => [s, String(b), String(n)])
@@ -252,7 +267,11 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
     assert.deepEqual([none[0].service_id, none[0].blocks], [null, null]);
     const twin = JSON.parse(
       String(
-        (await q(`SELECT ${S}.get_staked_suppliers_by_service_json('2026-09-05T00:00:00Z', '2026-09-06T00:00:00Z')::text j`))[0].j
+        (
+          await q(
+            `SELECT ${S}.get_staked_suppliers_by_service_json('2026-09-05T00:00:00Z', '2026-09-06T00:00:00Z')::text j`
+          )
+        )[0].j
       )
     ) as { range: { gaps: unknown[] }; data: unknown[] };
     assert.deepEqual(twin.data, []);
@@ -280,7 +299,15 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
   }
   const oldComposition = async (a: string, b: string, bucket: string) =>
     (JSON.parse(
-      String((await q(`SELECT ${S}.get_supply_composition_between_dates($1, $2, $3)::text j`, [oldStart(a), oldEnd(b), bucket]))[0].j)
+      String(
+        (
+          await q(`SELECT ${S}.get_supply_composition_between_dates($1, $2, $3)::text j`, [
+            oldStart(a),
+            oldEnd(b),
+            bucket,
+          ])
+        )[0].j
+      )
     ) ?? []) as Old[];
   const supply = async (a: string | null, b: string | null, bucket = "day") =>
     q(
@@ -300,14 +327,26 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
     const n = await supply(a, b, bucket);
     assert.deepEqual(
       n.map((r) => [ms(r.bucket_start), r.height, num(r.n), num(r.u), num(r.t)]),
-      o.map((r) => [ms(r.date_truncated), String(r.latest_block), num(r.network_supply), num(r.unmigrated_supply), num(r.total_supply)]),
+      o.map((r) => [
+        ms(r.date_truncated),
+        String(r.latest_block),
+        num(r.network_supply),
+        num(r.unmigrated_supply),
+        num(r.total_supply),
+      ]),
       `${a} ${b} ${bucket}`
     );
     const comp = await composition(a, b, bucket);
     const key = (t: number, h: string, l: string, x: unknown) => `${t}|${h}|${l}|${num(x)}`;
     assert.deepEqual(
       comp.map((r) => key(ms(r.bucket_start), String(r.height), String(r.label), r.a)).sort(),
-      o.flatMap((r) => (r.network_supply_composition ?? []).map((x) => key(ms(r.date_truncated), String(r.latest_block), x.label, x.amount))).sort(),
+      o
+        .flatMap((r) =>
+          (r.network_supply_composition ?? []).map((x) =>
+            key(ms(r.date_truncated), String(r.latest_block), x.label, x.amount)
+          )
+        )
+        .sort(),
       `${a} ${b} ${bucket} composition`
     );
     return n;
@@ -339,7 +378,10 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
       ]
     );
     // the open day is not written
-    assert.equal((await q(`SELECT count(*)::int n FROM ${S}.supply_composition_daily WHERE day = '2026-09-09'`))[0].n, 0);
+    assert.equal(
+      (await q(`SELECT count(*)::int n FROM ${S}.supply_composition_daily WHERE day = '2026-09-09'`))[0].n,
+      0
+    );
   });
 
   it("answers what get_supply_composition_between_dates answers, by day, week, month and year", async () => {
@@ -378,9 +420,14 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
     // a rollup value no live computation gives proves the full days are read from it
     await c.query(`UPDATE ${S}.supply_daily SET total_supply_upokt = -1 WHERE day = '2026-09-07'`);
     const marked = await supply("2026-09-07T00:00:00Z", "2026-09-08T00:00:00Z");
-    assert.deepEqual(marked.map((r) => r.t), ["-1"]);
+    assert.deepEqual(
+      marked.map((r) => r.t),
+      ["-1"]
+    );
     await c.query(`SELECT ${S}.rebuild_supply_daily('2026-09-07')`);
-    await c.query(`DELETE FROM ${S}.supply_composition_daily WHERE day = '2026-09-05'; DELETE FROM ${S}.supply_daily WHERE day = '2026-09-05'`);
+    await c.query(
+      `DELETE FROM ${S}.supply_composition_daily WHERE day = '2026-09-05'; DELETE FROM ${S}.supply_daily WHERE day = '2026-09-05'`
+    );
     const weeks = await supply("2026-08-31T00:00:00Z", "2026-09-14T00:00:00Z", "week");
     assert.deepEqual(
       weeks.map((r) => r.height),
@@ -410,11 +457,17 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
 
   it("writes a day again when its blocks are indexed again, and only when a day closes", async () => {
     // a balance of 09-05's point changes (the day indexed again): written again at the next day's first block
-    await c.query(`UPDATE ${S}.balances SET amount = amount + 1000 WHERE account_id = 'acc1' AND _block_range @> 118::bigint`);
+    await c.query(
+      `UPDATE ${S}.balances SET amount = amount + 1000 WHERE account_id = 'acc1' AND _block_range @> 118::bigint`
+    );
     await c.query(`SELECT ${S}.refresh_supply_daily(125)`);
-    const before = await q(`SELECT amount_upokt::text a FROM ${S}.supply_composition_daily WHERE day = '2026-09-05' AND label = 'others'`);
+    const before = await q(
+      `SELECT amount_upokt::text a FROM ${S}.supply_composition_daily WHERE day = '2026-09-05' AND label = 'others'`
+    );
     await c.query(`SELECT ${S}.refresh_supply_daily(120)`);
-    const now = await q(`SELECT amount_upokt::text a FROM ${S}.supply_composition_daily WHERE day = '2026-09-05' AND label = 'others'`);
+    const now = await q(
+      `SELECT amount_upokt::text a FROM ${S}.supply_composition_daily WHERE day = '2026-09-05' AND label = 'others'`
+    );
     assert.equal(Number(now[0].a) - Number(before[0].a), 1000);
     await sameAsOld(...SUPPLY_WINDOWS[0]);
   });
@@ -435,21 +488,42 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
       assert.ok(rows.length > 1);
       assert.deepEqual([...new Set(rows.map((r) => r.height))], [want]);
       const block = BLOCKS.find((b) => String(b.id) === want)!;
-      const o = (await oldComposition(`${block.at.slice(0, 10)}T00:00:00Z`, `${block.at.replace(" ", "T")}.001Z`, "day")).pop()!;
+      const o = (
+        await oldComposition(`${block.at.slice(0, 10)}T00:00:00Z`, `${block.at.replace(" ", "T")}.001Z`, "day")
+      ).pop()!;
       assert.equal(String(o.latest_block), want);
-      assert.deepEqual([num(rows[0].n), num(rows[0].u), num(rows[0].t)], [num(o.network_supply), num(o.unmigrated_supply), num(o.total_supply)]);
+      assert.deepEqual(
+        [num(rows[0].n), num(rows[0].u), num(rows[0].t)],
+        [num(o.network_supply), num(o.unmigrated_supply), num(o.total_supply)]
+      );
       assert.deepEqual(
         rows.map((r) => `${r.label}|${num(r.a)}`).sort(),
         (o.network_supply_composition ?? []).map((x) => `${x.label}|${num(x.amount)}`).sort()
       );
     }
     assert.deepEqual(await at(50), []);
+    // get_supply's live end reads the unmigrated amount from the rollup's nearest day (09-08, 139) less the Morse
+    // accounts claimed since: the same as computing it in full, with claims in between
+    assert.ok(Number((await q(`SELECT count(*) n FROM ${S}.morse_claimable_accounts WHERE claimed_at_id > 139 AND claimed_at_id <= 149`))[0].n) > 0);
+    const live = (await supply("2026-09-09T00:00:00Z", "2026-09-10T00:00:00Z"))[0];
+    const full = (await at(149))[0];
+    assert.deepEqual([live.height, num(live.n), num(live.u), num(live.t)], ["149", num(full.n), num(full.u), num(full.t)]);
+    // without a day held below it, in full
+    const first = (await supply("2026-09-04T00:00:00Z", "2026-09-04T05:00:00Z"))[0];
+    assert.deepEqual([first.height, num(first.u)], ["102", num((await at(102))[0].u)]);
   });
 
   // scripts/fill_*_daily.sql as the runbook runs them: psql in its own session
   const psqlScript = (script: string) =>
     new Promise<{ code: number | null; stderr: string; stdout: string }>((resolve, reject) => {
-      const p = spawn("psql", [URL as string, "-X", "-v", `schema=${S}`, "-f", path.join(__dirname, "..", "..", "scripts", script)]);
+      const p = spawn("psql", [
+        URL as string,
+        "-X",
+        "-v",
+        `schema=${S}`,
+        "-f",
+        path.join(__dirname, "..", "..", "scripts", script),
+      ]);
       let stderr = "";
       let stdout = "";
       p.stderr.on("data", (d) => (stderr += String(d)));
@@ -484,7 +558,10 @@ describe("staked suppliers and supply daily rollups (PostgreSQL)", { skip: !URL 
   it("refuses a bucket other than day, week, month or year", async () => {
     for (const bucket of ["hour", null]) {
       await assert.rejects(supply("2026-09-04T00:00:00Z", "2026-09-05T00:00:00Z", bucket as string), /bucket must be/);
-      await assert.rejects(composition("2026-09-04T00:00:00Z", "2026-09-05T00:00:00Z", bucket as string), /bucket must be/);
+      await assert.rejects(
+        composition("2026-09-04T00:00:00Z", "2026-09-05T00:00:00Z", bucket as string),
+        /bucket must be/
+      );
     }
   });
 });

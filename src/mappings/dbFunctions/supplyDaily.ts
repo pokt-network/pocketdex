@@ -38,9 +38,16 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.supply_composition_daily (
 // that block, by module account name, 'dao' (the tokenomics dao_reward_address at that block), 'wrapped' (the bridge
 // address) or 'others', NULL without p_composition (get_supply: the totals need no balances, which are most of the
 // ~60 ms). The point's height is chosen by the caller (_supply_height).
+// p_anchor (get_supply's live points): the unmigrated amount from the nearest day the rollup holds at or below the
+// height, less the Morse accounts claimed in between, instead of summing every unclaimed account (42,901 rows, 15-30 ms
+// on the mainnet replica, 2026-10-20, which is all of get_total_supply_by_day's 30 days): unclaimed now plus claimed
+// after a height only loses, from one height to a later one, the accounts claimed between them, whenever it is read.
+// The day the rollup holds was written by this function in full, so a live point reads what the rollup would hold; with
+// no such day it is computed in full.
 export function createSupplyAtFn(dbSchema: string): string {
   return `
-CREATE OR REPLACE FUNCTION ${dbSchema}._supply_at(p_height bigint, p_composition boolean DEFAULT true)
+CREATE OR REPLACE FUNCTION ${dbSchema}._supply_at(p_height bigint, p_composition boolean DEFAULT true,
+  p_anchor boolean DEFAULT false)
 RETURNS TABLE(network_supply_upokt numeric, unmigrated_upokt numeric, total_supply_upokt numeric, composition jsonb)
 LANGUAGE plpgsql STABLE
 SET jit = off
@@ -48,7 +55,31 @@ SET jit = off
 -- one 60 ms warm (2026-10-20)
 SET plan_cache_mode = force_custom_plan
 AS $$
+DECLARE
+  a_height bigint;
+  a_unmigrated numeric;
 BEGIN
+  IF p_anchor AND NOT p_composition THEN
+    SELECT sd.height, sd.unmigrated_upokt INTO a_height, a_unmigrated
+    FROM ${dbSchema}.supply_daily sd WHERE sd.height IS NOT NULL AND sd.height <= p_height ORDER BY sd.day DESC LIMIT 1;
+  END IF;
+  IF a_height IS NOT NULL THEN
+    RETURN QUERY
+    WITH sp AS (
+      SELECT sp.amount
+      FROM ${dbSchema}.block_supplies bs
+      JOIN ${dbSchema}.supplies sp ON sp.id = bs.supply_id
+      WHERE bs.block_id = p_height AND sp.denom = 'upokt'
+      LIMIT 1
+    ),
+    m AS (
+      SELECT a_unmigrated - COALESCE(SUM(unstaked_balance_amount), 0) - COALESCE(SUM(supplier_stake_amount), 0)
+               - COALESCE(SUM(application_stake_amount), 0) unmigrated
+      FROM ${dbSchema}.morse_claimable_accounts WHERE claimed_at_id > a_height AND claimed_at_id <= p_height
+    )
+    SELECT (SELECT amount FROM sp), m.unmigrated, COALESCE((SELECT amount FROM sp), 0) + m.unmigrated, NULL::jsonb FROM m;
+    RETURN;
+  END IF;
   RETURN QUERY
   WITH sp AS (
     SELECT sp.amount
