@@ -125,40 +125,75 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
     await c.end();
   });
 
-  const oldJson = async (sql: string, params: unknown[]) => JSON.parse(String((await q(`SELECT (${sql})::text j`, params))[0].j));
+  const oldJson = async (sql: string, params: unknown[]) =>
+    JSON.parse(String((await q(`SELECT (${sql})::text j`, params))[0].j));
   const sortRows = (rows: unknown[][]) => rows.map((r) => JSON.stringify(r)).sort();
 
   it("get_network_rewards answers what get_rewards_by_date answers, newest first", async () => {
     for (const [a, b, bucket] of WINDOWS) {
-      const o = ((await oldJson(`${S}.get_rewards_by_date($1, $2, $3)`, [oldStart(a), oldEnd(b), bucket])) ?? []) as Row[];
+      const o = ((await oldJson(`${S}.get_rewards_by_date($1, $2, $3)`, [oldStart(a), oldEnd(b), bucket])) ??
+        []) as Row[];
       const n = await q(`SELECT * FROM ${S}.get_network_rewards($1::timestamptz, $2::timestamptz, $3)`, [a, b, bucket]);
       assert.ok(n.length > 0, `${a} ${bucket}`);
       assert.deepEqual(
-        n.map((r) => [ms(r.bucket_start), num(r.relays), num(r.estimated_relays), num(r.compute_units), num(r.estimated_compute_units), num(r.claimed_upokt)]),
-        o.reverse().map((r) => [ms(r.date_truncated), num(r.relays), num(r.estimated_relays), num(r.computed_units), num(r.estimated_computed_units), num(r.claimed_amount)]),
+        n.map((r) => [
+          ms(r.bucket_start),
+          num(r.relays),
+          num(r.estimated_relays),
+          num(r.compute_units),
+          num(r.estimated_compute_units),
+          num(r.claimed_upokt),
+        ]),
+        o
+          .reverse()
+          .map((r) => [
+            ms(r.date_truncated),
+            num(r.relays),
+            num(r.estimated_relays),
+            num(r.computed_units),
+            num(r.estimated_computed_units),
+            num(r.claimed_amount),
+          ]),
         `${a} ${b} ${bucket}`
       );
       for (let i = 1; i < n.length; i++) assert.ok(ms(n[i].bucket_start) < ms(n[i - 1].bucket_start));
     }
     // without a bucket: one total, whose bucket is the range
     const one = await q(`SELECT * FROM ${S}.get_network_rewards('2026-09-01T05:00:00Z', '2026-09-05T07:00:00Z')`);
-    const o = (await oldJson(`${S}.get_rewards_by_date($1, $2, 'year')`, [oldStart("2026-09-01T05:00:00Z"), oldEnd("2026-09-05T07:00:00Z")])) as Row[];
-    assert.deepEqual([one.length, num(one[0].claimed_upokt), ms(one[0].bucket_start)], [1, num(o[0].claimed_amount), Date.parse("2026-09-01T05:00:00Z")]);
+    const o = (await oldJson(`${S}.get_rewards_by_date($1, $2, 'year')`, [
+      oldStart("2026-09-01T05:00:00Z"),
+      oldEnd("2026-09-05T07:00:00Z"),
+    ])) as Row[];
+    assert.deepEqual(
+      [one.length, num(one[0].claimed_upokt), ms(one[0].bucket_start)],
+      [1, num(o[0].claimed_amount), Date.parse("2026-09-01T05:00:00Z")]
+    );
   });
 
   const CLAIM_KEYS: Array<[string, string]> = [
-    ["claims", "claim_amount"], ["claimed_relays", "claim_relays"], ["claimed_estimated_relays", "claim_estimated_relays"],
-    ["claimed_compute_units", "claim_computed_units"], ["claimed_estimated_compute_units", "claim_estimated_computed_units"],
-    ["claimed_upokt", "claim_upokt"], ["settled_claims", "proof_amount"], ["settled_relays", "proof_relays"],
-    ["settled_estimated_relays", "proof_estimated_relays"], ["settled_compute_units", "proof_computed_units"],
-    ["settled_estimated_compute_units", "proof_estimated_computed_units"], ["settled_upokt", "proof_upokt"],
-    ["expired_claims", "expired_proof_amount"], ["expired_relays", "expired_proof_relays"],
-    ["expired_estimated_relays", "expired_proof_estimated_relays"], ["expired_compute_units", "expired_proof_computed_units"],
-    ["expired_estimated_compute_units", "expired_proof_estimated_computed_units"], ["expired_upokt", "expired_proof_upokt"],
+    ["claims", "claim_amount"],
+    ["claimed_relays", "claim_relays"],
+    ["claimed_estimated_relays", "claim_estimated_relays"],
+    ["claimed_compute_units", "claim_computed_units"],
+    ["claimed_estimated_compute_units", "claim_estimated_computed_units"],
+    ["claimed_upokt", "claim_upokt"],
+    ["settled_claims", "proof_amount"],
+    ["settled_relays", "proof_relays"],
+    ["settled_estimated_relays", "proof_estimated_relays"],
+    ["settled_compute_units", "proof_computed_units"],
+    ["settled_estimated_compute_units", "proof_estimated_computed_units"],
+    ["settled_upokt", "proof_upokt"],
+    ["expired_claims", "expired_proof_amount"],
+    ["expired_relays", "expired_proof_relays"],
+    ["expired_estimated_relays", "expired_proof_estimated_relays"],
+    ["expired_compute_units", "expired_proof_computed_units"],
+    ["expired_estimated_compute_units", "expired_proof_estimated_computed_units"],
+    ["expired_upokt", "expired_proof_upokt"],
   ];
   it("get_network_claims answers what get_claim_proofs_data_by_time answers", async () => {
     for (const [a, b, bucket] of WINDOWS) {
-      const o = ((await oldJson(`${S}.get_claim_proofs_data_by_time($1, $2, $3)`, [oldStart(a), oldEnd(b), bucket])) ?? []) as Row[];
+      const o = ((await oldJson(`${S}.get_claim_proofs_data_by_time($1, $2, $3)`, [oldStart(a), oldEnd(b), bucket])) ??
+        []) as Row[];
       const n = await q(`SELECT * FROM ${S}.get_network_claims($1::timestamptz, $2::timestamptz, $3)`, [a, b, bucket]);
       assert.ok(n.length > 0, `${a} ${bucket}`);
       // the old function says 0 where the new one sums only NULLs (expired_estimated_relays here)
@@ -183,9 +218,15 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
       assert.ok(n.every((r) => ms(r.bucket_start) >= Date.parse("2026-09-04T00:00:00Z")));
       assert.ok(n.every((r) => Number(r.first_height) >= 130));
       // nothing held in the range: one row of NULLs carries the gap, out of the twin's data
-      const none = await q(`SELECT bucket_start, covered_gaps FROM ${S}.get_network_claims('2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z')`);
+      const none = await q(
+        `SELECT bucket_start, covered_gaps FROM ${S}.get_network_claims('2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z')`
+      );
       assert.deepEqual([none.length, none[0].bucket_start], [1, null]);
-      const twin = JSON.parse(String((await q(`SELECT ${S}.get_network_claims_json('2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z')::text j`))[0].j)) as {
+      const twin = JSON.parse(
+        String(
+          (await q(`SELECT ${S}.get_network_claims_json('2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z')::text j`))[0].j
+        )
+      ) as {
         data: unknown[];
         range: { gaps: unknown[] };
       };
@@ -198,8 +239,18 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
   it("get_overserviced answers what get_overserviced_by_addresses_and_time answers, for the suppliers the operators have now", async () => {
     for (const ops of [["op-a"], ["op-b"], ["op-a", "op-b"], ["op-x"]]) {
       for (const [a, b, bucket] of WINDOWS) {
-        const o = ((await oldJson(`${S}.get_overserviced_by_addresses_and_time($1, $2, $3, $4)`, [ops, oldStart(a), oldEnd(b), bucket])) ?? []) as Row[];
-        const n = await q(`SELECT * FROM ${S}.get_overserviced($1::text[], $2::timestamptz, $3::timestamptz, $4)`, [ops, a, b, bucket]);
+        const o = ((await oldJson(`${S}.get_overserviced_by_addresses_and_time($1, $2, $3, $4)`, [
+          ops,
+          oldStart(a),
+          oldEnd(b),
+          bucket,
+        ])) ?? []) as Row[];
+        const n = await q(`SELECT * FROM ${S}.get_overserviced($1::text[], $2::timestamptz, $3::timestamptz, $4)`, [
+          ops,
+          a,
+          b,
+          bucket,
+        ]);
         assert.deepEqual(
           n.map((r) => [ms(r.bucket_start), num(r.expected_burn_upokt), num(r.effective_burn_upokt)]),
           o.reverse().map((r) => [ms(r.date_truncated), num(r.expected_burn), num(r.effective_burn)]),
@@ -210,9 +261,14 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
     }
     // s3 (Unstaking now) and s4 (no live config) are not op-a's: their events are not counted
     const ev = await q(`SELECT sum(events)::int n FROM ${S}.get_overserviced(ARRAY['op-a'], NULL, NULL)`);
-    const want = await q(`SELECT count(*)::int n FROM ${S}.event_application_overserviceds WHERE supplier_id IN ('s1', 's2')`);
+    const want = await q(
+      `SELECT count(*)::int n FROM ${S}.event_application_overserviceds WHERE supplier_id IN ('s1', 's2')`
+    );
     assert.equal(ev[0].n, want[0].n);
-    await assert.rejects(q(`SELECT * FROM ${S}.get_overserviced(ARRAY[]::text[], NULL, NULL)`), /operators must have between 1 and 200/);
+    await assert.rejects(
+      q(`SELECT * FROM ${S}.get_overserviced(ARRAY[]::text[], NULL, NULL)`),
+      /operators must have between 1 and 200/
+    );
   });
 
   it("get_domain_service_rewards answers what the old function answers for the same days", async () => {
@@ -223,12 +279,38 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
       [["b.io"], "2026-09-03 00:00", "2026-09-03 23:59", "2026-09-03T00:00:00Z", "2026-09-04T00:00:00Z"],
     ];
     for (const [domains, os, oe, ns, ne] of cases) {
-      const o = ((await oldJson(`${S}.get_rewards_by_domains_and_time_group_by_service($1, $2, $3)`, [domains, os, oe])) as { services: Row[] }).services;
-      const n = await q(`SELECT * FROM ${S}.get_domain_service_rewards($1::text[], $2::timestamptz, $3::timestamptz)`, [domains, ns, ne]);
+      const o = (
+        (await oldJson(`${S}.get_rewards_by_domains_and_time_group_by_service($1, $2, $3)`, [domains, os, oe])) as {
+          services: Row[];
+        }
+      ).services;
+      const n = await q(`SELECT * FROM ${S}.get_domain_service_rewards($1::text[], $2::timestamptz, $3::timestamptz)`, [
+        domains,
+        ns,
+        ne,
+      ]);
       assert.ok(n.length > 0);
       assert.deepEqual(
-        sortRows(n.map((r) => [r.service_id, num(r.relays), num(r.estimated_relays), num(r.compute_units), num(r.estimated_compute_units), num(r.claimed_upokt)])),
-        sortRows(o.map((r) => [r.service_id, num(r.relays), num(r.estimated_relays), num(r.computed_units), num(r.estimated_computed_units), num(r.gross_rewards)])),
+        sortRows(
+          n.map((r) => [
+            r.service_id,
+            num(r.relays),
+            num(r.estimated_relays),
+            num(r.compute_units),
+            num(r.estimated_compute_units),
+            num(r.claimed_upokt),
+          ])
+        ),
+        sortRows(
+          o.map((r) => [
+            r.service_id,
+            num(r.relays),
+            num(r.estimated_relays),
+            num(r.computed_units),
+            num(r.estimated_computed_units),
+            num(r.gross_rewards),
+          ])
+        ),
         `${domains} ${ns} ${ne}`
       );
       // staked_suppliers: the old function's for one domain; for several, the sum over the domains of the service's last
@@ -239,11 +321,20 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
                WHERE d.domain = ANY($1::text[]) AND d.day >= $2::date AND d.day < $3::date) x GROUP BY 1`,
         [domains, ns.slice(0, 10), ne.slice(0, 10)]
       );
-      const want = domains.length === 1 ? o.map((r) => [r.service_id, num(r.staked_suppliers)]) : last.map((r) => [r.service_id, r.n]);
-      assert.deepEqual(sortRows(n.map((r) => [r.service_id, num(r.staked_suppliers)])), sortRows(want), `${domains} staked`);
+      const want =
+        domains.length === 1
+          ? o.map((r) => [r.service_id, num(r.staked_suppliers)])
+          : last.map((r) => [r.service_id, r.n]);
+      assert.deepEqual(
+        sortRows(n.map((r) => [r.service_id, num(r.staked_suppliers)])),
+        sortRows(want),
+        `${domains} staked`
+      );
     }
     // a range that starts mid-day leaves that day out (the old function read it)
-    const mid = await q(`SELECT min(first_day)::text d FROM ${S}.get_domain_service_rewards(ARRAY['a.net'], '2026-09-02T13:00:00Z', '2026-09-05T00:00:00Z')`);
+    const mid = await q(
+      `SELECT min(first_day)::text d FROM ${S}.get_domain_service_rewards(ARRAY['a.net'], '2026-09-02T13:00:00Z', '2026-09-05T00:00:00Z')`
+    );
     assert.equal(mid[0].d, "2026-09-03");
   });
 
@@ -254,33 +345,65 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
     ]) {
       for (const v of ["VA", "VB", "VX"]) {
         const o = (await oldJson(`${S}.${old}($1, $2)`, [117, v])) as number[];
-        const all = await q(`SELECT height::int h FROM ${S}.get_validator_blocks($1, 117, kind => $2, row_limit => 1000)`, [v, kind]);
-        assert.deepEqual(all.map((r) => r.h), [...o].reverse(), `${kind} ${v}`);
+        const all = await q(
+          `SELECT height::int h FROM ${S}.get_validator_blocks($1, 117, kind => $2, row_limit => 1000)`,
+          [v, kind]
+        );
+        assert.deepEqual(
+          all.map((r) => r.h),
+          [...o].reverse(),
+          `${kind} ${v}`
+        );
         // pages of 3 through before_height give the same list
         const paged: unknown[] = [];
         let before: unknown = null;
         for (;;) {
-          const page = await q(`SELECT height::int h FROM ${S}.get_validator_blocks($1, 117, NULL, $2, 3, $3)`, [v, kind, before]);
+          const page = await q(`SELECT height::int h FROM ${S}.get_validator_blocks($1, 117, NULL, $2, 3, $3)`, [
+            v,
+            kind,
+            before,
+          ]);
           paged.push(...page.map((r) => r.h));
           if (page.length < 3) break;
           before = page[page.length - 1].h;
         }
-        assert.deepEqual(paged, all.map((r) => r.h), `${kind} ${v} paged`);
+        assert.deepEqual(
+          paged,
+          all.map((r) => r.h),
+          `${kind} ${v} paged`
+        );
       }
     }
     // to_height bounds the newest
     const upTo = await q(`SELECT height::int h, block_time FROM ${S}.get_validator_blocks('VA', 100, 130, 'produced')`);
     assert.equal(upTo[0].h, 129);
     assert.equal(ms(upTo[0].block_time), Date.parse("2026-09-03T21:10:00Z"));
-    await assert.rejects(q(`SELECT * FROM ${S}.get_validator_blocks('VA', 100, kind => 'signed')`), /kind must be produced or missed/);
-    await assert.rejects(q(`SELECT * FROM ${S}.get_validator_blocks('VA', 100, row_limit => 1001)`), /row_limit must be between 1 and 1000/);
+    // its GraphQL description says how it pages: by before_height, not with first / offset
+    const d = String(
+      (await q(`SELECT obj_description('${S}.get_validator_blocks(text, bigint, bigint, text, integer, bigint)'::regprocedure, 'pg_proc') d`))[0].d
+    );
+    assert.match(d, /pass the last row's height as before_height, until a page comes back short; not first \/ offset\./);
+    assert.doesNotMatch(d, /paged by GraphQL/);
+    await assert.rejects(
+      q(`SELECT * FROM ${S}.get_validator_blocks('VA', 100, kind => 'signed')`),
+      /kind must be produced or missed/
+    );
+    await assert.rejects(
+      q(`SELECT * FROM ${S}.get_validator_blocks('VA', 100, row_limit => 1001)`),
+      /row_limit must be between 1 and 1000/
+    );
   });
 
   it("marks the old functions @deprecated with their replacement, keeps their comment, and rewrites nothing on a second run", async () => {
     const comments = async () =>
       Object.fromEntries(
-        (await q(`SELECT p.proname, obj_description(p.oid, 'pg_proc') c FROM pg_proc p WHERE p.pronamespace = $1::regnamespace
-                    AND p.proname = ANY($2::text[])`, [S, Object.keys(DEPRECATED_OLD_FUNCTIONS)])).map((r): [string, string] => [String(r.proname), String(r.c)])
+        (
+          await q(
+            `SELECT p.proname, obj_description(p.oid, 'pg_proc') c FROM pg_proc p WHERE p.pronamespace = $1::regnamespace
+                    AND p.proname = ANY($2::text[])`,
+            [S, Object.keys(DEPRECATED_OLD_FUNCTIONS)]
+          )
+        ).map((r): [string, string] => [String(r.proname), String(r.c)])
       );
     const before = await comments();
     await c.query(createDeprecationsFn(S));
@@ -288,10 +411,25 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
     assert.ok(Object.keys(after).length >= 6);
     for (const [f, c0] of Object.entries(after)) {
       const [first, ...rest] = c0.split("\n");
-      assert.match(first, new RegExp(`^@deprecated Will be removed from the schema\\. Use ${DEPRECATED_OLD_FUNCTIONS[f].replace(/[()[\]]/g, "\\$&")}\\.`), f);
+      assert.match(
+        first,
+        new RegExp(
+          `^@deprecated Will be removed from the schema\\. Use ${DEPRECATED_OLD_FUNCTIONS[f].replace(
+            /[()[\]]/g,
+            "\\$&"
+          )}\\.`
+        ),
+        f
+      );
       assert.equal(rest.join("\n"), before[f], f);
     }
-    const xmin = async () => (await q(`SELECT xmin::text x FROM pg_description WHERE classoid = 'pg_proc'::regclass AND objoid = $1::regprocedure`, [`${S}.get_rewards_by_date(timestamp, timestamp, text)`]))[0].x;
+    const xmin = async () =>
+      (
+        await q(
+          `SELECT xmin::text x FROM pg_description WHERE classoid = 'pg_proc'::regclass AND objoid = $1::regprocedure`,
+          [`${S}.get_rewards_by_date(timestamp, timestamp, text)`]
+        )
+      )[0].x;
     const x1 = await xmin();
     await c.query(createDeprecationsFn(S));
     assert.deepEqual(await comments(), after);

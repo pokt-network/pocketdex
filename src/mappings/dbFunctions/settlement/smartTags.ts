@@ -279,7 +279,7 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
   get_supply_composition_at:
     "Supply at one block, computed live: the last block at or below at_height (NULL = the latest) with an upokt supply, whose height and block_time every row carries; network_supply_upokt, unmigrated_upokt (the Morse balances not claimed at that block) and total_supply_upokt as get_supply gives them, repeated on each row; and one row per composition label (module account name, dao, wrapped, others) with its amount_upokt, as get_supply_composition.",
   get_validator_blocks:
-    "Blocks a validator produced (kind produced, the default: the block proposer) or missed (kind missed: the block's last commit has no signature of it) from from_height to to_height (NULL = the latest), newest first, with block_time; validator_address is the consensus address in hex, as getProducedBlocksByValidator and getMissingValidatorBlocks took it. At most row_limit rows (default 100, up to 1000) per call: for the next page pass the last row's height as before_height.",
+    "Blocks a validator produced (kind produced, the default: the block proposer) or missed (kind missed: the block's last commit has no signature of it) from from_height to to_height (NULL = the latest), newest first, with block_time; validator_address is the consensus address in hex, as getProducedBlocksByValidator and getMissingValidatorBlocks took it.",
   get_morse_claim_summary:
     "Morse migration now: the Morse accounts imported for claiming on Shannon, one row for the claimed ones and one for the unclaimed: accounts, and the sums of their liquid balance (unstaked_balance_upokt) and of the supplier and application stakes they carry. The accounts one by one: morseClaimableAccounts.",
 };
@@ -291,6 +291,8 @@ const STATE_ROWS_NOTE_NO_UNIT = `'Rows paged by GraphQL (first / offset) up to t
 // the state functions that page by keyset only (an input argument named after_*, and row_limit 1000 by default;
 // get_supplier_fleet, whose row_limit defaults to every row, says how it pages in its own description)
 const STATE_KEYSET_NOTE = `'At most row_limit rows (default 1000, up to 1000) per call, in the order of the after_* keys: for the next page pass the last row''s keys as after_*, until a page comes back short; not first / offset. Amounts in upokt.'`;
+// the state functions that page newest first by height (an input argument named before_height: get_validator_blocks)
+const STATE_BEFORE_NOTE = `'At most row_limit rows (default 100, up to 1000) per call, newest first: for the next page pass the last row''s height as before_height, until a page comes back short; not first / offset.'`;
 
 export function createSettlementSmartTagsFn(dbSchema: string): string {
   const s = dbSchema;
@@ -351,6 +353,8 @@ BEGIN
       || CASE WHEN EXISTS (SELECT 1 FROM pg_proc p2, unnest(p2.proargnames[1:p2.pronargs]) a
                            WHERE p2.oid = f AND a LIKE 'after\\_%')
                      AND pg_get_function_arguments(f) LIKE '%row_limit integer DEFAULT 1000%' THEN ${STATE_KEYSET_NOTE}
+                WHEN EXISTS (SELECT 1 FROM pg_proc p4, unnest(p4.proargnames[1:p4.pronargs]) a
+                             WHERE p4.oid = f AND a = 'before_height') THEN ${STATE_BEFORE_NOTE}
                 WHEN (SELECT p3.proname FROM pg_proc p3 WHERE p3.oid = f) = ANY(ARRAY[${STATE_UNIT_FREE.map((n) => `'${n}'`).join(", ")}]) THEN ${STATE_ROWS_NOTE_NO_UNIT}
                 ELSE ${STATE_ROWS_NOTE} END
       || E'\nColumns: ' || pg_get_function_result(f));
