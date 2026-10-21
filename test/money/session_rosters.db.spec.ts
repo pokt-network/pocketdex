@@ -134,8 +134,9 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, activated_at_id numeric,
         rev_share jsonb, domains jsonb, _block_range int8range);
       INSERT INTO ${S}.supplier_service_configs
-        -- p1 and p3 serve from a.net
-        SELECT p, 's1', 1, '[]'::jsonb, CASE WHEN p IN ('p1', 'p3') THEN '["a.net"]'::jsonb ELSE '[]' END, '[1,)'::int8range
+        -- p1 and p3 serve from a.net, p2 from b.io
+        SELECT p, 's1', 1, '[]'::jsonb,
+               CASE WHEN p IN ('p1', 'p3') THEN '["a.net"]'::jsonb WHEN p = 'p2' THEN '["b.io"]' ELSE '[]' END, '[1,)'::int8range
         FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4']) p
         -- p5 unstakes at the start block 9: still a candidate of the session 9-12, not of 13-16
         UNION ALL SELECT 'p5', 's1', 1, '[]', '[]', '[1,9)'
@@ -409,6 +410,11 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     const [dses] = await q(`SELECT count(DISTINCT ss.session_num) n FROM ${S}.session_suppliers ss
       JOIN ${S}.supplier_numbers n USING (supplier_num) WHERE n.supplier_id IN ('p1', 'p3') AND ss.state <> 0`);
     assert.equal(String(dm.sessions_with_selected), String(dses.n));
+    // two domains: a session with members on both counts once
+    const [two] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, domains => ARRAY['a.net', 'b.io'])`, RANGE);
+    const [tworaw] = await q(`SELECT count(DISTINCT ss.session_num) n, count(*) seats FROM ${S}.session_suppliers ss
+      JOIN ${S}.supplier_numbers n USING (supplier_num) WHERE n.supplier_id IN ('p1', 'p2', 'p3') AND ss.state <> 0`);
+    assert.deepEqual([String(two.sessions_with_selected), String(two.seats)], [String(tworaw.n), String(tworaw.seats)]);
     const bySup = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, by_supplier => true, domains => ARRAY['a.net'])`, RANGE);
     assert.deepEqual(bySup.map((x) => x.supplier_id).sort(), ["p1", "p3"]);
     assert.equal(String(bySup.reduce((a, x) => a + Number(x.seats), 0)), String(draw.seats));

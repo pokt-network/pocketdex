@@ -1,17 +1,20 @@
 // Backfills the session rosters (src/mappings/dbFunctions/sessionRosters.ts) for the session starts from FROM_HEIGHT to
 // TO_HEIGHT, with the indexer's own code (src/mappings/pocket/sessionRosters.ts), then writes the final states of every
 // session whose settlement block has come, in height order, as the indexer would have at each of them.
-// One transaction per session start and per settlement block; a start already written is left as it is, so a stopped run
-// is resumed by running it again. session_roster_progress.from_height is lowered to the first start written.
+// The starts are written newest first, one transaction each, and each lowers session_roster_progress.from_height to
+// itself: what the rosters say they cover is always written (a stopped run is resumed by running it again: TO_HEIGHT
+// defaults to the first start held minus 1). Then one transaction per settlement block for the final states.
 //
 //   DATABASE_URL=postgres://... SCHEMA=mainnet FROM_HEIGHT=889001 npx ts-node --transpile-only scripts/backfill_session_rosters.ts
 //
 // TO_HEIGHT defaults to the first start the rosters already hold minus 1 (the indexer's), or the latest block.
-// Several runs over disjoint FROM_HEIGHT..TO_HEIGHT ranges can write rosters at once with SKIP_FINAL_STATES=1; then one
-// run with FINAL_STATES_ONLY=1 over the whole range writes the final states.
-// FROM_HEIGHT below the chain's v0.1.33 height (SESSION_ROSTERS_FROM_HEIGHT) is refused: the rosters before it are not
-// the chain's. Run it on the primary once the indexer with the rosters is running.
-import { buildSessionRosters, SessionRosterInputs } from "../src/mappings/pocket/sessionRosters";
+// Several runs over disjoint ranges can write rosters at once with SKIP_FINAL_STATES=1, which leaves the progress
+// alone (the ranges are not contiguous while they run); then one run with FINAL_STATES_ONLY=1 over the whole range
+// writes the final states and lowers from_height to FROM_HEIGHT.
+// FROM_HEIGHT below the chain's v0.1.33 height (sessionRostersFromHeight of the chain id: CHAIN_ID, or the blocks
+// table's) is refused: the rosters before it are not the chain's. Run it on the primary once the indexer with the rosters
+// is running.
+import { buildSessionRosters, SessionRosterInputs, sessionRostersFromHeight } from "../src/mappings/pocket/sessionRosters";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { Client } = require("pg") as {
@@ -24,45 +27,58 @@ const { Client } = require("pg") as {
 
 async function main(): Promise<void> {
   const s = process.env.SCHEMA ?? "mainnet";
-  const from = Number(process.env.FROM_HEIGHT);
-  const minFrom = Number(process.env.MIN_FROM_HEIGHT ?? (s === "mainnet" ? 703870 : 1));
-  if (!Number.isFinite(from) || from < minFrom) throw new Error(`FROM_HEIGHT must be at least ${minFrom}`);
   const c = new Client({ connectionString: process.env.DATABASE_URL });
   await c.connect();
   await c.query("SET jit = off");
   const q = async (sql: string, params?: unknown[]) => (await c.query(sql, params)).rows;
+  const chainId =
+    process.env.CHAIN_ID ?? String((await q(`SELECT chain_id FROM ${s}.blocks ORDER BY id DESC LIMIT 1`))[0].chain_id);
+  const from = Number(process.env.FROM_HEIGHT);
+  const minFrom = sessionRostersFromHeight(chainId);
+  if (!Number.isFinite(from) || from < minFrom) throw new Error(`FROM_HEIGHT must be at least ${minFrom} on ${chainId}`);
   const held = await q(`SELECT from_height FROM ${s}.session_roster_progress`);
   const latest = Number((await q(`SELECT max(id) h FROM ${s}.blocks`))[0].h);
   const to = Number(process.env.TO_HEIGHT ?? (held.length ? Number(held[0].from_height) - 1 : latest));
-  let h = process.env.FINAL_STATES_ONLY ? to + 1 : from;
-  let first: number | undefined;
-  let starts = 0;
+  const parallel = Boolean(process.env.SKIP_FINAL_STATES);
+  // the starts of the range, from the grid (cheap), then written newest first
+  const starts: number[] = [];
+  for (let h = from; !process.env.FINAL_STATES_ONLY && h <= to; ) {
+    const [g] = await q(`SELECT start_height, blocks_per_session FROM ${s}._session_grid($1::bigint)`, [h]);
+    if (g.start_height === null) throw new Error(`no session params at ${h}`);
+    const start = Number(g.start_height);
+    if (start >= from && start <= to) starts.push(start);
+    h = start + Number(g.blocks_per_session);
+  }
   const t0 = Date.now();
-  while (h <= to) {
+  let written = 0;
+  for (const h of starts.reverse()) {
     const [inputs] = await q(`SELECT * FROM ${s}._session_roster_inputs($1::bigint)`, [h]);
-    if (!inputs.is_start) {
-      h += 1;
-      continue;
-    }
-    first ??= h;
     await q("BEGIN");
     await q(`SELECT ${s}._write_session_rosters($1::jsonb)`, [
       JSON.stringify(buildSessionRosters(h, inputs as unknown as SessionRosterInputs)),
     ]);
+    if (!parallel) {
+      await q(
+        `INSERT INTO ${s}.session_roster_progress AS t (singleton, from_height, height) VALUES (true, $1, $2)
+         ON CONFLICT (singleton) DO UPDATE SET from_height = least(t.from_height, EXCLUDED.from_height)`,
+        [h, to]
+      );
+    }
+    await q("COMMIT");
+    written += 1;
+    if (written % 100 === 0) console.log(`start ${h}: ${written} of ${starts.length}, ${Math.round((Date.now() - t0) / 1000)} s`);
+  }
+  console.log(`rosters: ${written} starts written, ${starts.length ? `${starts[starts.length - 1]}..${starts[0]}` : "none"}`);
+  if (parallel) {
+    await c.end();
+    return;
+  }
+  if (process.env.FINAL_STATES_ONLY) {
     await q(
       `INSERT INTO ${s}.session_roster_progress AS t (singleton, from_height, height) VALUES (true, $1, $2)
        ON CONFLICT (singleton) DO UPDATE SET from_height = least(t.from_height, EXCLUDED.from_height)`,
-      [first, h]
+      [from, to]
     );
-    await q("COMMIT");
-    starts += 1;
-    if (starts % 100 === 0) console.log(`start ${h}: ${starts} starts, ${Math.round((Date.now() - t0) / 1000)} s`);
-    h += Number(inputs.blocks_per_session);
-  }
-  console.log(`rosters: ${starts} starts written from ${first} to ${to}`);
-  if (process.env.SKIP_FINAL_STATES) {
-    await c.end();
-    return;
   }
   // the final states, at every block where a session written here settles or a claim of one settled
   const heights = await q(

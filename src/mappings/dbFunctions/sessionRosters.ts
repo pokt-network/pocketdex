@@ -216,9 +216,23 @@ export function createSessionRosterWritersFn(dbSchema: string): string {
     `(SELECT p.value::bigint FROM ${s}.params p WHERE p.key = '${key}' AND coalesce(p.active_at, p.block_id) <= p_height
       ORDER BY coalesce(p.active_at, p.block_id) DESC, p.block_id DESC LIMIT 1)`;
   return `
+-- The session grid at a height: the start of the session holding p_height and the session length, from the params in
+-- force there (poktroll x/shared/types/session.go GetSessionStartHeight: anchor + floor((h - anchor) / N) * N, the
+-- block-1 grid when the anchor is unset or above h). NULLs before the params exist.
+CREATE OR REPLACE FUNCTION ${s}._session_grid(p_height bigint, OUT start_height bigint, OUT blocks_per_session integer)
+LANGUAGE plpgsql STABLE SET jit = off AS $$
+DECLARE n bigint; anchor bigint;
+BEGIN
+  n := ${param("num_blocks_per_session")};
+  IF n IS NULL OR n <= 0 THEN RETURN; END IF;
+  anchor := coalesce(${param("session_grid_anchor_height")}, 0);
+  IF anchor <= 0 OR anchor > p_height THEN anchor := 1; END IF;
+  start_height := anchor + ((p_height - anchor) / n) * n;
+  blocks_per_session := n;
+END $$;
+
 -- What the indexer needs to compute the rosters of the sessions that start at p_height: nothing (is_start false) when
--- p_height is not a session start of the grid (poktroll x/shared/types/session.go GetSessionStartHeight: anchor +
--- floor((h - anchor) / N) * N, the block-1 grid when the anchor is unset or above h). Otherwise the block hash, N =
+-- p_height is not a session start of the grid (_session_grid). Otherwise the block hash, N =
 -- num_suppliers_per_session, the session's end and settlement heights, the start block time, the active (application,
 -- service) pairs, and per service the candidate suppliers (service configs live at the start and activated at or below
 -- it: x/session/keeper/session_hydrator.go hydrateSessionSuppliers, ServiceConfigUpdate.IsActive).
@@ -230,18 +244,13 @@ CREATE OR REPLACE FUNCTION ${s}.${sessionRosterInputsFnName}(p_height bigint,
   OUT is_start boolean, OUT blocks_per_session integer, OUT block_hash text, OUT num_suppliers integer, OUT end_height bigint,
   OUT settlement_height bigint, OUT start_time timestamptz, OUT pairs jsonb, OUT candidates jsonb)
 LANGUAGE plpgsql STABLE SET jit = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE n bigint; anchor bigint; st bigint;
+DECLARE st bigint;
 BEGIN
   is_start := false;
-  n := ${param("num_blocks_per_session")};
-  IF n IS NULL OR n <= 0 THEN RETURN; END IF;
-  blocks_per_session := n;
-  anchor := coalesce(${param("session_grid_anchor_height")}, 0);
-  IF anchor <= 0 OR anchor > p_height THEN anchor := 1; END IF;
-  st := anchor + ((p_height - anchor) / n) * n;
-  IF st <> p_height THEN RETURN; END IF;
+  SELECT g.start_height, g.blocks_per_session INTO st, blocks_per_session FROM ${s}._session_grid(p_height) g;
+  IF st IS DISTINCT FROM p_height THEN RETURN; END IF;
   is_start := true;
-  end_height := p_height + n - 1;
+  end_height := p_height + blocks_per_session - 1;
   num_suppliers := ${param("num_suppliers_per_session")};
   -- params at the end height, as the chain reads them to find the sessions it settles
   settlement_height := end_height + 1 + coalesce((
@@ -304,7 +313,8 @@ BEGIN
         WHERE c.service_id IN (SELECT DISTINCT y.svc FROM _sr_mem y)
           AND c._block_range && int8range(v_start - 1, v_start, '[]') AND coalesce(c.activated_at_id, 0) <= v_start
           AND jsonb_array_length(c.domains) > 0
-        ORDER BY c.service_id, c.supplier_id, lower(c._block_range) DESC) d
+        -- the version that serves the session: the one live before the start block, over one opened by it
+        ORDER BY c.service_id, c.supplier_id, (c._block_range @> v_start - 1) DESC, lower(c._block_range) DESC) d
   WHERE d.service_id = x.svc AND d.supplier_id = x.sup;
   INSERT INTO ${s}.domain_numbers (domain)
   SELECT DISTINCT x.dom FROM _sr_mem x
@@ -622,9 +632,10 @@ export function createSessionRosterFunctionsFn(dbSchema: string): string {
 -- nums = those suppliers as supplier_numbers; for domains, the union of the stored daily sets of staked suppliers
 -- (domain_service_daily_suppliers) over the UTC days of the range (NULL range = every stored day), and dnums = the
 -- domains as domain_numbers (the seats' own domains: session_suppliers.domain_num, session_domain_daily). p_optional:
--- none given is allowed (both NULL: no selector).
+-- none given is allowed (both NULL: no selector). p_domain_suppliers: for domains, nums too (only by_supplier reads it).
 CREATE OR REPLACE FUNCTION ${s}._session_selector(suppliers text[], owners text[], operators text[], domains text[],
-  range_start timestamptz, range_end timestamptz, p_optional boolean DEFAULT false, OUT nums integer[], OUT dnums integer[])
+  range_start timestamptz, range_end timestamptz, p_optional boolean DEFAULT false, p_domain_suppliers boolean DEFAULT false,
+  OUT nums integer[], OUT dnums integer[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE ids text[];
 BEGIN
@@ -635,6 +646,7 @@ BEGIN
   IF domains IS NOT NULL THEN
     PERFORM ${s}._validate(domains, 'domains', NULL, NULL, NULL);
     dnums := ARRAY(SELECT n.domain_num FROM ${s}.domain_numbers n WHERE n.domain = ANY(_session_selector.domains) ORDER BY 1);
+    IF NOT p_domain_suppliers THEN RETURN; END IF;
     nums := (SELECT coalesce(${s}._supplier_nums_union(t.supplier_nums), '{}')
              FROM ${s}.domain_service_daily_suppliers t
              WHERE t.domain = ANY(_session_selector.domains)
@@ -688,10 +700,11 @@ END $$;
 -- their shareholders, equal_share_upokt (B) = each session's V over its roster size, per seat (rounded to upokt):
 -- F = Y / B. sessions_with_selected = the settled sessions with at least one of them, pool_upokt = what those sessions
 -- paid every member (V summed), roster_seats = their roster sizes (K summed): per supplier (by_supplier) each seat is a
--- session; for a domain they come from its rollup (with several domains, a session with members on two counts in
--- each); for a list of suppliers they are counted from the sessions themselves (member_nums), which with_sessions false
--- skips. network_sessions = every settled session of the service(s) (presence = sessions_with_selected /
--- network_sessions, by service). active = the selected seats of the sessions not settled yet. first_height /
+-- session; for one domain they come from its rollup; for a list of suppliers or several domains they are counted from
+-- the sessions themselves (member_nums / domain_nums), which with_sessions false skips. With domains and by_supplier
+-- the rows are the suppliers staked on the domains on a day of the range (the stored daily sets), each with all its
+-- seats, on any domain. network_sessions = every settled session of the service(s) (presence =
+-- sessions_with_selected / network_sessions, by service). active = the selected seats of the sessions not settled yet. first_height /
 -- last_height = the settlement blocks summed.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_session_funnel(suppliers text[], range_start timestamptz,
   range_end timestamptz, bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT false,
@@ -702,14 +715,17 @@ RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, service_id text,
   first_height bigint, last_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE c_from timestamptz; c_to timestamptz; lo bigint; hi bigint; d1 date; d2 date; sel record; lo_d bigint;
-  hi_d bigint; by_domain boolean;
+  hi_d bigint; by_domain boolean; one_domain boolean;
 BEGIN
   PERFORM ${s}._validate(NULL, '', range_start, range_end, bucket);
   IF bucket = 'hour' THEN RAISE EXCEPTION 'bucket=hour is not available here: use day, week, month or year'; END IF;
 ${cover}
 ${days}
-  SELECT * INTO sel FROM ${s}._session_selector(suppliers, owners, operators, domains, range_start, range_end);
+  SELECT * INTO sel FROM ${s}._session_selector(suppliers, owners, operators, domains, range_start, range_end, false,
+    by_supplier);
   by_domain := sel.dnums IS NOT NULL AND NOT by_supplier;
+  -- one domain: its rollup counts each session once; several: a session with members on two would count twice there
+  one_domain := by_domain AND cardinality(sel.dnums) <= 1;
   -- the start heights of the days d1..d2
   IF d1 IS NOT NULL AND d1 <= d2 THEN
     SELECT b.id INTO lo_d FROM ${s}.blocks b WHERE b.timestamp >= d1::timestamp ORDER BY b.timestamp, b.id LIMIT 1;
@@ -745,11 +761,13 @@ ${days}
            min(r.first_height)::bigint fh, max(r.last_height)::bigint lh
     FROM r GROUP BY 1, 2, 3
   ), ses AS (
-    -- a list of suppliers without by_supplier: each settled session once, through member_nums
+    -- a list of suppliers or several domains, without by_supplier: each settled session once, through member_nums or
+    -- domain_nums
     SELECT ${s}._bucket(bucket, x.start_time, c_from) b, CASE WHEN by_service THEN x.service_num END svc,
            count(*)::bigint n, sum(x.paid_upokt)::numeric v, sum(x.roster_size)::bigint k
     FROM ${s}.session_rosters x
-    WHERE with_sessions AND NOT by_domain AND NOT by_supplier AND x.member_nums OPERATOR(public.&&) sel.nums
+    WHERE with_sessions AND NOT one_domain AND NOT by_supplier
+      AND CASE WHEN by_domain THEN x.domain_nums OPERATOR(public.&&) sel.dnums ELSE x.member_nums OPERATOR(public.&&) sel.nums END
       AND x.start_height BETWEEN lo_d AND hi_d AND x.settled_height IS NOT NULL
     GROUP BY 1, 2
   ), net AS (
@@ -762,9 +780,9 @@ ${days}
   )
   SELECT g.b, ${s}._bucket_end(bucket, g.b, c_to), coalesce(v.service_id, 'all'), coalesce(sn.supplier_id, 'all'),
          g.seats, ${states.map((n) => `g.${n}`).join(", ")}, g.active, g.y, g.eq,
-         CASE WHEN by_domain OR by_supplier THEN g.n ELSE ses.n END,
-         CASE WHEN by_domain OR by_supplier THEN g.v ELSE ses.v END,
-         CASE WHEN by_domain OR by_supplier THEN g.k ELSE ses.k END,
+         CASE WHEN one_domain OR by_supplier THEN g.n ELSE ses.n END,
+         CASE WHEN one_domain OR by_supplier THEN g.v ELSE ses.v END,
+         CASE WHEN one_domain OR by_supplier THEN g.k ELSE ses.k END,
          net.n, g.fh, g.lh, c_from, c_to, '[]'::jsonb
   FROM g
   LEFT JOIN ses ON ses.b = g.b AND ses.svc IS NOT DISTINCT FROM g.svc

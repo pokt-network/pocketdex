@@ -129,6 +129,7 @@ const OMITTED_FUNCTIONS = [
   "_session_roster_progress",
   "_session_state_name",
   "_session_selector",
+  "_session_grid",
   "finalize_session_rosters",
   "refresh_tx_counts_daily",
   // the staked suppliers' and the supply's daily rollups: helpers and writers (stakedSuppliersDaily.ts, supplyDaily.ts)
