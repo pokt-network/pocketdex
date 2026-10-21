@@ -136,5 +136,11 @@ export const entityStubsSql = (S: string, heights: string): string => `
         SELECT 'dom-l', 'svc-d', x.day, 1, 2, 3, 4, 5, 6, min(x.id), max(x.id)
         FROM (SELECT bl.id, bl.timestamp::date + o AS day FROM ${S}.blocks bl, (VALUES (0), (1)) v(o) WHERE bl.id IN (${heights})) x
         GROUP BY x.day ON CONFLICT DO NOTHING;
+      -- get_domain_staked_suppliers: sup-l staked on dom-l on every day of its rows
+      INSERT INTO ${S}.supplier_numbers (supplier_id) VALUES ('sup-l') ON CONFLICT DO NOTHING;
+      INSERT INTO ${S}.domain_service_daily_suppliers
+        SELECT r.day, r.domain, r.service_id, ARRAY[(SELECT n.supplier_num FROM ${S}.supplier_numbers n WHERE n.supplier_id = 'sup-l')],
+               r.first_height, r.last_height
+        FROM ${S}.domain_service_daily_rewards r WHERE r.domain = 'dom-l' ON CONFLICT DO NOTHING;
       INSERT INTO ${S}.msg_claim_morse_accounts SELECT 'mm' || b.id, 'pokt-sign', 'pokt-dest', 'MORSE' || b.id, 100, b.id,
         'tx' || b.id FROM (${heights}) b(id);`;

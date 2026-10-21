@@ -379,6 +379,59 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
     assert.equal(mid[0].d, "2026-09-03");
   });
 
+  it("get_domain_staked_suppliers counts only the listed suppliers in each day's stored set, and says nothing of the others", async () => {
+    const list = ["sup-3", "sup-7", "sup-12", "sup-nowhere"];
+    const got = await q(
+      `SELECT day::text, domain, service_id, staked_suppliers::text n, array_to_string(supplier_ids, ',') ids, covered_gaps
+       FROM ${S}.get_domain_staked_suppliers($1::text[], ARRAY['a.net', 'b.io'], '2026-09-01T00:00:00Z', '2026-09-07T00:00:00Z')`,
+      [list]
+    );
+    // by hand: each set's numbers that are the listed suppliers' (sup-g is number g), only where there is one
+    const want = await q(
+      `SELECT t.day::text, t.domain, t.service_id, count(*)::text n, string_agg(n.supplier_id, ',' ORDER BY n.supplier_id) ids
+       FROM ${S}.domain_service_daily_suppliers t CROSS JOIN unnest(t.supplier_nums) u(num)
+       JOIN ${S}.supplier_numbers n ON n.supplier_num = u.num
+       WHERE t.domain IN ('a.net', 'b.io') AND n.supplier_id = ANY($1::text[])
+       GROUP BY 1, 2, 3 ORDER BY 1 DESC, 2, 3`,
+      [list]
+    );
+    assert.ok(want.length > 3);
+    assert.deepEqual(got.map((r) => [r.day, r.domain, r.service_id, r.n, r.ids]), want.map((r) => [r.day, r.domain, r.service_id, r.n, r.ids]));
+    // never an id outside the list, never a zero row, no gap while every set is written
+    assert.ok(got.every((r) => String(r.ids).split(",").every((x) => list.includes(x)) && Number(r.n) > 0));
+    assert.deepEqual(got[0].covered_gaps, []);
+    // a day whose set is not written yet: a gap; inside it, one row of NULLs, out of the twin's data
+    await c.query("BEGIN");
+    try {
+      await c.query(`UPDATE ${S}.domain_service_daily_suppliers SET day = day + 100 WHERE day = '2026-09-03' AND domain = 'a.net'`);
+      const gap = await q(
+        `SELECT day::text, covered_gaps FROM ${S}.get_domain_staked_suppliers($1::text[], ARRAY['a.net'], '2026-09-01T00:00:00Z', '2026-09-07T00:00:00Z')`,
+        [list]
+      );
+      assert.deepEqual(
+        (gap[0].covered_gaps as Array<{ from: string; to: string }>).map((g) => [Date.parse(g.from), Date.parse(g.to)]),
+        [[Date.parse("2026-09-03T00:00:00Z"), Date.parse("2026-09-04T00:00:00Z")]]
+      );
+      assert.ok(gap.every((r) => r.day !== "2026-09-03"));
+      const only = await q(
+        `SELECT day FROM ${S}.get_domain_staked_suppliers($1::text[], ARRAY['a.net'], '2026-09-03T00:00:00Z', '2026-09-04T00:00:00Z')`,
+        [list]
+      );
+      assert.deepEqual(only.map((r) => r.day), [null]);
+      const twin = JSON.parse(
+        String((await q(`SELECT ${S}.get_domain_staked_suppliers_json($1::text[], ARRAY['a.net'], '2026-09-03T00:00:00Z', '2026-09-04T00:00:00Z')::text j`, [list]))[0].j)
+      ) as { data: unknown[]; range: { gaps: unknown[] } };
+      assert.deepEqual([twin.data.length, twin.range.gaps.length], [0, 1]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    await assert.rejects(
+      q(`SELECT * FROM ${S}.get_domain_staked_suppliers(ARRAY(SELECT 's' || g FROM generate_series(1, 201) g), ARRAY['a.net'], NULL, NULL)`),
+      /suppliers must have between 1 and 200 elements/
+    );
+    await assert.rejects(q(`SELECT * FROM ${S}.get_domain_staked_suppliers(ARRAY['sup-1'], ARRAY[]::text[], NULL, NULL)`), /domains must have between 1 and 200/);
+  });
+
   it("get_validator_blocks lists what the old functions list, newest first, a page at a time", async () => {
     for (const [kind, old] of [
       ["produced", "get_produced_blocks_by_validator"],

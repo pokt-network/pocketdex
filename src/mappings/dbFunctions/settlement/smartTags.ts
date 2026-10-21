@@ -120,6 +120,8 @@ const OMITTED_FUNCTIONS = [
   "_write_domain_service_suppliers",
   "_domain_service_staked",
   "_domain_service_count_diffs",
+  // the config history rows of a list of suppliers, which the public config history functions read
+  "_supplier_config_history",
   "rebuild_domain_service_daily_suppliers",
   "refresh_tx_counts_daily",
   // the staked suppliers' and the supply's daily rollups: helpers and writers (stakedSuppliersDaily.ts, supplyDaily.ts)
@@ -224,6 +226,10 @@ const DESCRIPTIONS: Record<string, string> = {
     "Overservicing of the Staked suppliers that share revenue with the operators now (up to 200 addresses in the rev_share of a live service config), per bucket: expected_burn_upokt and effective_burn_upokt summed over their application overservicing events, the events and the first and last height, as getOverservicedByAddressesAndTime gives them. These are the events' own amounts; getSupplierEarnings overservicing_loss_upokt comes from the settlements and differs by about 1 ppm. Covers the indexed blocks.",
   get_domain_service_rewards:
     "What the suppliers serving the domains (up to 200 endpoint root domains) earned per service, summed over the UTC days that start inside [range_start, range_end): relays, compute units, claimed_upokt (gross rewards), staked_suppliers = the distinct staked suppliers of the service's last day read across the domains (a supplier on two of them counts once; NULL while that day's supplier sets are not written yet; getRewardsByDomainsAndTimeGroupByService took one domain's count), first_day / last_day and the first and last height of those days. getRewardsByDomainsAndTimeGroupByService read the days from the date of its start to the date of its end, both included: the same days as range_start = that first midnight and range_end = the midnight after the last day. Covers the indexed blocks.",
+  get_supplier_sessions:
+    "Sessions of a list of suppliers (up to 200): per bucket (and per service with by_service), the distinct sessions in which at least one of them settled a claim (three of the suppliers in one session count once), and settled_claims = their settled claims (three there), with the first and last settlement height. Per supplier the sessions are its claims (getSupplierEarnings settled_claims).",
+  get_domain_staked_suppliers:
+    "The staked suppliers of the domains (up to 200 endpoint root domains) among a list of suppliers (up to 200), per UTC day that starts inside [range_start, range_end), domain and service: staked_suppliers = how many of the listed suppliers were staked on it that day, supplier_ids = which, and the day's first and last height counted. Only the listed suppliers: no row where none of them was staked, and nothing about the others. A day whose supplier sets are not written yet is a gap (covered_gaps); when only such days are in the range, one row of NULLs carries them (the _json twin leaves it out of data). Covers the indexed blocks.",
   get_relay_mining_difficulty:
     "Relay mining difficulty history of the services listed (up to 200): each update newest first (by height, then service_id), with the relays EMA and the target hash before and after it. The current difficulty of a service is its newest row (row_limit 1 with that one service). row_limit (default 100, at most 1000) rows per call; for the next page pass the last row's height and service_id as before_height and before_service_id, or skip row_offset rows of the order (default 0, at most 10,000,000) for a page at any depth in one call. Covers the indexed blocks.",
   get_morse_claims:
@@ -281,6 +287,8 @@ const STATE_DESCRIPTIONS: Record<string, string> = {
     "A block's metadata record, given by height or by hash (exactly one; the hash in any case): block_height, and the CometBFT block_id, header and last_commit as JSON, as the indexer received them; no row for a block it has no record for.",
   get_active_accounts:
     "Accounts active since each time of since_times (up to 20, timestamptz with an explicit zone): accounts = the live upokt balances last updated in a block at or after the time (null when beyond_tip: no indexed block that late yet); height = the newest block before the time (an account counts when its last update is above it).",
+  get_supplier_config_histories:
+    "Service configs over time of up to 200 suppliers (suppliers; services keeps those, up to 200), one row per supplier and stretch of heights in which a config declared the same content, as getSupplierConfigHistoryList gives them for one supplier: supplier_id, service_id, first_height, last_height (NULL while declared now), rev_share sorted by address, endpoints and the endpoint root domains. Ordered by supplier_id, service_id, first_height; at most row_limit rows (default 1000, up to 1000) per call: for the next page pass the last row's supplier_id, service_id and first_height as after_supplier_id, after_service_id and after_first_height; every row in one call: getSupplierConfigHistoriesJson.",
   get_supply_composition_at:
     "Supply at one block, computed live: the last block at or below at_height (NULL = the latest) with an upokt supply, whose height and block_time every row carries; network_supply_upokt, unmigrated_upokt (the Morse balances not claimed at that block) and total_supply_upokt as get_supply gives them, repeated on each row; and one row per composition label (module account name, dao, wrapped, others) with its amount_upokt, as get_supply_composition.",
   get_validator_blocks:

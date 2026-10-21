@@ -98,6 +98,9 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     await c.query(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${S}_owner') THEN CREATE ROLE ${S}_owner NOSUPERUSER; END IF;
     END $$`);
+    // intarray (the domain rewards' sets, in the stubs), which the role creates in pnf as the database's owner; this role
+    // does not own the test's database
+    await c.query(`CREATE EXTENSION IF NOT EXISTS intarray WITH SCHEMA public`);
     await c.query(`DROP SCHEMA IF EXISTS ${S} CASCADE; CREATE SCHEMA ${S} AUTHORIZATION ${S}_owner; SET ROLE ${S}_owner;`);
     await c.query(createSettlementTablesFn(S));
     await c.query(createSettlementWriterFn(S));
@@ -962,18 +965,20 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
       ["get_network_claims", "$1, $2"],
       ["get_overserviced", "ARRAY['op-l'], $1, $2"],
       ["get_domain_service_rewards", "ARRAY['dom-l'], $1, $2"],
+      ["get_supplier_sessions", `ARRAY(SELECT DISTINCT supplier_id FROM ${S}.claim_settlements ORDER BY 1 LIMIT 200), $1, $2`],
+      ["get_domain_staked_suppliers", "ARRAY['sup-l'], ARRAY['dom-l'], $1, $2"],
     ];
     const ON_BLOCKS = [
       "get_app_auto_unstakes", "get_param_history", "get_actor_lifecycle", "get_block_stats", "get_relay_mining_difficulty",
       "get_created_claims", "get_morse_claims", "get_native_transfers", "get_tx_counts", "get_staked_suppliers_by_service",
       "get_supply", "get_supply_composition", "get_network_rewards", "get_network_claims", "get_overserviced",
-      "get_domain_service_rewards",
+      "get_domain_service_rewards", "get_domain_staked_suppliers",
     ];
     // the functions that list rows one by one have no bucket_start; get_supply and get_supply_composition always bucket
     // (day by default), so a row never spans the range
     const NO_BUCKET = ["get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims",
       "get_native_transfers", "get_tx_counts", "get_staked_suppliers_by_service", "get_supply", "get_supply_composition",
-      "get_domain_service_rewards"];
+      "get_domain_service_rewards", "get_domain_staked_suppliers"];
     assert.deepEqual(CALLS.map(([f]) => f).sort(), [...CATALOG_FUNCTIONS].sort());
     // and each starts from _coverage (functions.ts covered()): a new one cannot skip it
     const bodies = await c.query(
@@ -1357,7 +1362,7 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     );
     assert.deepEqual(twins.rows.map((r) => r.proname), [
       "get_actor_lifecycle_json", "get_app_auto_unstakes_json", "get_block_stats_json", "get_created_claims_json",
-      "get_domain_service_rewards_json", "get_morse_claims_json", "get_native_transfers_json", "get_network_claims_json",
+      "get_domain_service_rewards_json", "get_domain_staked_suppliers_json", "get_morse_claims_json", "get_native_transfers_json", "get_network_claims_json",
       "get_network_rewards_json", "get_overserviced_json", "get_param_history_json", "get_relay_mining_difficulty_json",
       "get_staked_suppliers_by_service_json", "get_supply_composition_json", "get_supply_json", "get_tx_counts_json",
     ]);

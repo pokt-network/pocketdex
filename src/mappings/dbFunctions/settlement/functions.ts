@@ -105,6 +105,8 @@ export const CATALOG_FUNCTIONS = [
   "get_network_claims",
   "get_overserviced",
   "get_domain_service_rewards",
+  "get_supplier_sessions",
+  "get_domain_staked_suppliers",
   "get_relay_mining_difficulty",
   "get_created_claims",
   "get_morse_claims",
@@ -616,6 +618,7 @@ BEGIN
                       , ('get_block_supplies', 'hash')
                       , ('get_relay_mining_difficulty', 'row_offset')
                       , ('get_service_usage', 'search_text')
+                      , ('get_supplier_distribution', 'by_service')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -1543,7 +1546,56 @@ END $$;
 -- map, so its order changes on every stake (poktroll x/supplier/config/supplier_configs_reader.go). last_height is the
 -- last height of the stretch (NULL while the config declares it now); domains are those of its newest version. The
 -- configs are what the supplier declared, from its stake height (see getServices in src/mappings/pocket/suppliers.ts).
--- Keyset paging on (service_id, first_height).
+-- Keyset paging on (service_id, first_height). _supplier_config_history computes the rows of a list of suppliers, which
+-- get_supplier_config_history (one supplier), get_supplier_config_histories (up to 200, keyset on (supplier_id,
+-- service_id, first_height)) and get_supplier_config_histories_json (every row of up to 200 in one call) read, so their
+-- rows cannot differ.
+CREATE OR REPLACE FUNCTION ${s}._supplier_config_history(p_suppliers text[], services text[], p_limit integer,
+  after_supplier_id text, after_service_id text, after_first_height bigint)
+RETURNS TABLE(supplier_id text, service_id text, first_height bigint, last_height bigint, rev_share jsonb, endpoints jsonb,
+  domains text[])
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+DECLARE sid text; left_rows integer := p_limit; n integer;
+BEGIN
+  -- one supplier at a time, in order, until the page is full: a page reads its own suppliers' versions only (200 of an
+  -- operator's suppliers have 321k versions, 31.5k rows: 3.9 s all at once on the mainnet replica, 2026-10-20)
+  FOR sid IN SELECT DISTINCT u.x FROM unnest(p_suppliers) u(x)
+             WHERE u.x IS NOT NULL AND (after_service_id IS NULL OR u.x >= after_supplier_id) ORDER BY 1 LOOP
+    RETURN QUERY
+    WITH v AS (
+      SELECT c.service_id svc, lower(c._block_range) lo, upper(c._block_range) hi,
+             (SELECT coalesce(jsonb_agg(x ORDER BY x->>'address', x->>'revSharePercentage'), '[]'::jsonb)
+              FROM jsonb_array_elements(c.rev_share) x) rs,
+             c.endpoints ep, c.domains dm
+      FROM ${s}.supplier_service_configs c
+      WHERE c.supplier_id = sid AND NOT isempty(c._block_range)
+        AND (services IS NULL OR c.service_id = ANY(services))
+        AND (after_service_id IS NULL OR sid > after_supplier_id OR c.service_id >= after_service_id)
+    ), w AS (
+      SELECT v.*, lag(v.hi) OVER k p_hi, lag(v.rs) OVER k p_rs, lag(v.ep) OVER k p_ep
+      FROM v WINDOW k AS (PARTITION BY v.svc ORDER BY v.lo)
+    ), g AS (
+      -- the stretch of each version: how many rows started up to it
+      SELECT w.*, count(*) FILTER (WHERE w.p_hi IS NULL OR w.p_hi <> w.lo OR w.rs <> w.p_rs OR w.ep <> w.p_ep)
+                    OVER (PARTITION BY w.svc ORDER BY w.lo) seg
+      FROM w
+    ), r AS (
+      SELECT g.svc, min(g.lo)::bigint f, CASE WHEN bool_or(g.hi IS NULL) THEN NULL ELSE max(g.hi)::bigint - 1 END l,
+             (array_agg(g.rs ORDER BY g.lo))[1] rs, (array_agg(g.ep ORDER BY g.lo))[1] ep,
+             (array_agg(g.dm ORDER BY g.lo DESC))[1] domains
+      FROM g GROUP BY g.svc, g.seg
+    )
+    SELECT sid, r.svc, r.f, r.l, r.rs, r.ep, ARRAY(SELECT e.x FROM ${configDomains("r")} e(x))
+    FROM r
+    WHERE after_service_id IS NULL OR sid > after_supplier_id OR (r.svc, r.f) > (after_service_id, after_first_height)
+    ORDER BY r.svc, r.f
+    LIMIT left_rows;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    left_rows := left_rows - n;
+    EXIT WHEN left_rows <= 0;
+  END LOOP;
+END $$;
+
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_config_history(supplier_id text, services text[] DEFAULT NULL,
   row_limit integer DEFAULT 1000, after_service_id text DEFAULT NULL, after_first_height bigint DEFAULT NULL)
 RETURNS TABLE(service_id text, first_height bigint, last_height bigint, rev_share jsonb, endpoints jsonb, domains text[])
@@ -1558,35 +1610,45 @@ BEGIN
   END IF;
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
   RETURN QUERY
-  WITH v AS (
-    SELECT c.service_id svc, lower(c._block_range) lo, upper(c._block_range) hi,
-           (SELECT coalesce(jsonb_agg(x ORDER BY x->>'address', x->>'revSharePercentage'), '[]'::jsonb)
-            FROM jsonb_array_elements(c.rev_share) x) rs,
-           c.endpoints ep, c.domains dm
-    FROM ${s}.supplier_service_configs c
-    WHERE c.supplier_id = get_supplier_config_history.supplier_id AND NOT isempty(c._block_range)
-      AND (services IS NULL OR c.service_id = ANY(services))
-      AND (after_service_id IS NULL OR c.service_id >= after_service_id)
-  ), w AS (
-    SELECT v.*, lag(v.hi) OVER k p_hi, lag(v.rs) OVER k p_rs, lag(v.ep) OVER k p_ep
-    FROM v WINDOW k AS (PARTITION BY v.svc ORDER BY v.lo)
-  ), g AS (
-    -- the stretch of each version: how many rows started up to it
-    SELECT w.*, count(*) FILTER (WHERE w.p_hi IS NULL OR w.p_hi <> w.lo OR w.rs <> w.p_rs OR w.ep <> w.p_ep)
-                  OVER (PARTITION BY w.svc ORDER BY w.lo) seg
-    FROM w
-  ), r AS (
-    SELECT g.svc, min(g.lo)::bigint f, CASE WHEN bool_or(g.hi IS NULL) THEN NULL ELSE max(g.hi)::bigint - 1 END l,
-           (array_agg(g.rs ORDER BY g.lo))[1] rs, (array_agg(g.ep ORDER BY g.lo))[1] ep,
-           (array_agg(g.dm ORDER BY g.lo DESC))[1] domains
-    FROM g GROUP BY g.svc, g.seg
-  )
-  SELECT r.svc, r.f, r.l, r.rs, r.ep, ARRAY(SELECT e.x FROM ${configDomains("r")} e(x))
-  FROM r
-  WHERE after_service_id IS NULL OR (r.svc, r.f) > (after_service_id, after_first_height)
-  ORDER BY r.svc, r.f
-  LIMIT row_limit;
+  SELECT h.service_id, h.first_height, h.last_height, h.rev_share, h.endpoints, h.domains
+  FROM ${s}._supplier_config_history(ARRAY[get_supplier_config_history.supplier_id], services, row_limit,
+                                     get_supplier_config_history.supplier_id, after_service_id, after_first_height) h;
 END $$;
+
+-- The same for up to 200 suppliers, one row per (supplier, stretch): row_limit rows (up to 1000) per call, keyset on
+-- (after_supplier_id, after_service_id, after_first_height), all three or none.
+CREATE OR REPLACE FUNCTION ${s}.get_supplier_config_histories(suppliers text[], services text[] DEFAULT NULL,
+  row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL, after_service_id text DEFAULT NULL,
+  after_first_height bigint DEFAULT NULL)
+RETURNS TABLE(supplier_id text, service_id text, first_height bigint, last_height bigint, rev_share jsonb, endpoints jsonb,
+  domains text[])
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  PERFORM ${s}._validate(suppliers, 'suppliers', NULL, NULL, NULL);
+  IF row_limit IS NULL OR row_limit < 1 OR row_limit > 1000 THEN
+    RAISE EXCEPTION 'row_limit must be between 1 and 1000 (has %); page with after_supplier_id / after_service_id / after_first_height', row_limit;
+  END IF;
+  IF (after_supplier_id IS NULL) <> (after_service_id IS NULL) OR (after_service_id IS NULL) <> (after_first_height IS NULL) THEN
+    RAISE EXCEPTION 'pass after_supplier_id, after_service_id and after_first_height (the last row of the previous page), or none';
+  END IF;
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  RETURN QUERY SELECT * FROM ${s}._supplier_config_history(suppliers, services, row_limit, after_supplier_id, after_service_id,
+                                                           after_first_height);
+END $$;
+
+-- Every row of get_supplier_config_histories for up to 200 suppliers in one call, as a JSON array in its order (numbers
+-- as strings, as the catalog's _json variants): the list caps a call at 1000 rows.
+CREATE OR REPLACE FUNCTION ${s}.get_supplier_config_histories_json(suppliers text[], services text[] DEFAULT NULL)
+RETURNS jsonb
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  PERFORM ${s}._validate(suppliers, 'suppliers', NULL, NULL, NULL);
+  IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
+  RETURN (SELECT coalesce(jsonb_agg(${s}._json_strings(to_jsonb(h)) ORDER BY h.supplier_id, h.service_id, h.first_height), '[]'::jsonb)
+          FROM ${s}._supplier_config_history(suppliers, services, NULL, NULL, NULL, NULL) h);
+END $$;
+COMMENT ON FUNCTION ${s}.get_supplier_config_histories_json(text[], text[]) IS
+'Service configs over time of up to 200 suppliers (suppliers; services keeps those, up to 200) in one call: every row of getSupplierConfigHistoriesList, as one JSON array in its order (supplier_id, service_id, first_height), numbers as strings. For answers above the list''s 1000 rows.';
 
 -- The live service configs of the Staked suppliers, one row per (supplier, service), with the supplier's owner and stake
 -- and the config's endpoint domains: the suppliers { serviceConfigs } join consumers built by hand (158,314 live configs
@@ -2629,6 +2691,87 @@ ${covered(null, true)}
   ORDER BY g.service_id;
 END $$;
 
+-- Sessions of a list of suppliers (up to 200): per bucket (and per service with by_service), the distinct sessions in
+-- which at least one of them settled a claim, from claim_settlements (session_id). settled_claims counts the claims, as
+-- get_supplier_earnings does: three of the suppliers in one session are three claims and one session. A session's claims
+-- settle at one height, so a session is in one bucket. Its own function rather than a column of get_supplier_earnings:
+-- distinct sessions cannot be summed from the rollups that function reads, so it reads every settled claim of the range
+-- (200 suppliers over 30 days: 274k claims, 0.6-1.0 s on the mainnet replica, 2026-10-20), a cost the earnings calls do
+-- not pay. Per supplier the sessions are its claims, hence no by_supplier.
+CREATE OR REPLACE FUNCTION ${s}.get_supplier_sessions(suppliers text[], range_start timestamptz, range_end timestamptz,
+  bucket text DEFAULT NULL, by_service boolean DEFAULT false)
+RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, service_id text, sessions bigint, settled_claims bigint,
+  first_settled_height bigint, last_settled_height bigint, covered_from timestamptz, covered_to timestamptz,
+  covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE sp record; cv record; lo bigint; hi bigint;
+BEGIN
+  PERFORM ${s}._validate(suppliers, 'suppliers', range_start, range_end, bucket);
+${covered("settled")}
+  SELECT min(sb.height), max(sb.height) INTO lo, hi FROM ${s}.settlement_blocks sb
+  WHERE sb.block_time >= range_start AND sb.block_time < range_end;
+  IF lo IS NULL THEN RETURN; END IF;
+  RETURN QUERY
+  SELECT ${s}._bucket(bucket, c.block_time, sp.f), ${s}._bucket_end(bucket, c.block_time, sp.t),
+         CASE WHEN by_service THEN c.service_id ELSE 'all' END, count(DISTINCT c.session_id)::bigint, count(*)::bigint,
+         min(c.height)::bigint, max(c.height)::bigint, cv.covered_from, cv.covered_to, cv.gaps
+  FROM ${s}.claim_settlements c
+  WHERE c.supplier_id = ANY(get_supplier_sessions.suppliers) AND c.height BETWEEN lo AND hi
+  GROUP BY 1, 2, 3
+  ORDER BY 1 DESC, 3;
+END $$;
+
+-- The staked suppliers of the domains (up to 200) among a list of suppliers (up to 200), per UTC day that starts inside
+-- the range, domain and service: the stored set of the day (domain_service_daily_suppliers, domainRewards.ts)
+-- intersected with the list's numbers (intarray &), staked_suppliers = how many of the listed suppliers were staked on it
+-- that day and supplier_ids = which. It answers only for the listed suppliers: no row where none of them was staked, and
+-- nothing about the others (no total of the domain). A day of the domains' rewards rows whose sets are not written yet is
+-- a gap (covered_gaps), until scripts/fill_domain_service_suppliers.sql writes it; a range with nothing but such days
+-- answers one row of NULLs that carries them. Covers the indexed blocks.
+CREATE OR REPLACE FUNCTION ${s}.get_domain_staked_suppliers(suppliers text[], domains text[], range_start timestamptz,
+  range_end timestamptz)
+RETURNS TABLE(day date, domain text, service_id text, staked_suppliers bigint, supplier_ids text[], first_height bigint,
+  last_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
+DECLARE cv record; d1 date; d2 date; nums integer[]; gp jsonb;
+BEGIN
+  PERFORM ${s}._validate(suppliers, 'suppliers', range_start, range_end, NULL);
+  PERFORM ${s}._validate(domains, 'domains', NULL, NULL, NULL);
+${covered(null, true)}
+  -- the days that start inside the range, as get_domain_service_rewards reads them
+  d1 := coalesce((date_trunc('day', cv.requested_from AT TIME ZONE 'UTC')
+         + CASE WHEN cv.requested_from AT TIME ZONE 'UTC' = date_trunc('day', cv.requested_from AT TIME ZONE 'UTC') THEN interval '0' ELSE interval '1 day' END)::date,
+         '-infinity'::date);
+  d2 := (date_trunc('day', (range_end AT TIME ZONE 'UTC') - interval '1 microsecond'))::date;
+  IF d1 > d2 THEN RETURN; END IF;
+  -- the listed suppliers' numbers, sorted (a supplier never staked on a domain has none)
+  nums := ARRAY(SELECT n.supplier_num FROM ${s}.supplier_numbers n
+                WHERE n.supplier_id = ANY(get_domain_staked_suppliers.suppliers) ORDER BY 1);
+  -- the days with a rewards row of the domains that has no set yet
+  SELECT coalesce(jsonb_agg(jsonb_build_object('from', g.a AT TIME ZONE 'UTC', 'to', g.b AT TIME ZONE 'UTC') ORDER BY g.a), '[]')
+  INTO gp
+  FROM (SELECT min(m.day)::timestamp a, (max(m.day) + 1)::timestamp b
+        FROM (SELECT x.day, x.day - (row_number() OVER (ORDER BY x.day))::int AS grp
+              FROM (SELECT DISTINCT r.day FROM ${s}.domain_service_daily_rewards r
+                    WHERE r.domain = ANY(get_domain_staked_suppliers.domains) AND r.day BETWEEN d1 AND d2
+                      AND NOT EXISTS (SELECT 1 FROM ${s}.domain_service_daily_suppliers t
+                                      WHERE t.day = r.day AND t.domain = r.domain AND t.service_id = r.service_id)) x) m
+        GROUP BY m.grp) g;
+  gp := coalesce(cv.gaps, '[]'::jsonb) || gp;
+  RETURN QUERY
+  SELECT t.day, t.domain, t.service_id, public.icount(i.x)::bigint,
+         ARRAY(SELECT n.supplier_id FROM unnest(i.x) u(num) JOIN ${s}.supplier_numbers n ON n.supplier_num = u.num ORDER BY 1),
+         t.first_height, t.last_height, cv.covered_from, cv.covered_to, gp
+  FROM ${s}.domain_service_daily_suppliers t
+  CROSS JOIN LATERAL (SELECT t.supplier_nums OPERATOR(public.&) nums AS x) i
+  WHERE t.domain = ANY(get_domain_staked_suppliers.domains) AND t.day BETWEEN d1 AND d2 AND public.icount(i.x) > 0
+  ORDER BY t.day DESC, t.domain, t.service_id;
+  IF NOT FOUND AND jsonb_array_length(gp) > 0 THEN
+    RETURN QUERY SELECT NULL::date, NULL::text, NULL::text, NULL::bigint, NULL::text[], NULL::bigint, NULL::bigint,
+      cv.covered_from, cv.covered_to, gp;
+  END IF;
+END $$;
+
 -- The blocks a validator produced (kind produced: blocks.proposer_address, as get_produced_blocks_by_validator) or
 -- missed (kind missed: a block_metadata last_commit whose signatures lack it, as get_missing_validator_blocks) between
 -- from_height and to_height (NULL = the latest), newest first, with the block's time (NULL while the block row is not
@@ -2805,10 +2948,14 @@ END $$;
 -- (the chain pays every validator and delegator once per settlement, not per claim); its transfer_count is
 -- the claims that gave stakers a share. The other rows count payout legs: one per claim and family (relay,
 -- global) that paid that recipient, so a claim with global mint counts twice unless by_reason splits it.
+-- by_service splits the rows by the service of the claims that paid them (service_id; 'all' without it), the
+-- stakers' row too (claim_settlements.relay_to_stakers_upokt is per claim): the range is read from the per-settlement
+-- tables, as the daily rollup has no service. Without it the reads are those of before (service_id 'all').
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_distribution(suppliers text[], range_start timestamptz, range_end timestamptz,
   bucket text DEFAULT NULL, by_reason boolean DEFAULT false, by_supplier boolean DEFAULT true,
-  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL)
-RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, recipient_id text, role text, family text,
+  owners text[] DEFAULT NULL, fill_empty_buckets boolean DEFAULT false, operators text[] DEFAULT NULL,
+  by_service boolean DEFAULT false)
+RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, supplier_id text, service_id text, recipient_id text, role text, family text,
   amount_upokt numeric, transfer_count bigint, covered_from timestamptz,
   covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET enable_mergejoin = off SET plan_cache_mode = force_custom_plan AS $$
@@ -2816,49 +2963,74 @@ DECLARE rg record; sp record; cv record; fb timestamptz;
 BEGIN
   suppliers := ${s}._supplier_ids(suppliers, owners, operators, true, range_start, range_end, bucket);
 ${covered("settled")}
-  rg := ${s}._ranges(range_start, range_end, bucket);
+  -- by_service: daily_income_by_address_supplier has no service, so every height of the range comes from the base
+  rg := ${s}._ranges(range_start, range_end, bucket, by_service);
   fb := CASE WHEN fill_empty_buckets THEN ${s}._first_bucket(bucket, sp.f, sp.t_last, cv.covered) END;
   RETURN QUERY SELECT q.*, cv.covered_from, cv.covered_to, cv.gaps FROM (
-  WITH res0(bucket_start, bucket_end, supplier_id, recipient_id, role, family, amount_upokt, transfer_count) AS (
+  WITH res0(bucket_start, bucket_end, supplier_id, service_id, recipient_id, role, family, amount_upokt, transfer_count) AS (
   WITH x AS (
-    SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id, CASE WHEN d.role = 'stakers' THEN 'all' ELSE d.address END address, d.role, d.family,
+    SELECT d.day::timestamp AT TIME ZONE 'UTC' block_time, d.supplier_id, ''::text service_id, CASE WHEN d.role = 'stakers' THEN 'all' ELSE d.address END address, d.role, d.family,
            d.amount_upokt, d.transfer_count
     FROM ${s}.daily_income_by_address_supplier d
     WHERE d.supplier_id = ANY(suppliers) AND d.day BETWEEN rg.d1 AND rg.d2
     UNION ALL
-    SELECT sb.block_time, v.supplier_id, v.address, v.role, v.family, v.amount_upokt, v.transfer_count::bigint
+    SELECT sb.block_time, v.supplier_id, v.service_id, v.address, v.role, v.family, v.amount_upokt, v.transfer_count::bigint
     FROM ${s}.v_income_base v JOIN ${s}.settlement_blocks sb USING (height)
-    WHERE v.supplier_id = ANY(suppliers) AND (v.height BETWEEN rg.lo1 AND rg.hi1 OR v.height BETWEEN rg.lo2 AND rg.hi2)
+    WHERE NOT by_service AND v.supplier_id = ANY(suppliers) AND (v.height BETWEEN rg.lo1 AND rg.hi1 OR v.height BETWEEN rg.lo2 AND rg.hi2)
     UNION ALL
-    SELECT c.block_time, c.supplier_id, 'all', 'stakers', 'relay', c.relay_to_stakers_upokt,
+    SELECT c.block_time, c.supplier_id, c.service_id, 'all', 'stakers', 'relay', c.relay_to_stakers_upokt,
            (c.relay_to_stakers_upokt > 0)::int::bigint
     FROM ${s}.claim_settlements c
-    WHERE c.supplier_id = ANY(suppliers) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
+    WHERE NOT by_service AND c.supplier_id = ANY(suppliers) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
+    -- by_service reads the whole range from the base: v_income_base's branches as one read of each table (the view reads
+    -- claim_settlements once per branch: 200 suppliers over 30 days took 5.1 s through it on the mainnet replica,
+    -- 2026-10-20), with the same legs: an amount above 0 each, and the stakers' share of every claim
+    UNION ALL
+    SELECT sb.block_time, shp.supplier_id, shp.service_id, shp.recipient_id, 'rev_share', f.family, f.amt, 1::bigint
+    FROM ${s}.shareholder_payouts shp JOIN ${s}.settlement_blocks sb USING (height)
+    CROSS JOIN LATERAL (VALUES ('relay', shp.relay_upokt), ('global', shp.global_upokt)) f(family, amt)
+    WHERE by_service AND shp.supplier_id = ANY(suppliers) AND (shp.height BETWEEN rg.lo1 AND rg.hi1 OR shp.height BETWEEN rg.lo2 AND rg.hi2)
+      AND f.amt > 0
+    UNION ALL
+    SELECT c.block_time, c.supplier_id, c.service_id, f.address, f.role, f.family, f.amt,
+           CASE WHEN f.role = 'stakers' THEN (f.amt > 0)::int ELSE 1 END::bigint
+    FROM ${s}.claim_settlements c JOIN ${s}.settlement_blocks sb USING (height)
+    CROSS JOIN LATERAL (VALUES (sb.dao_address, 'dao', 'relay', c.relay_to_dao_upokt),
+                               (sb.dao_address, 'dao', 'global', c.global_to_dao_upokt),
+                               (sb.dao_address, 'dao', 'reimb_escrow', c.reimbursement_to_dao_upokt),
+                               (c.source_owner_id, 'source_owner', 'relay', c.relay_to_source_owner_upokt),
+                               (c.source_owner_id, 'source_owner', 'global', c.global_to_source_owner_upokt),
+                               (c.application_id, 'application', 'relay', c.relay_to_application_upokt),
+                               (c.application_id, 'application', 'global', c.global_to_application_upokt),
+                               ('all', 'stakers', 'relay', c.relay_to_stakers_upokt)) f(address, role, family, amt)
+    WHERE by_service AND c.supplier_id = ANY(suppliers) AND (c.height BETWEEN rg.lo1 AND rg.hi1 OR c.height BETWEEN rg.lo2 AND rg.hi2)
+      AND (f.amt > 0 OR f.role = 'stakers')
   )
-  SELECT ${s}._bucket(bucket, x.block_time, sp.f), ${s}._bucket_end(bucket, x.block_time, sp.t), CASE WHEN by_supplier THEN x.supplier_id ELSE 'all' END, x.address, x.role, CASE WHEN by_reason THEN x.family ELSE 'all' END,
+  SELECT ${s}._bucket(bucket, x.block_time, sp.f), ${s}._bucket_end(bucket, x.block_time, sp.t), CASE WHEN by_supplier THEN x.supplier_id ELSE 'all' END,
+         CASE WHEN by_service THEN x.service_id ELSE 'all' END, x.address, x.role, CASE WHEN by_reason THEN x.family ELSE 'all' END,
          sum(x.amount_upokt)::numeric, sum(x.transfer_count)::bigint
-  FROM x GROUP BY 1, 2, 3, 4, 5, 6
-  ), res(bucket_start, bucket_end, supplier_id, recipient_id, role, family, amount_upokt, transfer_count) AS (
+  FROM x GROUP BY 1, 2, 3, 4, 5, 6, 7
+  ), res(bucket_start, bucket_end, supplier_id, service_id, recipient_id, role, family, amount_upokt, transfer_count) AS (
   -- every requested id gets its row or series, 0 where it had no activity (not in the sparse output)
   SELECT * FROM res0
   UNION ALL
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 'all', 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), u.id, 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
   FROM (SELECT DISTINCT unnest(suppliers) id) u
   WHERE u.id IS NOT NULL AND fill_empty_buckets AND by_supplier AND fb IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM res0 r0 WHERE r0.supplier_id = u.id)
   UNION ALL
   -- the group total of a list with no activity at all: one zero row
-  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
+  SELECT ${s}._bucket(bucket, fb, sp.f), ${s}._bucket_end(bucket, fb, sp.t), 'all', 'all', 'all', 'all', 'all', 0::numeric, 0::bigint
   WHERE fill_empty_buckets AND NOT by_supplier AND fb IS NOT NULL AND cardinality(suppliers) > 0 AND NOT EXISTS (SELECT 1 FROM res0)
   )
   SELECT r.* FROM res r WHERE bucket IS NULL OR NOT fill_empty_buckets OR r.bucket_start <= sp.t_last
   UNION ALL
-  SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.recipient_id, k.role, k.family, CASE WHEN k.amount_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.transfer_count_na THEN NULL ELSE 0 END
+  SELECT b.bucket_start, b.bucket_end, k.supplier_id, k.service_id, k.recipient_id, k.role, k.family, CASE WHEN k.amount_upokt_na THEN NULL ELSE 0 END, CASE WHEN k.transfer_count_na THEN NULL ELSE 0 END
   FROM ${s}._covered_buckets(bucket, sp.f, sp.t_last, cv.covered) b
-  CROSS JOIN (SELECT r.supplier_id, r.recipient_id, r.role, r.family, bool_and(r.amount_upokt IS NULL) amount_upokt_na, bool_and(r.transfer_count IS NULL) transfer_count_na FROM res r GROUP BY r.supplier_id, r.recipient_id, r.role, r.family) k
+  CROSS JOIN (SELECT r.supplier_id, r.service_id, r.recipient_id, r.role, r.family, bool_and(r.amount_upokt IS NULL) amount_upokt_na, bool_and(r.transfer_count IS NULL) transfer_count_na FROM res r GROUP BY r.supplier_id, r.service_id, r.recipient_id, r.role, r.family) k
   WHERE bucket IS NOT NULL AND fill_empty_buckets
-    AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.recipient_id, chr(1)) = coalesce(k.recipient_id, chr(1)) AND coalesce(r.role, chr(1)) = coalesce(k.role, chr(1)) AND coalesce(r.family, chr(1)) = coalesce(k.family, chr(1)))
-  ) q ORDER BY 1 DESC, 3, 4, 5, 6;
+    AND NOT EXISTS (SELECT 1 FROM res r WHERE r.bucket_start = b.bucket_start AND coalesce(r.supplier_id, chr(1)) = coalesce(k.supplier_id, chr(1)) AND coalesce(r.service_id, chr(1)) = coalesce(k.service_id, chr(1)) AND coalesce(r.recipient_id, chr(1)) = coalesce(k.recipient_id, chr(1)) AND coalesce(r.role, chr(1)) = coalesce(k.role, chr(1)) AND coalesce(r.family, chr(1)) = coalesce(k.family, chr(1)))
+  ) q ORDER BY 1 DESC, 3, 4, 5, 6, 7;
 END $$;
 
 -- Income of any address. The rollup follows the breakdown: daily_income_by_address (none), daily_income_by_address_supplier /
@@ -4164,7 +4336,8 @@ BEGIN
                      WHEN 'get_staked_suppliers_by_service' THEN 'WHERE r.service_id IS NOT NULL'
                      WHEN 'get_supply' THEN 'WHERE r.height IS NOT NULL'
                      WHEN 'get_supply_composition' THEN 'WHERE r.height IS NOT NULL'
-                     WHEN 'get_network_claims' THEN 'WHERE r.bucket_start IS NOT NULL' ELSE '' END);
+                     WHEN 'get_network_claims' THEN 'WHERE r.bucket_start IS NOT NULL'
+                     WHEN 'get_domain_staked_suppliers' THEN 'WHERE r.day IS NOT NULL' ELSE '' END);
   END LOOP;
 END $$;
 ${blockTimeColumnsSql(s)}
