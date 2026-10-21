@@ -226,7 +226,10 @@ BEGIN
   SELECT coalesce(jsonb_object_agg(c.svc, c.sups), '{}') INTO candidates
   FROM (SELECT c.service_id svc, jsonb_agg(DISTINCT c.supplier_id) sups
         FROM ${s}.supplier_service_configs c
-        WHERE c._block_range @> p_height AND coalesce(c.activated_at_id, 0) <= p_height
+        -- live at the start, or closed by the start block itself: an unstake or a config change takes effect at the next
+        -- session start (its deactivation height), so a config closed at the start still serves the session (mainnet
+        -- 894,421 and 904,821: the chain's roster held such a supplier; 46 claims in 60 days)
+        WHERE c._block_range && int8range(p_height - 1, p_height, '[]') AND coalesce(c.activated_at_id, 0) <= p_height
           AND c.service_id IN (SELECT DISTINCT e->>1 FROM jsonb_array_elements(pairs) e)
         GROUP BY c.service_id) c;
 END $$;

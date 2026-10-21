@@ -134,7 +134,9 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, activated_at_id numeric,
         rev_share jsonb, domains jsonb, _block_range int8range);
       INSERT INTO ${S}.supplier_service_configs
-        SELECT p, 's1', 1, '[]'::jsonb, '[]'::jsonb, '[1,)'::int8range FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4', 'p5']) p
+        SELECT p, 's1', 1, '[]'::jsonb, '[]'::jsonb, '[1,)'::int8range FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4']) p
+        -- p5 unstakes at the start block 9: still a candidate of the session 9-12, not of 13-16
+        UNION ALL SELECT 'p5', 's1', 1, '[]', '[]', '[1,9)'
         UNION ALL SELECT 'p6', 's1', 7, '[]', '[]', '[5,)'
         UNION ALL SELECT q, 's2', 1, '[]', '[]', '[1,)' FROM unnest(ARRAY['q1', 'q2']) q;
       CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_status text, _block_range int8range);
@@ -277,8 +279,8 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         [9, "a1", "s1", 3, 6, 12, 18],
         [9, "a2", "s1", 3, 6, 12, 18],
         [9, "a3", "s2", 2, 2, 12, 18],
-        [13, "a1", "s1", 3, 6, 16, 22],
-        [13, "a2", "s1", 3, 6, 16, 22],
+        [13, "a1", "s1", 3, 5, 16, 22],
+        [13, "a2", "s1", 3, 5, 16, 22],
       ]
     );
     assert.deepEqual(await members("a3", "s2", 1), ["q1", "q2"]);
