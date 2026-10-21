@@ -134,7 +134,9 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       CREATE TABLE ${S}.supplier_service_configs (supplier_id text, service_id text, activated_at_id numeric,
         rev_share jsonb, domains jsonb, _block_range int8range);
       INSERT INTO ${S}.supplier_service_configs
-        SELECT p, 's1', 1, '[]'::jsonb, '[]'::jsonb, '[1,)'::int8range FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4']) p
+        -- p1 and p3 serve from a.net
+        SELECT p, 's1', 1, '[]'::jsonb, CASE WHEN p IN ('p1', 'p3') THEN '["a.net"]'::jsonb ELSE '[]' END, '[1,)'::int8range
+        FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4']) p
         -- p5 unstakes at the start block 9: still a candidate of the session 9-12, not of 13-16
         UNION ALL SELECT 'p5', 's1', 1, '[]', '[]', '[1,9)'
         UNION ALL SELECT 'p6', 's1', 7, '[]', '[]', '[5,)'
@@ -242,6 +244,28 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       seatRoll.map((r) => Object.values(r).map(String)),
       seatStates.map((r) => Object.values(r).map(String))
     );
+    // per domain: the seats of members on it, and each session once with its V and K; per supplier its sessions' V and K
+    const draw = await q(`
+      WITH seat AS (
+        SELECT (r.start_time AT TIME ZONE 'UTC')::date dd, ss.domain_num, ss.service_num, ss.session_num, ss.paid_upokt,
+               r.paid_upokt v
+        FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r ON r.session_num = ss.session_num
+        WHERE ss.state <> 0 AND ss.domain_num IS NOT NULL),
+      ses AS (SELECT DISTINCT dd, domain_num, service_num, session_num, v FROM seat)
+      SELECT a.dd::text AS day, a.domain_num, a.service_num, a.seats, b.sessions, a.y, b.v
+      FROM (SELECT dd, domain_num, service_num, count(*) seats, coalesce(sum(paid_upokt), 0) y FROM seat GROUP BY 1, 2, 3) a
+      JOIN (SELECT dd, domain_num, service_num, count(*) sessions, coalesce(sum(v), 0) v FROM ses GROUP BY 1, 2, 3) b
+        USING (dd, domain_num, service_num)
+      ORDER BY 1, 2, 3`);
+    const droll = await q(`SELECT d.day::text AS day, d.domain_num, d.service_num, d.seats, d.sessions, d.paid_upokt, d.pool_upokt
+      FROM ${S}.session_domain_daily d WHERE d.seats <> 0 ORDER BY 1, 2, 3`);
+    assert.ok(droll.length > 0);
+    assert.deepEqual(droll.map((r) => Object.values(r).map(String)), draw.map((r) => Object.values(r).map(String)));
+    const praw = await q(`SELECT ss.supplier_num, sum(coalesce(r.paid_upokt, 0)) v, sum(r.roster_size) k
+      FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num) WHERE ss.state <> 0 GROUP BY 1 ORDER BY 1`);
+    const proll = await q(`SELECT supplier_num, sum(pool_upokt) v, sum(roster_seats) k FROM ${S}.session_supplier_daily
+      GROUP BY 1 HAVING sum(sessions) <> 0 ORDER BY 1`);
+    assert.deepEqual(proll.map((r) => Object.values(r).map(String)), praw.map((r) => Object.values(r).map(String)));
     const araw = await q(`
       SELECT (r.start_time AT TIME ZONE 'UTC')::date::text AS day, r.application_num, r.service_num, count(*) sessions,
              count(*) FILTER (WHERE r.claimed > 0) wc, count(*) FILTER (WHERE r.claimed = 0) nw, sum(r.roster_size) rs,
@@ -368,7 +392,8 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       q(`SELECT * FROM ${S}.get_supplier_session_funnel(ARRAY['p1'], $1, $2, owners => ARRAY['o1'])`, RANGE),
       /pass one of/
     );
-    // domains: the stored daily sets (a.net held p1 on the first day, p1 and p3 on the second)
+    // domains: the seats of members whose config is on the domain (session_domain_daily), and by_supplier through the
+    // stored daily sets (a.net held p1 on the first day, p1 and p3 on the second)
     await q(`INSERT INTO ${S}.domain_service_daily_suppliers
              SELECT '2026-09-01'::date, 'a.net', 's1', ARRAY(SELECT supplier_num FROM ${S}.supplier_numbers WHERE supplier_id = 'p1'), 1, 24
              UNION ALL SELECT '2026-09-02'::date, 'a.net', 's1',
@@ -381,6 +406,12 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       await q(`SELECT count(*) seats FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
                             WHERE n.supplier_id IN ('p1', 'p3') AND ss.state <> 0`);
     assert.equal(String(dm.seats), String(draw.seats));
+    const [dses] = await q(`SELECT count(DISTINCT ss.session_num) n FROM ${S}.session_suppliers ss
+      JOIN ${S}.supplier_numbers n USING (supplier_num) WHERE n.supplier_id IN ('p1', 'p3') AND ss.state <> 0`);
+    assert.equal(String(dm.sessions_with_selected), String(dses.n));
+    const bySup = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, by_supplier => true, domains => ARRAY['a.net'])`, RANGE);
+    assert.deepEqual(bySup.map((x) => x.supplier_id).sort(), ["p1", "p3"]);
+    assert.equal(String(bySup.reduce((a, x) => a + Number(x.seats), 0)), String(draw.seats));
     // by service and supplier: the rows add up to the total
     const parts = await q(`SELECT * FROM ${S}.get_supplier_session_funnel($1, $2, $3, 'day', true, true)`, [
       P,
