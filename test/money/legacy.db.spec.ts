@@ -7,6 +7,7 @@
 // claim, as the indexer records them. So this checks the windows, the edges and the JSON, not the writer (writer.db.spec.ts
 // does that); the equality on the chain's own tables was measured on the explorer replica.
 import assert from "node:assert/strict";
+import { SESSION_ROSTER_CATALOG_FUNCTIONS } from "../../src/mappings/dbFunctions/sessionRosters";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -979,13 +980,15 @@ describe("legacy_* functions answer as the live get_* (PostgreSQL)", { skip: !UR
     const NO_BUCKET = ["get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims",
       "get_native_transfers", "get_tx_counts", "get_staked_suppliers_by_service", "get_supply", "get_supply_composition",
       "get_domain_service_rewards", "get_domain_staked_suppliers"];
-    assert.deepEqual(CALLS.map(([f]) => f).sort(), [...CATALOG_FUNCTIONS].sort());
+    // the rosters' functions cover what the rosters hold, and are checked in session_rosters.db.spec.ts
+    const MONEY_CATALOG = CATALOG_FUNCTIONS.filter((f) => !SESSION_ROSTER_CATALOG_FUNCTIONS.includes(f));
+    assert.deepEqual(CALLS.map(([f]) => f).sort(), [...MONEY_CATALOG].sort());
     // and each starts from _coverage (functions.ts covered()): a new one cannot skip it
     const bodies = await c.query(
       `SELECT p.proname, p.prosrc FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = ANY($2::text[])`,
-      [S, [...CATALOG_FUNCTIONS]]
+      [S, [...MONEY_CATALOG]]
     );
-    assert.equal(bodies.rows.length, CATALOG_FUNCTIONS.length);
+    assert.equal(bodies.rows.length, MONEY_CATALOG.length);
     for (const r of bodies.rows) assert.match(String(r.prosrc), /\._coverage\(range_start, range_end/, String(r.proname));
     const ms = (v: unknown) => (v === null || v === undefined ? null : Date.parse(String(v)));
     // the rows without what the range repeats; bucket_start apart: without a bucket it echoes the requested range_start

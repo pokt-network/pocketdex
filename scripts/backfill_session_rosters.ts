@@ -7,6 +7,8 @@
 //   DATABASE_URL=postgres://... SCHEMA=mainnet FROM_HEIGHT=889001 npx ts-node --transpile-only scripts/backfill_session_rosters.ts
 //
 // TO_HEIGHT defaults to the first start the rosters already hold minus 1 (the indexer's), or the latest block.
+// Several runs over disjoint FROM_HEIGHT..TO_HEIGHT ranges can write rosters at once with SKIP_FINAL_STATES=1; then one
+// run with FINAL_STATES_ONLY=1 over the whole range writes the final states.
 // FROM_HEIGHT below the chain's v0.1.33 height (SESSION_ROSTERS_FROM_HEIGHT) is refused: the rosters before it are not
 // the chain's. Run it on the primary once the indexer with the rosters is running.
 import { buildSessionRosters, SessionRosterInputs } from "../src/mappings/pocket/sessionRosters";
@@ -32,7 +34,7 @@ async function main(): Promise<void> {
   const held = await q(`SELECT from_height FROM ${s}.session_roster_progress`);
   const latest = Number((await q(`SELECT max(id) h FROM ${s}.blocks`))[0].h);
   const to = Number(process.env.TO_HEIGHT ?? (held.length ? Number(held[0].from_height) - 1 : latest));
-  let h = from;
+  let h = process.env.FINAL_STATES_ONLY ? to + 1 : from;
   let first: number | undefined;
   let starts = 0;
   const t0 = Date.now();
@@ -58,6 +60,10 @@ async function main(): Promise<void> {
     h += Number(inputs.blocks_per_session);
   }
   console.log(`rosters: ${starts} starts written from ${first} to ${to}`);
+  if (process.env.SKIP_FINAL_STATES) {
+    await c.end();
+    return;
+  }
   // the final states, at every block where a session written here settles or a claim of one settled
   const heights = await q(
     `SELECT h FROM (SELECT DISTINCT r.settlement_height::bigint h FROM ${s}.session_rosters r

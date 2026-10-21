@@ -6,6 +6,10 @@
 // (.local/ab/money/make_ci_fixtures.py in the author's checkout), not by the code under test.
 /* eslint-disable @typescript-eslint/no-floating-promises */
 import assert from "node:assert/strict";
+import {
+  SESSION_ROSTER_CATALOG_FUNCTIONS,
+  SESSION_ROSTER_STATE_FUNCTIONS,
+} from "../../src/mappings/dbFunctions/sessionRosters";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -52,6 +56,8 @@ interface PgClient {
   query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, string | number>> }>;
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
+// the catalog over the money tables: the rosters' functions (session_rosters.db.spec.ts) are not created here
+const MONEY_CATALOG = CATALOG_FUNCTIONS.filter((f) => !SESSION_ROSTER_CATALOG_FUNCTIONS.includes(f));
 const { Client } = require("pg") as { Client: new (options: { connectionString?: string }) => PgClient };
 
 const URL = process.env.MONEY_TEST_PG;
@@ -3819,8 +3825,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     const tags = Object.fromEntries(rows.map((r) => [r.proname, r.tag]));
     const catalog = rows.map((r) => String(r.proname)).filter((n) => !n.startsWith("_") && !STATE_FUNCTIONS.includes(n));
     // the functions over the current state are plain lists too, with no _json twin
-    assert.deepEqual(rows.map((r) => String(r.proname)).filter((n) => STATE_FUNCTIONS.includes(n)), [...STATE_FUNCTIONS].sort());
-    for (const n of STATE_FUNCTIONS) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
+    // (the rosters' state function is not created here: session_rosters.db.spec.ts)
+    const moneyState = STATE_FUNCTIONS.filter((f) => !SESSION_ROSTER_STATE_FUNCTIONS.includes(f));
+    assert.deepEqual(rows.map((r) => String(r.proname)).filter((n) => STATE_FUNCTIONS.includes(n)), [...moneyState].sort());
+    for (const n of moneyState) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     assert.deepEqual(catalog, [
       "get_actor_lifecycle", "get_app_auto_unstakes", "get_application_spend", "get_block_stats", "get_claims",
       "get_created_claims", "get_delegator_income", "get_domain_service_rewards", "get_domain_staked_suppliers",
@@ -3834,7 +3842,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     ]);
     for (const n of catalog) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     // the same functions have a description (smartTags.ts) and a _json twin (functions.ts)
-    assert.deepEqual([...catalog].sort(), [...CATALOG_FUNCTIONS].sort());
+    assert.deepEqual([...catalog].sort(), [...MONEY_CATALOG].sort());
     const twins = await c.query(
       `SELECT p.proname, obj_description(p.oid, 'pg_proc') tag FROM pg_proc p
        WHERE p.pronamespace = $1::regnamespace AND p.proname = ANY($2::text[]) ORDER BY 1`,
@@ -3865,7 +3873,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     assert.deepEqual(
       shown.filter((n) => !catalog.includes(n.replace(/_json$/, "")) && !n.startsWith("legacy_")),
       // get_supplier_config_histories_json: every row of a state list in one call, published on purpose too
-      ["get_height_at", "get_last_settlement", "get_supplier_config_histories_json", ...STATE_FUNCTIONS].sort()
+      ["get_height_at", "get_last_settlement", "get_supplier_config_histories_json", ...moneyState].sort()
     );
     const vrd = await c.query(
       `SELECT count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = '_vrd_range_start'`,
@@ -4311,7 +4319,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_domain_staked_suppliers: "ARRAY['sup-l'], ARRAY['dom-l'], NULL, NULL",
       };
       await stubEntityTables();
-      assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
+      assert.deepEqual(Object.keys(calls).sort(), [...MONEY_CATALOG].sort());
       const numbers = (v: unknown, path: string): string[] =>
         typeof v === "number" ? [path] : v !== null && typeof v === "object"
           ? Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => numbers(x, `${path}.${k}`)) : [];
@@ -4518,7 +4526,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_domain_staked_suppliers: "ARRAY['sup-l'], ARRAY['dom-l'], NULL, NULL",
       };
       await stubEntityTables();
-      assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
+      assert.deepEqual(Object.keys(calls).sort(), [...MONEY_CATALOG].sort());
       // the functions that list rows one by one order them by height
       const byHeight = [
         "get_param_history", "get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims",

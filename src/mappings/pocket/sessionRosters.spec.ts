@@ -3,7 +3,13 @@
 /* eslint-disable @typescript-eslint/no-floating-promises */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildSessionRosters, selectMembers, sessionIdBytes, sessionIdOf, sessionRostersFromHeight } from "./sessionRosters";
+import {
+  buildSessionRosters,
+  selectMembers,
+  sessionIdBytes,
+  sessionIdOf,
+  sessionRostersFromHeight,
+} from "./sessionRosters";
 
 // mainnet session bera 974,561-974,580 of application pokt1plxq...: its block hash (blocks.hash at 974,561) and the
 // session_id the chain's get_session answered (2026-10-21)

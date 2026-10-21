@@ -10,6 +10,8 @@ import {
   createSessionRosterFunctionsFn,
   createSessionRosterTablesFn,
   createSessionRosterWritersFn,
+  SESSION_ROSTER_CATALOG_FUNCTIONS,
+  SESSION_ROSTER_STATE_FUNCTIONS,
   SESSION_STATES,
 } from "../../src/mappings/dbFunctions/sessionRosters";
 import { createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
@@ -154,9 +156,14 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         // member's claim has no outcome
         const [m1, m2] = await members("a1", "s1", 1);
         await settle(10, 1, m1, "a1", "s1", 4, 100);
-        await q(`INSERT INTO ${S}.msg_create_claims VALUES ($1, 'a1', 's1', $2, 6, '[6,)'), ($3, 'a1', 's1', $2, 6, '[6,)')`,
-          [m1, await sessionId("a1", "s1", 1), m2]);
-        await q(`INSERT INTO ${S}.claim_expirations VALUES (10, 2, $1, 'a1', 's1', 4, 50, 'PROOF_MISSING', 1, 1, 1, 1)`, [m2]);
+        await q(
+          `INSERT INTO ${S}.msg_create_claims VALUES ($1, 'a1', 's1', $2, 6, '[6,)'), ($3, 'a1', 's1', $2, 6, '[6,)')`,
+          [m1, await sessionId("a1", "s1", 1), m2]
+        );
+        await q(
+          `INSERT INTO ${S}.claim_expirations VALUES (10, 2, $1, 'a1', 's1', 4, 50, 'PROOF_MISSING', 1, 1, 1, 1)`,
+          [m2]
+        );
         await q(`INSERT INTO ${S}.supplier_slashes VALUES (10, 3, $1, 'a1', 's1', 4, 7, NULL)`, [m2]);
         await q(`INSERT INTO ${S}.claim_discards VALUES (10, 4, 'q1', 'a3', 's2', 4, 'boom')`);
         await settle(10, 5, "q2", "a3", "s2", 4, 0);
@@ -165,7 +172,10 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       }
       if (h === 9) {
         const [u] = await members("a2", "s1", 5);
-        await q(`INSERT INTO ${S}.msg_create_claims VALUES ($1, 'a2', 's1', $2, 10, '[10,)')`, [u, await sessionId("a2", "s1", 5)]);
+        await q(`INSERT INTO ${S}.msg_create_claims VALUES ($1, 'a2', 's1', $2, 10, '[10,)')`, [
+          u,
+          await sessionId("a2", "s1", 5),
+        ]);
       }
       await block(h);
     }
@@ -198,10 +208,15 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r ON r.session_num = ss.session_num
       WHERE ss.state <> 0 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`);
     const roll = await q(`
-      SELECT d.day::text AS day, d.supplier_num, d.service_num, d.sessions seats, ${STATES.map((n) => `d.${n}`).join(", ")},
+      SELECT d.day::text AS day, d.supplier_num, d.service_num, d.sessions seats, ${STATES.map((n) => `d.${n}`).join(
+        ", "
+      )},
              d.paid_upokt paid, round(d.equal_share_upokt, 6) eq
       FROM ${S}.session_supplier_daily d WHERE d.sessions <> 0 ORDER BY 1, 2, 3`);
-    assert.deepEqual(roll.map((r) => JSON.stringify(Object.values(r).map(String))), raw.map((r) => JSON.stringify(Object.values(r).map(String))));
+    assert.deepEqual(
+      roll.map((r) => JSON.stringify(Object.values(r).map(String))),
+      raw.map((r) => JSON.stringify(Object.values(r).map(String)))
+    );
     const sraw = await q(`
       SELECT (r.start_time AT TIME ZONE 'UTC')::date::text AS day, r.service_num, count(*) sessions,
              count(*) FILTER (WHERE r.claimed > 0) wc, count(*) FILTER (WHERE r.claimed = 0) nw, sum(r.roster_size) rs,
@@ -211,14 +226,20 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       SELECT d.day::text, d.service_num, d.sessions, d.sessions_with_claim, d.sessions_no_work, d.roster_seats,
              d.candidates, d.paid_upokt, d.settled_upokt
       FROM ${S}.session_service_daily d WHERE d.sessions <> 0 ORDER BY 1, 2`);
-    assert.deepEqual(sroll.map((r) => Object.values(r).map(String)), sraw.map((r) => Object.values(r).map(String)));
+    assert.deepEqual(
+      sroll.map((r) => Object.values(r).map(String)),
+      sraw.map((r) => Object.values(r).map(String))
+    );
     const seatStates = await q(`
       SELECT (r.start_time AT TIME ZONE 'UTC')::date::text AS day, ss.service_num, ${sums}
       FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r ON r.session_num = ss.session_num
       WHERE ss.state <> 0 GROUP BY 1, 2 ORDER BY 1, 2`);
     const seatRoll = await q(`SELECT d.day::text, d.service_num, ${STATES.map((n) => `d.${n}`).join(", ")}
       FROM ${S}.session_service_daily d WHERE d.sessions <> 0 ORDER BY 1, 2`);
-    assert.deepEqual(seatRoll.map((r) => Object.values(r).map(String)), seatStates.map((r) => Object.values(r).map(String)));
+    assert.deepEqual(
+      seatRoll.map((r) => Object.values(r).map(String)),
+      seatStates.map((r) => Object.values(r).map(String))
+    );
     const araw = await q(`
       SELECT (r.start_time AT TIME ZONE 'UTC')::date::text AS day, r.application_num, r.service_num, count(*) sessions,
              count(*) FILTER (WHERE r.claimed > 0) wc, count(*) FILTER (WHERE r.claimed = 0) nw, sum(r.roster_size) rs,
@@ -228,7 +249,10 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       SELECT d.day::text, d.application_num, d.service_num, d.sessions, d.sessions_with_claim, d.sessions_no_work,
              d.roster_seats, d.claimed_seats, d.paid_upokt
       FROM ${S}.session_application_daily d WHERE d.sessions <> 0 ORDER BY 1, 2, 3`);
-    assert.deepEqual(aroll.map((r) => Object.values(r).map(String)), araw.map((r) => Object.values(r).map(String)));
+    assert.deepEqual(
+      aroll.map((r) => Object.values(r).map(String)),
+      araw.map((r) => Object.values(r).map(String))
+    );
   };
 
   it("writes every active (application, service) session at each start, with the chain's selection", async () => {
@@ -237,7 +261,15 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       FROM ${S}.session_rosters r JOIN ${S}.application_numbers a USING (application_num) JOIN ${S}.service_numbers v USING (service_num)
       WHERE r.start_height IN (1, 9, 13) ORDER BY 1, 2`);
     assert.deepEqual(
-      rows.map((r) => [r.start_height, r.application_id, r.service_id, r.roster_size, r.candidates, r.end_height, r.settlement_height]),
+      rows.map((r) => [
+        r.start_height,
+        r.application_id,
+        r.service_id,
+        r.roster_size,
+        r.candidates,
+        r.end_height,
+        r.settlement_height,
+      ]),
       [
         [1, "a1", "s1", 3, 5, 4, 10],
         [1, "a2", "s1", 3, 5, 4, 10],
@@ -255,8 +287,11 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
   it("gives each member its final state at the settlement block", async () => {
     const [m1, m2, m3] = await members("a1", "s1", 1);
     const got = await Promise.all([
-      stateOf(m1, "a1", "s1", 1), stateOf(m2, "a1", "s1", 1), stateOf(m3, "a1", "s1", 1),
-      stateOf("q1", "a3", "s2", 1), stateOf("q2", "a3", "s2", 1),
+      stateOf(m1, "a1", "s1", 1),
+      stateOf(m2, "a1", "s1", 1),
+      stateOf(m3, "a1", "s1", 1),
+      stateOf("q1", "a3", "s2", 1),
+      stateOf("q2", "a3", "s2", 1),
     ]);
     // m1..m3 in roster order are by id here; the first two claimed
     assert.deepEqual(got.slice(3), ["discarded", "settled_zero"]);
@@ -264,9 +299,17 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     for (const m of await members("a2", "s1", 1)) assert.equal(await stateOf(m, "a2", "s1", 1), "idle_no_work");
     const states5 = await Promise.all((await members("a2", "s1", 5)).map((m) => stateOf(m, "a2", "s1", 5)));
     assert.deepEqual(states5.sort(), ["idle_others_worked", "idle_others_worked", "unresolved"]);
-    const [v] = await q(`SELECT r.paid_upokt, r.settled_upokt, r.claimed, r.settled_height FROM ${S}.session_rosters r
-                         WHERE r.session_id = $1`, [await sessionId("a1", "s1", 1)]);
-    assert.deepEqual([v.paid_upokt, v.settled_upokt, v.claimed, v.settled_height].map(String), ["70", "100", "2", "10"]);
+    const [v] = await q(
+      `SELECT r.paid_upokt, r.settled_upokt, r.claimed, r.settled_height FROM ${S}.session_rosters r
+                         WHERE r.session_id = $1`,
+      [await sessionId("a1", "s1", 1)]
+    );
+    assert.deepEqual([v.paid_upokt, v.settled_upokt, v.claimed, v.settled_height].map(String), [
+      "70",
+      "100",
+      "2",
+      "10",
+    ]);
     // the sessions whose settlement block has not come are still active
     const [act] = await q(`SELECT count(*) n FROM ${S}.session_rosters WHERE settled_height IS NULL`);
     // starts 33 and 37 (settled at start + 9), a1 and a2 each
@@ -284,7 +327,9 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     // a claim of a2's session 1-4 settles at 41: the session is recomputed, its members move from idle_no_work
     const [w] = await members("a2", "s1", 1);
     await settle(41, 1, w, "a2", "s1", 4, 30);
-    await q(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version) VALUES (41, now(), 'test', '2026-09-02', 1)`);
+    await q(
+      `INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version) VALUES (41, now(), 'test', '2026-09-02', 1)`
+    );
     await q(`INSERT INTO ${S}.blocks VALUES (41.5, timestamp '2026-09-02 17:00', 'X')`);
     assert.ok((await block(41)) > 0);
     assert.equal(await stateOf(w, "a2", "s1", 1), "paid");
@@ -293,10 +338,13 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
 
   it("answers the funnel of a selector from the rollup and the seats", async () => {
     const [r] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel($1, $2, $3)`, [P, ...RANGE]);
-    const [raw] = await q(`
+    const [raw] = await q(
+      `
       SELECT count(*) seats, count(DISTINCT ss.session_num) ses, sum(ss.paid_upokt) paid
       FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
-      WHERE n.supplier_id = ANY($1) AND ss.state <> 0`, [P]);
+      WHERE n.supplier_id = ANY($1) AND ss.state <> 0`,
+      [P]
+    );
     assert.equal(String(r.seats), String(raw.seats));
     assert.equal(String(r.sessions_with_selected), String(raw.ses));
     assert.equal(String(r.paid_upokt), String(raw.paid));
@@ -306,21 +354,32 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     assert.equal(String(r.pool_upokt), String(net.v));
     // owners: o1 owns p1 and p2
     const [o] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, owners => ARRAY['o1'])`, RANGE);
-    const [oraw] = await q(`SELECT count(*) seats FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
+    const [oraw] =
+      await q(`SELECT count(*) seats FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
                             WHERE n.supplier_id IN ('p1', 'p2') AND ss.state <> 0`);
     assert.equal(String(o.seats), String(oraw.seats));
-    await assert.rejects(q(`SELECT * FROM ${S}.get_supplier_session_funnel(ARRAY['p1'], $1, $2, owners => ARRAY['o1'])`, RANGE), /pass one of/);
+    await assert.rejects(
+      q(`SELECT * FROM ${S}.get_supplier_session_funnel(ARRAY['p1'], $1, $2, owners => ARRAY['o1'])`, RANGE),
+      /pass one of/
+    );
     // domains: the stored daily sets (a.net held p1 on the first day, p1 and p3 on the second)
     await q(`INSERT INTO ${S}.domain_service_daily_suppliers
              SELECT '2026-09-01'::date, 'a.net', 's1', ARRAY(SELECT supplier_num FROM ${S}.supplier_numbers WHERE supplier_id = 'p1'), 1, 24
              UNION ALL SELECT '2026-09-02'::date, 'a.net', 's1',
                ARRAY(SELECT supplier_num FROM ${S}.supplier_numbers WHERE supplier_id IN ('p1', 'p3') ORDER BY 1), 25, 48`);
-    const [dm] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, domains => ARRAY['a.net'])`, RANGE);
-    const [draw] = await q(`SELECT count(*) seats FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
+    const [dm] = await q(
+      `SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, domains => ARRAY['a.net'])`,
+      RANGE
+    );
+    const [draw] =
+      await q(`SELECT count(*) seats FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
                             WHERE n.supplier_id IN ('p1', 'p3') AND ss.state <> 0`);
     assert.equal(String(dm.seats), String(draw.seats));
     // by service and supplier: the rows add up to the total
-    const parts = await q(`SELECT * FROM ${S}.get_supplier_session_funnel($1, $2, $3, 'day', true, true)`, [P, ...RANGE]);
+    const parts = await q(`SELECT * FROM ${S}.get_supplier_session_funnel($1, $2, $3, 'day', true, true)`, [
+      P,
+      ...RANGE,
+    ]);
     assert.equal(String(parts.reduce((a, x) => a + Number(x.seats), 0)), String(raw.seats));
   });
 
@@ -332,7 +391,10 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     assert.deepEqual([String(s1.sessions), String(s1.no_work)], [String(raw.n), String(raw.nw)]);
     const act = await q(`SELECT * FROM ${S}.get_active_sessions(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6'])`);
     // the starts 33, 37 and 41 (block 41 ran in the late-claim test), a1 and a2 each
-    assert.deepEqual(act.map((x) => [x.service_id, Number(x.network_active)]), [["s1", 6]]);
+    assert.deepEqual(
+      act.map((x) => [x.service_id, Number(x.network_active)]),
+      [["s1", 6]]
+    );
     assert.ok(Number(act[0].selected_active) > 0 && Number(act[0].selected_seats) >= Number(act[0].selected_active));
     const apps = await q(`SELECT * FROM ${S}.get_application_sessions($1, $2, ARRAY['a2'])`, RANGE);
     assert.ok(apps.every((x) => x.application_id === "a2"));
@@ -341,17 +403,72 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
   it("lists sessions with full rosters, and pages them", async () => {
     const all = await q(`SELECT * FROM ${S}.get_session_rosters($1, $2)`, RANGE);
     const [first] = await q(`SELECT * FROM ${S}.get_session_rosters($1, $2, row_limit => 1)`, RANGE);
-    const next = await q(`SELECT * FROM ${S}.get_session_rosters($1, $2, row_limit => 1000, before_height => $3, before_session_id => $4)`,
-      [...RANGE, first.start_height, first.session_id]);
+    const next = await q(
+      `SELECT * FROM ${S}.get_session_rosters($1, $2, row_limit => 1000, before_height => $3, before_session_id => $4)`,
+      [...RANGE, first.start_height, first.session_id]
+    );
     assert.equal(next.length, all.length - 1);
     const one = all.find((x) => (x.member_ids as string[]).includes("q1") && Number(x.start_height) === 1) as Row;
     assert.deepEqual(one.member_ids, ["q1", "q2"]);
     assert.deepEqual(one.member_states, ["discarded", "settled_zero"]);
-    const mine = await q(`SELECT * FROM ${S}.get_supplier_session_list(ARRAY['q1'], $1, $2, states => ARRAY['discarded'])`, RANGE);
-    assert.deepEqual(mine.map((x) => [x.selected_supplier_ids, x.selected_states]), [[["q1"], ["discarded"]]]);
+    const mine = await q(
+      `SELECT * FROM ${S}.get_supplier_session_list(ARRAY['q1'], $1, $2, states => ARRAY['discarded'])`,
+      RANGE
+    );
+    assert.deepEqual(
+      mine.map((x) => [x.selected_supplier_ids, x.selected_states]),
+      [[["q1"], ["discarded"]]]
+    );
     const [j] = await q(`SELECT ${S}.get_session_rosters_json($1, $2, row_limit => 2) j`, RANGE);
     const json = j.j as { range: Row; data: Row[] };
     assert.equal(json.data.length, 2);
     assert.ok(json.range.covered_from);
+  });
+  it("carries on every row the part of the range its _json twin reports, and data [] where nothing is covered", async () => {
+    const CALLS: Record<string, string> = {
+      get_supplier_session_funnel: "ARRAY['p1', 'p2'], $1, $2",
+      get_network_sessions: "$1, $2",
+      get_supplier_session_list: "ARRAY['p1', 'p2'], $1, $2",
+      get_application_sessions: "$1, $2",
+      get_session_rosters: "$1, $2",
+    };
+    assert.deepEqual(Object.keys(CALLS).sort(), [...SESSION_ROSTER_CATALOG_FUNCTIONS].sort());
+    // GraphQL plain lists with a description (smartTags.ts), and the helpers hidden
+    const tags = Object.fromEntries(
+      (
+        await q(
+          `SELECT p.proname, obj_description(p.oid, 'pg_proc') t FROM pg_proc p
+      WHERE p.pronamespace = $1::regnamespace`,
+          [S]
+        )
+      ).map((r) => [r.proname, String(r.t)])
+    );
+    for (const f of [...SESSION_ROSTER_CATALOG_FUNCTIONS, ...SESSION_ROSTER_STATE_FUNCTIONS])
+      assert.ok(tags[f].startsWith("@simpleCollections only\n"), f);
+    for (const f of [
+      "_session_roster_inputs",
+      "_write_session_rosters",
+      "_session_roster_progress",
+      "_session_state_name",
+      "_session_selector",
+      "finalize_session_rosters",
+    ])
+      assert.equal(tags[f], "@omit", f);
+    for (const [fn, args] of Object.entries(CALLS)) {
+      for (const range of [RANGE, ["2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"]]) {
+        const rows = await q(`SELECT * FROM ${S}.${fn}(${args})`, range);
+        const [{ j }] = await q(`SELECT ${S}.${fn}_json(${args}) j`, range);
+        const json = j as { range: { covered_from: string | null; covered_to: string | null }; data: unknown[] };
+        for (const r of rows) {
+          assert.equal(
+            r.covered_from === null ? null : (r.covered_from as Date).toISOString(),
+            json.range.covered_from === null ? null : new Date(json.range.covered_from).toISOString(),
+            fn
+          );
+        }
+        if (range === RANGE) assert.ok(json.data.length > 0 && json.range.covered_from, fn);
+        else assert.deepEqual([json.data, json.range.covered_from], [[], null], fn);
+      }
+    }
   });
 });

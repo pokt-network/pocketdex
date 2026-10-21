@@ -1,3 +1,4 @@
+import { SESSION_ROSTER_CATALOG_FUNCTIONS } from "../sessionRosters";
 import { ROLLUP_VERSION, STAKER_ROLES_SQL } from "./writer";
 
 // Catalog functions over the settlement money tables (./schema.ts), plus three over SubQuery entity
@@ -108,11 +109,7 @@ export const CATALOG_FUNCTIONS = [
   "get_supplier_sessions",
   "get_domain_staked_suppliers",
   // the session rosters (sessionRosters.ts)
-  "get_supplier_session_funnel",
-  "get_network_sessions",
-  "get_supplier_session_list",
-  "get_application_sessions",
-  "get_session_rosters",
+  ...SESSION_ROSTER_CATALOG_FUNCTIONS,
   "get_relay_mining_difficulty",
   "get_created_claims",
   "get_morse_claims",

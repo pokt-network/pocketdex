@@ -36,6 +36,19 @@ export const SESSION_STATES = [
 ];
 const STATE_NAMES_SQL = `ARRAY[${SESSION_STATES.map((s) => `'${s}'`).join(", ")}]::text[]`;
 
+// The catalog functions over the rosters (CATALOG_FUNCTIONS, with a _json twin each). They cover what the rosters hold
+// (session_roster_progress), not the money tables, so they do not start from _coverage as the others do.
+export const SESSION_ROSTER_CATALOG_FUNCTIONS = [
+  "get_supplier_session_funnel",
+  "get_network_sessions",
+  "get_supplier_session_list",
+  "get_application_sessions",
+  "get_session_rosters",
+];
+
+// and the state function over them (STATE_DESCRIPTIONS: a plain list, no _json twin)
+export const SESSION_ROSTER_STATE_FUNCTIONS = ["get_active_sessions"];
+
 export const writeSessionRostersFnName = "_write_session_rosters";
 export const sessionRosterInputsFnName = "_session_roster_inputs";
 export const finalizeSessionRostersFnName = "finalize_session_rosters";
@@ -497,9 +510,11 @@ export function createSessionRosterFunctionsFn(dbSchema: string): string {
            + CASE WHEN c_from AT TIME ZONE 'UTC' = date_trunc('day', c_from AT TIME ZONE 'UTC') THEN interval '0' ELSE interval '1 day' END)::date;
     d2 := (date_trunc('day', (c_to AT TIME ZONE 'UTC') - interval '1 microsecond'))::date;
   END IF;`;
-  const nullRow = (cols: number) =>
+  // nothing matched: one row of NULLs with the coverage (the OUT columns not assigned stay NULL, typed)
+  const nullRow =
     `  IF NOT FOUND THEN
-    RETURN QUERY SELECT ${Array(cols).fill("NULL").join(", ")}, c_from, c_to, '[]'::jsonb;
+    covered_from := c_from; covered_to := c_to; covered_gaps := '[]'::jsonb;
+    RETURN NEXT;
   END IF;`;
   const selectorArgs = `owners text[] DEFAULT NULL, operators text[] DEFAULT NULL, domains text[] DEFAULT NULL`;
   return `
@@ -640,7 +655,7 @@ ${days}
   LEFT JOIN ${s}.service_numbers v ON v.service_num = g.svc
   LEFT JOIN ${s}.supplier_numbers sn ON sn.supplier_num = g.sup
   ORDER BY 1 DESC, 3, 4;
-${nullRow(14 + states.length)}
+${nullRow}
 END $$;
 
 -- The network's sessions per bucket of session start (day, week, month or year; NULL = one total) and per service with
@@ -686,7 +701,7 @@ ${days}
   LEFT JOIN act ON act.svc IS NOT DISTINCT FROM g.svc
   LEFT JOIN ${s}.service_numbers v ON v.service_num = g.svc
   ORDER BY 1 DESC, 3;
-${nullRow(14 + states.length)}
+${nullRow}
 END $$;
 
 -- The sessions of the selected suppliers one by one, newest first (by start height, then session_id): one row per
@@ -747,7 +762,7 @@ ${cover}
   JOIN ${s}.application_numbers a ON a.application_num = r.application_num
   JOIN ${s}.service_numbers v ON v.service_num = r.service_num
   ORDER BY r.start_height DESC, r.session_id DESC;
-${nullRow(15)}
+${nullRow}
 END $$;
 
 -- The sessions of applications: per bucket of session start (day, week, month or year; NULL = one total), and per
@@ -803,7 +818,7 @@ ${cover}
   JOIN ${s}.service_numbers v ON v.service_num = r.service_num
   GROUP BY 1, 2, 3, 4
   ORDER BY 1 DESC, 3, 4;
-${nullRow(14)}
+${nullRow}
 END $$;
 
 -- Full rosters, one session per row, newest first (by start height, then session_id): the sessions that started in
@@ -860,7 +875,7 @@ ${cover}
     FROM ${s}.session_suppliers ss JOIN ${s}.supplier_numbers n ON n.supplier_num = ss.supplier_num
     WHERE ss.session_num = r.session_num) m
   ORDER BY r.start_height DESC, r.session_id DESC;
-${nullRow(15)}
+${nullRow}
 END $$;
 `;
 }
