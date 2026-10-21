@@ -3,7 +3,9 @@
 // the supplier unstaked, or after it restaked with other domains, keeps the domain it served.
 //   MONEY_TEST_PG=postgres://postgres:postgres@127.0.0.1:5432/postgres yarn test:money
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { after, before, describe, it } from "node:test";
+import path from "node:path";
 import {
   createDomainServiceDailyRewardsTableFn,
   refreshDomainServiceDailyRewardsFn,
@@ -31,6 +33,8 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
     await c.query(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${S}_owner') THEN CREATE ROLE ${S}_owner NOSUPERUSER; END IF;
     END $$`);
+    // intarray, which the role creates in pnf as the database's owner (domainRewards.ts); this role does not own the test's
+    await c.query(`CREATE EXTENSION IF NOT EXISTS intarray WITH SCHEMA public`);
     await c.query(
       `DROP SCHEMA IF EXISTS ${S} CASCADE; CREATE SCHEMA ${S} AUTHORIZATION ${S}_owner; SET ROLE ${S}_owner;`
     );
@@ -371,6 +375,110 @@ describe("refresh_domain_service_daily_rewards (PostgreSQL)", { skip: !URL && "M
         await c.query("ROLLBACK");
       }
     });
+  });
+
+  it("stores each row's staked suppliers as a set of dictionary numbers the size of its count; the backfill writes it again", async () => {
+    const sets = async () =>
+      (
+        await c.query(
+          `SELECT r.domain, r.service_id, r.suppliers_count::text n, s.first_height::text f, s.last_height::text l,
+                  (SELECT string_agg(sn.supplier_id, ',' ORDER BY sn.supplier_id) FROM unnest(s.supplier_nums) u(num)
+                   JOIN ${S}.supplier_numbers sn ON sn.supplier_num = u.num) ids,
+                  cardinality(s.supplier_nums)::text k,
+                  s.supplier_nums = (SELECT array_agg(x ORDER BY x) FROM unnest(s.supplier_nums) x) sorted
+           FROM ${S}.domain_service_daily_rewards r
+           LEFT JOIN ${S}.domain_service_daily_suppliers s ON s.day = r.day AND s.domain = r.domain AND s.service_id = r.service_id
+           WHERE r.day = '2026-10-01' ORDER BY 1, 2`
+        )
+      ).rows;
+    const rows = await sets();
+    assert.ok(rows.length > 5);
+    for (const r of rows) {
+      assert.equal(r.k, r.n, `${r.domain}: the set is the count`);
+      assert.equal(String(r.sorted), "true");
+      assert.deepEqual([r.f, r.l], ["100", "200"], String(r.domain));
+    }
+    // restaked declared b.com until 165 (c.com from it); dup's live configs are i.com and k.com
+    const byDomain = Object.fromEntries(rows.map((r) => [r.domain, r.ids]));
+    assert.equal(byDomain["b.com"], "restaked");
+    assert.equal(byDomain["k.com"], "dup");
+    // the backfill, over the day's blocks up to its last settlement block (175): the same sets, those heights
+    await c.query("BEGIN");
+    try {
+      await c.query(`TRUNCATE ${S}.domain_service_daily_suppliers`);
+      const n = (await c.query(`SELECT ${S}.rebuild_domain_service_daily_suppliers('2026-10-01')::text n`)).rows[0].n;
+      assert.equal(n, String(rows.length));
+      const again = await sets();
+      assert.deepEqual(
+        again.map((r) => [r.domain, r.ids, r.n]),
+        rows.map((r) => [r.domain, r.ids, r.n])
+      );
+      assert.ok(again.every((r) => r.f === "100" && r.l === "175"));
+      // a day with no rewards row has nothing to write
+      assert.equal((await c.query(`SELECT ${S}.rebuild_domain_service_daily_suppliers('2026-09-01') n`)).rows[0].n, null);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    // a day whose counts were written over the whole day (rebuilt after it ended): a supplier staked on b.com after the
+    // last settlement block (175) is in its count, so the backfill reads the whole day and keeps the counts
+    await c.query("BEGIN");
+    try {
+      await c.query(`INSERT INTO ${S}.suppliers VALUES ('after-last', 'Staked', int8range(180, NULL));
+        INSERT INTO ${S}.supplier_service_configs (supplier_id, service_id, domains, _block_range)
+          VALUES ('after-last', 'akash', '["b.com"]', int8range(180, NULL));
+        SELECT ${S}.refresh_domain_service_daily_rewards(175);`);
+      const counted = await sets();
+      assert.equal(counted.find((r) => r.domain === "b.com")!.ids, "after-last,restaked");
+      await c.query(`TRUNCATE ${S}.domain_service_daily_suppliers`);
+      await c.query(`SELECT ${S}.rebuild_domain_service_daily_suppliers('2026-10-01')`);
+      const kept = await sets();
+      assert.deepEqual(
+        kept.map((r) => [r.domain, r.ids, r.n, r.l]),
+        counted.map((r) => [r.domain, r.ids, r.n, "200"])
+      );
+    } finally {
+      await c.query("ROLLBACK");
+    }
+    // a rebuilt day (as after a rewind) writes its sets again with its rows
+    await c.query(`SELECT ${S}.refresh_domain_service_daily_rewards(175)`);
+    assert.deepEqual(
+      (await sets()).map((r) => [r.domain, r.ids, r.k]),
+      rows.map((r) => [r.domain, r.ids, r.k])
+    );
+  });
+
+  it("scripts/fill_domain_service_suppliers.sql writes the sets of the past days that lack them, and nothing else", async () => {
+    const psql = () =>
+      new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+        const p = spawn("psql", [URL as string, "-X", "-v", `schema=${S}`, "-f",
+          path.join(__dirname, "..", "..", "scripts", "fill_domain_service_suppliers.sql")]);
+        let stdout = "";
+        let stderr = "";
+        p.stdout.on("data", (d) => (stdout += String(d)));
+        p.stderr.on("data", (d) => (stderr += String(d)));
+        p.on("error", reject);
+        p.on("close", (code) => resolve({ code, stdout, stderr }));
+      });
+    const sets = async () =>
+      (await c.query(`SELECT domain, service_id, supplier_nums::text n, last_height::text l FROM ${S}.domain_service_daily_suppliers WHERE day = '2026-10-01' ORDER BY 1, 2`)).rows;
+    const want = await sets();
+    // 2026-10-01 becomes a past day: the latest block's day is the next one
+    await c.query(`INSERT INTO ${S}.blocks VALUES (201, '2026-10-02 00:30')`);
+    try {
+      await c.query(`DELETE FROM ${S}.domain_service_daily_suppliers WHERE day = '2026-10-01'`);
+      const r = await psql();
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /2026-10-01/);
+      assert.match(r.stdout, /days_not_held\s*\n-+\n\s*0\n/);
+      // over the day's blocks up to its last settlement block (175), the same sets
+      assert.deepEqual((await sets()).map((x) => [x.domain, x.service_id, x.n, x.l]), want.map((x) => [x.domain, x.service_id, x.n, "175"]));
+      const again = await psql();
+      assert.equal(again.code, 0, again.stderr);
+      assert.doesNotMatch(again.stdout, /2026-10-01/);
+    } finally {
+      await c.query(`DELETE FROM ${S}.blocks WHERE id = 201`);
+      await c.query(`SELECT ${S}.refresh_domain_service_daily_rewards(175)`);
+    }
   });
 
   it("without the session length, a claim is attributed at its settlement block", async () => {

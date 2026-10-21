@@ -116,6 +116,11 @@ const OMITTED_FUNCTIONS = [
   // the transaction counts' helper and writers (txCounts.ts)
   "_tx_counts_of_blocks",
   "rebuild_tx_counts_daily",
+  // the domain rewards' supplier sets: writer and backfill (domainRewards.ts)
+  "_write_domain_service_suppliers",
+  "_domain_service_staked",
+  "_domain_service_count_diffs",
+  "rebuild_domain_service_daily_suppliers",
   "refresh_tx_counts_daily",
   // the staked suppliers' and the supply's daily rollups: helpers and writers (stakedSuppliersDaily.ts, supplyDaily.ts)
   "_staked_suppliers_of_blocks",
@@ -218,7 +223,7 @@ const DESCRIPTIONS: Record<string, string> = {
   get_overserviced:
     "Overservicing of the Staked suppliers that share revenue with the operators now (up to 200 addresses in the rev_share of a live service config), per bucket: expected_burn_upokt and effective_burn_upokt summed over their application overservicing events, the events and the first and last height, as getOverservicedByAddressesAndTime gives them. These are the events' own amounts; getSupplierEarnings overservicing_loss_upokt comes from the settlements and differs by about 1 ppm. Covers the indexed blocks.",
   get_domain_service_rewards:
-    "What the suppliers serving the domains (up to 200 endpoint root domains) earned per service, summed over the UTC days that start inside [range_start, range_end): relays, compute units, claimed_upokt (gross rewards), staked_suppliers on the service's last day read, summed over the domains with that day (getRewardsByDomainsAndTimeGroupByService took one of those domains' count), first_day / last_day and the first and last height of those days. getRewardsByDomainsAndTimeGroupByService read the days from the date of its start to the date of its end, both included: the same days as range_start = that first midnight and range_end = the midnight after the last day. Covers the indexed blocks.",
+    "What the suppliers serving the domains (up to 200 endpoint root domains) earned per service, summed over the UTC days that start inside [range_start, range_end): relays, compute units, claimed_upokt (gross rewards), staked_suppliers = the distinct staked suppliers of the service's last day read across the domains (a supplier on two of them counts once; NULL while that day's supplier sets are not written yet; getRewardsByDomainsAndTimeGroupByService took one domain's count), first_day / last_day and the first and last height of those days. getRewardsByDomainsAndTimeGroupByService read the days from the date of its start to the date of its end, both included: the same days as range_start = that first midnight and range_end = the midnight after the last day. Covers the indexed blocks.",
   get_relay_mining_difficulty:
     "Relay mining difficulty history of the services listed (up to 200): each update newest first (by height, then service_id), with the relays EMA and the target hash before and after it. The current difficulty of a service is its newest row (row_limit 1 with that one service). row_limit (default 100, at most 1000) rows per call; for the next page pass the last row's height and service_id as before_height and before_service_id, or skip row_offset rows of the order (default 0, at most 10,000,000) for a page at any depth in one call. Covers the indexed blocks.",
   get_morse_claims:

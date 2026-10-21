@@ -2574,21 +2574,25 @@ END $$;
 
 -- What the suppliers serving the domains (up to 200 endpoint root domains) earned per service, from
 -- domain_service_daily_rewards (domainRewards.ts) summed over the UTC days that start inside [range_start, range_end), as
--- get_supplier_domains reads it: relays, compute units, claimed_upokt (the table's gross_rewards), staked_suppliers = the
--- suppliers of the service's last day read, summed over the domains that have that day (a supplier on two of the
--- domains counts in both), first_day / last_day, and the first and last height of those days. The old function took
--- the count of one of those domains, whichever its DISTINCT ON met first (with several domains on the last day it
--- differed for 32 of 100 services over 7 days for 3 domains on mainnet, 2026-10-20; equal for one domain). get_rewards_by_domains_and_time_group_by_service read the days from the date of start_ts to the date of end_ts,
--- both included: the same days as range_start = that first midnight and range_end = the midnight after the last day.
+-- get_supplier_domains reads it: relays, compute units, claimed_upokt (the table's gross_rewards), first_day / last_day,
+-- the first and last height of those days, and staked_suppliers = the distinct staked suppliers of the service's last
+-- day read: with one domain its suppliers_count, as the old function; with several, the union of the sets the writer
+-- stores beside the counts (domain_service_daily_suppliers), so a supplier on two of the domains counts once, and NULL
+-- while a set of that day is not written yet (scripts/fill_domain_service_suppliers.sql). The old function took the
+-- count of one of the domains, whichever its DISTINCT ON met first (it differed for 32 of 100 services over 7 days for 3
+-- domains on mainnet, 2026-10-20). get_rewards_by_domains_and_time_group_by_service read the days from the date of
+-- start_ts to the date of end_ts, both included: the same days as range_start = that first midnight and range_end = the
+-- midnight after the last day.
 -- Covers the indexed blocks.
 CREATE OR REPLACE FUNCTION ${s}.get_domain_service_rewards(domains text[], range_start timestamptz, range_end timestamptz)
 RETURNS TABLE(service_id text, staked_suppliers bigint, relays numeric, estimated_relays numeric, compute_units numeric,
   estimated_compute_units numeric, claimed_upokt numeric, first_day date, last_day date, first_height bigint,
   last_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
-DECLARE cv record; d1 date; d2 date;
+DECLARE cv record; d1 date; d2 date; one boolean;
 BEGIN
   PERFORM ${s}._validate(domains, 'domains', range_start, range_end, NULL);
+  one := (SELECT count(DISTINCT x) FROM unnest(domains) x) = 1;
 ${covered(null, true)}
   -- the days that start inside the range: [d1, d2]; from the requested start, as the first indexed block is later than
   -- the start of its day (the end is the covered one: the day of the latest block starts before it)
@@ -2598,15 +2602,31 @@ ${covered(null, true)}
   d2 := (date_trunc('day', (range_end AT TIME ZONE 'UTC') - interval '1 microsecond'))::date;
   IF d1 > d2 THEN RETURN; END IF;
   RETURN QUERY
-  SELECT d.service_id,
-         (sum(d.suppliers_count) FILTER (WHERE d.day = d.last_day))::bigint,
-         sum(d.relays)::numeric, sum(d.estimated_relays)::numeric, sum(d.computed_units)::numeric,
-         sum(d.estimated_computed_units)::numeric, sum(d.gross_rewards), min(d.day), max(d.day), min(d.first_height)::bigint,
-         max(d.last_height)::bigint, cv.covered_from, cv.covered_to, cv.gaps
-  FROM (SELECT x.*, max(x.day) OVER (PARTITION BY x.service_id) last_day FROM ${s}.domain_service_daily_rewards x
-        WHERE x.domain = ANY(get_domain_service_rewards.domains) AND x.day BETWEEN d1 AND d2) d
-  GROUP BY d.service_id
-  ORDER BY d.service_id;
+  WITH d AS MATERIALIZED (
+    SELECT x.*, max(x.day) OVER (PARTITION BY x.service_id) last_day FROM ${s}.domain_service_daily_rewards x
+    WHERE x.domain = ANY(get_domain_service_rewards.domains) AND x.day BETWEEN d1 AND d2
+  ),
+  -- several domains: the union of the last day's sets per service; held = every row of that day has its set
+  st AS (
+    SELECT d.service_id, public.icount(${s}._supplier_nums_union(ss.supplier_nums))::bigint n, bool_and(ss.day IS NOT NULL) held
+    FROM d
+    LEFT JOIN ${s}.domain_service_daily_suppliers ss ON ss.day = d.day AND ss.domain = d.domain AND ss.service_id = d.service_id
+    WHERE NOT one AND d.day = d.last_day
+    GROUP BY d.service_id
+  )
+  SELECT g.service_id, CASE WHEN one THEN g.staked WHEN st.held THEN st.n END, g.relays, g.estimated_relays,
+         g.compute_units, g.estimated_compute_units, g.claimed_upokt, g.first_day, g.last_day, g.first_height, g.last_height,
+         cv.covered_from, cv.covered_to, cv.gaps
+  FROM (
+    SELECT d.service_id, (sum(d.suppliers_count) FILTER (WHERE d.day = d.last_day))::bigint staked,
+           sum(d.relays)::numeric relays, sum(d.estimated_relays)::numeric estimated_relays,
+           sum(d.computed_units)::numeric compute_units, sum(d.estimated_computed_units)::numeric estimated_compute_units,
+           sum(d.gross_rewards) claimed_upokt, min(d.day) first_day, max(d.day) last_day,
+           min(d.first_height)::bigint first_height, max(d.last_height)::bigint last_height
+    FROM d GROUP BY d.service_id
+  ) g
+  LEFT JOIN st ON st.service_id = g.service_id
+  ORDER BY g.service_id;
 END $$;
 
 -- The blocks a validator produced (kind produced: blocks.proposer_address, as get_produced_blocks_by_validator) or

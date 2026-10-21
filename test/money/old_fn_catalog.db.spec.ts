@@ -106,7 +106,15 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
         SELECT dm, 'svc-' || k, date '2026-09-01' + d, d * 10 + k, d * 11 + k, d * 12 + k, d * 13 + k, d * 100 + k * 7 + length(dm),
                d + k + length(dm), 100 + d * 10, 109 + d * 10
         FROM unnest(ARRAY['a.net', 'b.io', 'c.org']) dm, generate_series(0, 5) d, generate_series(1, 3) k
-        WHERE (d + k + length(dm)) % 4 <> 0;`);
+        WHERE (d + k + length(dm)) % 4 <> 0;
+      -- each row's staked suppliers as the writer stores them: numbers from the day's offset, as many as its count, so
+      -- a.net and c.org (same length) hold the same set on a day and service, and b.io a subset of it
+      INSERT INTO ${S}.supplier_numbers (supplier_id) SELECT 'sup-' || g FROM generate_series(1, 40) g;
+      INSERT INTO ${S}.domain_service_daily_suppliers
+        SELECT r.day, r.domain, r.service_id,
+               ARRAY(SELECT generate_series(1 + (r.day - date '2026-09-01'), (r.day - date '2026-09-01') + r.suppliers_count)),
+               r.first_height, r.last_height
+        FROM ${S}.domain_service_daily_rewards r;`);
     await c.query(createSupplierRevShareWalletsFn(S));
     await c.query(createSettlementFunctionsFn(S));
     await c.query(createSettlementSmartTagsFn(S));
@@ -313,12 +321,13 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
         ),
         `${domains} ${ns} ${ne}`
       );
-      // staked_suppliers: the old function's for one domain; for several, the sum over the domains of the service's last
-      // day (the old one took one of them, whichever came first)
+      // staked_suppliers: the old function's for one domain; for several, the distinct suppliers of the sets of the
+      // service's last day across the domains, counted here by hand (the old one took one domain's count)
       const last = await q(
-        `SELECT service_id, sum(suppliers_count) FILTER (WHERE day = last_day)::text n
-         FROM (SELECT d.*, max(d.day) OVER (PARTITION BY d.service_id) last_day FROM ${S}.domain_service_daily_rewards d
-               WHERE d.domain = ANY($1::text[]) AND d.day >= $2::date AND d.day < $3::date) x GROUP BY 1`,
+        `SELECT x.service_id, count(DISTINCT u.num)::text n
+         FROM (SELECT d.*, max(d.day) OVER (PARTITION BY d.service_id) last_day FROM ${S}.domain_service_daily_suppliers d
+               WHERE d.domain = ANY($1::text[]) AND d.day >= $2::date AND d.day < $3::date) x
+         CROSS JOIN unnest(x.supplier_nums) u(num) WHERE x.day = x.last_day GROUP BY 1`,
         [domains, ns.slice(0, 10), ne.slice(0, 10)]
       );
       const want =
@@ -330,6 +339,38 @@ describe("catalog versions of the old functions (PostgreSQL)", { skip: !URL && "
         sortRows(want),
         `${domains} staked`
       );
+    }
+    // overlapping domains count a supplier once: a.net and c.org hold the same set, so together they give a.net's
+    const pair = await q(
+      `SELECT service_id, staked_suppliers::text n FROM ${S}.get_domain_service_rewards(ARRAY['a.net', 'c.org'], '2026-09-06T00:00:00Z', '2026-09-07T00:00:00Z') ORDER BY 1`
+    );
+    const alone = await q(
+      `SELECT service_id, staked_suppliers::text n FROM ${S}.get_domain_service_rewards(ARRAY['a.net'], '2026-09-06T00:00:00Z', '2026-09-07T00:00:00Z') ORDER BY 1`
+    );
+    assert.ok(pair.length > 0);
+    for (const r of pair) {
+      const a = alone.find((x) => x.service_id === r.service_id);
+      if (a) assert.equal(r.n, a.n, String(r.service_id));
+    }
+    // a set not written yet (a day before the backfill): NULL for several domains, never a partial union; one domain
+    // still reads its count
+    await c.query("BEGIN");
+    try {
+      await c.query(`DELETE FROM ${S}.domain_service_daily_suppliers WHERE day = '2026-09-06' AND domain = 'c.org'`);
+      const gap = await q(
+        `SELECT service_id, staked_suppliers FROM ${S}.get_domain_service_rewards(ARRAY['a.net', 'c.org'], '2026-09-06T00:00:00Z', '2026-09-07T00:00:00Z')`
+      );
+      const cOrg = await q(`SELECT DISTINCT service_id FROM ${S}.domain_service_daily_rewards WHERE day = '2026-09-06' AND domain = 'c.org'`);
+      assert.ok(cOrg.length > 0);
+      for (const r of gap) {
+        if (cOrg.some((x) => x.service_id === r.service_id)) assert.equal(r.staked_suppliers, null, String(r.service_id));
+      }
+      const one = await q(
+        `SELECT staked_suppliers FROM ${S}.get_domain_service_rewards(ARRAY['c.org'], '2026-09-06T00:00:00Z', '2026-09-07T00:00:00Z')`
+      );
+      assert.ok(one.every((r) => r.staked_suppliers !== null));
+    } finally {
+      await c.query("ROLLBACK");
     }
     // a range that starts mid-day leaves that day out (the old function read it)
     const mid = await q(
