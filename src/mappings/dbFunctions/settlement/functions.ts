@@ -107,6 +107,12 @@ export const CATALOG_FUNCTIONS = [
   "get_domain_service_rewards",
   "get_supplier_sessions",
   "get_domain_staked_suppliers",
+  // the session rosters (sessionRosters.ts)
+  "get_supplier_session_funnel",
+  "get_network_sessions",
+  "get_supplier_session_list",
+  "get_application_sessions",
+  "get_session_rosters",
   "get_relay_mining_difficulty",
   "get_created_claims",
   "get_morse_claims",
@@ -4337,7 +4343,12 @@ BEGIN
                      WHEN 'get_supply' THEN 'WHERE r.height IS NOT NULL'
                      WHEN 'get_supply_composition' THEN 'WHERE r.height IS NOT NULL'
                      WHEN 'get_network_claims' THEN 'WHERE r.bucket_start IS NOT NULL'
-                     WHEN 'get_domain_staked_suppliers' THEN 'WHERE r.day IS NOT NULL' ELSE '' END);
+                     WHEN 'get_domain_staked_suppliers' THEN 'WHERE r.day IS NOT NULL'
+                     WHEN 'get_supplier_session_funnel' THEN 'WHERE r.bucket_start IS NOT NULL'
+                     WHEN 'get_network_sessions' THEN 'WHERE r.bucket_start IS NOT NULL'
+                     WHEN 'get_supplier_session_list' THEN 'WHERE r.session_id IS NOT NULL'
+                     WHEN 'get_application_sessions' THEN 'WHERE r.bucket_start IS NOT NULL'
+                     WHEN 'get_session_rosters' THEN 'WHERE r.session_id IS NOT NULL' ELSE '' END);
   END LOOP;
 END $$;
 ${blockTimeColumnsSql(s)}

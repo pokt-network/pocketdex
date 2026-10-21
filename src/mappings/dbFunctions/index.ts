@@ -51,6 +51,11 @@ import {
 } from "./rewardsByAddressesAndTime";
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByServicesAddressesAndTime";
 import { getAmountOfBlocksAndSuppliersByTimesFn, servicesPerformanceBetweenTimesFn } from "./servicePerformance";
+import {
+  createSessionRosterFunctionsFn,
+  createSessionRosterTablesFn,
+  createSessionRosterWritersFn,
+} from "./sessionRosters";
 import { createSettlementFunctionsFn } from "./settlement/functions";
 import { createSettlementTablesFn } from "./settlement/schema";
 import { createSettlementSmartTagsFn } from "./settlement/smartTags";
@@ -182,6 +187,11 @@ export async function createDbFunctions(): Promise<void> {
     createClaimsByBlockFn,
     // the (wallet, supplier) pairs of every rev_share, which operator_scope ever reads
     createSupplierRevShareWalletsFn,
+    // the session rosters, their writers and the catalog functions over them (after supplier_numbers; the _json twins
+    // are made with the settlement functions below)
+    createSessionRosterTablesFn,
+    createSessionRosterWritersFn,
+    createSessionRosterFunctionsFn,
   )
   // settlement money tables, their single writer (src/mappings/money) and the catalog functions over them;
   // a failure here is fatal

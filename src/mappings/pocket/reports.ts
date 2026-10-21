@@ -4,9 +4,15 @@ import { updateBlockReportsFnName } from "../dbFunctions/reports";
 import { upsertAppsByBlockAndServicesFnName } from "../dbFunctions/reports/apps";
 import { upsertRelaysByBlockAndServicesFnName } from "../dbFunctions/reports/relays";
 import { upsertSuppliersByBlockAndServicesFnName } from "../dbFunctions/reports/suppliers";
+import {
+  finalizeSessionRostersFnName,
+  sessionRosterInputsFnName,
+  writeSessionRostersFnName,
+} from "../dbFunctions/sessionRosters";
 import { refreshSupplyDailyFnName } from "../dbFunctions/supplyDaily";
 import { refreshTxCountsDailyFnName } from "../dbFunctions/txCounts";
 import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
+import { buildSessionRosters, SessionRosterInputs, sessionRostersFromHeight } from "./sessionRosters";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   try {
@@ -46,6 +52,19 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       // refresh domain+service daily rewards summary — only on blocks with settlements
       hasClaimSettled && sequelize.query(`SELECT ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}(${height}::bigint);`, defaultOptions),
     ].filter(Boolean))
+
+    // session rosters: at a session start, every session of it with its members; at every block, the final states of
+    // the sessions it settles (after the money tables of the block, which indexMoney wrote before the reports)
+    if (height >= sessionRostersFromHeight(block.header.chainId)) {
+      const [inputs] = (await sequelize.query(`SELECT * FROM ${dbSchema}.${sessionRosterInputsFnName}(${height}::bigint);`,
+        { ...defaultOptions, raw: true, plain: false })) as unknown as [Array<SessionRosterInputs & { is_start: boolean }>];
+      if (inputs[0]?.is_start) {
+        await sequelize.query(`SELECT ${dbSchema}.${writeSessionRostersFnName}($1::jsonb);`,
+          { ...defaultOptions, bind: [JSON.stringify(buildSessionRosters(height, inputs[0]))] });
+      }
+      await sequelize.query(`SELECT ${dbSchema}.${finalizeSessionRostersFnName}(${height}::bigint);`, defaultOptions);
+      await sequelize.query(`SELECT ${dbSchema}._session_roster_progress(${height}::bigint);`, defaultOptions);
+    }
   } catch (e) {
     logger.error(`[handleAddBlockReports] Error generating block #${block.header.height} reports: ${e}`);
     throw e;
