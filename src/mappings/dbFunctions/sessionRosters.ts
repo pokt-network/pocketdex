@@ -239,12 +239,19 @@ CREATE OR REPLACE FUNCTION ${s}.${writeSessionRostersFnName}(p jsonb)
 RETURNS integer LANGUAGE plpgsql SET jit = off AS $$
 DECLARE v_start bigint := (p->>'start')::bigint; n integer;
 BEGIN
+  -- only the ids the dictionaries lack: ON CONFLICT DO NOTHING alone takes a number from the identity for every row it
+  -- skips, and service_num (smallint) ran out after ~195 starts of 168 services in the backfill (2026-10-21)
   INSERT INTO ${s}.application_numbers (application_id)
-  SELECT DISTINCT e->>'app' FROM jsonb_array_elements(p->'sessions') e ORDER BY 1 ON CONFLICT (application_id) DO NOTHING;
+  SELECT DISTINCT e->>'app' FROM jsonb_array_elements(p->'sessions') e
+  WHERE NOT EXISTS (SELECT 1 FROM ${s}.application_numbers n WHERE n.application_id = e->>'app')
+  ORDER BY 1 ON CONFLICT (application_id) DO NOTHING;
   INSERT INTO ${s}.service_numbers (service_id)
-  SELECT DISTINCT e->>'svc' FROM jsonb_array_elements(p->'sessions') e ORDER BY 1 ON CONFLICT (service_id) DO NOTHING;
+  SELECT DISTINCT e->>'svc' FROM jsonb_array_elements(p->'sessions') e
+  WHERE NOT EXISTS (SELECT 1 FROM ${s}.service_numbers n WHERE n.service_id = e->>'svc')
+  ORDER BY 1 ON CONFLICT (service_id) DO NOTHING;
   INSERT INTO ${s}.supplier_numbers (supplier_id)
   SELECT DISTINCT m FROM jsonb_array_elements(p->'sessions') e CROSS JOIN jsonb_array_elements_text(e->'members') m
+  WHERE NOT EXISTS (SELECT 1 FROM ${s}.supplier_numbers n WHERE n.supplier_id = m)
   ORDER BY 1 ON CONFLICT (supplier_id) DO NOTHING;
   WITH ins AS (
     INSERT INTO ${s}.session_rosters (session_id, application_num, service_num, start_height, end_height, start_time,

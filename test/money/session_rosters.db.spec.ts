@@ -282,6 +282,10 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       ]
     );
     assert.deepEqual(await members("a3", "s2", 1), ["q1", "q2"]);
+    // the dictionaries take a number only for a new id: 10 starts of the same 2 services used 2 service numbers
+    const [seq] = await q(`SELECT max(service_num) m, (SELECT last_value FROM ${S}.service_numbers_service_num_seq) l
+                           FROM ${S}.service_numbers`);
+    assert.deepEqual([Number(seq.m), Number(seq.l)], [2, 2]);
   });
 
   it("gives each member its final state at the settlement block", async () => {
