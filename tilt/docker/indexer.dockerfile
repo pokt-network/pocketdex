@@ -34,7 +34,12 @@ COPY package.json yarn.lock .yarnrc.yml vendor-builder.js vendor-config.yaml /ho
 COPY .yarn /home/app/.yarn
 
 # Install dependencies
-RUN yarn install --immutable --inline-builds --silent 2>&1 | grep -vE "YN000|YN0013|YN0060"
+# Not a pipe into grep: the pipe's exit status was grep's, so a failed install passed. The log is printed whole on
+# failure, and filtered as before on success.
+RUN yarn install --immutable --inline-builds --silent > /tmp/yarn-install.log 2>&1 \
+      || { cat /tmp/yarn-install.log; exit 1; }; \
+    grep -vE "YN000|YN0013|YN0060" /tmp/yarn-install.log || true; \
+    rm -f /tmp/yarn-install.log
 
 # Copy vendor workspace
 COPY vendor /home/app/vendor
