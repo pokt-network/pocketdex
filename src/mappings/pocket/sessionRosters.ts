@@ -94,3 +94,38 @@ export function buildSessionRosters(
     sessions: keep ? sessions.filter((x) => keep.has(x.id)) : sessions,
   };
 }
+
+// Writes the sessions of the claims created in blocks from..to that have no roster (_claims_without_roster: an
+// application staked during the session, which the chain validated with the state of the claim's block), with the
+// suppliers of their start. Used by handleAddBlockReports (one block), the backfill and the spec, through their own
+// query function. Returns the sessions written and the claimed session ids it could not reproduce (not written).
+export async function writeClaimsWithoutRoster(
+  query: (sql: string, params: unknown[]) => Promise<Array<Record<string, unknown>>>,
+  schema: string,
+  from: number,
+  to: number,
+  minStart: number
+): Promise<{ written: number; unmatched: string[] }> {
+  let written = 0;
+  const unmatched: string[] = [];
+  const missing = await query(`SELECT * FROM ${schema}._claims_without_roster($1::bigint, $2::bigint, $3::bigint)`, [
+    from,
+    to,
+    minStart,
+  ]);
+  for (const m of missing) {
+    const start = Number(m.start_height);
+    const ids = m.session_ids as string[];
+    const [at] = await query(`SELECT * FROM ${schema}._session_roster_inputs($1::bigint, $2::jsonb)`, [
+      start,
+      JSON.stringify(m.pairs),
+    ]);
+    const payload = at?.is_start ? buildSessionRosters(start, at as unknown as SessionRosterInputs, ids) : undefined;
+    const got = new Set(((payload?.sessions as Array<{ id: string }>) ?? []).map((x) => x.id));
+    unmatched.push(...ids.filter((id) => !got.has(id)));
+    if (!payload || got.size === 0) continue;
+    await query(`SELECT ${schema}._write_session_rosters($1::jsonb)`, [JSON.stringify(payload)]);
+    written += got.size;
+  }
+  return { written, unmatched };
+}

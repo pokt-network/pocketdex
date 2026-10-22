@@ -18,7 +18,7 @@ import { createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/sett
 import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlement/schema";
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
-import { buildSessionRosters, SessionRosterInputs } from "../../src/mappings/pocket/sessionRosters";
+import { buildSessionRosters, SessionRosterInputs, writeClaimsWithoutRoster } from "../../src/mappings/pocket/sessionRosters";
 
 type Row = Record<string, unknown>;
 interface PgClient {
@@ -47,12 +47,7 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         JSON.stringify(buildSessionRosters(h, inputs as unknown as SessionRosterInputs)),
       ]);
     }
-    for (const m of await q(`SELECT * FROM ${S}._claims_without_roster($1::bigint, $1::bigint, 1)`, [h])) {
-      const [at] = await q(`SELECT * FROM ${S}._session_roster_inputs($1::bigint, $2::jsonb)`, [m.start_height, JSON.stringify(m.pairs)]);
-      await q(`SELECT ${S}._write_session_rosters($1::jsonb)`, [
-        JSON.stringify(buildSessionRosters(Number(m.start_height), at as unknown as SessionRosterInputs, m.session_ids as string[])),
-      ]);
-    }
+    await writeClaimsWithoutRoster(q, S, h, h, 1);
     await q("BEGIN");
     try {
       const [{ n }] = await q(`SELECT ${S}.finalize_session_rosters($1::bigint) n`, [h]);
