@@ -4,17 +4,17 @@
 
 [submodule "vendor/subql"]
 	path = vendor/subql
-	url = https://github.com/pokt-shannon/subql.git
+	url = https://github.com/pokt-network/subql.git
 	branch = pocketdex
 [submodule "vendor/subql-cosmos"]
 	path = vendor/subql-cosmos
-	url = https://github.com/pokt-shannon/subql-cosmos.git
+	url = https://github.com/pokt-network/subql-cosmos.git
 	branch = pocketdex
 [submodule "vendor/cosmjs"]
 	path = vendor/cosmjs
-	url = https://github.com/pokt-shannon/x-cosmjs.git
+	url = https://github.com/pokt-network/x-cosmjs.git
 	branch = main
 [submodule "vendor/simdjson"]
 	path = vendor/simdjson
-	url = https://github.com/jorgecuesta/simdjson_nodejs.git
+	url = https://github.com/pokt-network/simdjson_nodejs.git
 	branch = buffer-support
