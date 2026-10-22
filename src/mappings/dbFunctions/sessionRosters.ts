@@ -750,12 +750,17 @@ ${days}
     FROM ${s}.session_domain_daily d
     WHERE by_domain AND d.domain_num = ANY(sel.dnums) AND d.day BETWEEN d1 AND d2
     UNION ALL
-    -- the selected seats of the sessions not settled yet
+    -- the selected seats of the sessions not settled yet: from those few sessions to their seats (a join the other way
+    -- read a million seats of 200 suppliers for 30 days, 0.8 s)
     SELECT p.start_time, ss.service_num, ss.supplier_num, 0, ${states.map(() => "0").join(", ")}, 1, 0, 0, 0, 0, 0, NULL, NULL
-    FROM ${s}.session_rosters p JOIN ${s}.session_suppliers ss ON ss.session_num = p.session_num
+    FROM ${s}.session_rosters p
+    CROSS JOIN LATERAL (
+      SELECT x.service_num, x.supplier_num FROM ${s}.session_suppliers x
+      WHERE x.session_num = p.session_num
+        AND CASE WHEN by_domain THEN x.domain_num = ANY(sel.dnums) ELSE x.supplier_num = ANY(sel.nums) END
+      OFFSET 0) ss  -- not pulled up into a join: each pending session's seats by the primary key
     WHERE p.settled_height IS NULL AND p.start_height BETWEEN lo_d AND hi_d
-      AND CASE WHEN by_domain THEN p.domain_nums OPERATOR(public.&&) sel.dnums AND ss.domain_num = ANY(sel.dnums)
-               ELSE p.member_nums OPERATOR(public.&&) sel.nums AND ss.supplier_num = ANY(sel.nums) END
+      AND CASE WHEN by_domain THEN p.domain_nums OPERATOR(public.&&) sel.dnums ELSE p.member_nums OPERATOR(public.&&) sel.nums END
   ), g AS (
     SELECT ${s}._bucket(bucket, r.t, c_from) b, CASE WHEN by_service THEN r.service_num END svc,
            CASE WHEN by_supplier THEN r.supplier_num END sup,
@@ -878,6 +883,10 @@ ${cover}
   vn := CASE WHEN services IS NOT NULL THEN ARRAY(SELECT n.service_num FROM ${s}.service_numbers n
                                                   WHERE n.service_id = ANY(get_supplier_session_list.services)) END;
   IF before_height IS NOT NULL THEN hi := least(hi, before_height); END IF;
+  -- the sessions not settled yet are the last few starts: read from the oldest of them (session_rosters_pending_idx)
+  IF only_active THEN
+    lo := greatest(lo, (SELECT min(x.start_height) FROM ${s}.session_rosters x WHERE x.settled_height IS NULL));
+  END IF;
   RETURN QUERY
   WITH p AS (
     SELECT x.session_num FROM ${s}.session_rosters x
