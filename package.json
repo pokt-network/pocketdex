@@ -31,6 +31,9 @@
   "engines": {
     "node": "26.x"
   },
+  "resolutions": {
+    "@nestjs/schedule@^3.0.1": "4.1.2"
+  },
   "files": [
     "dist",
     "schema.graphql",
