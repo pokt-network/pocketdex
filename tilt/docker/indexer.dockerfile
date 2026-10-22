@@ -1,4 +1,4 @@
-FROM node:18.20.3-alpine3.20
+FROM node:26.12.1-alpine3.24@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797
 
 # Build mode: development or production
 ARG BUILD_MODE=development
@@ -25,6 +25,10 @@ RUN apk add --no-cache \
     && curl -L https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/bin/yq \
     && chmod +x /usr/bin/yq
 
+# The node:26 image ships neither yarn nor corepack; yarn classic hands off to each .yarnrc.yml yarnPath.
+ADD --checksum=sha256:c17d3797fb9a9115bf375e31bfd30058cac6bc9c3b8807a3d8cb2094794b51ca https://registry.npmjs.org/yarn/-/yarn-1.22.22.tgz /tmp/yarn-1.22.22.tgz
+RUN npm install -g /tmp/yarn-1.22.22.tgz && rm /tmp/yarn-1.22.22.tgz && yarn --version
+
 COPY scripts /home/app/scripts
 RUN chmod +x /home/app/scripts/*.sh
 
@@ -33,7 +37,12 @@ COPY package.json yarn.lock .yarnrc.yml vendor-builder.js vendor-config.yaml /ho
 COPY .yarn /home/app/.yarn
 
 # Install dependencies
-RUN yarn install --immutable --inline-builds --silent 2>&1 | grep -vE "YN000|YN0013|YN0060"
+# Not a pipe into grep: the pipe's exit status was grep's, so a failed install passed. The log is printed whole on
+# failure, and filtered as before on success.
+RUN yarn install --immutable --inline-builds --silent > /tmp/yarn-install.log 2>&1 \
+      || { cat /tmp/yarn-install.log; exit 1; }; \
+    grep -vE "YN000|YN0013|YN0060" /tmp/yarn-install.log || true; \
+    rm -f /tmp/yarn-install.log
 
 # Copy vendor workspace
 COPY vendor /home/app/vendor

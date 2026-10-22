@@ -1,10 +1,12 @@
+# Install scripts keep yarn's exit status: a pipe into grep reported grep's, so a failed install passed.
+# vendor-builder.js discards their stdout, so the log goes to stderr, whole, only when yarn fails.
 vendors:
   - name: "@cosmjs"
     path: "vendor/cosmjs"
     workspace: true
     install:
       required: true
-      script: "yarn install --silent 2>&1 | grep -vE 'YN000|YN0013|YN0060'"
+      script: "if yarn install --silent > yarn-install.log 2>&1; then rm -f yarn-install.log; else cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; fi"
       cleanCache: true
     build:
       required: true
@@ -19,7 +21,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install --silent 2>&1 | grep -vE 'YN000|YN0013|YN0060'"
+      script: "if yarn install --silent > yarn-install.log 2>&1; then rm -f yarn-install.log; else cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; fi"
       cleanCache: true
     build:
       required: true
@@ -39,7 +41,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install --silent 2>&1 | grep -vE 'YN000|YN0013|YN0060'"
+      script: "if yarn install --silent > yarn-install.log 2>&1; then rm -f yarn-install.log; else cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; fi"
       cleanCache: true
     build:
       required: true

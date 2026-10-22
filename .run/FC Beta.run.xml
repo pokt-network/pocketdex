@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
     <configuration default="false" name="FC Beta" type="NodeJSConfigurationType" singleton="false"
                    application-parameters="force-clean -f . --db-schema=testnet_beta --profiler"
-                   path-to-node="$USER_HOME$/.nvm/versions/node/v18.20.3/bin/node"
+                   path-to-node="$USER_HOME$/.nvm/versions/node/v26.12.1/bin/node"
                    path-to-js-file="node_modules/@subql/node-cosmos/bin/run" typescript-loader="bundled"
                    working-dir="$PROJECT_DIR$">
         <envs>

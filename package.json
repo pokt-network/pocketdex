@@ -23,13 +23,16 @@
     "test:ci": "env node vendor/subql-cosmos/packages/node/bin/run test",
     "test:money": "TS_NODE_FILES=true sh scripts/run-node-tests.sh -r ts-node/register --test --test-concurrency=1 test/money/writer.db.spec.ts test/money/history.db.spec.ts test/money/supply.db.spec.ts test/money/legacy.db.spec.ts test/money/claim_proofs.db.spec.ts test/money/rewrites.db.spec.ts test/money/domain_rewards.db.spec.ts test/money/tx_counts.db.spec.ts",
     "test:graphql": "TS_NODE_FILES=true sh scripts/run-node-tests.sh -r ts-node/register --test test/graphql/closed_schema.spec.ts",
-    "test:unit": "TS_NODE_FILES=true sh scripts/run-node-tests.sh -r ts-node/register --test src/mappings/utils/params_normalize.spec.ts src/mappings/utils/params_history.spec.ts src/mappings/pocket/params.spec.ts src/mappings/pocket/validator.spec.ts src/mappings/pocket/suppliers.spec.ts src/mappings/pocket/morse_claims.spec.ts src/mappings/authz/exec.spec.ts src/mappings/utils/service_config_history.spec.ts src/mappings/utils/domain_rule_pin.spec.ts src/mappings/utils/env.spec.ts src/mappings/utils/db.spec.ts src/mappings/utils/genesis_height.spec.ts src/mappings/money/payload.spec.ts src/mappings/money/delegations.spec.ts src/mappings/money/de2.spec.ts src/mappings/money/bank.spec.ts src/mappings/money/history/chain.spec.ts src/mappings/money/history/job.spec.ts src/mappings/money/history/parity.spec.ts src/mappings/money/replay.spec.ts src/mappings/pocket/validator_delegations.spec.ts src/mappings/dbFunctions/entityColumns.spec.ts src/mappings/dbFunctions/entityDescriptions.spec.ts src/mappings/pocket/applications.spec.ts src/mappings/pocket/applications_reconcile.spec.ts src/mappings/dbFunctions/closedSchema.spec.ts"
+    "test:unit": "TS_NODE_FILES=true sh scripts/run-node-tests.sh -r ts-node/register --test --test-concurrency=4 src/mappings/utils/params_normalize.spec.ts src/mappings/utils/params_history.spec.ts src/mappings/pocket/params.spec.ts src/mappings/pocket/validator.spec.ts src/mappings/pocket/suppliers.spec.ts src/mappings/pocket/morse_claims.spec.ts src/mappings/authz/exec.spec.ts src/mappings/utils/service_config_history.spec.ts src/mappings/utils/domain_rule_pin.spec.ts src/mappings/utils/env.spec.ts src/mappings/utils/db.spec.ts src/mappings/utils/genesis_height.spec.ts src/mappings/money/payload.spec.ts src/mappings/money/delegations.spec.ts src/mappings/money/de2.spec.ts src/mappings/money/bank.spec.ts src/mappings/money/history/chain.spec.ts src/mappings/money/history/job.spec.ts src/mappings/money/history/parity.spec.ts src/mappings/money/replay.spec.ts src/mappings/pocket/validator_delegations.spec.ts src/mappings/dbFunctions/entityColumns.spec.ts src/mappings/dbFunctions/entityDescriptions.spec.ts src/mappings/pocket/applications.spec.ts src/mappings/pocket/applications_reconcile.spec.ts src/mappings/dbFunctions/closedSchema.spec.ts"
   },
   "homepage": "https://github.com/pokt-network/pocketdex",
   "repository": "github:pokt-network/pocketdex",
   "packageManager": "yarn@3.8.0",
   "engines": {
-    "node": "18.x"
+    "node": "26.x"
+  },
+  "resolutions": {
+    "@nestjs/schedule@^3.0.1": "4.1.2"
   },
   "files": [
     "dist",
