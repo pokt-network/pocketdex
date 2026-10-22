@@ -26,7 +26,7 @@ const gzip = promisify(zlib.gzip);
 
 // The fork in vendor/simdjson (memory project_parse_speedup): findChunkBoundaries returns [start, end) byte ranges
 // of the elements of the array at keyPath, grouped into chunks of at most maxBytes. Never lazyParse: it segfaults
-// on Node 18 above 1 GB.
+// on Node 18 above 1 GB (measured 2026-03, never re-measured on Node 26).
 interface Simdjson {
   findChunkBoundaries(buf: Buffer, keyPath: string, maxBytes: number): number[][];
 }
