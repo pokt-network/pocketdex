@@ -1,0 +1,61 @@
+name: Query image
+# Builds the GraphQL API image (docker/query) and pushes it to Harbor with the tag given by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag, e.g. 2.22.2-node26.12.1
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    # Only reviewed code reaches Harbor.
+    if: github.ref == 'refs/heads/main'
+    env:
+      TAG: ${{ inputs.tag }}
+      IMAGE: ${{ vars.HARBOR_REGISTRY }}/${{ vars.HARBOR_PROJECT }}/subql-query
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v3.9.0
+
+      - name: Login to Harbor
+        uses: docker/login-action@v3.4.0
+        with:
+          registry: ${{ vars.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      # A tag is published once: re-pushing it would change what a deployment pinned to the tag runs.
+      - name: Check tag
+        run: |
+          [[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "invalid tag: $TAG"; exit 1; }
+          if docker manifest inspect "$IMAGE:$TAG" > /dev/null 2>&1; then echo "$IMAGE:$TAG already exists"; exit 1; fi
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6.14.0
+        with:
+          context: docker/query
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          # Harbor lists buildkit attestation manifests as a separate untagged artifact; emit a plain manifest.
+          provenance: false
+          sbom: false
+
+      # Deployments pin the image by digest.
+      - name: Digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "$IMAGE:$TAG $DIGEST" >> "$GITHUB_STEP_SUMMARY"
