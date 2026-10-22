@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
     <configuration default="false" name="Reindex" type="NodeJSConfigurationType"
                    application-parameters="reindex -f . --targetHeight=100 --db-schema=app --unfinalized-blocks=true --timeout=120000 --store-cache-async=false --store-cache-upper-limit=30000 --store-cache-threshold=30000 --store-get-cache-size=30000 --store-flush-interval=60 --enable-cache=false --kyve-endpoint=false --query-limit=1000 --profiler"
-                   path-to-node="$USER_HOME$/.nvm/versions/node/v18.20.3/bin/node"
+                   path-to-node="$USER_HOME$/.nvm/versions/node/v26.12.1/bin/node"
                    path-to-js-file="node_modules/@subql/node-cosmos/bin/run" typescript-loader="bundled"
                    working-dir="$PROJECT_DIR$">
         <envs>
