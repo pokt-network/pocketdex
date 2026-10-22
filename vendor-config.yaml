@@ -6,7 +6,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install --silent > yarn-install.log 2>&1 && rm -f yarn-install.log || { cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; }"
+      script: "if yarn install --silent > yarn-install.log 2>&1; then rm -f yarn-install.log; else cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; fi"
       cleanCache: true
     build:
       required: true
@@ -21,7 +21,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install --silent > yarn-install.log 2>&1 && rm -f yarn-install.log || { cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; }"
+      script: "if yarn install --silent > yarn-install.log 2>&1; then rm -f yarn-install.log; else cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; fi"
       cleanCache: true
     build:
       required: true
@@ -41,7 +41,7 @@ vendors:
     workspace: true
     install:
       required: true
-      script: "yarn install --silent > yarn-install.log 2>&1 && rm -f yarn-install.log || { cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; }"
+      script: "if yarn install --silent > yarn-install.log 2>&1; then rm -f yarn-install.log; else cat yarn-install.log >&2; rm -f yarn-install.log; exit 1; fi"
       cleanCache: true
     build:
       required: true
