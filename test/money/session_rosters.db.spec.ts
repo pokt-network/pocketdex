@@ -141,10 +141,14 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         -- p5 unstakes at the start block 9: still a candidate of the session 9-12, not of 13-16
         UNION ALL SELECT 'p5', 's1', 1, '[]', '[]', '[1,9)'
         UNION ALL SELECT 'p6', 's1', 7, '[]', '[]', '[5,)'
+        -- p7 stakes in the start block 9: its config has no activation until the start 13 writes the activated version,
+        -- so it is a candidate from 13 on, not at 9 (mainnet 894,421)
+        UNION ALL SELECT 'p7', 's1', NULL, '[]', '[]', '[9,13)'
+        UNION ALL SELECT 'p7', 's1', 13, '[]', '[]', '[13,)'
         UNION ALL SELECT q, 's2', 1, '[]', '[]', '[1,)' FROM unnest(ARRAY['q1', 'q2']) q;
       CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_status text, _block_range int8range);
       INSERT INTO ${S}.suppliers SELECT p, CASE WHEN p IN ('p1', 'p2') THEN 'o1' ELSE 'o2' END, 'Staked', '[1,)'
-        FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'q1', 'q2']) p;
+        FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'q1', 'q2']) p;
       CREATE TABLE ${S}.msg_create_claims (supplier_id text, application_id text, service_id text, session_id text,
         block_id numeric, _block_range int8range);`);
     await c.query(createDomainServiceDailyRewardsTableFn(S));
@@ -304,8 +308,8 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         [9, "a1", "s1", 3, 6, 12, 18],
         [9, "a2", "s1", 3, 6, 12, 18],
         [9, "a3", "s2", 2, 2, 12, 18],
-        [13, "a1", "s1", 3, 5, 16, 22],
-        [13, "a2", "s1", 3, 5, 16, 22],
+        [13, "a1", "s1", 3, 6, 16, 22],
+        [13, "a2", "s1", 3, 6, 16, 22],
       ]
     );
     assert.deepEqual(await members("a3", "s2", 1), ["q1", "q2"]);

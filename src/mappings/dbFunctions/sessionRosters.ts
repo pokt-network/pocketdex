@@ -272,7 +272,10 @@ BEGIN
         -- live at the start, or closed by the start block itself: an unstake or a config change takes effect at the next
         -- session start (its deactivation height), so a config closed at the start still serves the session (mainnet
         -- 894,421 and 904,821: the chain's roster held such a supplier; 46 claims in 60 days)
-        WHERE c._block_range && int8range(p_height - 1, p_height, '[]') AND coalesce(c.activated_at_id, 0) <= p_height
+        -- activated: a stake's config is written with no activation until the next session start writes its activated
+        -- version (mainnet 894,421: a supplier staked at 894,420 is no candidate; every such row of 60 days lasted 20
+        -- blocks at most)
+        WHERE c._block_range && int8range(p_height - 1, p_height, '[]') AND c.activated_at_id <= p_height
           AND c.service_id IN (SELECT DISTINCT e->>1 FROM jsonb_array_elements(pairs) e)
         GROUP BY c.service_id) c;
 END $$;
@@ -311,7 +314,7 @@ BEGIN
   FROM (SELECT DISTINCT ON (c.service_id, c.supplier_id) c.service_id, c.supplier_id, c.domains->>0 dom
         FROM ${s}.supplier_service_configs c
         WHERE c.service_id IN (SELECT DISTINCT y.svc FROM _sr_mem y)
-          AND c._block_range && int8range(v_start - 1, v_start, '[]') AND coalesce(c.activated_at_id, 0) <= v_start
+          AND c._block_range && int8range(v_start - 1, v_start, '[]') AND c.activated_at_id <= v_start
           AND jsonb_array_length(c.domains) > 0
         -- the version that serves the session: the one live before the start block, over one opened by it
         ORDER BY c.service_id, c.supplier_id, (c._block_range @> v_start - 1) DESC, lower(c._block_range) DESC) d
