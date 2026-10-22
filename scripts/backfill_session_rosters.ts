@@ -14,7 +14,11 @@
 // FROM_HEIGHT below the chain's v0.1.33 height (sessionRostersFromHeight of the chain id: CHAIN_ID, or the blocks
 // table's) is refused: the rosters before it are not the chain's. Run it on the primary once the indexer with the rosters
 // is running.
-import { buildSessionRosters, SessionRosterInputs, sessionRostersFromHeight } from "../src/mappings/pocket/sessionRosters";
+import {
+  buildSessionRosters,
+  SessionRosterInputs,
+  sessionRostersFromHeight,
+} from "../src/mappings/pocket/sessionRosters";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { Client } = require("pg") as {
@@ -35,7 +39,8 @@ async function main(): Promise<void> {
     process.env.CHAIN_ID ?? String((await q(`SELECT chain_id FROM ${s}.blocks ORDER BY id DESC LIMIT 1`))[0].chain_id);
   const from = Number(process.env.FROM_HEIGHT);
   const minFrom = sessionRostersFromHeight(chainId);
-  if (!Number.isFinite(from) || from < minFrom) throw new Error(`FROM_HEIGHT must be at least ${minFrom} on ${chainId}`);
+  if (!Number.isFinite(from) || from < minFrom)
+    throw new Error(`FROM_HEIGHT must be at least ${minFrom} on ${chainId}`);
   const held = await q(`SELECT from_height FROM ${s}.session_roster_progress`);
   const latest = Number((await q(`SELECT max(id) h FROM ${s}.blocks`))[0].h);
   const to = Number(process.env.TO_HEIGHT ?? (held.length ? Number(held[0].from_height) - 1 : latest));
@@ -66,9 +71,12 @@ async function main(): Promise<void> {
     }
     await q("COMMIT");
     written += 1;
-    if (written % 100 === 0) console.log(`start ${h}: ${written} of ${starts.length}, ${Math.round((Date.now() - t0) / 1000)} s`);
+    if (written % 100 === 0)
+      console.log(`start ${h}: ${written} of ${starts.length}, ${Math.round((Date.now() - t0) / 1000)} s`);
   }
-  console.log(`rosters: ${written} starts written, ${starts.length ? `${starts[starts.length - 1]}..${starts[0]}` : "none"}`);
+  console.log(
+    `rosters: ${written} starts written, ${starts.length ? `${starts[starts.length - 1]}..${starts[0]}` : "none"}`
+  );
   if (parallel) {
     await c.end();
     return;
