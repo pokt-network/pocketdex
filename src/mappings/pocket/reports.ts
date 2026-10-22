@@ -55,12 +55,26 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
 
     // session rosters: at a session start, every session of it with its members; at every block, the final states of
     // the sessions it settles (after the money tables of the block, which indexMoney wrote before the reports)
-    if (height >= sessionRostersFromHeight(block.header.chainId)) {
+    const rostersFrom = sessionRostersFromHeight(block.header.chainId);
+    if (height >= rostersFrom) {
       const [inputs] = (await sequelize.query(`SELECT * FROM ${dbSchema}.${sessionRosterInputsFnName}(${height}::bigint);`,
         { ...defaultOptions, raw: true, plain: false })) as unknown as [Array<SessionRosterInputs & { is_start: boolean }>];
       if (inputs[0]?.is_start) {
         await sequelize.query(`SELECT ${dbSchema}.${writeSessionRostersFnName}($1::jsonb);`,
           { ...defaultOptions, bind: [JSON.stringify(buildSessionRosters(height, inputs[0]))] });
+      }
+      // the sessions of this block's claims that have no roster (an application staked during the session): written
+      // now with the start's suppliers, as the chain validated the claims (_claims_without_roster)
+      const [missing] = (await sequelize.query(
+        `SELECT * FROM ${dbSchema}._claims_without_roster(${height}::bigint, ${height}::bigint, ${rostersFrom}::bigint);`,
+        { ...defaultOptions, raw: true, plain: false })) as unknown as [Array<{ start_height: string; pairs: unknown; session_ids: string[] }>];
+      for (const m of missing) {
+        const [at] = (await sequelize.query(`SELECT * FROM ${dbSchema}.${sessionRosterInputsFnName}($1::bigint, $2::jsonb);`,
+          { ...defaultOptions, raw: true, plain: false, bind: [m.start_height, JSON.stringify(m.pairs)] })) as unknown as [
+          Array<SessionRosterInputs & { is_start: boolean }>];
+        if (!at[0]?.is_start) continue;
+        await sequelize.query(`SELECT ${dbSchema}.${writeSessionRostersFnName}($1::jsonb);`,
+          { ...defaultOptions, bind: [JSON.stringify(buildSessionRosters(Number(m.start_height), at[0], m.session_ids))] });
       }
       await sequelize.query(`SELECT ${dbSchema}.${finalizeSessionRostersFnName}(${height}::bigint);`, defaultOptions);
       await sequelize.query(`SELECT ${dbSchema}._session_roster_progress(${height}::bigint);`, defaultOptions);

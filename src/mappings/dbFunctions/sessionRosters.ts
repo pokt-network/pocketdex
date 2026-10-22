@@ -144,6 +144,22 @@ CREATE TABLE IF NOT EXISTS ${s}.session_supplier_daily (
   last_height        BIGINT   NOT NULL,
   PRIMARY KEY (supplier_num, day, service_num)
 );
+-- Per UTC day of the session start and supplier, every service together: the same columns, for the selectors with many
+-- suppliers and no by_service (nodefleet.net's 2,385 suppliers by supplier over 30 days: 2.4M rows of
+-- session_supplier_daily, 16 s).
+CREATE TABLE IF NOT EXISTS ${s}.session_supplier_day (
+  day                DATE     NOT NULL,
+  supplier_num       INTEGER  NOT NULL,
+  sessions           INTEGER  NOT NULL DEFAULT 0,
+${SESSION_STATES.slice(1).map((n) => `  ${n.padEnd(18)} INTEGER  NOT NULL DEFAULT 0,`).join("\n")}
+  paid_upokt         BIGINT   NOT NULL DEFAULT 0,
+  equal_share_upokt  NUMERIC  NOT NULL DEFAULT 0,
+  pool_upokt         BIGINT   NOT NULL DEFAULT 0,
+  roster_seats       BIGINT   NOT NULL DEFAULT 0,
+  first_height       BIGINT   NOT NULL,
+  last_height        BIGINT   NOT NULL,
+  PRIMARY KEY (supplier_num, day)
+);
 -- Per UTC day of the session start, domain and service: the same seat counts for the members on the domain (seats, per
 -- state, Y, B), and the sessions with at least one of them (sessions) with those sessions' V and K, each session once per
 -- domain. nodefleet.net's 2,385 suppliers sat 6.9M seats in 30 days: the per-supplier rollup read 2.4M rows (2.5 s).
@@ -240,7 +256,7 @@ END $$;
 -- the session end: an unbonding application keeps the session in which it began to unbond), and a service row of it is
 -- live at the start (GetActiveServiceConfigs). 35 ms and 368 ms for the two reads on the mainnet replica (974,561:
 -- 247 pairs, 174,547 candidates in 168 services).
-CREATE OR REPLACE FUNCTION ${s}.${sessionRosterInputsFnName}(p_height bigint,
+CREATE OR REPLACE FUNCTION ${s}.${sessionRosterInputsFnName}(p_height bigint, p_pairs jsonb DEFAULT NULL,
   OUT is_start boolean, OUT blocks_per_session integer, OUT block_hash text, OUT num_suppliers integer, OUT end_height bigint,
   OUT settlement_height bigint, OUT start_time timestamptz, OUT pairs jsonb, OUT candidates jsonb)
 LANGUAGE plpgsql STABLE SET jit = off SET plan_cache_mode = force_custom_plan AS $$
@@ -260,12 +276,17 @@ BEGIN
       FROM unnest(ARRAY['claim_window_open_offset_blocks', 'claim_window_close_offset_blocks',
                         'proof_window_open_offset_blocks', 'proof_window_close_offset_blocks']) k(key)) x), 0);
   SELECT b.hash, b.timestamp AT TIME ZONE 'UTC' INTO block_hash, start_time FROM ${s}.blocks b WHERE b.id = p_height LIMIT 1;
+  -- given pairs (the sessions of claims with no roster, _claims_without_roster): the chain accepted their claims, so
+  -- their applications had the session; only the suppliers are computed
+  pairs := p_pairs;
+  IF pairs IS NULL THEN
   SELECT coalesce(jsonb_agg(jsonb_build_array(x.app, x.svc) ORDER BY x.app, x.svc), '[]') INTO pairs
   FROM (SELECT DISTINCT a.id app, sv.service_id svc
         FROM ${s}.applications a
         JOIN ${s}.application_services sv ON sv.application_id = a.id AND sv._block_range @> p_height
         WHERE a._block_range @> p_height
           AND (a.stake_status = 'Staked' OR (a.stake_status = 'Unstaking' AND a.unstaking_begin_block_id >= p_height))) x;
+  END IF;
   SELECT coalesce(jsonb_object_agg(c.svc, c.sups), '{}') INTO candidates
   FROM (SELECT c.service_id svc, jsonb_agg(DISTINCT c.supplier_id) sups
         FROM ${s}.supplier_service_configs c
@@ -278,6 +299,27 @@ BEGIN
         WHERE c._block_range && int8range(p_height - 1, p_height, '[]') AND c.activated_at_id <= p_height
           AND c.service_id IN (SELECT DISTINCT e->>1 FROM jsonb_array_elements(pairs) e)
         GROUP BY c.service_id) c;
+END $$;
+
+-- The sessions whose claims (MsgCreateClaim) were created in blocks p_from..p_to and that have no roster, per session
+-- start: the (application, service) pairs and their session ids. The chain validates a claim against the session hydrated
+-- at its start height with the state of the claim's block (poktroll x/proof/keeper/msg_server_create_claim.go:41,
+-- x/proof/keeper/session.go:26-33), where an application staked during the session is found and, with no service history
+-- yet, has its service at every height (x/application/types/application.go:85-91); the start's rosters do not have it.
+-- The suppliers are those of the start (the same configs and block hash), so the session is written with them
+-- (handleAddBlockReports at the claim's block; the backfill). Starts below p_min_start are left out.
+CREATE OR REPLACE FUNCTION ${s}._claims_without_roster(p_from bigint, p_to bigint, p_min_start bigint)
+RETURNS TABLE(start_height bigint, pairs jsonb, session_ids text[])
+LANGUAGE plpgsql STABLE SET jit = off SET plan_cache_mode = force_custom_plan AS $$
+BEGIN
+  RETURN QUERY
+  SELECT m.session_start_height::bigint, jsonb_agg(DISTINCT jsonb_build_array(m.application_id, m.service_id)),
+         array_agg(DISTINCT m.session_id)
+  FROM ${s}.msg_create_claims m
+  WHERE m.block_id BETWEEN p_from AND p_to AND m.session_start_height >= p_min_start
+    AND NOT EXISTS (SELECT 1 FROM ${s}.session_rosters r WHERE r.session_id = m.session_id)
+  GROUP BY 1
+  ORDER BY 1;
 END $$;
 
 -- Writes the sessions of one start (p: {start, end, settlement, time, sessions: [{id, app, svc, candidates, members}]},
@@ -484,6 +526,19 @@ ${SESSION_STATES.slice(1)
       first_height = least(t.first_height, EXCLUDED.first_height),
       last_height = greatest(t.last_height, EXCLUDED.last_height)
     RETURNING 1
+  ), sday AS (
+    INSERT INTO ${s}.session_supplier_day AS t (day, supplier_num, sessions, ${SESSION_STATES.slice(1).join(", ")},
+      paid_upokt, equal_share_upokt, pool_upokt, roster_seats, first_height, last_height)
+    SELECT ag.day, ag.supplier_num, sum(ag.sessions), ${SESSION_STATES.slice(1).map((n) => `sum(ag.${n})`).join(", ")},
+           sum(ag.paid_upokt), sum(ag.equal_share_upokt), sum(ag.pool_upokt), sum(ag.roster_seats), p_height, p_height
+    FROM ag GROUP BY 1, 2
+    ON CONFLICT (supplier_num, day) DO UPDATE SET
+      sessions = t.sessions + EXCLUDED.sessions,
+${SESSION_STATES.slice(1).map((n) => `      ${n} = t.${n} + EXCLUDED.${n},`).join("\n")}
+      paid_upokt = t.paid_upokt + EXCLUDED.paid_upokt, equal_share_upokt = t.equal_share_upokt + EXCLUDED.equal_share_upokt,
+      pool_upokt = t.pool_upokt + EXCLUDED.pool_upokt, roster_seats = t.roster_seats + EXCLUDED.roster_seats,
+      first_height = least(t.first_height, EXCLUDED.first_height), last_height = greatest(t.last_height, EXCLUDED.last_height)
+    RETURNING 1
   ), cn AS (
     SELECT nw.session_num, count(*) FILTER (WHERE nw.new_state IN (1, 2, 3, 4, 5, 8))::smallint claimed
     FROM nw GROUP BY 1
@@ -579,7 +634,8 @@ ${SESSION_STATES.slice(1).map((n) => `      ${n} = t.${n} + EXCLUDED.${n},`).joi
     RETURNING 1
   )
   SELECT (SELECT count(*) FROM ch)::integer + 0 * (SELECT count(*) FROM up) + 0 * (SELECT count(*) FROM roll)
-         + 0 * (SELECT count(*) FROM app) + 0 * (SELECT count(*) FROM svc) + 0 * (SELECT count(*) FROM dom) INTO n;
+         + 0 * (SELECT count(*) FROM app) + 0 * (SELECT count(*) FROM svc) + 0 * (SELECT count(*) FROM dom)
+         + 0 * (SELECT count(*) FROM sday) INTO n;
   RETURN n;
 END $$;
 
@@ -706,8 +762,8 @@ END $$;
 -- session; for one domain they come from its rollup; for a list of suppliers or several domains they are counted from
 -- the sessions themselves (member_nums / domain_nums), which with_sessions false skips. With domains and by_supplier
 -- the rows are the suppliers staked on the domains on a day of the range (the stored daily sets), each with all its
--- seats, on any domain. network_sessions = every settled session of the service(s) (presence =
--- sessions_with_selected / network_sessions, by service). active = the selected seats of the sessions not settled yet. first_height /
+-- seats, on any domain. network_sessions = every settled session of the service (by_service; without it, of the whole
+-- network) (presence = sessions_with_selected / network_sessions, by service). active = the selected seats of the sessions not settled yet. first_height /
 -- last_height = the settlement blocks summed.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_session_funnel(suppliers text[], range_start timestamptz,
   range_end timestamptz, bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT false,
@@ -742,7 +798,14 @@ ${days}
            d.equal_share_upokt eq, d.sessions::bigint n, d.pool_upokt::numeric v, d.roster_seats k,
            d.first_height, d.last_height
     FROM ${s}.session_supplier_daily d
-    WHERE NOT by_domain AND d.supplier_num = ANY(sel.nums) AND d.day BETWEEN d1 AND d2
+    WHERE NOT by_domain AND by_service AND d.supplier_num = ANY(sel.nums) AND d.day BETWEEN d1 AND d2
+    UNION ALL
+    -- without by_service, the day's row of each supplier for every service together
+    SELECT d.day::timestamp AT TIME ZONE 'UTC', NULL::smallint, d.supplier_num, d.sessions::bigint,
+           ${states.map((n) => `d.${n}::bigint`).join(", ")}, 0::bigint, d.paid_upokt::numeric, d.equal_share_upokt,
+           d.sessions::bigint, d.pool_upokt::numeric, d.roster_seats, d.first_height, d.last_height
+    FROM ${s}.session_supplier_day d
+    WHERE NOT by_domain AND NOT by_service AND d.supplier_num = ANY(sel.nums) AND d.day BETWEEN d1 AND d2
     UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.service_num, NULL, d.seats::bigint,
            ${states.map((n) => `d.${n}::bigint`).join(", ")}, 0::bigint, d.paid_upokt::numeric,
@@ -783,7 +846,7 @@ ${days}
            CASE WHEN by_service THEN d.service_num END svc, sum(d.sessions)::bigint n
     FROM ${s}.session_service_daily d
     WHERE d.day BETWEEN d1 AND d2
-      AND d.service_num IN (SELECT DISTINCT r.service_num FROM r)
+      AND (NOT by_service OR d.service_num IN (SELECT DISTINCT r.service_num FROM r))
     GROUP BY 1, 2
   )
   SELECT g.b, ${s}._bucket_end(bucket, g.b, c_to), coalesce(v.service_id, 'all'), coalesce(sn.supplier_id, 'all'),

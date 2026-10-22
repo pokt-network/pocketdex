@@ -81,6 +81,28 @@ async function main(): Promise<void> {
     await c.end();
     return;
   }
+  // the sessions of claims with no roster (applications staked during a session), as the indexer writes them at the
+  // claim's block: claims up to the latest block, of the starts of the range
+  let late = 0;
+  for (const m of await q(`SELECT * FROM ${s}._claims_without_roster($1::bigint, $2::bigint, $3::bigint)`, [
+    from,
+    latest,
+    from,
+  ])) {
+    if (Number(m.start_height) > to) continue;
+    const [at] = await q(`SELECT * FROM ${s}._session_roster_inputs($1::bigint, $2::jsonb)`, [
+      m.start_height,
+      JSON.stringify(m.pairs),
+    ]);
+    if (!at.is_start) continue;
+    await q(`SELECT ${s}._write_session_rosters($1::jsonb)`, [
+      JSON.stringify(
+        buildSessionRosters(Number(m.start_height), at as unknown as SessionRosterInputs, m.session_ids as string[])
+      ),
+    ]);
+    late += 1;
+  }
+  console.log(`claims with no roster: sessions of ${late} starts written`);
   if (process.env.FINAL_STATES_ONLY) {
     await q(
       `INSERT INTO ${s}.session_roster_progress AS t (singleton, from_height, height) VALUES (true, $1, $2)

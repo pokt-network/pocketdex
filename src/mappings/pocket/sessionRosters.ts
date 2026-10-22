@@ -64,8 +64,13 @@ export interface SessionRosterInputs {
   candidates: Record<string, string[]>;
 }
 
-// The payload _write_session_rosters takes: every session of the start, with its members.
-export function buildSessionRosters(start: number, inputs: SessionRosterInputs): Record<string, unknown> {
+// The payload _write_session_rosters takes: every session of the start, with its members; with onlyIds, those sessions
+// only (the sessions of claims with no roster: a pair whose computed id is not the claim's is not written).
+export function buildSessionRosters(
+  start: number,
+  inputs: SessionRosterInputs,
+  onlyIds?: string[]
+): Record<string, unknown> {
   // a service with no candidate has no session (the chain answers ErrSessionSuppliersNotFound)
   const sessions = inputs.pairs
     .filter(([, svc]) => (inputs.candidates[svc] ?? []).length > 0)
@@ -80,11 +85,12 @@ export function buildSessionRosters(start: number, inputs: SessionRosterInputs):
         members: selectMembers(bz, candidates, inputs.num_suppliers),
       };
     });
+  const keep = onlyIds ? new Set(onlyIds) : undefined;
   return {
     start,
     end: Number(inputs.end_height),
     settlement: Number(inputs.settlement_height),
     time: inputs.start_time instanceof Date ? inputs.start_time.toISOString() : inputs.start_time,
-    sessions,
+    sessions: keep ? sessions.filter((x) => keep.has(x.id)) : sessions,
   };
 }
