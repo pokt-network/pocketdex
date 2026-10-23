@@ -4,20 +4,10 @@ import { updateBlockReportsFnName } from "../dbFunctions/reports";
 import { upsertAppsByBlockAndServicesFnName } from "../dbFunctions/reports/apps";
 import { upsertRelaysByBlockAndServicesFnName } from "../dbFunctions/reports/relays";
 import { upsertSuppliersByBlockAndServicesFnName } from "../dbFunctions/reports/suppliers";
-import {
-  finalizeSessionRostersFnName,
-  sessionRosterInputsFnName,
-  writeSessionRostersFnName,
-} from "../dbFunctions/sessionRosters";
 import { refreshSupplyDailyFnName } from "../dbFunctions/supplyDaily";
 import { refreshTxCountsDailyFnName } from "../dbFunctions/txCounts";
 import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
-import {
-  buildSessionRosters,
-  SessionRosterInputs,
-  sessionRostersFromHeight,
-  writeClaimsWithoutRoster,
-} from "./sessionRosters";
+import { sessionRostersFromHeight, sessionRosterStep } from "./sessionRosters";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   try {
@@ -58,31 +48,20 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       hasClaimSettled && sequelize.query(`SELECT ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}(${height}::bigint);`, defaultOptions),
     ].filter(Boolean))
 
-    // session rosters: at a session start, every session of it with its members; at every block, the final states of
-    // the sessions it settles (after the money tables of the block, which indexMoney wrote before the reports)
+    // session rosters (sessionRosterStep): after the money tables of the block, which indexMoney wrote before the reports
     const rostersFrom = sessionRostersFromHeight(block.header.chainId);
     if (height >= rostersFrom) {
-      const [inputs] = (await sequelize.query(`SELECT * FROM ${dbSchema}.${sessionRosterInputsFnName}(${height}::bigint);`,
-        { ...defaultOptions, raw: true, plain: false })) as unknown as [Array<SessionRosterInputs & { is_start: boolean }>];
-      if (inputs[0]?.is_start) {
-        await sequelize.query(`SELECT ${dbSchema}.${writeSessionRostersFnName}($1::jsonb);`,
-          { ...defaultOptions, bind: [JSON.stringify(buildSessionRosters(height, inputs[0]))] });
+      const run = async (sql: string, params: unknown[]) =>
+        ((await sequelize.query(sql, { ...defaultOptions, raw: true, plain: false, bind: params })) as unknown as [
+          Array<Record<string, unknown>>,
+        ])[0];
+      // claims only in blocks with a MsgCreateClaim (an authz MsgExec may carry them)
+      const hasClaims = block.messages.some((m) =>
+        ["/pocket.proof.MsgCreateClaim", "/cosmos.authz.v1beta1.MsgExec"].includes(m.msg.typeUrl));
+      const { unmatched } = await sessionRosterStep(run, dbSchema, height, rostersFrom, hasClaims);
+      if (unmatched.length > 0) {
+        logger.warn(`[handleAddBlockReports] block #${height}: claims of sessions whose roster could not be reproduced: ${unmatched.join(", ")}`);
       }
-      // the sessions of this block's claims that have no roster (an application staked during the session): written
-      // now with the start's suppliers, as the chain validated the claims (_claims_without_roster); only blocks with claims
-      // (an authz MsgExec may carry them)
-      if (block.messages.some((m) => ["/pocket.proof.MsgCreateClaim", "/cosmos.authz.v1beta1.MsgExec"].includes(m.msg.typeUrl))) {
-        const run = async (sql: string, params: unknown[]) =>
-          ((await sequelize.query(sql, { ...defaultOptions, raw: true, plain: false, bind: params })) as unknown as [
-            Array<Record<string, unknown>>,
-          ])[0];
-        const late = await writeClaimsWithoutRoster(run, dbSchema, height, height, rostersFrom);
-        if (late.unmatched.length > 0) {
-          logger.warn(`[handleAddBlockReports] block #${height}: claims of sessions whose roster could not be reproduced: ${late.unmatched.join(", ")}`);
-        }
-      }
-      await sequelize.query(`SELECT ${dbSchema}.${finalizeSessionRostersFnName}(${height}::bigint);`, defaultOptions);
-      await sequelize.query(`SELECT ${dbSchema}._session_roster_progress(${height}::bigint);`, defaultOptions);
     }
   } catch (e) {
     logger.error(`[handleAddBlockReports] Error generating block #${block.header.height} reports: ${e}`);

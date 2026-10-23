@@ -18,7 +18,7 @@ import { createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/sett
 import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlement/schema";
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
-import { buildSessionRosters, SessionRosterInputs, writeClaimsWithoutRoster } from "../../src/mappings/pocket/sessionRosters";
+import { buildSessionRosters, SessionRosterInputs, sessionRosterStep } from "../../src/mappings/pocket/sessionRosters";
 
 type Row = Record<string, unknown>;
 interface PgClient {
@@ -39,21 +39,19 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
   let a4: { id: string; members: string[] } = { id: "", members: [] };
   const c = new Client({ connectionString: URL });
   const q = async (sql: string, params?: unknown[]) => (await c.query(sql, params)).rows;
-  // what handleAddBlockReports does at a block
+  // what handleAddBlockReports does at a block (sessionRosterStep, in the block transaction); inputsRead counts the
+  // blocks it read the start inputs for
+  let inputsRead = 0;
   const block = async (h: number) => {
-    const [inputs] = await q(`SELECT * FROM ${S}._session_roster_inputs($1::bigint)`, [h]);
-    if (inputs.is_start) {
-      await q(`SELECT ${S}._write_session_rosters($1::jsonb)`, [
-        JSON.stringify(buildSessionRosters(h, inputs as unknown as SessionRosterInputs)),
-      ]);
-    }
-    await writeClaimsWithoutRoster(q, S, h, h, 1);
+    const counted = async (sql: string, params: unknown[]) => {
+      if (sql.includes("_session_roster_inputs(") && params.length === 1) inputsRead += 1;
+      return q(sql, params);
+    };
     await q("BEGIN");
     try {
-      const [{ n }] = await q(`SELECT ${S}.finalize_session_rosters($1::bigint) n`, [h]);
+      const { changed } = await sessionRosterStep(counted, S, h, 1, true);
       await q("COMMIT");
-      await q(`SELECT ${S}._session_roster_progress($1::bigint)`, [h]);
-      return Number(n);
+      return changed;
     } catch (e) {
       await q("ROLLBACK");
       throw e;
@@ -307,6 +305,13 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       araw.map((r) => Object.values(r).map(String))
     );
   };
+
+  it("reads the start inputs only at the session starts, and moves the coverage only there", async () => {
+    // blocks 1..40, sessions of 4 blocks: the starts 1, 5, ..., 37
+    assert.equal(inputsRead, 10);
+    const [p] = await q(`SELECT from_height, height FROM ${S}.session_roster_progress`);
+    assert.deepEqual([Number(p.from_height), Number(p.height)], [1, 37]);
+  });
 
   it("writes every active (application, service) session at each start, with the chain's selection", async () => {
     const rows = await q(`

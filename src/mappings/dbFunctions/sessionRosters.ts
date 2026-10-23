@@ -219,8 +219,8 @@ ${SESSION_STATES.slice(1).map((n) => `  ${n.padEnd(19)} BIGINT   NOT NULL DEFAUL
   last_height         BIGINT   NOT NULL,
   PRIMARY KEY (day, service_num)
 );
--- What the rosters cover: the session starts from from_height to height (the last block the roster step processed;
--- the backfill lowers from_height). One row.
+-- What the rosters cover: the session starts from from_height to height (the last start written: no session starts
+-- between two starts; the backfill lowers from_height). One row.
 CREATE TABLE IF NOT EXISTS ${s}.session_roster_progress (
   singleton   BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
   from_height BIGINT  NOT NULL,
@@ -395,7 +395,7 @@ BEGIN
   RETURN n;
 END $$;
 
--- The step of every block (handleAddBlockReports, after the start's rosters are written): the rosters cover p_height.
+-- At each session start, after its rosters are written (sessionRosterStep): the rosters cover the starts up to p_height.
 CREATE OR REPLACE FUNCTION ${s}._session_roster_progress(p_height bigint)
 RETURNS void LANGUAGE sql AS $$
   INSERT INTO ${s}.session_roster_progress AS t (singleton, from_height, height) VALUES (true, p_height, p_height)
@@ -671,8 +671,8 @@ $$;
 // Who: the supplier functions take one selector (_session_selector): suppliers (up to 200 ids), owners (the suppliers
 // they own now), operators (the suppliers whose live configs share revenue with them now) or domains (up to 200 endpoint
 // root domains: the seats of the suppliers that served a session from one of them); the relations have no cap.
-// Coverage: the session starts the rosters hold (session_roster_progress: from from_height, where the indexer or the
-// backfill started, to the last block the roster step processed); a session is in a bucket by the block time of its
+// Coverage: the session starts the rosters hold (session_roster_progress: from from_height, the first start the indexer
+// or the backfill wrote, to the last start written); a session is in a bucket by the block time of its
 // start. Every row carries covered_from, covered_to and covered_gaps (always []: the rosters are written in order); when
 // nothing matched, one row of NULLs carries them (the _json twin leaves it out of data).
 export function createSessionRosterFunctionsFn(dbSchema: string): string {

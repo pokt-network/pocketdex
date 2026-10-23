@@ -129,3 +129,38 @@ export async function writeClaimsWithoutRoster(
   }
   return { written, unmatched };
 }
+
+// The last session start the roster step wrote, per schema: the blocks after it and before its next start are no start,
+// and the step reads no inputs for them. The session timing params take effect only at the next start of the current
+// grid (since v0.1.31, before every roster height: poktroll x/shared/keeper/msg_server_update_param.go:154-185), so
+// start + num_blocks_per_session is the next start. The start itself is always read again (a block retried after its
+// transaction rolled back).
+const lastStart = new Map<string, { start: number; next: number }>();
+
+// The roster step of a block, in the block transaction after the money step (handleAddBlockReports; the spec runs it
+// as the indexer does): at a session start, its sessions with their members, and the coverage (session_roster_progress)
+// moves to it; at a block with claims (hasClaims: a MsgCreateClaim, maybe inside an authz MsgExec), the sessions of its
+// claims that have no roster (writeClaimsWithoutRoster); at every block, the final states of the sessions it settles.
+// Returns the seats whose state changed and the claims' session ids whose roster could not be reproduced.
+export async function sessionRosterStep(
+  query: (sql: string, params: unknown[]) => Promise<Array<Record<string, unknown>>>,
+  schema: string,
+  height: number,
+  minStart: number,
+  hasClaims: boolean
+): Promise<{ changed: number; unmatched: string[] }> {
+  const g = lastStart.get(schema);
+  if (!g || height <= g.start || height >= g.next) {
+    const [inputs] = await query(`SELECT * FROM ${schema}._session_roster_inputs($1::bigint)`, [height]);
+    if (inputs?.is_start) {
+      await query(`SELECT ${schema}._write_session_rosters($1::jsonb)`, [
+        JSON.stringify(buildSessionRosters(height, inputs as unknown as SessionRosterInputs)),
+      ]);
+      await query(`SELECT ${schema}._session_roster_progress($1::bigint)`, [height]);
+      lastStart.set(schema, { start: height, next: height + Number(inputs.blocks_per_session) });
+    }
+  }
+  const unmatched = hasClaims ? (await writeClaimsWithoutRoster(query, schema, height, height, minStart)).unmatched : [];
+  const [f] = await query(`SELECT ${schema}.finalize_session_rosters($1::bigint) n`, [height]);
+  return { changed: Number(f.n), unmatched };
+}
