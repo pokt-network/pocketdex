@@ -420,7 +420,7 @@ async function lockProgress(client: PgClient, schema: string): Promise<void> {
 }
 
 // One height, one transaction: the CALLs of write_settlement, then the gap lowered below the height (which also
-// covers the heights with no money above it, already classified).
+// covers the heights with no money above it, already classified), then the session rosters of the height finalized.
 async function writeHeight(client: PgClient, o: HistoryOptions, p: Prepared): Promise<void> {
   await client.query("BEGIN");
   try {
@@ -452,6 +452,14 @@ async function writeHeight(client: PgClient, o: HistoryOptions, p: Prepared): Pr
       return;
     }
     await lowerGap(client, o.schema, p.height);
+    // the sessions the indexer settled at this height without money (session_rosters.money_missing) complete now that
+    // the money tables cover it (sessionRosters.ts finalize_session_rosters); a schema without the rosters skips it
+    const rosters = await client.query(
+      `SELECT to_regprocedure('${o.schema}.finalize_session_rosters(bigint)') IS NOT NULL AS ok`
+    );
+    if (rosters.rows[0]?.ok) {
+      await client.query(`SELECT ${o.schema}.finalize_session_rosters($1::bigint)`, [p.height]);
+    }
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
