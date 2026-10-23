@@ -13,7 +13,8 @@
 // writes the final states and lowers from_height to FROM_HEIGHT.
 // FROM_HEIGHT below the chain's v0.1.33 height (sessionRostersFromHeight of the chain id: CHAIN_ID, or the blocks
 // table's) is refused: the rosters before it are not the chain's. Run it on the primary once the indexer with the rosters
-// is running.
+// is running. The sessions of claims with no roster are looked for LATE_CHUNK blocks of claims at a time (default
+// 2000), one transaction each. test/money/session_rosters.db.spec.ts runs backfillSessionRosters over the spec's chain.
 import {
   buildSessionRosters,
   SessionRosterInputs,
@@ -21,34 +22,34 @@ import {
   writeClaimsWithoutRoster,
 } from "../src/mappings/pocket/sessionRosters";
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { Client } = require("pg") as {
-  Client: new (o: { connectionString?: string }) => {
-    connect(): Promise<void>;
-    end(): Promise<void>;
-    query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>;
-  };
-};
+type Query = (sql: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
 
-async function main(): Promise<void> {
-  const s = process.env.SCHEMA ?? "mainnet";
-  const c = new Client({ connectionString: process.env.DATABASE_URL });
-  await c.connect();
-  await c.query("SET jit = off");
-  const q = async (sql: string, params?: unknown[]) => (await c.query(sql, params)).rows;
-  const chainId =
-    process.env.CHAIN_ID ?? String((await q(`SELECT chain_id FROM ${s}.blocks ORDER BY id DESC LIMIT 1`))[0].chain_id);
-  const from = Number(process.env.FROM_HEIGHT);
-  const minFrom = sessionRostersFromHeight(chainId);
-  if (!Number.isFinite(from) || from < minFrom)
-    throw new Error(`FROM_HEIGHT must be at least ${minFrom} on ${chainId}`);
+export interface BackfillOptions {
+  from: number;
+  // default: the first start the rosters hold minus 1, or latest
+  to?: number;
+  // the last block processed (default: the latest block): claims and final states up to it
+  latest?: number;
+  skipFinalStates?: boolean;
+  finalStatesOnly?: boolean;
+  lateChunk?: number;
+  log?: (line: string) => void;
+}
+
+export async function backfillSessionRosters(
+  q: Query,
+  s: string,
+  o: BackfillOptions
+): Promise<{ starts: number; late: number; unmatched: string[]; finalBlocks: number; changed: number }> {
+  const log = o.log ?? (() => undefined);
+  const from = o.from;
   const held = await q(`SELECT from_height FROM ${s}.session_roster_progress`);
-  const latest = Number((await q(`SELECT max(id) h FROM ${s}.blocks`))[0].h);
-  const to = Number(process.env.TO_HEIGHT ?? (held.length ? Number(held[0].from_height) - 1 : latest));
-  const parallel = Boolean(process.env.SKIP_FINAL_STATES);
+  const latest = o.latest ?? Number((await q(`SELECT max(id) h FROM ${s}.blocks`))[0].h);
+  const to = o.to ?? (held.length ? Number(held[0].from_height) - 1 : latest);
+  const parallel = Boolean(o.skipFinalStates);
   // the starts of the range, from the grid (cheap), then written newest first
   const starts: number[] = [];
-  for (let h = from; !process.env.FINAL_STATES_ONLY && h <= to; ) {
+  for (let h = from; !o.finalStatesOnly && h <= to; ) {
     const [g] = await q(`SELECT start_height, blocks_per_session FROM ${s}._session_grid($1::bigint)`, [h]);
     if (g.start_height === null) throw new Error(`no session params at ${h}`);
     const start = Number(g.start_height);
@@ -73,20 +74,30 @@ async function main(): Promise<void> {
     await q("COMMIT");
     written += 1;
     if (written % 100 === 0)
-      console.log(`start ${h}: ${written} of ${starts.length}, ${Math.round((Date.now() - t0) / 1000)} s`);
+      log(`start ${h}: ${written} of ${starts.length}, ${Math.round((Date.now() - t0) / 1000)} s`);
   }
-  console.log(
-    `rosters: ${written} starts written, ${starts.length ? `${starts[starts.length - 1]}..${starts[0]}` : "none"}`
-  );
-  if (parallel) {
-    await c.end();
-    return;
-  }
+  log(`rosters: ${written} starts written, ${starts.length ? `${starts[starts.length - 1]}..${starts[0]}` : "none"}`);
+  if (parallel) return { starts: written, late: 0, unmatched: [], finalBlocks: 0, changed: 0 };
   // the sessions of claims with no roster (applications staked during a session), as the indexer writes them at the
-  // claim's block: claims up to the latest block, of the starts of the range
-  const late = await writeClaimsWithoutRoster(q, s, from, latest, from);
-  console.log(`claims with no roster: ${late.written} sessions written, ${late.unmatched.length} not reproduced`);
-  if (process.env.FINAL_STATES_ONLY) {
+  // claim's block: claims up to the latest block, of the starts of the range, lateChunk blocks of claims a transaction
+  const chunk = o.lateChunk ?? 2000;
+  let late = 0;
+  const unmatched: string[] = [];
+  for (let a = from; a <= latest; a += chunk) {
+    await q("BEGIN");
+    const w = await writeClaimsWithoutRoster(
+      q as (sql: string, params: unknown[]) => ReturnType<Query>,
+      s,
+      a,
+      Math.min(a + chunk - 1, latest),
+      from
+    );
+    await q("COMMIT");
+    late += w.written;
+    unmatched.push(...w.unmatched);
+  }
+  log(`claims with no roster: ${late} sessions written, ${unmatched.length} not reproduced`);
+  if (o.finalStatesOnly) {
     await q(
       `INSERT INTO ${s}.session_roster_progress AS t (singleton, from_height, height) VALUES (true, $1, $2)
        ON CONFLICT (singleton) DO UPDATE SET from_height = least(t.from_height, EXCLUDED.from_height)`,
@@ -107,11 +118,45 @@ async function main(): Promise<void> {
     changed += Number((await q(`SELECT ${s}.finalize_session_rosters($1::bigint) n`, [sh]))[0].n);
     await q("COMMIT");
   }
-  console.log(`final states: ${heights.length} blocks, ${changed} seats written`);
+  log(`final states: ${heights.length} blocks, ${changed} seats written`);
+  return { starts: written, late, unmatched, finalBlocks: heights.length, changed };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { Client } = require("pg") as {
+  Client: new (o: { connectionString?: string }) => {
+    connect(): Promise<void>;
+    end(): Promise<void>;
+    query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>;
+  };
+};
+
+async function main(): Promise<void> {
+  const s = process.env.SCHEMA ?? "mainnet";
+  const c = new Client({ connectionString: process.env.DATABASE_URL });
+  await c.connect();
+  await c.query("SET jit = off");
+  const q = async (sql: string, params?: unknown[]) => (await c.query(sql, params)).rows;
+  const chainId =
+    process.env.CHAIN_ID ?? String((await q(`SELECT chain_id FROM ${s}.blocks ORDER BY id DESC LIMIT 1`))[0].chain_id);
+  const from = Number(process.env.FROM_HEIGHT);
+  const minFrom = sessionRostersFromHeight(chainId);
+  if (!Number.isFinite(from) || from < minFrom)
+    throw new Error(`FROM_HEIGHT must be at least ${minFrom} on ${chainId}`);
+  await backfillSessionRosters(q, s, {
+    from,
+    to: process.env.TO_HEIGHT ? Number(process.env.TO_HEIGHT) : undefined,
+    skipFinalStates: Boolean(process.env.SKIP_FINAL_STATES),
+    finalStatesOnly: Boolean(process.env.FINAL_STATES_ONLY),
+    lateChunk: process.env.LATE_CHUNK ? Number(process.env.LATE_CHUNK) : undefined,
+    log: (line) => console.log(line),
+  });
   await c.end();
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

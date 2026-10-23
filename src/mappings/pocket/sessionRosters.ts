@@ -160,7 +160,9 @@ export async function sessionRosterStep(
       lastStart.set(schema, { start: height, next: height + Number(inputs.blocks_per_session) });
     }
   }
-  const unmatched = hasClaims ? (await writeClaimsWithoutRoster(query, schema, height, height, minStart)).unmatched : [];
+  const unmatched = hasClaims
+    ? (await writeClaimsWithoutRoster(query, schema, height, height, minStart)).unmatched
+    : [];
   const [f] = await query(`SELECT ${schema}.finalize_session_rosters($1::bigint) n`, [height]);
   return { changed: Number(f.n), unmatched };
 }

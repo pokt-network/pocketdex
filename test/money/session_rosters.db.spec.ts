@@ -18,6 +18,7 @@ import { createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/sett
 import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlement/schema";
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
+import { backfillSessionRosters } from "../../scripts/backfill_session_rosters";
 import { buildSessionRosters, SessionRosterInputs, sessionRosterStep } from "../../src/mappings/pocket/sessionRosters";
 
 type Row = Record<string, unknown>;
@@ -565,6 +566,31 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       }
     }
   });
+  it("backfills what the indexer wrote, from the session starts and the settlement blocks", async () => {
+    // the indexer has processed blocks 1..41 here; the tables it wrote, by session id (the dictionaries stay)
+    const tables = ["session_supplier_daily", "session_supplier_day", "session_domain_daily", "session_service_daily",
+      "session_application_daily"];
+    const snapshot = async () => ({
+      rosters: await q(`SELECT r.session_id, r.application_num, r.service_num, r.start_height, r.end_height, r.start_time,
+          r.settlement_height, r.candidates, r.roster_size, r.claimed, r.settled_height, r.paid_upokt, r.settled_upokt,
+          r.member_nums, r.domain_nums
+        FROM ${S}.session_rosters r ORDER BY r.session_id`),
+      seats: await q(`SELECT r.session_id, ss.supplier_num, ss.start_height, ss.application_num, ss.service_num, ss.state,
+          ss.paid_upokt, ss.domain_num
+        FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num) ORDER BY 1, 2`),
+      progress: await q(`SELECT from_height, height FROM ${S}.session_roster_progress`),
+      ...Object.fromEntries(await Promise.all(tables.map(async (t) => [t, await q(`SELECT * FROM ${S}.${t} ORDER BY 1, 2, 3, 4`)]))),
+    });
+    const indexed = await snapshot();
+    assert.ok((indexed.rosters as Row[]).length > 0);
+    await q(`TRUNCATE ${S}.session_rosters, ${S}.session_suppliers, ${S}.session_roster_progress, ${tables.map((t) => `${S}.${t}`).join(", ")}`);
+    // the late pass three blocks of claims at a time: a4's claim at 10 is found in the chunk 10..12
+    const got = await backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, lateChunk: 3 });
+    assert.deepEqual([got.starts, got.late, got.unmatched], [11, 1, []]);
+    assert.deepEqual(await snapshot(), indexed);
+    await checkRollups();
+  });
+
   it("settles nothing where the money step has not written the outcomes", async () => {
     // the sessions of the start 33 settle at 42
     const due = async () =>
