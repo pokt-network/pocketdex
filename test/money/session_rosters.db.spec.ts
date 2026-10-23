@@ -552,4 +552,25 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       }
     }
   });
+  it("settles nothing where the money step has not written the outcomes", async () => {
+    // the sessions of the start 33 settle at 42
+    const due = async () =>
+      Number((await q(`SELECT count(*) n FROM ${S}.session_rosters WHERE start_height = 33 AND settled_height IS NULL`))[0].n);
+    assert.equal(await due(), 3);
+    // the money step has not processed 42 (an override skipping heights): nothing moves
+    await q(`UPDATE ${S}.money_progress SET height = 41`);
+    assert.equal(await block(42), 0);
+    assert.equal(await due(), 3);
+    // processed, but 42 is a settlement gap: the sessions wait for it
+    await q(`UPDATE ${S}.money_progress SET height = 999999999`);
+    await q(`INSERT INTO ${S}.settlement_gaps (from_height, to_height) VALUES (42, 42)`);
+    assert.equal(await block(42), 0);
+    assert.equal(await due(), 3);
+    // the gap written: they settle at the next block that finalizes, as idle (no claims)
+    await q(`DELETE FROM ${S}.settlement_gaps`);
+    assert.ok((await block(43)) > 0);
+    assert.equal(await due(), 0);
+    for (const m of await members("a1", "s1", 33)) assert.equal(await stateOf(m, "a1", "s1", 33), "idle_no_work");
+    await checkRollups();
+  });
 });

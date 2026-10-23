@@ -409,12 +409,22 @@ $$;
 -- settled claims. Each seat whose state, paid_upokt or session V changed moves its (day, supplier, service) row by its
 -- old and new contribution (sessions counts a seat once, when it leaves active; equal_share_upokt adds V / roster_size),
 -- and each session its application's day; first_height / last_height take p_height. Returns the seats that changed.
+-- The outcomes are read only where the money step wrote them: nothing happens at a height it has not processed
+-- (money_progress.height below it: a POCKETDEX_MONEY_FROM_HEIGHT override skipping heights), and a session whose
+-- settlement height the money tables do not cover (below money_progress.from_height, or in a settlement_gaps row) stays
+-- active until they do; it is then settled at the next block that finalizes, with the outcomes of every height since its
+-- end.
 CREATE OR REPLACE FUNCTION ${s}.${finalizeSessionRostersFnName}(p_height bigint)
 RETURNS integer LANGUAGE plpgsql SET jit = off SET plan_cache_mode = force_custom_plan AS $$
-DECLARE lo bigint; n integer;
+DECLARE lo bigint; n integer; m_from bigint;
 BEGIN
+  SELECT mp.from_height INTO m_from FROM ${s}.money_progress mp WHERE mp.height >= p_height;
+  IF m_from IS NULL THEN RETURN 0; END IF;
   -- most blocks settle nothing: two index probes, and no temporary table
-  IF NOT EXISTS (SELECT 1 FROM ${s}.session_rosters p WHERE p.settled_height IS NULL AND p.settlement_height <= p_height)
+  IF NOT EXISTS (SELECT 1 FROM ${s}.session_rosters p WHERE p.settled_height IS NULL AND p.settlement_height <= p_height
+                   AND p.settlement_height >= m_from
+                   AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_gaps g
+                                   WHERE p.settlement_height BETWEEN g.from_height AND g.to_height))
      AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_blocks b WHERE b.height = p_height) THEN
     RETURN 0;
   END IF;
@@ -431,6 +441,8 @@ BEGIN
   JOIN ${s}.service_numbers v ON v.service_num = r.service_num
   WHERE r.session_num IN (
     SELECT p.session_num FROM ${s}.session_rosters p WHERE p.settled_height IS NULL AND p.settlement_height <= p_height
+      AND p.settlement_height >= m_from
+      AND NOT EXISTS (SELECT 1 FROM ${s}.settlement_gaps g WHERE p.settlement_height BETWEEN g.from_height AND g.to_height)
     UNION
     SELECT r2.session_num
     FROM (SELECT x.application_id, x.service_id, x.session_end FROM ${s}.claim_settlements x WHERE x.height = p_height
