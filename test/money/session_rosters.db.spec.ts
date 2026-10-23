@@ -421,10 +421,14 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     assert.equal(String(r.paid_upokt), String(raw.paid));
     const [net] = await q(`SELECT count(*) n, sum(r.paid_upokt) v FROM ${S}.session_rosters r
                            JOIN ${S}.service_numbers v USING (service_num) WHERE v.service_id = 's1' AND r.settled_height IS NOT NULL`);
-    // without by_service: every settled session of the network
+    // without by_service: the sessions of the services the selection sat in (s1 only), the sum of the by_service rows'
     const [all] = await q(`SELECT count(*) n FROM ${S}.session_rosters WHERE settled_height IS NOT NULL`);
-    assert.equal(String(r.network_sessions), String(all.n));
     assert.ok(Number(net.n) < Number(all.n));
+    assert.equal(String(r.network_sessions), String(net.n));
+    const perSvc = await q(`SELECT * FROM ${S}.get_supplier_session_funnel($1, $2, $3, NULL, true)`, [[...P, "q1"], ...RANGE]);
+    const [both] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel($1, $2, $3)`, [[...P, "q1"], ...RANGE]);
+    assert.equal(perSvc.length, 2);
+    assert.equal(String(both.network_sessions), String(perSvc.reduce((a, x) => a + Number(x.network_sessions), 0)));
     assert.equal(String(r.pool_upokt), String(net.v));
     // owners: o1 owns p1 and p2
     const [o] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, owners => ARRAY['o1'])`, RANGE);

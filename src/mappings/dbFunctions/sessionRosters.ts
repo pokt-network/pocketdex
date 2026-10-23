@@ -772,8 +772,9 @@ END $$;
 -- session; for one domain they come from its rollup; for a list of suppliers or several domains they are counted from
 -- the sessions themselves (member_nums / domain_nums), which with_sessions false skips. With domains and by_supplier
 -- the rows are the suppliers that served sessions from the domains, each with its seats served from them (the rows add
--- up to the domains' total without by_supplier). network_sessions = every settled session of the service (by_service; without it, of the whole
--- network) (presence = sessions_with_selected / network_sessions, by service). active = the selected seats of the sessions not settled yet. first_height /
+-- up to the domains' total without by_supplier). network_sessions = the settled sessions of the services the selection
+-- sat in during the bucket (by_service: of the row's service; without it, the sum of the by_service rows'): presence =
+-- sessions_with_selected / network_sessions. active = the selected seats of the sessions not settled yet. first_height /
 -- last_height = the settlement blocks summed.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_session_funnel(suppliers text[], range_start timestamptz,
   range_end timestamptz, bucket text DEFAULT NULL, by_service boolean DEFAULT false, by_supplier boolean DEFAULT false,
@@ -853,12 +854,21 @@ ${days}
       AND CASE WHEN by_domain THEN x.domain_nums OPERATOR(public.&&) sel.dnums ELSE x.member_nums OPERATOR(public.&&) sel.nums END
       AND x.start_height BETWEEN lo_d AND hi_d AND x.settled_height IS NOT NULL
     GROUP BY 1, 2
+  ), sat AS (
+    -- the (bucket, service) pairs the selection sat in: the rows read by service, else the per-service rollup
+    SELECT ${s}._bucket(bucket, r.t, c_from) b, r.service_num svc FROM r WHERE r.service_num IS NOT NULL
+    UNION
+    SELECT ${s}._bucket(bucket, d.day::timestamp AT TIME ZONE 'UTC', c_from), d.service_num
+    FROM ${s}.session_supplier_daily d
+    WHERE NOT by_service AND NOT by_domain AND d.day BETWEEN d1 AND d2
+      AND CASE WHEN sel.dnums IS NOT NULL THEN d.domain_num = ANY(sel.dnums) ELSE d.supplier_num = ANY(sel.nums) END
   ), net AS (
-    SELECT ${s}._bucket(bucket, d.day::timestamp AT TIME ZONE 'UTC', c_from) b,
-           CASE WHEN by_service THEN d.service_num END svc, sum(d.sessions)::bigint n
-    FROM ${s}.session_service_daily d
-    WHERE d.day BETWEEN d1 AND d2
-      AND (NOT by_service OR d.service_num IN (SELECT DISTINCT r.service_num FROM r))
+    SELECT x.b, CASE WHEN by_service THEN x.svc END svc, sum(x.n)::bigint n
+    FROM (SELECT ${s}._bucket(bucket, d.day::timestamp AT TIME ZONE 'UTC', c_from) b, d.service_num svc, sum(d.sessions) n
+          FROM ${s}.session_service_daily d
+          WHERE d.day BETWEEN d1 AND d2
+          GROUP BY 1, 2) x
+    JOIN sat ON sat.b = x.b AND sat.svc = x.svc
     GROUP BY 1, 2
   )
   SELECT g.b, ${s}._bucket_end(bucket, g.b, c_to), coalesce(v.service_id, 'all'), coalesce(sn.supplier_id, 'all'),
