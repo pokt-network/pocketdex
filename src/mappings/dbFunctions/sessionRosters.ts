@@ -118,8 +118,8 @@ CREATE TABLE IF NOT EXISTS ${s}.session_suppliers (
   PRIMARY KEY (session_num, supplier_num)
 );
 CREATE INDEX IF NOT EXISTS session_suppliers_supplier_idx ON ${s}.session_suppliers (supplier_num, start_height);
--- Per UTC day of the session start, supplier and service: the settled sessions it was a member of (sessions) and how
--- many ended in each state; paid_upokt (Y) = what its settled claims paid its shareholders; equal_share_upokt (B) = each
+-- Per UTC day of the session start, supplier, service and the domain the supplier served the session from (domain_num of
+-- the seat, 0 for none): the settled sessions it was a member of (sessions) and how many ended in each state; paid_upokt (Y) = what its settled claims paid its shareholders; equal_share_upokt (B) = each
 -- session's paid_upokt over its roster size, summed over its seats (B of fleet-analysis = V x X / K, which sums over
 -- suppliers); pool_upokt and roster_seats = those sessions' V and K, summed over its seats. first_height / last_height =
 -- the settlement blocks whose sessions the row holds.
@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS ${s}.session_supplier_daily (
   day                DATE     NOT NULL,
   supplier_num       INTEGER  NOT NULL,
   service_num        SMALLINT NOT NULL,
+  domain_num         INTEGER  NOT NULL DEFAULT 0,
   sessions           INTEGER  NOT NULL DEFAULT 0,
   paid               INTEGER  NOT NULL DEFAULT 0,
   settled_zero       INTEGER  NOT NULL DEFAULT 0,
@@ -142,14 +143,17 @@ CREATE TABLE IF NOT EXISTS ${s}.session_supplier_daily (
   roster_seats       BIGINT   NOT NULL DEFAULT 0,
   first_height       BIGINT   NOT NULL,
   last_height        BIGINT   NOT NULL,
-  PRIMARY KEY (supplier_num, day, service_num)
+  PRIMARY KEY (supplier_num, day, service_num, domain_num)
 );
--- Per UTC day of the session start and supplier, every service together: the same columns, for the selectors with many
+-- the domains selector by supplier (its seats on the domains)
+CREATE INDEX IF NOT EXISTS session_supplier_daily_domain_idx ON ${s}.session_supplier_daily (domain_num, day) WHERE domain_num <> 0;
+-- Per UTC day of the session start, supplier and domain (as above), every service together: the same columns, for the selectors with many
 -- suppliers and no by_service (nodefleet.net's 2,385 suppliers by supplier over 30 days: 2.4M rows of
 -- session_supplier_daily, 16 s).
 CREATE TABLE IF NOT EXISTS ${s}.session_supplier_day (
   day                DATE     NOT NULL,
   supplier_num       INTEGER  NOT NULL,
+  domain_num         INTEGER  NOT NULL DEFAULT 0,
   sessions           INTEGER  NOT NULL DEFAULT 0,
 ${SESSION_STATES.slice(1).map((n) => `  ${n.padEnd(18)} INTEGER  NOT NULL DEFAULT 0,`).join("\n")}
   paid_upokt         BIGINT   NOT NULL DEFAULT 0,
@@ -158,8 +162,9 @@ ${SESSION_STATES.slice(1).map((n) => `  ${n.padEnd(18)} INTEGER  NOT NULL DEFAUL
   roster_seats       BIGINT   NOT NULL DEFAULT 0,
   first_height       BIGINT   NOT NULL,
   last_height        BIGINT   NOT NULL,
-  PRIMARY KEY (supplier_num, day)
+  PRIMARY KEY (supplier_num, day, domain_num)
 );
+CREATE INDEX IF NOT EXISTS session_supplier_day_domain_idx ON ${s}.session_supplier_day (domain_num, day) WHERE domain_num <> 0;
 -- Per UTC day of the session start, domain and service: the same seat counts for the members on the domain (seats, per
 -- state, Y, B), and the sessions with at least one of them (sessions) with those sessions' V and K, each session once per
 -- domain. nodefleet.net's 2,385 suppliers sat 6.9M seats in 30 days: the per-supplier rollup read 2.4M rows (2.5 s).
@@ -515,19 +520,19 @@ BEGIN
        -coalesce(ch.old_v, 0), -ch.roster_size::bigint)) k(st, sign, sess, paid, eq, pool, k)
     WHERE k.st <> 0
   ), ag AS (
-    SELECT d.day, d.supplier_num, d.service_num, sum(d.sess) sessions,
+    SELECT d.day, d.supplier_num, d.service_num, coalesce(d.domain_num, 0) domain_num, sum(d.sess) sessions,
 ${SESSION_STATES.slice(1)
   .map((name, i) => `           sum(CASE WHEN d.st = ${i + 1} THEN d.sign ELSE 0 END) ${name}`)
   .join(",\n")},
            sum(d.paid) paid_upokt, sum(d.eq) equal_share_upokt, sum(d.pool) pool_upokt, sum(d.k) roster_seats
-    FROM d GROUP BY 1, 2, 3
+    FROM d GROUP BY 1, 2, 3, 4
   ), roll AS (
-    INSERT INTO ${s}.session_supplier_daily AS t (day, supplier_num, service_num, sessions, ${SESSION_STATES.slice(1).join(", ")},
+    INSERT INTO ${s}.session_supplier_daily AS t (day, supplier_num, service_num, domain_num, sessions, ${SESSION_STATES.slice(1).join(", ")},
       paid_upokt, equal_share_upokt, pool_upokt, roster_seats, first_height, last_height)
-    SELECT ag.day, ag.supplier_num, ag.service_num, ag.sessions, ${SESSION_STATES.slice(1).map((n) => `ag.${n}`).join(", ")},
+    SELECT ag.day, ag.supplier_num, ag.service_num, ag.domain_num, ag.sessions, ${SESSION_STATES.slice(1).map((n) => `ag.${n}`).join(", ")},
            ag.paid_upokt, ag.equal_share_upokt, ag.pool_upokt, ag.roster_seats, p_height, p_height
     FROM ag
-    ON CONFLICT (supplier_num, day, service_num) DO UPDATE SET
+    ON CONFLICT (supplier_num, day, service_num, domain_num) DO UPDATE SET
       sessions = t.sessions + EXCLUDED.sessions,
 ${SESSION_STATES.slice(1)
   .map((name) => `      ${name} = t.${name} + EXCLUDED.${name}`)
@@ -539,12 +544,12 @@ ${SESSION_STATES.slice(1)
       last_height = greatest(t.last_height, EXCLUDED.last_height)
     RETURNING 1
   ), sday AS (
-    INSERT INTO ${s}.session_supplier_day AS t (day, supplier_num, sessions, ${SESSION_STATES.slice(1).join(", ")},
+    INSERT INTO ${s}.session_supplier_day AS t (day, supplier_num, domain_num, sessions, ${SESSION_STATES.slice(1).join(", ")},
       paid_upokt, equal_share_upokt, pool_upokt, roster_seats, first_height, last_height)
-    SELECT ag.day, ag.supplier_num, sum(ag.sessions), ${SESSION_STATES.slice(1).map((n) => `sum(ag.${n})`).join(", ")},
+    SELECT ag.day, ag.supplier_num, ag.domain_num, sum(ag.sessions), ${SESSION_STATES.slice(1).map((n) => `sum(ag.${n})`).join(", ")},
            sum(ag.paid_upokt), sum(ag.equal_share_upokt), sum(ag.pool_upokt), sum(ag.roster_seats), p_height, p_height
-    FROM ag GROUP BY 1, 2
-    ON CONFLICT (supplier_num, day) DO UPDATE SET
+    FROM ag GROUP BY 1, 2, 3
+    ON CONFLICT (supplier_num, day, domain_num) DO UPDATE SET
       sessions = t.sessions + EXCLUDED.sessions,
 ${SESSION_STATES.slice(1).map((n) => `      ${n} = t.${n} + EXCLUDED.${n},`).join("\n")}
       paid_upokt = t.paid_upokt + EXCLUDED.paid_upokt, equal_share_upokt = t.equal_share_upokt + EXCLUDED.equal_share_upokt,
@@ -665,8 +670,7 @@ $$;
 // one call. What PNF does not build is a website that ranks peers.
 // Who: the supplier functions take one selector (_session_selector): suppliers (up to 200 ids), owners (the suppliers
 // they own now), operators (the suppliers whose live configs share revenue with them now) or domains (up to 200 endpoint
-// root domains: the suppliers staked on them on a day of the range, from the stored daily sets); the relations have no
-// cap.
+// root domains: the seats of the suppliers that served a session from one of them); the relations have no cap.
 // Coverage: the session starts the rosters hold (session_roster_progress: from from_height, where the indexer or the
 // backfill started, to the last block the roster step processed); a session is in a bucket by the block time of its
 // start. Every row carries covered_from, covered_to and covered_gaps (always []: the rosters are written in order); when
@@ -700,12 +704,12 @@ export function createSessionRosterFunctionsFn(dbSchema: string): string {
   return `
 -- The suppliers a selector names: exactly one of suppliers (up to 200), owners (the suppliers each owns now), operators
 -- (_operator_suppliers: the Staked suppliers whose live configs share revenue with them now) or domains (up to 200).
--- nums = those suppliers as supplier_numbers; for domains, the union of the stored daily sets of staked suppliers
--- (domain_service_daily_suppliers) over the UTC days of the range (NULL range = every stored day), and dnums = the
--- domains as domain_numbers (the seats' own domains: session_suppliers.domain_num, session_domain_daily). p_optional:
--- none given is allowed (both NULL: no selector). p_domain_suppliers: for domains, nums too (only by_supplier reads it).
+-- nums = those suppliers as supplier_numbers; for domains, dnums = the domains as domain_numbers (the seats' own
+-- domains: session_suppliers.domain_num and the rollups' domain_num) and nums NULL. p_optional: none given is allowed
+-- (both NULL: no selector).
+DROP FUNCTION IF EXISTS ${s}._session_selector(text[], text[], text[], text[], timestamptz, timestamptz, boolean, boolean);
 CREATE OR REPLACE FUNCTION ${s}._session_selector(suppliers text[], owners text[], operators text[], domains text[],
-  range_start timestamptz, range_end timestamptz, p_optional boolean DEFAULT false, p_domain_suppliers boolean DEFAULT false,
+  range_start timestamptz, range_end timestamptz, p_optional boolean DEFAULT false,
   OUT nums integer[], OUT dnums integer[])
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE ids text[];
@@ -717,12 +721,6 @@ BEGIN
   IF domains IS NOT NULL THEN
     PERFORM ${s}._validate(domains, 'domains', NULL, NULL, NULL);
     dnums := ARRAY(SELECT n.domain_num FROM ${s}.domain_numbers n WHERE n.domain = ANY(_session_selector.domains) ORDER BY 1);
-    IF NOT p_domain_suppliers THEN RETURN; END IF;
-    nums := (SELECT coalesce(${s}._supplier_nums_union(t.supplier_nums), '{}')
-             FROM ${s}.domain_service_daily_suppliers t
-             WHERE t.domain = ANY(_session_selector.domains)
-               AND (range_start IS NULL OR t.day >= (range_start AT TIME ZONE 'UTC')::date)
-               AND (range_end IS NULL OR t.day <= ((range_end AT TIME ZONE 'UTC') - interval '1 microsecond')::date));
     RETURN;
   END IF;
   IF num_nonnulls(suppliers, owners, operators) = 0 THEN RETURN; END IF;
@@ -773,8 +771,8 @@ END $$;
 -- paid every member (V summed), roster_seats = their roster sizes (K summed): per supplier (by_supplier) each seat is a
 -- session; for one domain they come from its rollup; for a list of suppliers or several domains they are counted from
 -- the sessions themselves (member_nums / domain_nums), which with_sessions false skips. With domains and by_supplier
--- the rows are the suppliers staked on the domains on a day of the range (the stored daily sets), each with all its
--- seats, on any domain. network_sessions = every settled session of the service (by_service; without it, of the whole
+-- the rows are the suppliers that served sessions from the domains, each with its seats served from them (the rows add
+-- up to the domains' total without by_supplier). network_sessions = every settled session of the service (by_service; without it, of the whole
 -- network) (presence = sessions_with_selected / network_sessions, by service). active = the selected seats of the sessions not settled yet. first_height /
 -- last_height = the settlement blocks summed.
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_session_funnel(suppliers text[], range_start timestamptz,
@@ -792,8 +790,7 @@ BEGIN
   IF bucket = 'hour' THEN RAISE EXCEPTION 'bucket=hour is not available here: use day, week, month or year'; END IF;
 ${cover}
 ${days}
-  SELECT * INTO sel FROM ${s}._session_selector(suppliers, owners, operators, domains, range_start, range_end, false,
-    by_supplier);
+  SELECT * INTO sel FROM ${s}._session_selector(suppliers, owners, operators, domains, range_start, range_end);
   by_domain := sel.dnums IS NOT NULL AND NOT by_supplier;
   -- one domain: its rollup counts each session once; several: a session with members on two would count twice there
   one_domain := by_domain AND cardinality(sel.dnums) <= 1;
@@ -810,14 +807,16 @@ ${days}
            d.equal_share_upokt eq, d.sessions::bigint n, d.pool_upokt::numeric v, d.roster_seats k,
            d.first_height, d.last_height
     FROM ${s}.session_supplier_daily d
-    WHERE NOT by_domain AND by_service AND d.supplier_num = ANY(sel.nums) AND d.day BETWEEN d1 AND d2
+    WHERE NOT by_domain AND by_service AND d.day BETWEEN d1 AND d2
+      AND CASE WHEN sel.dnums IS NOT NULL THEN d.domain_num = ANY(sel.dnums) ELSE d.supplier_num = ANY(sel.nums) END
     UNION ALL
     -- without by_service, the day's row of each supplier for every service together
     SELECT d.day::timestamp AT TIME ZONE 'UTC', NULL::smallint, d.supplier_num, d.sessions::bigint,
            ${states.map((n) => `d.${n}::bigint`).join(", ")}, 0::bigint, d.paid_upokt::numeric, d.equal_share_upokt,
            d.sessions::bigint, d.pool_upokt::numeric, d.roster_seats, d.first_height, d.last_height
     FROM ${s}.session_supplier_day d
-    WHERE NOT by_domain AND NOT by_service AND d.supplier_num = ANY(sel.nums) AND d.day BETWEEN d1 AND d2
+    WHERE NOT by_domain AND NOT by_service AND d.day BETWEEN d1 AND d2
+      AND CASE WHEN sel.dnums IS NOT NULL THEN d.domain_num = ANY(sel.dnums) ELSE d.supplier_num = ANY(sel.nums) END
     UNION ALL
     SELECT d.day::timestamp AT TIME ZONE 'UTC', d.service_num, NULL, d.seats::bigint,
            ${states.map((n) => `d.${n}::bigint`).join(", ")}, 0::bigint, d.paid_upokt::numeric,
@@ -832,10 +831,11 @@ ${days}
     CROSS JOIN LATERAL (
       SELECT x.service_num, x.supplier_num FROM ${s}.session_suppliers x
       WHERE x.session_num = p.session_num
-        AND CASE WHEN by_domain THEN x.domain_num = ANY(sel.dnums) ELSE x.supplier_num = ANY(sel.nums) END
+        AND CASE WHEN sel.dnums IS NOT NULL THEN x.domain_num = ANY(sel.dnums) ELSE x.supplier_num = ANY(sel.nums) END
       OFFSET 0) ss  -- not pulled up into a join: each pending session's seats by the primary key
     WHERE p.settled_height IS NULL AND p.start_height BETWEEN lo_d AND hi_d
-      AND CASE WHEN by_domain THEN p.domain_nums OPERATOR(public.&&) sel.dnums ELSE p.member_nums OPERATOR(public.&&) sel.nums END
+      AND CASE WHEN sel.dnums IS NOT NULL THEN p.domain_nums OPERATOR(public.&&) sel.dnums
+               ELSE p.member_nums OPERATOR(public.&&) sel.nums END
   ), g AS (
     SELECT ${s}._bucket(bucket, r.t, c_from) b, CASE WHEN by_service THEN r.service_num END svc,
            CASE WHEN by_supplier THEN r.supplier_num END sup,
