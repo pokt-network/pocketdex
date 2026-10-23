@@ -106,6 +106,8 @@ CREATE INDEX IF NOT EXISTS session_rosters_pending_idx ON ${s}.session_rosters (
 -- sessions in a range read this table alone (session_suppliers_supplier_idx). paid_upokt = what its settled claim paid its
 -- shareholders (NULL when it has none). domain_num = the endpoint root domain of its config at the start (NULL: none; a
 -- config has one domain: no live config on mainnet had two, 2026-10-21; with two, the first counts).
+-- Size (60 days of mainnet, 2026-10-23): 26.2M seats, 3.9 GB; with the rollups and rosters 6.3 GB, about 38 GB a year.
+-- No retention: an accepted cost (Jorge, 2026-10-23).
 CREATE TABLE IF NOT EXISTS ${s}.session_suppliers (
   session_num     INTEGER  NOT NULL,
   supplier_num    INTEGER  NOT NULL,

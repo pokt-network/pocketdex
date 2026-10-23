@@ -153,6 +153,12 @@ are computed by the indexer as poktroll's session hydrator does, which reproduce
 they start with the release and its backfill of 60 days, and every range reports what they cover. The supplier functions
 take one selector: `suppliers` (up to 200), `owners`, `operators` or `domains` (up to 200).
 
+Most of these calls answer in well under a second over 30 days (measured on a 60-day copy of mainnet). Two shapes take
+longer, by decision: an owner with many suppliers (one with 1,037 suppliers: 2.4 s over 30 days, 3.6 s by service; 0.1 s
+with `withSessions: false`, which drops the count of distinct sessions), and a large domain by supplier and by service
+(nodefleet.net over 30 days returns 2.4 million rows, about 19 s). The session tables are kept with no retention: 6.3 GB
+for 60 days of mainnet (seats 3.9 GB, the per-supplier rollup 1.6 GB, rosters 0.7 GB), about 38 GB a year.
+
 Every function and argument is described in the schema (introspection, GraphiQL). The table gives the first sentence
 of each description. All are live now, except `getTxCountsList` / `getTxCountsJson`, which arrive on 2026-10-19, and the
 catalog versions of the old functions, which come with a later release (item 4 of "Timeline").
