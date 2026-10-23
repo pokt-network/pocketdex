@@ -46,7 +46,7 @@ export const SESSION_STATES = [
 const STATE_NAMES_SQL = `ARRAY[${SESSION_STATES.map((s) => `'${s}'`).join(", ")}]::text[]`;
 
 // The phases of a session as _session_phase names them, in order.
-export const SESSION_PHASES = ["active", "grace", "waiting_claim", "claiming", "waiting_proof", "proving", "settled"];
+export const SESSION_PHASES = ["active", "grace", "waiting_claim", "claiming", "waiting_proof", "proving", "overdue", "settled"];
 
 // The catalog functions over the rosters (CATALOG_FUNCTIONS, with a _json twin each). They cover what the rosters hold
 // (session_roster_progress), not the money tables, so they do not start from _coverage as the others do.
@@ -232,7 +232,6 @@ ${stateCols("INTEGER")}
 CREATE INDEX IF NOT EXISTS session_supplier_daily_owner_idx ON ${s}.session_supplier_daily (owner_num, day) WHERE owner_num <> 0;
 CREATE INDEX IF NOT EXISTS session_supplier_daily_domain_idx ON ${s}.session_supplier_daily (domain_num, day) WHERE domain_num <> 0;
 CREATE INDEX IF NOT EXISTS session_supplier_daily_operators_idx ON ${s}.session_supplier_daily USING gin (operator_nums public.gin__int_ops);
-CREATE INDEX IF NOT EXISTS session_supplier_daily_day_idx ON ${s}.session_supplier_daily (day, service_num);
 -- Per dimension (kind 1 = owner, 2 = rev-share address, 3 = domain; dim_num = its account_numbers or domain_numbers
 -- number), day and service: the settled sessions with at least one seat of it (sessions, each session once) with those
 -- sessions' V and K (pool_upokt, roster_seats), and its seats there (seats, per state, Y, relays, compute units, B).
@@ -763,14 +762,17 @@ $$;
 
 -- A session's phase at p_tip (the latest indexed block), from its heights (session_rosters): settled once its final
 -- states are written, else active up to end_height, grace up to grace_end_height, waiting_claim before
--- claim_open_height, claiming up to claim_close_height, waiting_proof before proof_open_height, and proving after.
+-- claim_open_height, claiming up to claim_close_height, waiting_proof before proof_open_height, proving up to
+-- settlement_height, and overdue past it (finalize_session_rosters settles every session at its settlement height:
+-- an overdue session is one the indexer has not reached, or a fault to look at).
+DROP FUNCTION IF EXISTS ${s}._session_phase(integer, integer, integer, integer, integer, integer, bigint);
 CREATE OR REPLACE FUNCTION ${s}._session_phase(p_settled_height integer, p_end integer, p_grace_end integer,
-  p_claim_open integer, p_claim_close integer, p_proof_open integer, p_tip bigint)
+  p_claim_open integer, p_claim_close integer, p_proof_open integer, p_settlement integer, p_tip bigint)
 RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE WHEN p_settled_height IS NOT NULL THEN 'settled' WHEN p_tip <= p_end THEN 'active'
               WHEN p_tip <= p_grace_end THEN 'grace' WHEN p_tip < p_claim_open THEN 'waiting_claim'
               WHEN p_tip <= p_claim_close THEN 'claiming' WHEN p_tip < p_proof_open THEN 'waiting_proof'
-              ELSE 'proving' END
+              WHEN p_tip <= p_settlement THEN 'proving' ELSE 'overdue' END
 $$;
 `;
 }
@@ -837,7 +839,7 @@ export function createSessionRosterFunctionsFn(dbSchema: string): string {
             WHEN 4 THEN ${a}.application_num = ANY(nums) WHEN 5 THEN ${a}.gateway_nums OPERATOR(public.&&) nums ELSE true END`;
   const phase = (a: string) =>
     `${s}._session_phase(${a}.settled_height, ${a}.end_height, ${a}.grace_end_height, ${a}.claim_open_height,
-       ${a}.claim_close_height, ${a}.proof_open_height, tip)`;
+       ${a}.claim_close_height, ${a}.proof_open_height, ${a}.settlement_height, tip)`;
   const tipSql = `  tip := (SELECT b.id::bigint FROM ${s}.blocks b ORDER BY b.id DESC LIMIT 1);`;
   const svcNums = (fn: string) =>
     `CASE WHEN services IS NOT NULL THEN ARRAY(SELECT n.service_num FROM ${s}.service_numbers n
@@ -915,7 +917,7 @@ BEGIN
 END $$;
 
 -- Sessions running now (not settled yet; a state function: no range, no _json twin), per service with by_service and
--- per phase at the latest indexed block (active, grace, waiting_claim, claiming, waiting_proof, proving:
+-- per phase at the latest indexed block (active, grace, waiting_claim, claiming, waiting_proof, proving, overdue:
 -- _session_phase): network_sessions = every such session; with a selector (optional, one of suppliers, owners,
 -- operators, domains, applications or gateways, up to 200 each, as the sessions froze them at their start),
 -- selected_sessions = those with at least one of them (for applications and gateways: their sessions) and

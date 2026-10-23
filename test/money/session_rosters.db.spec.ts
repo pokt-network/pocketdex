@@ -20,6 +20,7 @@ import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlem
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
 import { backfillSessionRosters } from "../../scripts/backfill_session_rosters";
+import { finalizeRostersAt } from "../../src/mappings/money/history/job";
 import { buildSessionRosters, SessionRosterInputs, sessionRosterStep } from "../../src/mappings/pocket/sessionRosters";
 
 type Row = Record<string, unknown>;
@@ -577,18 +578,19 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       WHERE r.settled_height IS NOT NULL AND (a.application_id = 'a2' OR (a.application_id = 'a1' AND r.start_height < 13))`);
     assert.equal(String(g1.sessions), String(g1raw.n));
     await assert.rejects(q(`SELECT * FROM ${S}.get_network_sessions($1, $2, applications => ARRAY['a1'], gateways => ARRAY['g1'])`, RANGE), /not both/);
-    // running now, per phase at the latest block (48): the starts 33 and 37 are proving, 41 claiming
+    // running now, per phase at the latest block (48, beyond what this chain indexed): the start 41 is claiming, and
+    // the starts 33 and 37 are past their settlement heights (43, 47) unsettled: overdue
     const act = await q(`SELECT * FROM ${S}.get_active_sessions(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6'])`);
     assert.deepEqual(
       act.map((x) => [x.service_id, x.phase, Number(x.network_sessions)]),
-      [["s1", "claiming", 3], ["s1", "proving", 6]]
+      [["s1", "claiming", 3], ["s1", "overdue", 6]]
     );
     assert.ok(act.every((x) => Number(x.selected_sessions) > 0 && Number(x.selected_seats) >= Number(x.selected_sessions)));
     const [none] = await q(`SELECT * FROM ${S}.get_active_sessions()`);
     assert.equal(none.selected_sessions, null);
     const ga = await q(`SELECT * FROM ${S}.get_active_sessions(gateways => ARRAY['g2'], by_service => false)`);
     // g2 has a1's sessions: one per start
-    assert.deepEqual(ga.map((x) => [x.phase, Number(x.selected_sessions)]), [["claiming", 1], ["proving", 2]]);
+    assert.deepEqual(ga.map((x) => [x.phase, Number(x.selected_sessions)]), [["claiming", 1], ["overdue", 2]]);
   });
 
   it("lists sessions with full rosters, and pages them", async () => {
@@ -713,12 +715,16 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     await q("BEGIN");
     assert.equal(Number((await q(`SELECT ${S}.finalize_session_rosters(43) n`))[0].n), 0);
     await q("COMMIT");
-    // the gap is filled (the history job wrote 43 and finalizes it): the session completes, the rollups move by the
-    // difference (the claimed seat, and the two others whose share of the session's V moved)
-    await q(`DELETE FROM ${S}.settlement_gaps`);
+    // the gap is filled: the history job wrote 43 and finalizes it (finalizeRostersAt, in its transaction after the gap
+    // is lowered); the session completes, the rollups move by the difference (the claimed seat, and the two others
+    // whose share of the session's V moved)
     await q("BEGIN");
-    assert.equal(Number((await q(`SELECT ${S}.finalize_session_rosters(43) n`))[0].n), 3);
+    await q(`DELETE FROM ${S}.settlement_gaps`);
+    await finalizeRostersAt(c as unknown as Parameters<typeof finalizeRostersAt>[0], S, 43);
     await q("COMMIT");
+    const [moved] = await q(`SELECT count(*) n FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num)
+      WHERE r.session_id = $1 AND ss.state <> 0`, [sid]);
+    assert.equal(Number(moved.n), 3);
     assert.equal(await stateOf(m, "a1", "s1", 33), "paid");
     const [r2] = await q(`SELECT money_missing, paid_upokt, settled_height FROM ${S}.session_rosters WHERE session_id = $1`, [sid]);
     assert.deepEqual([r2.money_missing, String(r2.paid_upokt), r2.settled_height], [false, "35", 43]);
