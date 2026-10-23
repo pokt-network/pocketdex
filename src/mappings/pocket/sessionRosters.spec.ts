@@ -8,6 +8,7 @@ import {
   selectMembers,
   sessionIdBytes,
   sessionIdOf,
+  SessionRosterInputs,
   sessionRostersFromHeight,
 } from "./sessionRosters";
 
@@ -39,10 +40,14 @@ describe("session rosters", () => {
   });
 
   it("builds every session of a start, and none for a service without candidates", () => {
-    const p = buildSessionRosters(974561, {
+    const inputs = {
       block_hash: HASH,
       num_suppliers: 2,
       end_height: "974580",
+      grace_end_height: "974590",
+      claim_open_height: "974592",
+      claim_close_height: "974602",
+      proof_open_height: "974603",
       settlement_height: "974613",
       start_time: new Date("2026-10-21T15:00:00Z"),
       pairs: [
@@ -50,10 +55,13 @@ describe("session rosters", () => {
         [APP, "eth"],
       ],
       candidates: { bera: ["pokt1cand00", "pokt1cand01", "pokt1cand02"] },
-    });
+    } as SessionRosterInputs;
+    const p = buildSessionRosters(974561, inputs);
     assert.equal(p.end, 974580);
-    assert.equal(p.settlement, 974613);
+    assert.deepEqual([p.grace_end, p.claim_open, p.claim_close, p.proof_open, p.settlement], [974590, 974592, 974602, 974603, 974613]);
     assert.equal(p.time, "2026-10-21T15:00:00.000Z");
+    assert.equal(p.late, false);
+    assert.equal(buildSessionRosters(974561, inputs, []).late, true);
     const sessions = p.sessions as Array<{ id: string; svc: string; candidates: number; members: string[] }>;
     assert.deepEqual(
       sessions.map((x) => [x.svc, x.candidates, x.members.length]),

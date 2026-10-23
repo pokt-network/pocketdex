@@ -58,6 +58,10 @@ export interface SessionRosterInputs {
   block_hash: string;
   num_suppliers: number;
   end_height: string | number;
+  grace_end_height: string | number;
+  claim_open_height: string | number;
+  claim_close_height: string | number;
+  proof_open_height: string | number;
   settlement_height: string | number;
   start_time: Date | string;
   pairs: [string, string][];
@@ -65,7 +69,8 @@ export interface SessionRosterInputs {
 }
 
 // The payload _write_session_rosters takes: every session of the start, with its members; with onlyIds, those sessions
-// only (the sessions of claims with no roster: a pair whose computed id is not the claim's is not written).
+// only (the sessions of claims with no roster: a pair whose computed id is not the claim's is not written; late, so
+// their gateways are read at the session end, where the application exists).
 export function buildSessionRosters(
   start: number,
   inputs: SessionRosterInputs,
@@ -89,8 +94,13 @@ export function buildSessionRosters(
   return {
     start,
     end: Number(inputs.end_height),
+    grace_end: Number(inputs.grace_end_height),
+    claim_open: Number(inputs.claim_open_height),
+    claim_close: Number(inputs.claim_close_height),
+    proof_open: Number(inputs.proof_open_height),
     settlement: Number(inputs.settlement_height),
     time: inputs.start_time instanceof Date ? inputs.start_time.toISOString() : inputs.start_time,
+    late: Boolean(onlyIds),
     sessions: keep ? sessions.filter((x) => keep.has(x.id)) : sessions,
   };
 }

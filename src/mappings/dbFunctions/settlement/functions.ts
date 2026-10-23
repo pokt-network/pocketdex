@@ -4344,7 +4344,6 @@ BEGIN
                      WHEN 'get_supplier_session_funnel' THEN 'WHERE r.bucket_start IS NOT NULL'
                      WHEN 'get_network_sessions' THEN 'WHERE r.bucket_start IS NOT NULL'
                      WHEN 'get_supplier_session_list' THEN 'WHERE r.session_id IS NOT NULL'
-                     WHEN 'get_application_sessions' THEN 'WHERE r.bucket_start IS NOT NULL'
                      WHEN 'get_session_rosters' THEN 'WHERE r.session_id IS NOT NULL' ELSE '' END);
   END LOOP;
 END $$;
