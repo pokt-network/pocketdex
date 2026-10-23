@@ -855,13 +855,17 @@ ${days}
       AND x.start_height BETWEEN lo_d AND hi_d AND x.settled_height IS NOT NULL
     GROUP BY 1, 2
   ), sat AS (
-    -- the (bucket, service) pairs the selection sat in: the rows read by service, else the per-service rollup
+    -- the (bucket, service) pairs the selection sat in: the rows read by service, else the per-service rollups (the
+    -- domains' own for domains: the per-supplier one holds millions of rows of a large domain's suppliers)
     SELECT ${s}._bucket(bucket, r.t, c_from) b, r.service_num svc FROM r WHERE r.service_num IS NOT NULL
     UNION
     SELECT ${s}._bucket(bucket, d.day::timestamp AT TIME ZONE 'UTC', c_from), d.service_num
     FROM ${s}.session_supplier_daily d
-    WHERE NOT by_service AND NOT by_domain AND d.day BETWEEN d1 AND d2
-      AND CASE WHEN sel.dnums IS NOT NULL THEN d.domain_num = ANY(sel.dnums) ELSE d.supplier_num = ANY(sel.nums) END
+    WHERE NOT by_service AND sel.dnums IS NULL AND d.day BETWEEN d1 AND d2 AND d.supplier_num = ANY(sel.nums)
+    UNION
+    SELECT ${s}._bucket(bucket, d.day::timestamp AT TIME ZONE 'UTC', c_from), d.service_num
+    FROM ${s}.session_domain_daily d
+    WHERE NOT by_service AND NOT by_domain AND d.day BETWEEN d1 AND d2 AND d.domain_num = ANY(sel.dnums)
   ), net AS (
     SELECT x.b, CASE WHEN by_service THEN x.svc END svc, sum(x.n)::bigint n
     FROM (SELECT ${s}._bucket(bucket, d.day::timestamp AT TIME ZONE 'UTC', c_from) b, d.service_num svc, sum(d.sessions) n

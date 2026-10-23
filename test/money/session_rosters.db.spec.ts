@@ -467,6 +467,9 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     // by supplier: each supplier's seats served from the domain, adding up to the domain's total (not p3's b.io seats)
     const bySup = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, by_supplier => true, domains => ARRAY['a.net'])`, RANGE);
     assert.deepEqual(bySup.map((x) => x.supplier_id).sort(), ["p1", "p3"]);
+    // and the network of the services the domain's seats sat in, as without by_supplier
+    assert.ok(Number(dm.network_sessions) > 0);
+    assert.ok(bySup.every((x) => String(x.network_sessions) === String(dm.network_sessions)));
     assert.equal(String(bySup.reduce((a, x) => a + Number(x.seats), 0)), String(draw.seats));
     const bySvcSup = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, NULL, true, true, domains => ARRAY['a.net'])`, RANGE);
     assert.equal(String(bySvcSup.reduce((a, x) => a + Number(x.seats), 0)), String(draw.seats));
