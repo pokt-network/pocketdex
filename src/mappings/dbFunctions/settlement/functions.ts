@@ -1550,8 +1550,8 @@ END $$;
 -- last height of the stretch (NULL while the config declares it now); domains are those of its newest version. The
 -- configs are what the supplier declared, from its stake height (see getServices in src/mappings/pocket/suppliers.ts).
 -- Keyset paging on (service_id, first_height). _supplier_config_history computes the rows of a list of suppliers, which
--- get_supplier_config_history (one supplier), get_supplier_config_histories (up to 200, keyset on (supplier_id,
--- service_id, first_height)) and get_supplier_config_histories_json (every row of up to 200 in one call) read, so their
+-- get_supplier_config_history (one supplier), get_suppliers_config_history (up to 200, keyset on (supplier_id,
+-- service_id, first_height)) and get_suppliers_config_history_json (every row of up to 200 in one call) read, so their
 -- rows cannot differ.
 CREATE OR REPLACE FUNCTION ${s}._supplier_config_history(p_suppliers text[], services text[], p_limit integer,
   after_supplier_id text, after_service_id text, after_first_height bigint)
@@ -1620,7 +1620,9 @@ END $$;
 
 -- The same for up to 200 suppliers, one row per (supplier, stretch): row_limit rows (up to 1000) per call, keyset on
 -- (after_supplier_id, after_service_id, after_first_height), all three or none.
-CREATE OR REPLACE FUNCTION ${s}.get_supplier_config_histories(suppliers text[], services text[] DEFAULT NULL,
+-- Named get_suppliers_*, not get_supplier_config_histories: PostGraphile singularizes "histories" and both functions
+-- would define the type GetSupplierConfigHistoryEdge, which stops subql-query from building its schema (2026-10-24).
+CREATE OR REPLACE FUNCTION ${s}.get_suppliers_config_history(suppliers text[], services text[] DEFAULT NULL,
   row_limit integer DEFAULT 1000, after_supplier_id text DEFAULT NULL, after_service_id text DEFAULT NULL,
   after_first_height bigint DEFAULT NULL)
 RETURNS TABLE(supplier_id text, service_id text, first_height bigint, last_height bigint, rev_share jsonb, endpoints jsonb,
@@ -1639,9 +1641,9 @@ BEGIN
                                                            after_first_height);
 END $$;
 
--- Every row of get_supplier_config_histories for up to 200 suppliers in one call, as a JSON array in its order (numbers
+-- Every row of get_suppliers_config_history for up to 200 suppliers in one call, as a JSON array in its order (numbers
 -- as strings, as the catalog's _json variants): the list caps a call at 1000 rows.
-CREATE OR REPLACE FUNCTION ${s}.get_supplier_config_histories_json(suppliers text[], services text[] DEFAULT NULL)
+CREATE OR REPLACE FUNCTION ${s}.get_suppliers_config_history_json(suppliers text[], services text[] DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
@@ -1650,8 +1652,8 @@ BEGIN
   RETURN (SELECT coalesce(jsonb_agg(${s}._json_strings(to_jsonb(h)) ORDER BY h.supplier_id, h.service_id, h.first_height), '[]'::jsonb)
           FROM ${s}._supplier_config_history(suppliers, services, NULL, NULL, NULL, NULL) h);
 END $$;
-COMMENT ON FUNCTION ${s}.get_supplier_config_histories_json(text[], text[]) IS
-'Service configs over time of up to 200 suppliers (suppliers; services keeps those, up to 200) in one call: every row of getSupplierConfigHistoriesList, as one JSON array in its order (supplier_id, service_id, first_height), numbers as strings. For answers above the list''s 1000 rows.';
+COMMENT ON FUNCTION ${s}.get_suppliers_config_history_json(text[], text[]) IS
+'Service configs over time of up to 200 suppliers (suppliers; services keeps those, up to 200) in one call: every row of getSuppliersConfigHistoryList, as one JSON array in its order (supplier_id, service_id, first_height), numbers as strings. For answers above the list''s 1000 rows.';
 
 -- The live service configs of the Staked suppliers, one row per (supplier, service), with the supplier's owner and stake
 -- and the config's endpoint domains: the suppliers { serviceConfigs } join consumers built by hand (158,314 live configs

@@ -2039,7 +2039,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
                            (SELECT string_agg((x->>'address') || ':' || (x->>'revSharePercentage'), ',' ORDER BY i)
                             FROM jsonb_array_elements(rev_share) WITH ORDINALITY a(x, i)),
                            endpoints->0->>'url', array_to_string(domains, ',')) k
-                         FROM ${S}.get_supplier_config_histories(${args})`)
+                         FROM ${S}.get_suppliers_config_history(${args})`)
         ).rows.map((r) => String(r.k));
       const other = (await many("ARRAY['other']"))[0];
       assert.equal(other, "other kava 1 - w-z:100 https://t.net t.net");
@@ -2050,7 +2050,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         await many("ARRAY['sk', 'other'], row_limit => 3, after_supplier_id => 'sk', after_service_id => 'eth', after_first_height => 300"),
         both.slice(3, 6)
       );
-      const json = (await c.query(`SELECT ${S}.get_supplier_config_histories_json(ARRAY['sk', 'other'])::text j`)).rows[0].j as string;
+      const json = (await c.query(`SELECT ${S}.get_suppliers_config_history_json(ARRAY['sk', 'other'])::text j`)).rows[0].j as string;
       const parsed = JSON.parse(json) as Array<Record<string, unknown>>;
       assert.equal(parsed.length, both.length);
       assert.deepEqual(parsed.map((r) => `${r.supplier_id} ${r.service_id} ${r.first_height}`), both.map((k) => k.split(" ").slice(0, 3).join(" ")));
@@ -2060,7 +2060,7 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         ["ARRAY['sk'], after_service_id => 'kava', after_first_height => 1", /pass after_supplier_id, after_service_id and after_first_height/],
       ] as const) {
         await c.query("SAVEPOINT e");
-        await assert.rejects(c.query(`SELECT * FROM ${S}.get_supplier_config_histories(${args})`), err);
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_suppliers_config_history(${args})`), err);
         await c.query("ROLLBACK TO SAVEPOINT e");
       }
       for (const [args, err] of [
@@ -3872,8 +3872,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     // list or _json twin), published on purpose
     assert.deepEqual(
       shown.filter((n) => !catalog.includes(n.replace(/_json$/, "")) && !n.startsWith("legacy_")),
-      // get_supplier_config_histories_json: every row of a state list in one call, published on purpose too
-      ["get_height_at", "get_last_settlement", "get_supplier_config_histories_json", ...moneyState].sort()
+      // get_suppliers_config_history_json: every row of a state list in one call, published on purpose too
+      ["get_height_at", "get_last_settlement", "get_suppliers_config_history_json", ...moneyState].sort()
     );
     const vrd = await c.query(
       `SELECT count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = '_vrd_range_start'`,
