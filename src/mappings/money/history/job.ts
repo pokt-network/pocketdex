@@ -421,14 +421,16 @@ async function lockProgress(client: PgClient, schema: string): Promise<void> {
 
 // The sessions the indexer settled at `height` without money (session_rosters.money_missing) complete once the money
 // tables cover it: after the gap is lowered below the height, in its transaction (sessionRosters.ts
-// finalize_session_rosters). A schema without the rosters skips it (looked up once per schema).
-const hasRosters = new Map<string, boolean>();
+// finalize_session_rosters). A schema without the rosters skips it; only its presence is remembered, so a job started
+// before the indexer's startup DDL created the function finds it later.
+const hasRosters = new Set<string>();
 export async function finalizeRostersAt(client: PgClient, schema: string, height: number): Promise<void> {
   if (!hasRosters.has(schema)) {
     const r = await client.query(`SELECT to_regprocedure('${schema}.finalize_session_rosters(bigint)') IS NOT NULL AS ok`);
-    hasRosters.set(schema, Boolean(r.rows[0]?.ok));
+    if (!r.rows[0]?.ok) return;
+    hasRosters.add(schema);
   }
-  if (hasRosters.get(schema)) await client.query(`SELECT ${schema}.finalize_session_rosters($1::bigint)`, [height]);
+  await client.query(`SELECT ${schema}.finalize_session_rosters($1::bigint)`, [height]);
 }
 
 // One height, one transaction: the CALLs of write_settlement, then the gap lowered below the height (which also

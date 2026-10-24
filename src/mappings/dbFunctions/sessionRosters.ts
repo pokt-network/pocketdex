@@ -722,6 +722,11 @@ ${STATES.map((name) => `        ${name} = cn.${name},`).join("\n")}
         money_missing = NOT m_ok, settled_height = greatest(coalesce(r.settled_height, 0), p_height)
     FROM sv JOIN cn ON cn.session_num = sv.session_num
     WHERE r.session_num = sv.session_num
+      -- a session re-selected with nothing new keeps its row (no dead tuple, no GIN update)
+      AND (r.settled_height IS NULL OR r.claimed IS DISTINCT FROM cn.claimed OR r.paid_upokt IS DISTINCT FROM sv.v
+           OR r.settled_upokt IS DISTINCT FROM sv.settled OR r.relays IS DISTINCT FROM sv.relays
+           OR r.compute_units IS DISTINCT FROM sv.cu OR r.money_missing IS DISTINCT FROM NOT m_ok
+${STATES.map((name) => `           OR r.${name} IS DISTINCT FROM cn.${name}`).join("\n")})
     RETURNING r.session_num, cn.claimed new_claimed, sv.v new_v, sv.settled new_settled, sv.relays new_relays,
       sv.cu new_cu
   ), sx AS (
@@ -951,8 +956,9 @@ LANGUAGE sql STABLE SET jit = off AS $$
   SELECT coalesce(jsonb_agg(jsonb_build_object('from', g.f, 'to', g.t) ORDER BY g.f), '[]'::jsonb)
   FROM (SELECT min(r.start_time) f, max(r.start_time) + interval '1 microsecond' t
         FROM ${s}.session_rosters r
+        LEFT JOIN ${s}.settlement_gaps g ON r.settled_height BETWEEN g.from_height AND g.to_height
         WHERE r.money_missing AND r.start_height BETWEEN lo AND hi
-        GROUP BY (SELECT g.from_height FROM ${s}.settlement_gaps g WHERE r.settled_height BETWEEN g.from_height AND g.to_height)) g
+        GROUP BY g.from_height) g
 $$;
 
 -- The seats or sessions a selector names, as the sessions froze them at their start: k = 0 suppliers (up to 200), 1
