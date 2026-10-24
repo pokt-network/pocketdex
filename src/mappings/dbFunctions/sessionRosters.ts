@@ -587,13 +587,16 @@ BEGIN
     FROM ${s}.msg_create_claims m JOIN _sr_tgt t ON t.session_id = m.session_id
     WHERE m.block_id > lo AND m.block_id <= p_height
   ), pay AS MATERIALIZED (
-    -- what each rev-share recipient of a settled claim received (shareholder_payouts: by the claim's event)
-    SELECT t.session_num, c.supplier_id, sp.recipient_id, sum(sp.relay_upokt + sp.global_upokt) amt
-    FROM ${s}.claim_settlements c
-    JOIN _sr_tgt t ON t.application_id = c.application_id AND t.service_id = c.service_id AND t.end_height = c.session_end
-    JOIN ${s}.shareholder_payouts sp ON sp.height = c.height AND sp.event_idx = c.event_idx
-    WHERE m_ok AND c.height > lo AND c.height <= p_height
-    GROUP BY 1, 2, 3
+    -- what each rev-share recipient of a settled claim received (shareholder_payouts: by the claim's event), one
+    -- {recipient: upokt} object per seat, joined by hash below
+    SELECT x.session_num, x.supplier_id, jsonb_object_agg(x.recipient_id, x.amt) j
+    FROM (SELECT t.session_num, c.supplier_id, sp.recipient_id, sum(sp.relay_upokt + sp.global_upokt) amt
+          FROM ${s}.claim_settlements c
+          JOIN _sr_tgt t ON t.application_id = c.application_id AND t.service_id = c.service_id AND t.end_height = c.session_end
+          JOIN ${s}.shareholder_payouts sp ON sp.height = c.height AND sp.event_idx = c.event_idx
+          WHERE m_ok AND c.height > lo AND c.height <= p_height
+          GROUP BY 1, 2, 3) x
+    GROUP BY 1, 2
   ), worked AS (
     SELECT u.session_num, count(DISTINCT u.supplier_id) n
     FROM (SELECT oc.session_num, oc.supplier_id FROM oc UNION SELECT cl.session_num, cl.supplier_id FROM cl) u
@@ -614,8 +617,7 @@ BEGIN
            oc.paid::bigint new_paid, oc.relays::bigint new_relays, oc.cu::bigint new_cu, sv.v new_v,
            -- each rev-share address's part of the settled claim, in operator_nums order
            CASE WHEN oc.paid IS NOT NULL THEN ARRAY(
-             SELECT coalesce((SELECT sum(pay.amt) FROM pay WHERE pay.session_num = ss.session_num
-                                AND pay.supplier_id = sn.supplier_id AND pay.recipient_id = an.address), 0)::bigint
+             SELECT coalesce((pay.j->>an.address)::bigint, 0)
              FROM unnest(ss.operator_nums) WITH ORDINALITY o(num, i)
              JOIN ${s}.account_numbers an ON an.account_num = o.num ORDER BY o.i) END new_opp
     FROM ${s}.session_suppliers ss
@@ -624,6 +626,7 @@ BEGIN
     JOIN ${s}.supplier_numbers sn ON sn.supplier_num = ss.supplier_num
     LEFT JOIN oc ON oc.session_num = ss.session_num AND oc.supplier_id = sn.supplier_id
     LEFT JOIN cl ON cl.session_num = ss.session_num AND cl.supplier_id = sn.supplier_id
+    LEFT JOIN pay ON pay.session_num = ss.session_num AND pay.supplier_id = sn.supplier_id
     LEFT JOIN worked w ON w.session_num = ss.session_num
   ), ch AS MATERIALIZED (
     SELECT * FROM nw
