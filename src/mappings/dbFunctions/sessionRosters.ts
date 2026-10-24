@@ -992,17 +992,17 @@ ${days}
   per_seat := by_supplier OR (k = 0 AND cardinality(nums) <= 1);
   RETURN QUERY
   WITH r AS (
-    SELECT d.day::timestamp AT TIME ZONE 'UTC' t, d.service_num, d.supplier_num, d.sessions::bigint seats,
-           ${states.map((n) => `d.${n}::bigint ${n}`).join(", ")}, 0::bigint active, d.paid_upokt::numeric y,
-           d.relays::numeric rel, d.compute_units::numeric cu, d.equal_share_upokt eq, d.sessions::bigint n,
-           d.pool_upokt::numeric v, d.roster_seats k_, d.first_height, d.last_height
+    -- the counts stay integer, whose sum is a bigint: summed as bigint (numeric) they took 1 s more over a large
+    -- owner's 1M daily rows (2026-10-23)
+    SELECT d.day::timestamp AT TIME ZONE 'UTC' t, d.service_num, d.supplier_num, d.sessions seats,
+           ${states.map((n) => `d.${n}`).join(", ")}, 0 active, d.paid_upokt y, d.relays rel, d.compute_units cu,
+           d.equal_share_upokt eq, d.sessions n, d.pool_upokt v, d.roster_seats::integer k_, d.first_height, d.last_height
     FROM ${s}.session_supplier_daily d
     WHERE NOT one_dim AND d.day BETWEEN d1 AND d2 AND ${seatMatch("d")}
     UNION ALL
-    SELECT d.day::timestamp AT TIME ZONE 'UTC', d.service_num, NULL, d.seats::bigint,
-           ${states.map((n) => `d.${n}::bigint`).join(", ")}, 0::bigint, d.paid_upokt::numeric, d.relays::numeric,
-           d.compute_units::numeric, d.equal_share_upokt, d.sessions::bigint, d.pool_upokt::numeric, d.roster_seats,
-           d.first_height, d.last_height
+    SELECT d.day::timestamp AT TIME ZONE 'UTC', d.service_num, NULL, d.seats,
+           ${states.map((n) => `d.${n}`).join(", ")}, 0, d.paid_upokt, d.relays, d.compute_units, d.equal_share_upokt,
+           d.sessions, d.pool_upokt, d.roster_seats::integer, d.first_height, d.last_height
     FROM ${s}.session_dimension_daily d
     WHERE one_dim AND d.kind = k AND d.dim_num = nums[1] AND d.day BETWEEN d1 AND d2
     UNION ALL
@@ -1016,13 +1016,20 @@ ${days}
       WHERE x.session_num = p.session_num AND ${seatMatch("x")}
       OFFSET 0) ss  -- not pulled up into a join: each pending session's seats by the primary key
     WHERE p.settled_height IS NULL AND p.start_height BETWEEN lo_d AND hi_d AND ${sessionMatch("p")}
-  ), g AS (
-    SELECT ${s}._bucket(bucket, r.t, c_from) b, CASE WHEN by_service THEN r.service_num END svc,
-           CASE WHEN by_supplier THEN r.supplier_num END sup,
-           sum(r.seats)::bigint seats, ${states.map((n) => `sum(r.${n})::bigint ${n}`).join(", ")}, sum(r.active)::bigint active,
-           sum(r.y) y, round(sum(r.eq)) eq, sum(r.rel) rel, sum(r.cu) cu, sum(r.n)::bigint n, sum(r.v) v,
-           sum(r.k_)::bigint k_, min(r.first_height)::bigint fh, max(r.last_height)::bigint lh
+  ), r1 AS (
+    -- one pass over the rows (a large domain's 30 days are ~2.4M daily rows): per bucket, service and supplier, which
+    -- g and sat both read
+    SELECT ${s}._bucket(bucket, r.t, c_from) b, r.service_num svc, r.supplier_num sup,
+           sum(r.seats) seats, ${states.map((n) => `sum(r.${n}) ${n}`).join(", ")}, sum(r.active) active,
+           sum(r.y) y, sum(r.eq) eq, sum(r.rel) rel, sum(r.cu) cu, sum(r.n) n, sum(r.v) v,
+           sum(r.k_) k_, min(r.first_height) fh, max(r.last_height) lh
     FROM r GROUP BY 1, 2, 3
+  ), g AS (
+    SELECT r1.b, CASE WHEN by_service THEN r1.svc END svc, CASE WHEN by_supplier THEN r1.sup END sup,
+           sum(r1.seats)::bigint seats, ${states.map((n) => `sum(r1.${n})::bigint ${n}`).join(", ")}, sum(r1.active)::bigint active,
+           sum(r1.y) y, round(sum(r1.eq)) eq, sum(r1.rel) rel, sum(r1.cu) cu, sum(r1.n)::bigint n, sum(r1.v) v,
+           sum(r1.k_)::bigint k_, min(r1.fh)::bigint fh, max(r1.lh)::bigint lh
+    FROM r1 GROUP BY 1, 2, 3
   ), ses AS (
     -- a list (several suppliers, owners, operators or domains), without by_supplier: each settled session once
     SELECT ${s}._bucket(bucket, x.start_time, c_from) b, CASE WHEN by_service THEN x.service_num END svc,
@@ -1033,7 +1040,7 @@ ${days}
     GROUP BY 1, 2
   ), sat AS (
     -- the (bucket, service) pairs the selection sat in
-    SELECT DISTINCT ${s}._bucket(bucket, r.t, c_from) b, r.service_num svc FROM r
+    SELECT DISTINCT r1.b, r1.svc FROM r1
   ), net AS (
     SELECT x.b, CASE WHEN by_service THEN x.svc END svc, sum(x.n)::bigint n
     FROM (SELECT ${s}._bucket(bucket, d.day::timestamp AT TIME ZONE 'UTC', c_from) b, d.service_num svc, sum(d.sessions) n
