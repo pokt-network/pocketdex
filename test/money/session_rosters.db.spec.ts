@@ -84,8 +84,28 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         )
       )[0].session_id
     );
-  // a settled claim with its paid shareholder share (relay 60%, global 10% of the settled amount)
-  const settle = (h: number, i: number, sup: string, app: string, svc: string, end: number, upokt: number) =>
+  // a settled claim with its paid shareholder share (relay 60%, global 10% of the settled amount), and what each rev-share
+  // address of the supplier's config at the settlement block received of it (shareholder_payouts: each leg by its
+  // percentage, rounded down, the remainder to the last address, so the parts add up to the share)
+  const settle = async (h: number, i: number, sup: string, app: string, svc: string, end: number, upokt: number) => {
+    await settleClaim(h, i, sup, app, svc, end, upokt);
+    await q(
+      `INSERT INTO ${S}.shareholder_payouts (height, event_idx, supplier_id, service_id, recipient_id, relay_upokt, global_upokt,
+         row_source, calc_version)
+       WITH cfg AS (SELECT c.rev_share FROM ${S}.supplier_service_configs c
+                    WHERE c.supplier_id = $3 AND c.service_id = $4 AND c._block_range @> $1::bigint
+                    ORDER BY lower(c._block_range) DESC LIMIT 1),
+       r AS (SELECT e->>'address' a, (e->>'revSharePercentage')::bigint pct, row_number() OVER () i, count(*) OVER () n
+             FROM cfg CROSS JOIN jsonb_array_elements(cfg.rev_share) e),
+       legs AS (SELECT r.*, $5::bigint * 6 / 10 * r.pct / 100 rl, $5::bigint / 10 * r.pct / 100 gl FROM r)
+       SELECT $1, $2, $3, $4, legs.a,
+              legs.rl + CASE WHEN legs.i = legs.n THEN $5::bigint * 6 / 10 - sum(legs.rl) OVER () ELSE 0 END,
+              legs.gl + CASE WHEN legs.i = legs.n THEN $5::bigint / 10 - sum(legs.gl) OVER () ELSE 0 END, 'test', 1
+       FROM legs`,
+      [h, i, sup, svc, upokt]
+    );
+  };
+  const settleClaim = (h: number, i: number, sup: string, app: string, svc: string, end: number, upokt: number) =>
     q(
       `INSERT INTO ${S}.claim_settlements (height, event_idx, block_time, supplier_id, application_id, service_id,
          session_id, session_end, claimed_upokt, settled_upokt, relay_minted_upokt, overservicing_loss_upokt,
@@ -146,13 +166,15 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       INSERT INTO ${S}.supplier_service_configs
         -- p1 serves from a.net, p2 from b.io, p3 from a.net until it moves to b.io in the start block 13 (the session
         -- 13-16 is still served from a.net, the version closed at its start)
-        -- p1 shares revenue with r1; p2 with r1 until the start 13 and with r2 and r3 from it (the session 13-16 is still
-        -- r1's, the version closed at its start)
-        SELECT p, 's1', 1, CASE WHEN p = 'p1' THEN '[{"address": "r1"}]'::jsonb ELSE '[]' END,
+        -- p1 shares revenue 50/50 with r1 and r4; p2 with r1 alone until the start 13 and 1/49/50 with r2, r3 and r5
+        -- from it (the session 13-16 is still r1's, the version closed at its start)
+        SELECT p, 's1', 1, CASE WHEN p = 'p1' THEN '[{"address": "r1", "revSharePercentage": "50"},
+                                                   {"address": "r4", "revSharePercentage": "50"}]'::jsonb ELSE '[]' END,
                CASE WHEN p = 'p1' THEN '["a.net"]'::jsonb ELSE '[]' END, '[1,)'::int8range
         FROM unnest(ARRAY['p1', 'p4']) p
-        UNION ALL SELECT 'p2', 's1', 1, '[{"address": "r1"}]', '["b.io"]', '[1,13)'
-        UNION ALL SELECT 'p2', 's1', 13, '[{"address": "r3"}, {"address": "r2"}]', '["b.io"]', '[13,)'
+        UNION ALL SELECT 'p2', 's1', 1, '[{"address": "r1", "revSharePercentage": "100"}]', '["b.io"]', '[1,13)'
+        UNION ALL SELECT 'p2', 's1', 13, '[{"address": "r3", "revSharePercentage": "49"}, {"address": "r2", "revSharePercentage": "1"},
+                                           {"address": "r5", "revSharePercentage": "50"}]', '["b.io"]', '[13,)'
         UNION ALL SELECT 'p3', 's1', 1, '[]', '["a.net"]', '[1,13)'
         UNION ALL SELECT 'p3', 's1', 1, '[]', '["b.io"]', '[13,)'
         -- p5 unstakes at the start block 9: still a candidate of the session 9-12, not of 13-16
@@ -212,6 +234,20 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         await settle(14, 1, a4.members[0], "a4", "s1", 8, 40);
         await q(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version) VALUES (14, now(), 'test', '2026-09-01', 1)`);
       }
+      if (h === 21) {
+        // p1's and p2's claims of their sessions 17-20 (settled at 26): the 50/50 and 1/49/50 rev-share splits
+        const seats = await q(`SELECT DISTINCT ON (n.supplier_id) n.supplier_id, a.application_id, r.session_id
+          FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num)
+          JOIN ${S}.application_numbers a ON a.application_num = r.application_num
+          JOIN ${S}.supplier_numbers n ON n.supplier_num = ss.supplier_num
+          WHERE r.start_height = 17 AND n.supplier_id IN ('p1', 'p2') ORDER BY n.supplier_id, a.application_id`);
+        assert.deepEqual(seats.map((x) => x.supplier_id), ["p1", "p2"]);
+        for (const [k, x] of seats.entries()) {
+          await q(`INSERT INTO ${S}.msg_create_claims VALUES ($1, $2, 's1', $3, 22, '[22,)', 17)`, [x.supplier_id, x.application_id, x.session_id]);
+          await settle(26, k + 1, String(x.supplier_id), String(x.application_id), "s1", 20, 1000);
+        }
+        await q(`INSERT INTO ${S}.settlement_blocks (height, block_time, era, day, rollup_version) VALUES (26, now(), 'test', '2026-09-01', 1)`);
+      }
       if (h === 25) {
         // the session 21-24 of a1 ends after the proof window grew (its params say it settles at 31), but the chain
         // settled its claim at 30, with the window it had: the session settles there, with its claim
@@ -263,6 +299,20 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       FROM ${S}.session_supplier_daily d WHERE d.sessions <> 0 ORDER BY 1, 2, 3, 4, 5, 6`);
     assert.ok(roll.length > 0);
     assert.deepEqual(rows(roll), rows(raw));
+    // and what each rev-share address received, element by element
+    const praw = await q(`
+      SELECT ${day} AS day, ss.service_num, ss.supplier_num, coalesce(ss.owner_num, 0) o, coalesce(ss.domain_num, 0) d,
+             ss.operator_nums, u.i, sum(u.x) x
+      FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r ON r.session_num = ss.session_num
+      CROSS JOIN unnest(coalesce(ss.operator_paid_upokt, array_fill(0::bigint, ARRAY[cardinality(ss.operator_nums)])))
+        WITH ORDINALITY u(x, i)
+      WHERE ss.state <> 0 GROUP BY 1, 2, 3, 4, 5, 6, 7 ORDER BY 1, 2, 3, 4, 5, 6, 7`);
+    const proll = await q(`
+      SELECT d.day::text AS day, d.service_num, d.supplier_num, d.owner_num, d.domain_num, d.operator_nums, u.i, u.x
+      FROM ${S}.session_supplier_daily d CROSS JOIN unnest(d.operator_paid_upokt) WITH ORDINALITY u(x, i)
+      WHERE d.sessions <> 0 ORDER BY 1, 2, 3, 4, 5, 6, 7`);
+    assert.ok(proll.length > 0);
+    assert.deepEqual(rows(proll), rows(praw));
     // per (day, service, application): the sessions, and their seats' states
     const sraw = await q(`
       WITH st AS (SELECT ss.session_num, ${sums} FROM ${S}.session_suppliers ss GROUP BY 1)
@@ -292,11 +342,11 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     // session's own sets of them are its seats'
     const dims = `
       WITH sd AS (
-        SELECT ss.*, ${day} AS day, r.paid_upokt v, r.roster_size k, dm.kind, dm.dim
+        SELECT ss.*, ${day} AS day, r.paid_upokt v, r.roster_size k, dm.kind, dm.dim, dm.y dy
         FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num)
-        CROSS JOIN LATERAL (SELECT 1 kind, ss.owner_num dim WHERE ss.owner_num IS NOT NULL
-                            UNION ALL SELECT 2, o FROM unnest(ss.operator_nums) o
-                            UNION ALL SELECT 3, ss.domain_num WHERE ss.domain_num IS NOT NULL) dm
+        CROSS JOIN LATERAL (SELECT 1 kind, ss.owner_num dim, ss.paid_upokt y WHERE ss.owner_num IS NOT NULL
+                            UNION ALL SELECT 2, u.o, u.p FROM unnest(ss.operator_nums, ss.operator_paid_upokt) u(o, p)
+                            UNION ALL SELECT 3, ss.domain_num, ss.paid_upokt WHERE ss.domain_num IS NOT NULL) dm
         WHERE ss.state <> 0)`;
     const draw = await q(`${dims},
       ses AS (SELECT DISTINCT kind, dim, day, service_num, session_num, v, k FROM sd)
@@ -304,7 +354,7 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
              a.rel, a.cu, a.eq, b.pool, b.k
       FROM (SELECT kind, dim, day, service_num, count(*) seats,
                    ${STATES.map((n, i) => `count(*) FILTER (WHERE state = ${i + 1}) ${n}`).join(", ")},
-                   coalesce(sum(paid_upokt), 0) y, coalesce(sum(relays), 0) rel, coalesce(sum(compute_units), 0) cu,
+                   coalesce(sum(dy), 0) y, coalesce(sum(relays), 0) rel, coalesce(sum(compute_units), 0) cu,
                    round(sum(coalesce(v, 0)::numeric / k), 6) eq
             FROM sd GROUP BY 1, 2, 3, 4) a
       JOIN (SELECT kind, dim, day, service_num, count(*) sessions, sum(coalesce(v, 0)) pool, sum(k) k
@@ -327,6 +377,21 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
          OR r.member_nums IS DISTINCT FROM ARRAY(SELECT ss.supplier_num FROM ${S}.session_suppliers ss
                                                  WHERE ss.session_num = r.session_num ORDER BY 1)`);
     assert.deepEqual(sets, []);
+    // what the rev-share addresses received on each settled seat = its shareholder payouts to them (the claim's
+    // shareholder_payouts rows whose recipient is one of the seat's operators)
+    const [pay] = await q(`
+      SELECT (SELECT coalesce(sum(x), 0) FROM ${S}.session_suppliers ss CROSS JOIN unnest(ss.operator_paid_upokt) x) y,
+             (SELECT coalesce(sum(sp.relay_upokt + sp.global_upokt), 0)
+              FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num)
+              JOIN ${S}.supplier_numbers n ON n.supplier_num = ss.supplier_num
+              JOIN ${S}.application_numbers a ON a.application_num = r.application_num
+              JOIN ${S}.service_numbers v ON v.service_num = r.service_num
+              JOIN ${S}.claim_settlements c ON c.supplier_id = n.supplier_id AND c.application_id = a.application_id
+                AND c.service_id = v.service_id AND c.session_end = r.end_height
+              JOIN ${S}.shareholder_payouts sp ON sp.height = c.height AND sp.event_idx = c.event_idx
+              JOIN ${S}.account_numbers o ON o.address = sp.recipient_id AND o.account_num = ANY(ss.operator_nums)
+              WHERE ss.state <> 0 AND NOT r.money_missing) p`);
+    assert.equal(String(pay.y), String(pay.p));
   };
 
   it("reads the start inputs only at the session starts, and moves the coverage only there", async () => {
@@ -437,12 +502,12 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       JOIN ${S}.supplier_numbers n USING (supplier_num) JOIN ${S}.account_numbers o ON o.account_num = ss.owner_num
       WHERE n.supplier_id = 'p4' AND ss.start_height IN (13, 17) GROUP BY 1, 2 ORDER BY 1`);
     assert.deepEqual(own.map((r) => [r.start_height, r.address]), [[13, "o2"], [17, "o3"]]);
-    // p2's rev-share: r1 up to the start 13, r2 and r3 from 17
+    // p2's rev-share: r1 up to the start 13, r2, r3 and r5 from 17
     const ops = await q(`SELECT DISTINCT ss.start_height,
         ARRAY(SELECT o.address FROM ${S}.account_numbers o WHERE o.account_num = ANY(ss.operator_nums) ORDER BY 1) a
       FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
       WHERE n.supplier_id = 'p2' AND ss.start_height IN (13, 17) ORDER BY 1`);
-    assert.deepEqual(ops.map((r) => [r.start_height, r.a]), [[13, ["r1"]], [17, ["r2", "r3"]]]);
+    assert.deepEqual(ops.map((r) => [r.start_height, r.a]), [[13, ["r1"]], [17, ["r2", "r3", "r5"]]]);
     // a1's gateways: g1 before 13, g2 from it; a2's g1
     const gw = await q(`SELECT DISTINCT a.application_id, r.start_height,
         ARRAY(SELECT o.address FROM ${S}.account_numbers o WHERE o.account_num = ANY(r.gateway_nums) ORDER BY 1) g
@@ -470,6 +535,44 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     const [p2raw] = await q(`SELECT count(*) n FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
       WHERE n.supplier_id = 'p2' AND ss.start_height >= 17 AND ss.state <> 0`);
     assert.equal(String(r23.seats), String(p2raw.n));
+  });
+
+  it("gives each rev-share address its own part of a seat's pay", async () => {
+    const part = async (sup: string) =>
+      (
+        await q(`SELECT ss.paid_upokt, ss.operator_paid_upokt,
+            ARRAY(SELECT o.address FROM unnest(ss.operator_nums) WITH ORDINALITY u(n, i)
+                  JOIN ${S}.account_numbers o ON o.account_num = u.n ORDER BY u.i) a
+          FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num)
+          JOIN ${S}.supplier_numbers n ON n.supplier_num = ss.supplier_num
+          WHERE n.supplier_id = $1 AND r.start_height = 17 AND ss.paid_upokt IS NOT NULL`, [sup])
+      )[0];
+    // 1000 settled: 600 relay + 100 global = 700 to the shareholders
+    const p1 = await part("p1");
+    assert.deepEqual([String(p1.paid_upokt), p1.a, (p1.operator_paid_upokt as string[]).map(String)], ["700", ["r1", "r4"], ["350", "350"]]);
+    const p2 = await part("p2");
+    // r2 1% (6 + 1), r3 49% (294 + 49), r5 50% (300 + 50): the parts add up to the seat's pay
+    assert.deepEqual([String(p2.paid_upokt), p2.a, (p2.operator_paid_upokt as string[]).map(String)], ["700", ["r2", "r3", "r5"], ["7", "343", "350"]]);
+    for (const x of [p1, p2]) assert.equal(String((x.operator_paid_upokt as string[]).reduce((s, v) => s + Number(v), 0)), String(x.paid_upokt));
+    // the funnel by rev-share address: its own part, here and through its rollup (one address) and the seats (two)
+    const [r4] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, operators => ARRAY['r4'])`, RANGE);
+    const [r4s] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, by_supplier => true, operators => ARRAY['r4'])`, RANGE);
+    const [r35] = await q(`SELECT * FROM ${S}.get_supplier_session_funnel(NULL, $1, $2, operators => ARRAY['r3', 'r5'])`, RANGE);
+    // every settled seat's part for those addresses (p1's other claims pay r4 too; p2's, r3 and r5)
+    const own = async (addrs: string[]) =>
+      String((await q(`SELECT coalesce(sum(u.p), 0) y FROM ${S}.session_suppliers ss
+        CROSS JOIN unnest(ss.operator_nums, ss.operator_paid_upokt) u(o, p)
+        JOIN ${S}.account_numbers a ON a.account_num = u.o WHERE a.address = ANY($1) AND ss.state <> 0`, [addrs]))[0].y);
+    assert.deepEqual([String(r4.paid_upokt), String(r4s.paid_upokt), String(r35.paid_upokt)],
+      [await own(["r4"]), await own(["r4"]), await own(["r3", "r5"])]);
+    // and less than the seats paid: r3 and r5 hold 99% of p2's
+    const [r35seats] = await q(`SELECT sum(ss.paid_upokt) y FROM ${S}.session_suppliers ss JOIN ${S}.supplier_numbers n USING (supplier_num)
+      WHERE n.supplier_id = 'p2' AND ss.start_height >= 17 AND ss.state <> 0`);
+    assert.ok(Number(r35.paid_upokt) < Number(r35seats.y) && Number(r35.paid_upokt) >= 693);
+    // the session 17-20 alone (block 17 at 16:00): r2's part of p2's seat
+    const [l] = await q(`SELECT * FROM ${S}.get_supplier_session_list(NULL, '2026-09-01T16:00:00Z', '2026-09-01T17:00:00Z',
+      states => ARRAY['paid'], operators => ARRAY['r2'])`);
+    assert.deepEqual((l.selected_paid_upokt as string[]).map(String), ["7"]);
   });
 
   it("keeps every rollup equal to the seats one by one", checkRollups);

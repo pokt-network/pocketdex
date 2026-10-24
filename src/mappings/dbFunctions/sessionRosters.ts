@@ -154,7 +154,10 @@ CREATE INDEX IF NOT EXISTS session_rosters_money_missing_start_idx ON ${s}.sessi
 -- shareholders (NULL when it has none), relays / compute_units = those of its settled or expired claim. owner_num,
 -- operator_nums and domain_num = its owner, the rev-share addresses (account_numbers, sorted) and the endpoint root
 -- domain of the config that served the session, at the start (NULL / {}: none; a config has one domain: no live config
--- on mainnet had two, 2026-10-21; with two, the first counts).
+-- on mainnet had two, 2026-10-21; with two, the first counts). operator_paid_upokt = what each of operator_nums received
+-- of that claim (shareholder_payouts, same order; NULL when it has no settled claim): an address's Y is its own part,
+-- not the claim's (Jorge, 2026-10-23); the chain pays the rev-share of the settlement block, so an address the config
+-- dropped during the session receives 0 there and one it added is no operator of the seat.
 -- Size (60 days of mainnet, 2026-10-23): 26.2M seats, ~4 GB; with the rollups and rosters ~8 GB, about 45 GB a year.
 -- No retention: an accepted cost (Jorge, 2026-10-23).
 CREATE TABLE IF NOT EXISTS ${s}.session_suppliers (
@@ -170,6 +173,7 @@ CREATE TABLE IF NOT EXISTS ${s}.session_suppliers (
   owner_num       INTEGER,
   domain_num      INTEGER,
   operator_nums   INTEGER[] NOT NULL DEFAULT '{}',
+  operator_paid_upokt BIGINT[],
   PRIMARY KEY (session_num, supplier_num)
 );
 CREATE INDEX IF NOT EXISTS session_suppliers_supplier_idx ON ${s}.session_suppliers (supplier_num, start_height);
@@ -207,7 +211,8 @@ CREATE INDEX IF NOT EXISTS session_daily_application_idx ON ${s}.session_daily (
 -- none): its seats in settled sessions (sessions: one per session) and how many ended in each state; paid_upokt (Y) =
 -- what its settled claims paid its shareholders; relays / compute_units of its claims; equal_share_upokt (B) = each
 -- session's paid_upokt over its roster size, summed over its seats (B of fleet-analysis = V x X / K, which sums over
--- suppliers); pool_upokt and roster_seats = those sessions' V and K, summed over its seats. With the seat's owner,
+-- suppliers); pool_upokt and roster_seats = those sessions' V and K, summed over its seats; operator_paid_upokt = what
+-- each of operator_nums received of paid_upokt (same order). With the seat's owner,
 -- domain and rev-share in the key, a supplier's row splits only when they changed during the day, and every selector
 -- reads its seats by supplier from here (CATALOG.md §7: slot_day2).
 CREATE TABLE IF NOT EXISTS ${s}.session_supplier_daily (
@@ -225,6 +230,7 @@ ${stateCols("INTEGER")}
   equal_share_upokt  NUMERIC   NOT NULL DEFAULT 0,
   pool_upokt         BIGINT    NOT NULL DEFAULT 0,
   roster_seats       BIGINT    NOT NULL DEFAULT 0,
+  operator_paid_upokt BIGINT[] NOT NULL DEFAULT '{}',
   first_height       BIGINT    NOT NULL,
   last_height        BIGINT    NOT NULL,
   PRIMARY KEY (supplier_num, day, service_num, owner_num, domain_num, operator_nums)
@@ -235,6 +241,7 @@ CREATE INDEX IF NOT EXISTS session_supplier_daily_operators_idx ON ${s}.session_
 -- Per dimension (kind 1 = owner, 2 = rev-share address, 3 = domain; dim_num = its account_numbers or domain_numbers
 -- number), day and service: the settled sessions with at least one seat of it (sessions, each session once) with those
 -- sessions' V and K (pool_upokt, roster_seats), and its seats there (seats, per state, Y, relays, compute units, B).
+-- For a rev-share address, Y (paid_upokt) is what it received there (operator_paid_upokt), not what the seats paid.
 -- Distinct sessions add up over days and services, never over dimensions: a session with two of a list's owners counts
 -- once for each (the readers count a list's sessions from session_rosters).
 CREATE TABLE IF NOT EXISTS ${s}.session_dimension_daily (
@@ -483,6 +490,11 @@ RETURNS void LANGUAGE sql AS $$
   ON CONFLICT (singleton) DO UPDATE SET height = greatest(t.height, EXCLUDED.height)
 $$;
 
+-- The element-wise sum of two arrays of the same length (a rollup row's operator_paid_upokt and its increment).
+CREATE OR REPLACE FUNCTION ${s}._array_add(a bigint[], b bigint[]) RETURNS bigint[] LANGUAGE sql IMMUTABLE AS $$
+  SELECT ARRAY(SELECT coalesce(x, 0) + coalesce(y, 0) FROM unnest(a, b) WITH ORDINALITY u(x, y, i) ORDER BY i)
+$$;
+
 -- Whether the money tables cover the settlement block p_height: the money step processed it (money_progress) and no
 -- settlement_gaps row holds it.
 CREATE OR REPLACE FUNCTION ${s}._money_covers(p_height bigint) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -574,6 +586,14 @@ BEGIN
     SELECT DISTINCT t.session_num, m.supplier_id
     FROM ${s}.msg_create_claims m JOIN _sr_tgt t ON t.session_id = m.session_id
     WHERE m.block_id > lo AND m.block_id <= p_height
+  ), pay AS MATERIALIZED (
+    -- what each rev-share recipient of a settled claim received (shareholder_payouts: by the claim's event)
+    SELECT t.session_num, c.supplier_id, sp.recipient_id, sum(sp.relay_upokt + sp.global_upokt) amt
+    FROM ${s}.claim_settlements c
+    JOIN _sr_tgt t ON t.application_id = c.application_id AND t.service_id = c.service_id AND t.end_height = c.session_end
+    JOIN ${s}.shareholder_payouts sp ON sp.height = c.height AND sp.event_idx = c.event_idx
+    WHERE m_ok AND c.height > lo AND c.height <= p_height
+    GROUP BY 1, 2, 3
   ), worked AS (
     SELECT u.session_num, count(DISTINCT u.supplier_id) n
     FROM (SELECT oc.session_num, oc.supplier_id FROM oc UNION SELECT cl.session_num, cl.supplier_id FROM cl) u
@@ -588,9 +608,16 @@ BEGIN
     SELECT ss.session_num, ss.supplier_num, ss.owner_num, ss.domain_num, ss.operator_nums, t.day, t.service_num,
            t.application_num, t.roster_size,
            ss.state old_state, ss.paid_upokt old_paid, ss.relays old_relays, ss.compute_units old_cu, t.old_paid old_v,
+           ss.operator_paid_upokt old_opp,
            CASE WHEN oc.st IS NOT NULL THEN oc.st WHEN cl.supplier_id IS NOT NULL THEN 8
                 WHEN coalesce(w.n, 0) > 0 THEN 6 ELSE 7 END::smallint new_state,
-           oc.paid::bigint new_paid, oc.relays::bigint new_relays, oc.cu::bigint new_cu, sv.v new_v
+           oc.paid::bigint new_paid, oc.relays::bigint new_relays, oc.cu::bigint new_cu, sv.v new_v,
+           -- each rev-share address's part of the settled claim, in operator_nums order
+           CASE WHEN oc.paid IS NOT NULL THEN ARRAY(
+             SELECT coalesce((SELECT sum(pay.amt) FROM pay WHERE pay.session_num = ss.session_num
+                                AND pay.supplier_id = sn.supplier_id AND pay.recipient_id = an.address), 0)::bigint
+             FROM unnest(ss.operator_nums) WITH ORDINALITY o(num, i)
+             JOIN ${s}.account_numbers an ON an.account_num = o.num ORDER BY o.i) END new_opp
     FROM ${s}.session_suppliers ss
     JOIN _sr_tgt t ON t.session_num = ss.session_num
     JOIN sv ON sv.session_num = ss.session_num
@@ -602,27 +629,32 @@ BEGIN
     SELECT * FROM nw
     WHERE nw.old_state <> nw.new_state OR nw.old_paid IS DISTINCT FROM nw.new_paid
        OR nw.old_relays IS DISTINCT FROM nw.new_relays OR nw.old_cu IS DISTINCT FROM nw.new_cu
+       OR nw.old_opp IS DISTINCT FROM nw.new_opp
        OR (nw.old_state <> 0 AND nw.old_v IS DISTINCT FROM nw.new_v)
   ), up AS (
     UPDATE ${s}.session_suppliers ss SET state = ch.new_state, paid_upokt = ch.new_paid, relays = ch.new_relays,
-      compute_units = ch.new_cu
+      compute_units = ch.new_cu, operator_paid_upokt = ch.new_opp
     FROM ch
     WHERE ss.session_num = ch.session_num AND ss.supplier_num = ch.supplier_num
       AND (ss.state <> ch.new_state OR ss.paid_upokt IS DISTINCT FROM ch.new_paid
-           OR ss.relays IS DISTINCT FROM ch.new_relays OR ss.compute_units IS DISTINCT FROM ch.new_cu)
+           OR ss.relays IS DISTINCT FROM ch.new_relays OR ss.compute_units IS DISTINCT FROM ch.new_cu
+           OR ss.operator_paid_upokt IS DISTINCT FROM ch.new_opp)
     RETURNING 1
   ), d AS (
     -- each changed seat: its new contribution, minus its old one when it had left active already
     -- (pool = the session's V, k = its roster size: per seat, so a supplier's rows sum its sessions' V and K)
     SELECT ch.day, ch.supplier_num, ch.owner_num, ch.domain_num, ch.operator_nums, ch.service_num, ch.application_num,
-           k.st, k.sign, k.sess, k.paid, k.rel, k.cu, k.eq, k.pool, k.k
+           k.st, k.sign, k.sess, k.paid, k.rel, k.cu, k.eq, k.pool, k.k, k.opp
     FROM ch
     CROSS JOIN LATERAL (VALUES
       (ch.new_state, 1, CASE WHEN ch.old_state = 0 THEN 1 ELSE 0 END, coalesce(ch.new_paid, 0), coalesce(ch.new_relays, 0),
-       coalesce(ch.new_cu, 0), coalesce(ch.new_v, 0)::numeric / ch.roster_size, coalesce(ch.new_v, 0), ch.roster_size::bigint),
+       coalesce(ch.new_cu, 0), coalesce(ch.new_v, 0)::numeric / ch.roster_size, coalesce(ch.new_v, 0), ch.roster_size::bigint,
+       coalesce(ch.new_opp, array_fill(0::bigint, ARRAY[cardinality(ch.operator_nums)]))),
       (ch.old_state, -1, 0, -coalesce(ch.old_paid, 0), -coalesce(ch.old_relays, 0), -coalesce(ch.old_cu, 0),
-       -coalesce(ch.old_v, 0)::numeric / ch.roster_size, -coalesce(ch.old_v, 0), -ch.roster_size::bigint))
-      k(st, sign, sess, paid, rel, cu, eq, pool, k)
+       -coalesce(ch.old_v, 0)::numeric / ch.roster_size, -coalesce(ch.old_v, 0), -ch.roster_size::bigint,
+       ARRAY(SELECT -coalesce(x, 0) FROM unnest(coalesce(ch.old_opp, array_fill(0::bigint, ARRAY[cardinality(ch.operator_nums)])))
+             WITH ORDINALITY u(x, i) ORDER BY i)))
+      k(st, sign, sess, paid, rel, cu, eq, pool, k, opp)
     WHERE k.st <> 0
   ), ag AS (
     SELECT d.day, d.service_num, d.supplier_num, coalesce(d.owner_num, 0) owner_num, coalesce(d.domain_num, 0) domain_num,
@@ -631,14 +663,24 @@ ${STATES.map((name, i) => `           sum(CASE WHEN d.st = ${i + 1} THEN d.sign 
            sum(d.paid) paid_upokt, sum(d.rel) relays, sum(d.cu) cu, sum(d.eq) equal_share_upokt, sum(d.pool) pool_upokt,
            sum(d.k) roster_seats
     FROM d GROUP BY 1, 2, 3, 4, 5, 6
+  ), agp AS (
+    -- operator_paid_upokt summed element-wise (operator_nums is in the key, so the rows' arrays have its length)
+    SELECT x.day, x.service_num, x.supplier_num, x.owner_num, x.domain_num, x.operator_nums, array_agg(x.v ORDER BY x.i) opp
+    FROM (SELECT d.day, d.service_num, d.supplier_num, coalesce(d.owner_num, 0) owner_num, coalesce(d.domain_num, 0) domain_num,
+                 d.operator_nums, u.i, sum(u.x)::bigint v
+          FROM d CROSS JOIN unnest(d.opp) WITH ORDINALITY u(x, i)
+          GROUP BY 1, 2, 3, 4, 5, 6, 7) x
+    GROUP BY 1, 2, 3, 4, 5, 6
   ), roll AS (
     INSERT INTO ${s}.session_supplier_daily AS t (day, service_num, supplier_num, owner_num, domain_num, operator_nums,
       sessions, ${STATES.join(", ")}, paid_upokt, relays, compute_units, equal_share_upokt, pool_upokt, roster_seats,
-      first_height, last_height)
+      operator_paid_upokt, first_height, last_height)
     SELECT ag.day, ag.service_num, ag.supplier_num, ag.owner_num, ag.domain_num, ag.operator_nums, ag.sessions,
            ${STATES.map((n) => `ag.${n}`).join(", ")}, ag.paid_upokt, ag.relays, ag.cu, ag.equal_share_upokt,
-           ag.pool_upokt, ag.roster_seats, p_height, p_height
+           ag.pool_upokt, ag.roster_seats, coalesce(agp.opp, '{}'), p_height, p_height
     FROM ag
+    LEFT JOIN agp ON agp.day = ag.day AND agp.service_num = ag.service_num AND agp.supplier_num = ag.supplier_num
+      AND agp.owner_num = ag.owner_num AND agp.domain_num = ag.domain_num AND agp.operator_nums = ag.operator_nums
     ON CONFLICT (supplier_num, day, service_num, owner_num, domain_num, operator_nums) DO UPDATE SET
       sessions = t.sessions + EXCLUDED.sessions,
 ${STATES.map((name) => `      ${name} = t.${name} + EXCLUDED.${name},`).join("\n")}
@@ -646,6 +688,7 @@ ${STATES.map((name) => `      ${name} = t.${name} + EXCLUDED.${name},`).join("\n
       compute_units = t.compute_units + EXCLUDED.compute_units,
       equal_share_upokt = t.equal_share_upokt + EXCLUDED.equal_share_upokt,
       pool_upokt = t.pool_upokt + EXCLUDED.pool_upokt, roster_seats = t.roster_seats + EXCLUDED.roster_seats,
+      operator_paid_upokt = ${s}._array_add(t.operator_paid_upokt, EXCLUDED.operator_paid_upokt),
       first_height = least(t.first_height, EXCLUDED.first_height),
       last_height = greatest(t.last_height, EXCLUDED.last_height)
     RETURNING 1
@@ -719,11 +762,12 @@ ${STATES.map((n) => `           sum(y.${n}) ${n}`).join(",\n")},
            sum(y.y) y, sum(y.rel) rel, sum(y.cu) cu, sum(y.eq) eq, sum(y.pool) pool, sum(y.k) k
     FROM (SELECT dm.kind, dm.dim, d.day, d.service_num, 0 sessions, d.sess seats,
 ${STATES.map((n, i) => `                 CASE WHEN d.st = ${i + 1} THEN d.sign ELSE 0 END ${n}`).join(",\n")},
-                 d.paid y, d.rel, d.cu, d.eq, 0 pool, 0 k
+                 dm.y, d.rel, d.cu, d.eq, 0 pool, 0 k
           FROM d CROSS JOIN LATERAL (
-            SELECT 1::smallint kind, d.owner_num dim WHERE d.owner_num IS NOT NULL
-            UNION ALL SELECT 2::smallint, o FROM unnest(d.operator_nums) o
-            UNION ALL SELECT 3::smallint, d.domain_num WHERE d.domain_num IS NOT NULL) dm
+            -- an owner's and a domain's Y is what the seat paid; a rev-share address's, its own part
+            SELECT 1::smallint kind, d.owner_num dim, d.paid y WHERE d.owner_num IS NOT NULL
+            UNION ALL SELECT 2::smallint, u.o, u.p FROM unnest(d.operator_nums, d.opp) u(o, p)
+            UNION ALL SELECT 3::smallint, d.domain_num, d.paid WHERE d.domain_num IS NOT NULL) dm
           UNION ALL
           SELECT dm.kind, dm.dim, sx.day, sx.service_num, sx.sessions, 0,
 ${STATES.map(() => `                 0`).join(",\n")},
@@ -837,6 +881,11 @@ export function createSessionRosterFunctionsFn(dbSchema: string): string {
     `CASE k WHEN 0 THEN ${a}.member_nums OPERATOR(public.&&) nums WHEN 1 THEN ${a}.owner_nums OPERATOR(public.&&) nums
             WHEN 2 THEN ${a}.operator_nums OPERATOR(public.&&) nums WHEN 3 THEN ${a}.domain_nums OPERATOR(public.&&) nums
             WHEN 4 THEN ${a}.application_num = ANY(nums) WHEN 5 THEN ${a}.gateway_nums OPERATOR(public.&&) nums ELSE true END`;
+  // Y of a seat or rollup row for the selector: for rev-share addresses (k = 2) the part the selected addresses received
+  // (operator_paid_upokt), else what it paid its shareholders
+  const paidFor = (a: string) =>
+    `CASE WHEN k = 2 THEN (SELECT coalesce(sum(u.p), 0) FROM unnest(${a}.operator_nums, ${a}.operator_paid_upokt) u(o, p)
+                           WHERE u.o = ANY(nums))::bigint ELSE ${a}.paid_upokt END`;
   const phase = (a: string) =>
     `${s}._session_phase(${a}.settled_height, ${a}.end_height, ${a}.grace_end_height, ${a}.claim_open_height,
        ${a}.claim_close_height, ${a}.proof_open_height, ${a}.settlement_height, tip)`;
@@ -960,7 +1009,8 @@ END $$;
 -- NULL = one total) and per service / supplier with by_service / by_supplier, over the UTC days that start inside the
 -- range, from the daily rollups: seats = the seats of settled sessions, one per (session, selected member), and how they
 -- ended (paid, settled_zero, expired, discarded, slashed, idle_others_worked, idle_no_work, unresolved), paid_upokt (Y)
--- = what their settled claims paid their shareholders, relays / compute_units = those of their claims,
+-- = what their settled claims paid their shareholders (for operators: what those rev-share addresses received of it,
+-- shareholder_payouts), relays / compute_units = those of their claims,
 -- equal_share_upokt (B) = each session's V over its roster size, per seat (rounded to upokt): F = Y / B.
 -- sessions_with_selected = the settled sessions with at least one of them, pool_upokt = what those sessions paid every
 -- member (V summed), roster_seats = their roster sizes (K summed): per supplier (by_supplier, or one supplier) each seat
@@ -995,7 +1045,7 @@ ${days}
     -- the counts stay integer, whose sum is a bigint: summed as bigint (numeric) they took 1 s more over a large
     -- owner's 1M daily rows (2026-10-23)
     SELECT d.day::timestamp AT TIME ZONE 'UTC' t, d.service_num, d.supplier_num, d.sessions seats,
-           ${states.map((n) => `d.${n}`).join(", ")}, 0 active, d.paid_upokt y, d.relays rel, d.compute_units cu,
+           ${states.map((n) => `d.${n}`).join(", ")}, 0 active, ${paidFor("d")} y, d.relays rel, d.compute_units cu,
            d.equal_share_upokt eq, d.sessions n, d.pool_upokt v, d.roster_seats::integer k_, d.first_height, d.last_height
     FROM ${s}.session_supplier_daily d
     WHERE NOT one_dim AND d.day BETWEEN d1 AND d2 AND ${seatMatch("d")}
@@ -1147,7 +1197,8 @@ END $$;
 -- block (_session_phase), settlement_height (where the chain settles it), settled_height (NULL while active),
 -- money_missing, roster_size (K), candidates, claimed (members with a claim), paid_upokt (V), settled_upokt, relays and
 -- compute_units of the whole session, and selected_supplier_ids / selected_states / selected_paid_upokt = the selected
--- members, the state of each and what each was paid (same order; get_session_rosters gives every member). row_limit
+-- members, the state of each and what each was paid (for operators: what those addresses received of it; same order;
+-- get_session_rosters gives every member). row_limit
 -- (default 100, up to 1000) rows a call; for the next page pass the last row's start_height and session_id as
 -- before_height and before_session_id (a keyset: every page reads only its rows).
 CREATE OR REPLACE FUNCTION ${s}.get_supplier_session_list(suppliers text[], range_start timestamptz DEFAULT NULL,
@@ -1196,7 +1247,7 @@ ${tipSql}
   ), m AS (
     SELECT ss.session_num, array_agg(n.supplier_id ORDER BY n.supplier_id) ids,
            array_agg(${s}._session_state_name(ss.state) ORDER BY n.supplier_id) sts,
-           array_agg(ss.paid_upokt::numeric ORDER BY n.supplier_id) pds
+           array_agg(CASE WHEN ss.paid_upokt IS NOT NULL THEN (${paidFor("ss")})::numeric END ORDER BY n.supplier_id) pds
     FROM p JOIN ${s}.session_suppliers ss ON ss.session_num = p.session_num
     JOIN ${s}.supplier_numbers n ON n.supplier_num = ss.supplier_num
     WHERE ${seatMatch("ss")}
