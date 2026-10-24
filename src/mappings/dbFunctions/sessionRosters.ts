@@ -885,10 +885,13 @@ export function createSessionRosterFunctionsFn(dbSchema: string): string {
             WHEN 2 THEN ${a}.operator_nums OPERATOR(public.&&) nums WHEN 3 THEN ${a}.domain_nums OPERATOR(public.&&) nums
             WHEN 4 THEN ${a}.application_num = ANY(nums) WHEN 5 THEN ${a}.gateway_nums OPERATOR(public.&&) nums ELSE true END`;
   // Y of a seat or rollup row for the selector: for rev-share addresses (k = 2) the part the selected addresses received
-  // (operator_paid_upokt), else what it paid its shareholders
+  // (operator_paid_upokt), else what it paid its shareholders. One address reads its element: the unnest per row took
+  // a large address's 30 days by supplier to 2.7 s, its element to 1.5 s (2026-10-23)
   const paidFor = (a: string) =>
-    `CASE WHEN k = 2 THEN (SELECT coalesce(sum(u.p), 0) FROM unnest(${a}.operator_nums, ${a}.operator_paid_upokt) u(o, p)
-                           WHERE u.o = ANY(nums))::bigint ELSE ${a}.paid_upokt END`;
+    `CASE WHEN k <> 2 THEN ${a}.paid_upokt
+          WHEN cardinality(nums) = 1 THEN coalesce(${a}.operator_paid_upokt[array_position(${a}.operator_nums, nums[1])], 0)
+          ELSE (SELECT coalesce(sum(u.p), 0) FROM unnest(${a}.operator_nums, ${a}.operator_paid_upokt) u(o, p)
+                WHERE u.o = ANY(nums))::bigint END`;
   const phase = (a: string) =>
     `${s}._session_phase(${a}.settled_height, ${a}.end_height, ${a}.grace_end_height, ${a}.claim_open_height,
        ${a}.claim_close_height, ${a}.proof_open_height, ${a}.settlement_height, tip)`;
