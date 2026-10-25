@@ -23,7 +23,7 @@ import {
   writeClaimsWithoutRoster,
 } from "../src/mappings/pocket/sessionRosters";
 
-type Query = (sql: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
+export type Query = (sql: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
 
 export interface BackfillOptions {
   from: number;
@@ -37,6 +37,20 @@ export interface BackfillOptions {
   log?: (line: string) => void;
   // awaited after each start's transaction (the spec checks there that no settled-due session is left open)
   afterStart?: (start: number) => Promise<void>;
+}
+
+// The open sessions of one session end settle as the indexer settles them: at each block before the predicted
+// settlement height where one of their claims settled, expired or was discarded, then at the predicted one (the
+// outcomes come after the session end: the height range reads the primary keys). Also scripts/rewrite_session_starts.ts.
+export async function settleSessionsAt(q: Query, s: string, end: number, settle: number): Promise<void> {
+  const early = await q(
+    `SELECT DISTINCT x.height::bigint h FROM (
+       SELECT height FROM ${s}.claim_settlements WHERE height > $1 AND height < $2 AND session_end = $1
+       UNION SELECT height FROM ${s}.claim_expirations WHERE height > $1 AND height < $2 AND session_end = $1
+       UNION SELECT height FROM ${s}.claim_discards WHERE height > $1 AND height < $2 AND session_end = $1) x ORDER BY 1`,
+    [end, settle]
+  );
+  for (const { h: at } of [...early, { h: settle }]) await q(`SELECT ${s}.finalize_session_rosters($1::bigint)`, [at]);
 }
 
 export async function backfillSessionRosters(
@@ -83,19 +97,7 @@ export async function backfillSessionRosters(
     if (holes.length > 0)
       throw new Error(`${holes.length} session starts of ${from}..${to} hold no rosters (first: ${holes.slice(0, 5).join(", ")}); write them before FINAL_STATES_ONLY`);
   }
-  // The open sessions of one session end settle as the indexer settles them: at each block before the predicted
-  // settlement height where one of their claims settled, expired or was discarded, then at the predicted one (the
-  // outcomes come after the session end: the height range reads the primary keys).
-  const settleSessions = async (end: number, settle: number): Promise<void> => {
-    const early = await q(
-      `SELECT DISTINCT x.height::bigint h FROM (
-         SELECT height FROM ${s}.claim_settlements WHERE height > $1 AND height < $2 AND session_end = $1
-         UNION SELECT height FROM ${s}.claim_expirations WHERE height > $1 AND height < $2 AND session_end = $1
-         UNION SELECT height FROM ${s}.claim_discards WHERE height > $1 AND height < $2 AND session_end = $1) x ORDER BY 1`,
-      [end, settle]
-    );
-    for (const { h: at } of [...early, { h: settle }]) await q(`SELECT ${s}.finalize_session_rosters($1::bigint)`, [at]);
-  };
+  const settleSessions = (end: number, settle: number) => settleSessionsAt(q, s, end, settle);
   const t0 = Date.now();
   let written = 0;
   for (const h of starts.reverse()) {

@@ -20,6 +20,7 @@ import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlem
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
 import { backfillSessionRosters } from "../../scripts/backfill_session_rosters";
+import { rewriteSessionStarts } from "../../scripts/rewrite_session_starts";
 import { finalizeRostersAt } from "../../src/mappings/money/history/job";
 import { buildSessionRosters, SessionRosterInputs, sessionRosterStep } from "../../src/mappings/pocket/sessionRosters";
 
@@ -695,6 +696,26 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
 
   it("keeps every rollup equal to the seats one by one", checkRollups);
 
+  it("rebuilds a day's rollups from the facts to the rows finalize wrote", async () => {
+    const tables = ["session_daily", "session_supplier_daily", "session_dimension_daily"];
+    const rows = async () =>
+      Object.fromEntries(await Promise.all(tables.map(async (t) => [t,
+        (await q(`SELECT to_jsonb(t) - 'first_height' - 'last_height' j FROM ${S}.${t} t ORDER BY t::text`)).map((r) => r.j)])));
+    const before = await rows();
+    const days = await q(`SELECT DISTINCT day::text d FROM ${S}.session_daily ORDER BY 1`);
+    assert.ok(days.length > 0);
+    await q("BEGIN");
+    try {
+      for (const { d } of days) await q(`SELECT ${S}.rebuild_session_rollups($1::date)`, [d]);
+      await q("COMMIT");
+    } catch (e) {
+      await q("ROLLBACK");
+      throw e;
+    }
+    assert.deepEqual(await rows(), before);
+    await checkRollups();
+  });
+
   it("finalizes again without moving anything, and moves the rollups when a late claim settles", async () => {
     await q("BEGIN");
     const again = Number((await q(`SELECT ${S}.finalize_session_rosters(10) n`))[0].n);
@@ -923,6 +944,25 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     assert.deepEqual(await q(`SELECT * FROM ${S}.session_roster_progress`), []);
     await backfillSessionRosters(q, S, { from: 21, to: 30, latest: 41, skipFinalStates: true });
     await backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, finalStatesOnly: true, lateChunk: 3 });
+    assert.deepEqual(await snapshot(), indexed);
+    await checkRollups();
+  });
+
+  it("rewrites the rosters of a start, and its day's rollups, to what the indexer writes", async () => {
+    const tables = ["session_supplier_daily", "session_daily", "session_dimension_daily"];
+    const snapshot = async () => ({
+      rosters: await q(`SELECT to_jsonb(r) - 'session_num' j FROM ${S}.session_rosters r ORDER BY r.session_id`),
+      seats: await q(`SELECT r.session_id, to_jsonb(ss) - 'session_num' j
+        FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num) ORDER BY 1, ss.supplier_num`),
+      ...Object.fromEntries(await Promise.all(tables.map(async (t) => [t,
+        (await q(`SELECT to_jsonb(t) - 'first_height' - 'last_height' j FROM ${S}.${t} t ORDER BY t::text`)).map((r) => r.j)]))),
+    });
+    const indexed = await snapshot();
+    // a start written wrong: the s2 session of 9 missing (its seats gone, its rollups left as they were)
+    await q(`WITH r AS (DELETE FROM ${S}.session_rosters WHERE start_height = 9 AND service_num =
+               (SELECT service_num FROM ${S}.service_numbers WHERE service_id = 's2') RETURNING session_num)
+             DELETE FROM ${S}.session_suppliers WHERE session_num IN (SELECT session_num FROM r)`);
+    await rewriteSessionStarts(q, S, [9, 13]);
     assert.deepEqual(await snapshot(), indexed);
     await checkRollups();
   });

@@ -829,6 +829,89 @@ ${STATES.map((n) => `      ${n} = t.${n} + EXCLUDED.${n},`).join("\n")}
   RETURN n;
 END $$;
 
+-- The three rollups of one UTC day of session start rebuilt from the facts (session_rosters, session_suppliers): the
+-- day's rows deleted and written again as the settled sessions and seats of that day sum, the rows finalize writes one
+-- settlement block at a time. For a repair (scripts/rewrite_session_starts.ts: the starts whose rosters were written
+-- with a wrong rule) and for audit. first_height / last_height become the lowest and highest settled_height of the
+-- row's sessions: a session settled again later (a late claim, a money fill) keeps only its last one. Returns the rows
+-- written.
+CREATE OR REPLACE FUNCTION ${s}.rebuild_session_rollups(p_day date)
+RETURNS integer LANGUAGE plpgsql SET jit = off AS $$
+DECLARE n integer; m integer; k integer;
+BEGIN
+  DELETE FROM ${s}.session_daily WHERE day = p_day;
+  DELETE FROM ${s}.session_supplier_daily WHERE day = p_day;
+  DELETE FROM ${s}.session_dimension_daily WHERE day = p_day;
+  CREATE TEMP TABLE IF NOT EXISTS _rb_ses ON COMMIT DROP AS SELECT * FROM ${s}.session_rosters LIMIT 0;
+  TRUNCATE _rb_ses;
+  INSERT INTO _rb_ses SELECT r.* FROM ${s}.session_rosters r
+  WHERE r.settled_height IS NOT NULL AND (r.start_time AT TIME ZONE 'UTC')::date = p_day;
+  INSERT INTO ${s}.session_daily (day, service_num, application_num, sessions, sessions_with_claim, sessions_no_work,
+    roster_seats, candidates, claimed_seats, ${STATES.join(", ")}, paid_upokt, settled_upokt, relays, compute_units,
+    first_height, last_height)
+  SELECT p_day, r.service_num, r.application_num, count(*), count(*) FILTER (WHERE r.claimed > 0),
+         count(*) FILTER (WHERE r.claimed = 0), sum(r.roster_size), sum(r.candidates), sum(r.claimed),
+         ${STATES.map((n) => `sum(r.${n})`).join(", ")}, coalesce(sum(r.paid_upokt), 0), coalesce(sum(r.settled_upokt), 0),
+         coalesce(sum(r.relays), 0), coalesce(sum(r.compute_units), 0), min(r.settled_height), max(r.settled_height)
+  FROM _rb_ses r GROUP BY 1, 2, 3;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  CREATE TEMP TABLE IF NOT EXISTS _rb_seat ON COMMIT DROP AS
+    SELECT ss.*, r.service_num r_service, r.paid_upokt v, r.roster_size k, r.settled_height sh FROM ${s}.session_suppliers ss
+    JOIN ${s}.session_rosters r USING (session_num) LIMIT 0;
+  TRUNCATE _rb_seat;
+  INSERT INTO _rb_seat SELECT ss.*, r.service_num, r.paid_upokt, r.roster_size, r.settled_height
+  FROM ${s}.session_suppliers ss JOIN _rb_ses r USING (session_num) WHERE ss.state <> 0;
+  INSERT INTO ${s}.session_supplier_daily (day, service_num, supplier_num, owner_num, domain_num, operator_nums,
+    operator_share_percents, sessions, ${STATES.join(", ")}, paid_upokt, relays, compute_units, equal_share_upokt,
+    pool_upokt, roster_seats, operator_paid_upokt, first_height, last_height)
+  WITH g AS (
+    SELECT x.r_service svc, x.supplier_num sup, coalesce(x.owner_num, 0) own, coalesce(x.domain_num, 0) dom,
+           x.operator_nums ops, x.operator_share_percents pcs, x.state, x.paid_upokt, x.relays, x.compute_units, x.v, x.k,
+           x.sh, coalesce(x.operator_paid_upokt, array_fill(0::bigint, ARRAY[cardinality(x.operator_nums)])) opp
+    FROM _rb_seat x
+  ), opa AS (
+    -- operator_paid_upokt summed element by element (operator_nums is in the key: one length per row)
+    SELECT z.svc, z.sup, z.own, z.dom, z.ops, z.pcs, array_agg(z.t ORDER BY z.i) opp
+    FROM (SELECT g.svc, g.sup, g.own, g.dom, g.ops, g.pcs, u.i, sum(coalesce(u.x, 0))::bigint t
+          FROM g CROSS JOIN unnest(g.opp) WITH ORDINALITY u(x, i) GROUP BY 1, 2, 3, 4, 5, 6, 7) z
+    GROUP BY 1, 2, 3, 4, 5, 6
+  )
+  SELECT p_day, g.svc, g.sup, g.own, g.dom, g.ops, g.pcs, count(*),
+         ${STATES.map((n, i) => `count(*) FILTER (WHERE g.state = ${i + 1})`).join(", ")},
+         coalesce(sum(g.paid_upokt), 0), coalesce(sum(g.relays), 0), coalesce(sum(g.compute_units), 0),
+         sum(coalesce(g.v, 0)::numeric / g.k), coalesce(sum(g.v), 0), sum(g.k), coalesce(min(opa.opp), '{}'),
+         min(g.sh), max(g.sh)
+  FROM g LEFT JOIN opa USING (svc, sup, own, dom, ops, pcs)
+  GROUP BY g.svc, g.sup, g.own, g.dom, g.ops, g.pcs;
+  GET DIAGNOSTICS m = ROW_COUNT;
+  -- the dimensions: each seat once per dimension it had (an owner's and a domain's Y and B are the seat's, a rev-share
+  -- address's its own parts), and each session once per dimension of its members with its V and K
+  INSERT INTO ${s}.session_dimension_daily (kind, dim_num, day, service_num, sessions, seats, ${STATES.join(", ")},
+    paid_upokt, relays, compute_units, equal_share_upokt, pool_upokt, roster_seats, first_height, last_height)
+  SELECT y.kind, y.dim, p_day, y.svc, sum(y.sessions), sum(y.seats), ${STATES.map((n) => `sum(y.${n})`).join(", ")},
+         sum(y.yv), sum(y.rel), sum(y.cu), sum(y.eq), sum(y.pool), sum(y.k), min(y.sh), max(y.sh)
+  FROM (SELECT dm.kind, dm.dim, x.r_service svc, 0 sessions, 1 seats,
+               ${STATES.map((n, i) => `(x.state = ${i + 1})::int ${n}`).join(", ")},
+               dm.y yv, coalesce(x.relays, 0) rel, coalesce(x.compute_units, 0) cu, dm.eq, 0 pool, 0 k, x.sh
+        FROM _rb_seat x CROSS JOIN LATERAL (
+          SELECT 1::smallint kind, x.owner_num dim, coalesce(x.paid_upokt, 0) y, coalesce(x.v, 0)::numeric / x.k eq
+          WHERE x.owner_num IS NOT NULL
+          UNION ALL SELECT 2::smallint, u.o, coalesce(u.p, 0), coalesce(x.v, 0)::numeric / x.k * u.pc / 100
+          FROM unnest(x.operator_nums, x.operator_paid_upokt, x.operator_share_percents) u(o, p, pc)
+          UNION ALL SELECT 3::smallint, x.domain_num, coalesce(x.paid_upokt, 0), coalesce(x.v, 0)::numeric / x.k
+          WHERE x.domain_num IS NOT NULL) dm
+        UNION ALL
+        SELECT dm.kind, dm.dim, r.service_num, 1, 0, ${STATES.map(() => "0").join(", ")}, 0, 0, 0, 0,
+               coalesce(r.paid_upokt, 0), r.roster_size, r.settled_height
+        FROM _rb_ses r CROSS JOIN LATERAL (
+          SELECT 1::smallint kind, o dim FROM unnest(r.owner_nums) o
+          UNION ALL SELECT 2::smallint, o FROM unnest(r.operator_nums) o
+          UNION ALL SELECT 3::smallint, o FROM unnest(r.domain_nums) o) dm) y
+  GROUP BY 1, 2, 4;
+  GET DIAGNOSTICS k = ROW_COUNT;
+  RETURN n + m + k;
+END $$;
+
 -- The names of the states, for readers (index = state + 1).
 CREATE OR REPLACE FUNCTION ${s}._session_state_name(p_state smallint) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT (${STATE_NAMES_SQL})[p_state + 1]
