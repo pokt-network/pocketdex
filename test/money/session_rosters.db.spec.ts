@@ -20,6 +20,7 @@ import { createSettlementTablesFn } from "../../src/mappings/dbFunctions/settlem
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
 import { createSettlementWriterFn } from "../../src/mappings/dbFunctions/settlement/writer";
 import { backfillSessionRosters } from "../../scripts/backfill_session_rosters";
+import { rewriteSessionStarts } from "../../scripts/rewrite_session_starts";
 import { finalizeRostersAt } from "../../src/mappings/money/history/job";
 import { buildSessionRosters, SessionRosterInputs, sessionRosterStep } from "../../src/mappings/pocket/sessionRosters";
 
@@ -189,12 +190,19 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         -- so it is a candidate from 13 on, not at 9 (mainnet 894,421)
         UNION ALL SELECT 'p7', 's1', NULL, '[]', '[]', '[9,13)'
         UNION ALL SELECT 'p7', 's1', 13, '[]', '[]', '[13,)'
-        UNION ALL SELECT q, 's2', 1, '[]', '[]', '[1,)' FROM unnest(ARRAY['q1', 'q2']) q;
+        UNION ALL SELECT q, 's2', 1, '[]', '[]', '[1,)' FROM unnest(ARRAY['q1', 'q2']) q
+        -- q3 restakes at 6 (C2, from c.org to d.org: the chain activates it at the start 9) and again in the start block
+        -- 9 (C3): C2's row closes at 9 with no activation, the BeginBlock activation of that block lost to the restake
+        -- (suppliers.ts), yet the chain serves the session 9-12 with C2 (mainnet 979,961)
+        UNION ALL SELECT 'q3', 's2', 1, '[]', '["c.org"]', '[1,6)'
+        UNION ALL SELECT 'q3', 's2', NULL, '[]', '["d.org"]', '[6,9)'
+        UNION ALL SELECT 'q3', 's2', NULL, '[]', '["e.org"]', '[9,13)'
+        UNION ALL SELECT 'q3', 's2', 13, '[]', '["e.org"]', '[13,)';
       CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_status text, _block_range int8range);
       -- p4 passes from o2 to o3 at the start block 13 (its seats are o3's from the start 17 on)
       INSERT INTO ${S}.suppliers SELECT p, CASE WHEN p IN ('p1', 'p2') THEN 'o1' ELSE 'o2' END, 'Staked',
           CASE WHEN p = 'p4' THEN '[1,13)' ELSE '[1,)' END::int8range
-        FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'q1', 'q2']) p
+        FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'q1', 'q2', 'q3']) p
         UNION ALL SELECT 'p4', 'o3', 'Staked', '[13,)';
       CREATE TABLE ${S}.msg_create_claims (supplier_id text, application_id text, service_id text, session_id text,
         block_id numeric, _block_range int8range, session_start_height numeric);`);
@@ -451,17 +459,24 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       [
         [1, "a1", "s1", 3, 5, 4, 10],
         [1, "a2", "s1", 3, 5, 4, 10],
-        [1, "a3", "s2", 2, 2, 4, 10],
+        [1, "a3", "s2", 3, 3, 4, 10],
         [9, "a1", "s1", 3, 6, 12, 18],
         [9, "a2", "s1", 3, 6, 12, 18],
-        [9, "a3", "s2", 2, 2, 12, 18],
+        [9, "a3", "s2", 3, 3, 12, 18],
         [9, "a4", "s1", 3, 6, 12, 18],
         [13, "a1", "s1", 3, 6, 16, 22],
         [13, "a2", "s1", 3, 6, 16, 22],
         [13, "a4", "s1", 3, 6, 16, 22],
       ]
     );
-    assert.deepEqual(await members("a3", "s2", 1), ["q1", "q2"]);
+    assert.deepEqual(await members("a3", "s2", 1), ["q1", "q2", "q3"]);
+    // q3 at the start 9: its restake of 6 (activated by the chain at 9, the row closed in that block before the
+    // activation was written) serves the session, from d.org
+    assert.deepEqual(await members("a3", "s2", 9), ["q1", "q2", "q3"]);
+    const [dom] = await q(`SELECT d.domain FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num)
+      JOIN ${S}.supplier_numbers n USING (supplier_num) JOIN ${S}.domain_numbers d USING (domain_num)
+      WHERE r.start_height = 9 AND n.supplier_id = 'q3'`);
+    assert.equal(dom.domain, "d.org");
     // the lifecycle heights, by the params at the session end: the proof window grew at 22
     const life = await q(`SELECT DISTINCT start_height, grace_end_height, claim_open_height, claim_close_height,
         proof_open_height, settlement_height FROM ${S}.session_rosters WHERE start_height IN (17, 21) ORDER BY 1`);
@@ -681,6 +696,26 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
 
   it("keeps every rollup equal to the seats one by one", checkRollups);
 
+  it("rebuilds a day's rollups from the facts to the rows finalize wrote", async () => {
+    const tables = ["session_daily", "session_supplier_daily", "session_dimension_daily"];
+    const rows = async () =>
+      Object.fromEntries(await Promise.all(tables.map(async (t) => [t,
+        (await q(`SELECT to_jsonb(t) - 'first_height' - 'last_height' j FROM ${S}.${t} t ORDER BY t::text`)).map((r) => r.j)])));
+    const before = await rows();
+    const days = await q(`SELECT DISTINCT day::text d FROM ${S}.session_daily ORDER BY 1`);
+    assert.ok(days.length > 0);
+    await q("BEGIN");
+    try {
+      for (const { d } of days) await q(`SELECT ${S}.rebuild_session_rollups($1::date)`, [d]);
+      await q("COMMIT");
+    } catch (e) {
+      await q("ROLLBACK");
+      throw e;
+    }
+    assert.deepEqual(await rows(), before);
+    await checkRollups();
+  });
+
   it("finalizes again without moving anything, and moves the rollups when a late claim settles", async () => {
     await q("BEGIN");
     const again = Number((await q(`SELECT ${S}.finalize_session_rosters(10) n`))[0].n);
@@ -809,8 +844,8 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     );
     assert.equal(next.length, all.length - 1);
     const one = all.find((x) => (x.member_ids as string[]).includes("q1") && Number(x.start_height) === 1) as Row;
-    assert.deepEqual(one.member_ids, ["q1", "q2"]);
-    assert.deepEqual(one.member_states, ["discarded", "settled_zero"]);
+    assert.deepEqual(one.member_ids, ["q1", "q2", "q3"]);
+    assert.deepEqual(one.member_states, ["discarded", "settled_zero", "idle_others_worked"]);
     const mine = await q(
       `SELECT * FROM ${S}.get_supplier_session_list(ARRAY['q1'], $1, $2, states => ARRAY['discarded'])`,
       RANGE
@@ -909,6 +944,25 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     assert.deepEqual(await q(`SELECT * FROM ${S}.session_roster_progress`), []);
     await backfillSessionRosters(q, S, { from: 21, to: 30, latest: 41, skipFinalStates: true });
     await backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, finalStatesOnly: true, lateChunk: 3 });
+    assert.deepEqual(await snapshot(), indexed);
+    await checkRollups();
+  });
+
+  it("rewrites the rosters of a start, and its day's rollups, to what the indexer writes", async () => {
+    const tables = ["session_supplier_daily", "session_daily", "session_dimension_daily"];
+    const snapshot = async () => ({
+      rosters: await q(`SELECT to_jsonb(r) - 'session_num' j FROM ${S}.session_rosters r ORDER BY r.session_id`),
+      seats: await q(`SELECT r.session_id, to_jsonb(ss) - 'session_num' j
+        FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num) ORDER BY 1, ss.supplier_num`),
+      ...Object.fromEntries(await Promise.all(tables.map(async (t) => [t,
+        (await q(`SELECT to_jsonb(t) - 'first_height' - 'last_height' j FROM ${S}.${t} t ORDER BY t::text`)).map((r) => r.j)]))),
+    });
+    const indexed = await snapshot();
+    // a start written wrong: the s2 session of 9 missing (its seats gone, its rollups left as they were)
+    await q(`WITH r AS (DELETE FROM ${S}.session_rosters WHERE start_height = 9 AND service_num =
+               (SELECT service_num FROM ${S}.service_numbers WHERE service_id = 's2') RETURNING session_num)
+             DELETE FROM ${S}.session_suppliers WHERE session_num IN (SELECT session_num FROM r)`);
+    await rewriteSessionStarts(q, S, [9, 13]);
     assert.deepEqual(await snapshot(), indexed);
     await checkRollups();
   });
