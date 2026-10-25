@@ -1,8 +1,17 @@
+import { createClaimsByBlockFn } from "../../src/mappings/dbFunctions/claimProofs";
+import { createDomainServiceDailyRewardsTableFn } from "../../src/mappings/dbFunctions/domainRewards";
+import { upsertSuppliersByBlockAndServiceFn } from "../../src/mappings/dbFunctions/reports/suppliers";
+import {
+  createStakedSuppliersDailyTableFn,
+  createStakedSuppliersOfBlocksFn,
+} from "../../src/mappings/dbFunctions/stakedSuppliersDaily";
+import { createSupplyAtFn, createSupplyDailyTablesFn, createSupplyPointsFn } from "../../src/mappings/dbFunctions/supplyDaily";
 import { createTxCountsDailyTableFn, createTxCountsOfBlocksFn } from "../../src/mappings/dbFunctions/txCounts";
 
 // The entity tables the newer catalog functions read (get_actor_lifecycle, get_relay_mining_difficulty, get_claims,
-// get_created_claims, get_block_stats, get_morse_claims), reduced to their columns, with one row per height that the heights query
-// returns (each height needs its blocks row): supplier sup-l, application app-l, service svc-d; and the blocks' report
+// get_created_claims, get_block_stats, get_morse_claims, get_staked_suppliers_by_service, get_supply,
+// get_supply_composition), reduced to their columns, with one row per height that the heights query returns (each
+// height needs its blocks row): supplier sup-l, application app-l, service svc-d; and the blocks' report
 // columns. Run inside the test's transaction.
 export const entityStubsSql = (S: string, heights: string): string => `
       ALTER TABLE ${S}.blocks ADD COLUMN size int, ADD COLUMN time_to_block numeric, ADD COLUMN total_txs int,
@@ -80,5 +89,58 @@ export const entityStubsSql = (S: string, heights: string): string => `
       -- get_tx_counts: the rollup (empty here: every day is a gap) and the helper that reads the edges
       ${createTxCountsDailyTableFn(S)}
       ${createTxCountsOfBlocksFn(S)}
+      -- get_staked_suppliers_by_service: its rollup (empty here: every full day is a gap) and the per-block rows the edges
+      -- read, one service with three staked suppliers per height
+      ${upsertSuppliersByBlockAndServiceFn(S)}
+      INSERT INTO ${S}.staked_suppliers_by_block_and_services SELECT 30, 3, b.id, 'svc-d', gen_random_uuid() FROM (${heights}) b(id);
+      ${createStakedSuppliersDailyTableFn(S)}
+      ${createStakedSuppliersOfBlocksFn(S)}
+      -- get_supply and get_supply_composition: their rollups (empty: the partial days are read live), an upokt supply per
+      -- height, a module account's and an address' balance, and the Morse accounts' amounts
+      CREATE TABLE ${S}.supplies (id text, denom text, amount numeric);
+      CREATE TABLE ${S}.block_supplies (block_id numeric, supply_id text, _block_range int8range);
+      INSERT INTO ${S}.supplies SELECT 'upokt-' || b.id, 'upokt', 1000 + b.id FROM (${heights}) b(id);
+      INSERT INTO ${S}.block_supplies SELECT b.id, 'upokt-' || b.id, int8range(b.id::bigint, NULL) FROM (${heights}) b(id);
+      CREATE TABLE ${S}.module_accounts (id text, name text, _block_range int8range);
+      INSERT INTO ${S}.module_accounts VALUES ('acc-m', 'bonded_tokens_pool', '[1,)');
+      CREATE TABLE ${S}.balances (id text, account_id text, denom text, amount numeric, last_updated_block_id numeric,
+        _block_range int8range);
+      INSERT INTO ${S}.balances VALUES ('acc-m-upokt', 'acc-m', 'upokt', 70, 1, '[1,)'), ('acc-s-upokt', 'acc-s', 'upokt', 30, 1, '[1,)');
+      ALTER TABLE ${S}.morse_claimable_accounts ADD COLUMN IF NOT EXISTS claimed boolean, ADD COLUMN IF NOT EXISTS claimed_at_id numeric,
+        ADD COLUMN IF NOT EXISTS unstaked_balance_amount numeric, ADD COLUMN IF NOT EXISTS supplier_stake_amount numeric,
+        ADD COLUMN IF NOT EXISTS application_stake_amount numeric;
+      ${createSupplyDailyTablesFn(S)}
+      ${createSupplyAtFn(S)}
+      ${createSupplyPointsFn(S)}
+      -- get_network_rewards, get_network_claims, get_overserviced (operator op-l: sup-l shares revenue with it) and
+      -- get_domain_service_rewards (domain dom-l, the day of each height and the next): one row per height or day
+      CREATE TABLE ${S}.relay_by_block_and_services (relays numeric, estimated_relays numeric, computed_units numeric,
+        estimated_computed_units numeric, claimed_upokt numeric, amount integer, block_id numeric, service_id text, _id uuid);
+      INSERT INTO ${S}.relay_by_block_and_services SELECT 5, 6, 7, 8, 9, 1, b.id, 'svc-d', gen_random_uuid() FROM (${heights}) b(id);
+      ${createClaimsByBlockFn(S)}
+      UPDATE ${S}.claims_by_block_coverage SET covered_from_height = 1;
+      INSERT INTO ${S}.claims_by_block SELECT bl.id, bl.timestamp, 2, 5, 6, 7, 8, 9, 1, 5, 6, 7, 8, 9, 1, 1, 1, 1, 1, 1
+        FROM ${S}.blocks bl WHERE bl.id IN (${heights});
+      CREATE TABLE ${S}.event_application_overserviceds (id text, application_id text, supplier_id text, expected_burn numeric,
+        effective_burn numeric, block_id numeric, _block_range int8range);
+      INSERT INTO ${S}.event_application_overserviceds SELECT 'ov' || b.id, 'app-l', 'sup-l', 10, 7, b.id, int8range(b.id::bigint, NULL)
+        FROM (${heights}) b(id);
+      CREATE TABLE IF NOT EXISTS ${S}.supplier_service_configs (supplier_id text, service_id text, _block_range int8range);
+      ALTER TABLE ${S}.supplier_service_configs ADD COLUMN IF NOT EXISTS rev_share jsonb;
+      INSERT INTO ${S}.supplier_service_configs (supplier_id, service_id, rev_share, _block_range)
+        VALUES ('sup-l', 'svc-d', '[{"address": "op-l", "revSharePercentage": 100}]', '[1,)');
+      ALTER TABLE ${S}.suppliers ADD COLUMN IF NOT EXISTS stake_status text;
+      INSERT INTO ${S}.suppliers (id, _block_range, owner_id, stake_status) VALUES ('sup-l', '[1,)', 'own-l', 'Staked');
+      ${createDomainServiceDailyRewardsTableFn(S)}
+      INSERT INTO ${S}.domain_service_daily_rewards
+        SELECT 'dom-l', 'svc-d', x.day, 1, 2, 3, 4, 5, 6, min(x.id), max(x.id)
+        FROM (SELECT bl.id, bl.timestamp::date + o AS day FROM ${S}.blocks bl, (VALUES (0), (1)) v(o) WHERE bl.id IN (${heights})) x
+        GROUP BY x.day ON CONFLICT DO NOTHING;
+      -- get_domain_staked_suppliers: sup-l staked on dom-l on every day of its rows
+      INSERT INTO ${S}.supplier_numbers (supplier_id) VALUES ('sup-l') ON CONFLICT DO NOTHING;
+      INSERT INTO ${S}.domain_service_daily_suppliers
+        SELECT r.day, r.domain, r.service_id, ARRAY[(SELECT n.supplier_num FROM ${S}.supplier_numbers n WHERE n.supplier_id = 'sup-l')],
+               r.first_height, r.last_height
+        FROM ${S}.domain_service_daily_rewards r WHERE r.domain = 'dom-l' ON CONFLICT DO NOTHING;
       INSERT INTO ${S}.msg_claim_morse_accounts SELECT 'mm' || b.id, 'pokt-sign', 'pokt-dest', 'MORSE' || b.id, 100, b.id,
         'tx' || b.id FROM (${heights}) b(id);`;

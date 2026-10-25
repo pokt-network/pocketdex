@@ -2,7 +2,9 @@
 // from the generated transactions, not from the SQL under test.
 //   MONEY_TEST_PG=postgres://postgres:postgres@127.0.0.1:5432/postgres yarn test:money
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { after, before, describe, it } from "node:test";
+import path from "node:path";
 import { createSupplierRevShareWalletsFn } from "../../src/mappings/dbFunctions/revShareWallets";
 import { createSettlementFunctionsFn } from "../../src/mappings/dbFunctions/settlement/functions";
 import { createSettlementSmartTagsFn } from "../../src/mappings/dbFunctions/settlement/smartTags";
@@ -298,6 +300,32 @@ describe("tx_counts_daily and get_tx_counts (PostgreSQL)", { skip: !URL && "MONE
         .j as string
     ) as { data: unknown[] };
     assert.deepEqual(empty.data, []);
+  });
+
+  it("does not report a day without blocks as a gap, and the backfill does not wait for it", async () => {
+    // a halt: 09-05..09-07 have no block (mainnet 2025-05-01..06), the chain resumes on 09-08
+    await c.query(`INSERT INTO ${S}.blocks VALUES (300, '2026-09-08 01:00', 0, 0, 0)`);
+    await c.query(`SELECT ${S}.refresh_tx_counts_daily(300)`);
+    try {
+      const rows = await get("2026-09-03T00:00:00Z", "2026-09-08T05:00:00Z");
+      assert.deepEqual(rows[0].covered_gaps, []);
+      assert.deepEqual(sorted(asMap(rows)), sorted(count((b) => b.day === "2026-09-03" || b.day === "2026-09-04")));
+      // scripts/fill_tx_counts_daily.sql as the runbook runs it: nothing to write, and no day left (the halt is none)
+      const r = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+        const p = spawn("psql", [URL as string, "-X", "-v", `schema=${S}`, "-f", path.join(__dirname, "..", "..", "scripts", "fill_tx_counts_daily.sql")]);
+        let stdout = "";
+        let stderr = "";
+        p.stdout.on("data", (d) => (stdout += String(d)));
+        p.stderr.on("data", (d) => (stderr += String(d)));
+        p.on("error", reject);
+        p.on("close", (code) => resolve({ code, stdout, stderr }));
+      });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /days_not_held\s*\n-+\n\s*0\n/);
+      assert.doesNotMatch(r.stdout, /2026-09-0/);
+    } finally {
+      await c.query(`DELETE FROM ${S}.tx_counts_daily WHERE day = '2026-09-08'; DELETE FROM ${S}.blocks WHERE id = 300`);
+    }
   });
 
   it("refuses a status that is neither success nor failed and an inverted range", async () => {

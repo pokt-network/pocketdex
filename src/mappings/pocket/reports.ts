@@ -4,8 +4,10 @@ import { updateBlockReportsFnName } from "../dbFunctions/reports";
 import { upsertAppsByBlockAndServicesFnName } from "../dbFunctions/reports/apps";
 import { upsertRelaysByBlockAndServicesFnName } from "../dbFunctions/reports/relays";
 import { upsertSuppliersByBlockAndServicesFnName } from "../dbFunctions/reports/suppliers";
+import { refreshSupplyDailyFnName } from "../dbFunctions/supplyDaily";
 import { refreshTxCountsDailyFnName } from "../dbFunctions/txCounts";
 import { blockTransaction, getDbSchema, getSequelize } from "../utils/db";
+import { sessionRostersFromHeight, sessionRosterStep } from "./sessionRosters";
 
 export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
   try {
@@ -40,9 +42,27 @@ export async function handleAddBlockReports(block: CosmosBlock): Promise<void> {
       sequelize.query(`SELECT ${dbSchema}.write_claims_by_block(${height}::bigint, ${height}::bigint);`, defaultOptions),
       // add this block's transactions to its day's counts by message type and status (get_tx_counts)
       sequelize.query(`SELECT ${dbSchema}.${refreshTxCountsDailyFnName}(${height}::bigint);`, defaultOptions),
+      // write the days that closed before this block at their last block (get_supply, get_supply_composition)
+      sequelize.query(`SELECT ${dbSchema}.${refreshSupplyDailyFnName}(${height}::bigint);`, defaultOptions),
       // refresh domain+service daily rewards summary — only on blocks with settlements
       hasClaimSettled && sequelize.query(`SELECT ${dbSchema}.${refreshDomainServiceDailyRewardsFnName}(${height}::bigint);`, defaultOptions),
     ].filter(Boolean))
+
+    // session rosters (sessionRosterStep): after the money tables of the block, which indexMoney wrote before the reports
+    const rostersFrom = sessionRostersFromHeight(block.header.chainId);
+    if (height >= rostersFrom) {
+      const run = async (sql: string, params: unknown[]) =>
+        ((await sequelize.query(sql, { ...defaultOptions, raw: true, plain: false, bind: params })) as unknown as [
+          Array<Record<string, unknown>>,
+        ])[0];
+      // claims only in blocks with a MsgCreateClaim (an authz MsgExec may carry them)
+      const hasClaims = block.messages.some((m) =>
+        ["/pocket.proof.MsgCreateClaim", "/cosmos.authz.v1beta1.MsgExec"].includes(m.msg.typeUrl));
+      const { unmatched } = await sessionRosterStep(run, dbSchema, height, rostersFrom, hasClaims);
+      if (unmatched.length > 0) {
+        logger.warn(`[handleAddBlockReports] block #${height}: claims of sessions whose roster could not be reproduced: ${unmatched.join(", ")}`);
+      }
+    }
   } catch (e) {
     logger.error(`[handleAddBlockReports] Error generating block #${block.header.height} reports: ${e}`);
     throw e;

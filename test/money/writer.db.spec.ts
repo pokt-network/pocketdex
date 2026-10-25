@@ -6,6 +6,10 @@
 // (.local/ab/money/make_ci_fixtures.py in the author's checkout), not by the code under test.
 /* eslint-disable @typescript-eslint/no-floating-promises */
 import assert from "node:assert/strict";
+import {
+  SESSION_ROSTER_CATALOG_FUNCTIONS,
+  SESSION_ROSTER_STATE_FUNCTIONS,
+} from "../../src/mappings/dbFunctions/sessionRosters";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -52,6 +56,8 @@ interface PgClient {
   query(sql: string, params?: unknown[]): Promise<{ rows: Array<Record<string, string | number>> }>;
 }
 // eslint-disable-next-line @typescript-eslint/no-var-requires
+// the catalog over the money tables: the rosters' functions (session_rosters.db.spec.ts) are not created here
+const MONEY_CATALOG = CATALOG_FUNCTIONS.filter((f) => !SESSION_ROSTER_CATALOG_FUNCTIONS.includes(f));
 const { Client } = require("pg") as { Client: new (options: { connectionString?: string }) => PgClient };
 
 const URL = process.env.MONEY_TEST_PG;
@@ -2025,6 +2031,38 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.deepEqual(await history("'sk', row_limit => 3"), all.slice(0, 3));
       assert.deepEqual(await history("'sk', row_limit => 3, after_service_id => 'kava', after_first_height => 96805"), all.slice(3, 6));
       assert.deepEqual(await history("'nobody'"), []);
+      // up to 200 suppliers: the same rows with their supplier, in (supplier_id, service_id, first_height) order, paged by
+      // a keyset on the three, and every row in one call through the _json variant
+      const many = async (args: string) =>
+        (
+          await c.query(`SELECT concat_ws(' ', supplier_id, service_id, first_height, coalesce(last_height::text, '-'),
+                           (SELECT string_agg((x->>'address') || ':' || (x->>'revSharePercentage'), ',' ORDER BY i)
+                            FROM jsonb_array_elements(rev_share) WITH ORDINALITY a(x, i)),
+                           endpoints->0->>'url', array_to_string(domains, ',')) k
+                         FROM ${S}.get_suppliers_config_history(${args})`)
+        ).rows.map((r) => String(r.k));
+      const other = (await many("ARRAY['other']"))[0];
+      assert.equal(other, "other kava 1 - w-z:100 https://t.net t.net");
+      const both = [other, ...all.map((k) => `sk ${k}`)];
+      assert.deepEqual(await many("ARRAY['sk', 'other', 'nobody']"), both);
+      assert.deepEqual(await many("ARRAY['sk', 'other'], row_limit => 2"), both.slice(0, 2));
+      assert.deepEqual(
+        await many("ARRAY['sk', 'other'], row_limit => 3, after_supplier_id => 'sk', after_service_id => 'eth', after_first_height => 300"),
+        both.slice(3, 6)
+      );
+      const json = (await c.query(`SELECT ${S}.get_suppliers_config_history_json(ARRAY['sk', 'other'])::text j`)).rows[0].j as string;
+      const parsed = JSON.parse(json) as Array<Record<string, unknown>>;
+      assert.equal(parsed.length, both.length);
+      assert.deepEqual(parsed.map((r) => `${r.supplier_id} ${r.service_id} ${r.first_height}`), both.map((k) => k.split(" ").slice(0, 3).join(" ")));
+      assert.equal(typeof parsed[0].first_height, "string");
+      for (const [args, err] of [
+        ["ARRAY(SELECT 's' || g FROM generate_series(1, 201) g)", /suppliers must have between 1 and 200 elements/],
+        ["ARRAY['sk'], after_service_id => 'kava', after_first_height => 1", /pass after_supplier_id, after_service_id and after_first_height/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_suppliers_config_history(${args})`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
       for (const [args, err] of [
         ["NULL", /supplier_id is required/],
         ["'sk', row_limit => 1001", /row_limit must be between 1 and 1000/],
@@ -3787,18 +3825,24 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     const tags = Object.fromEntries(rows.map((r) => [r.proname, r.tag]));
     const catalog = rows.map((r) => String(r.proname)).filter((n) => !n.startsWith("_") && !STATE_FUNCTIONS.includes(n));
     // the functions over the current state are plain lists too, with no _json twin
-    assert.deepEqual(rows.map((r) => String(r.proname)).filter((n) => STATE_FUNCTIONS.includes(n)), [...STATE_FUNCTIONS].sort());
-    for (const n of STATE_FUNCTIONS) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
+    // (the rosters' state function is not created here: session_rosters.db.spec.ts)
+    const moneyState = STATE_FUNCTIONS.filter((f) => !SESSION_ROSTER_STATE_FUNCTIONS.includes(f));
+    assert.deepEqual(rows.map((r) => String(r.proname)).filter((n) => STATE_FUNCTIONS.includes(n)), [...moneyState].sort());
+    for (const n of moneyState) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     assert.deepEqual(catalog, [
       "get_actor_lifecycle", "get_app_auto_unstakes", "get_application_spend", "get_block_stats", "get_claims",
-      "get_created_claims", "get_delegator_income", "get_gateway_spend", "get_income", "get_morse_claims", "get_native_transfers",
+      "get_created_claims", "get_delegator_income", "get_domain_service_rewards", "get_domain_staked_suppliers",
+      "get_gateway_spend", "get_income",
+      "get_morse_claims", "get_native_transfers", "get_network_claims", "get_network_rewards", "get_overserviced",
       "get_param_history",
-      "get_relay_mining_difficulty", "get_service_usage", "get_supplier_distribution", "get_supplier_earnings",
-      "get_supplier_penalties", "get_supplier_proofs", "get_supply_flows", "get_tx_counts", "get_validator_rewards", "money_coverage",
+      "get_relay_mining_difficulty", "get_service_usage", "get_staked_suppliers_by_service", "get_supplier_distribution",
+      "get_supplier_earnings", "get_supplier_penalties", "get_supplier_proofs", "get_supplier_sessions", "get_supply",
+      "get_supply_composition",
+      "get_supply_flows", "get_tx_counts", "get_validator_rewards", "money_coverage",
     ]);
     for (const n of catalog) assert.ok(String(tags[n]).startsWith("@simpleCollections only\n"), n);
     // the same functions have a description (smartTags.ts) and a _json twin (functions.ts)
-    assert.deepEqual([...catalog].sort(), [...CATALOG_FUNCTIONS].sort());
+    assert.deepEqual([...catalog].sort(), [...MONEY_CATALOG].sort());
     const twins = await c.query(
       `SELECT p.proname, obj_description(p.oid, 'pg_proc') tag FROM pg_proc p
        WHERE p.pronamespace = $1::regnamespace AND p.proname = ANY($2::text[]) ORDER BY 1`,
@@ -3828,7 +3872,8 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
     // list or _json twin), published on purpose
     assert.deepEqual(
       shown.filter((n) => !catalog.includes(n.replace(/_json$/, "")) && !n.startsWith("legacy_")),
-      ["get_height_at", "get_last_settlement", ...STATE_FUNCTIONS].sort()
+      // get_suppliers_config_history_json: every row of a state list in one call, published on purpose too
+      ["get_height_at", "get_last_settlement", "get_suppliers_config_history_json", ...moneyState].sort()
     );
     const vrd = await c.query(
       `SELECT count(*)::int n FROM pg_proc p WHERE p.pronamespace = $1::regnamespace AND p.proname = '_vrd_range_start'`,
@@ -3889,6 +3934,125 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       for (const r of gws.rows) assert.equal(r.g, r.application_id === app ? "gw-a,gw-b" : "", String(r.application_id));
       const none = await c.query(`SELECT DISTINCT gateway_ids FROM ${S}.get_supplier_earnings(ARRAY[$1], NULL, NULL)`, [top.supplier_id]);
       assert.deepEqual(none.rows, [{ gateway_ids: null }]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+
+  it("get_supplier_distribution by_service splits each row by the service of the claims that paid it, and sums to the rows without it", async () => {
+    const sup = (
+      await c.query(`SELECT supplier_id FROM ${S}.claim_settlements GROUP BY 1 HAVING count(DISTINCT service_id) > 1
+                     ORDER BY count(*) DESC, 1 LIMIT 2`)
+    ).rows.map((r) => String(r.supplier_id));
+    assert.ok(sup.length > 0);
+    for (const [from, to, bucket] of [
+      [null, null, "NULL"],
+      ["2026-09-01T00:00:00Z", "2026-09-04T00:00:00Z", "'day'"],
+      ["2026-09-01T11:00:00Z", "2026-09-01T13:00:00Z", "'hour'"],
+    ]) {
+      const label = `${from} ${to} ${bucket}`;
+      const key = "bucket_start, supplier_id, recipient_id, role, family";
+      const plain = await c.query(
+        `SELECT ${key}, service_id, amount_upokt::text a, transfer_count::text n
+         FROM ${S}.get_supplier_distribution($1::text[], $2, $3, ${bucket}, by_reason => true) ORDER BY 1, 2, 3, 4, 5`,
+        [sup, from, to]
+      );
+      assert.ok(plain.rows.length > 0, label);
+      assert.ok(plain.rows.every((r) => r.service_id === "all"), label);
+      const summed = await c.query(
+        `SELECT ${key}, 'all' service_id, sum(amount_upokt)::text a, sum(transfer_count)::text n
+         FROM ${S}.get_supplier_distribution($1::text[], $2, $3, ${bucket}, by_reason => true, by_service => true)
+         GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5`,
+        [sup, from, to]
+      );
+      assert.deepEqual(summed.rows, plain.rows, label);
+      // by hand, per service: the payout legs of the claims of each service (v_income_base) and the stakers' share
+      const by = await c.query(
+        `SELECT supplier_id, service_id, recipient_id, role, family, amount_upokt::text a
+         FROM ${S}.get_supplier_distribution($1::text[], $2, $3, NULL, by_reason => true, by_service => true) ORDER BY 1, 2, 3, 4, 5`,
+        [sup, from, to]
+      );
+      const hand = await c.query(
+        `SELECT x.supplier_id, x.service_id, x.address recipient_id, x.role, x.family, sum(x.amount_upokt)::text a FROM (
+           SELECT v.supplier_id, v.service_id, v.address, v.role, v.family, v.amount_upokt FROM ${S}.v_income_base v
+           JOIN ${S}.settlement_blocks sb USING (height)
+           WHERE v.supplier_id = ANY($1::text[]) AND ($2::timestamptz IS NULL OR sb.block_time >= $2) AND ($3::timestamptz IS NULL OR sb.block_time < $3)
+           UNION ALL
+           SELECT c.supplier_id, c.service_id, 'all', 'stakers', 'relay', c.relay_to_stakers_upokt FROM ${S}.claim_settlements c
+           WHERE c.supplier_id = ANY($1::text[]) AND ($2::timestamptz IS NULL OR c.block_time >= $2) AND ($3::timestamptz IS NULL OR c.block_time < $3)) x
+         GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5`,
+        [sup, from, to]
+      );
+      assert.deepEqual(by.rows, hand.rows, label);
+      assert.ok(new Set(by.rows.map((r) => r.service_id)).size > 1, label);
+    }
+  });
+
+  it("get_supplier_sessions counts each session once, however many of the suppliers settled in it", async () => {
+    const sup = (await c.query(`SELECT DISTINCT supplier_id FROM ${S}.claim_settlements ORDER BY 1 LIMIT 200`)).rows.map((r) => String(r.supplier_id));
+    await c.query("BEGIN");
+    try {
+      // a session with claims of three of the suppliers: three claims, one session
+      await c.query(
+        `INSERT INTO ${S}.claim_settlements
+         SELECT c.height, 900000 + row_number() OVER (), c.block_time, s.id, c.supplier_owner_id, c.application_id, c.service_id, 'shared-session',
+                c.session_end, c.source_owner_id, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, c.row_source, c.calc_version, true
+         FROM (SELECT * FROM ${S}.claim_settlements ORDER BY height DESC, event_idx LIMIT 1) c, unnest($1::text[]) s(id)`,
+        [sup.slice(0, 3)]
+      );
+      for (const [from, to, bucket, byService] of [
+        [null, null, "NULL", false],
+        [null, null, "'month'", true],
+        ["2026-06-05T00:00:00Z", "2026-09-02T00:00:00Z", "'day'", true],
+        ["2026-09-01T11:00:00Z", "2026-09-01T13:00:00Z", "'hour'", false],
+      ] as const) {
+        const label = `${from} ${to} ${bucket} ${byService}`;
+        const got = await c.query(
+          `SELECT bucket_start, service_id, sessions::text, settled_claims::text
+           FROM ${S}.get_supplier_sessions($1::text[], $2, $3, ${bucket}, ${byService}) ORDER BY 1, 2`,
+          [sup, from, to]
+        );
+        const want = await c.query(
+          `SELECT ${bucket === "NULL" ? `coalesce($2::timestamptz, (SELECT min(block_time) FROM ${S}.settlement_blocks))` : `date_trunc(${bucket}, c.block_time, 'UTC')`} bucket_start,
+                  ${byService ? "c.service_id" : "'all'"} service_id, count(DISTINCT c.session_id)::text sessions, count(*)::text settled_claims
+           FROM ${S}.claim_settlements c
+           WHERE c.supplier_id = ANY($1::text[]) AND ($2::timestamptz IS NULL OR c.block_time >= $2) AND ($3::timestamptz IS NULL OR c.block_time < $3)
+           GROUP BY 1, 2 ORDER BY 1, 2`,
+          [sup, from, to]
+        );
+        assert.ok(got.rows.length > 0, label);
+        // without a bucket the row's bucket_start is the span's start (covered_from for an open range): not compared
+        const at = (v: unknown) => (bucket === "NULL" ? null : Date.parse(String(v)));
+        assert.deepEqual(
+          got.rows.map((r) => [at(r.bucket_start), r.service_id, r.sessions, r.settled_claims]),
+          want.rows.map((r) => [at(r.bucket_start), r.service_id, r.sessions, r.settled_claims]),
+          label
+        );
+      }
+      // and claims of other sessions one and two days earlier (their block_time: the fixtures' settled claims are on one day)
+      await c.query(
+        `INSERT INTO ${S}.claim_settlements
+         SELECT c.height, 910000 + row_number() OVER (), c.block_time - d * interval '1 day', c.supplier_id, c.supplier_owner_id,
+                c.application_id, c.service_id, 'earlier-' || d, c.session_end, c.source_owner_id, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, c.row_source, c.calc_version, true
+         FROM (SELECT * FROM ${S}.claim_settlements ORDER BY height DESC, event_idx LIMIT 1) c, generate_series(1, 2) d`
+      );
+      // newest first across days
+      const days = (
+        await c.query(`SELECT bucket_start FROM ${S}.get_supplier_sessions($1::text[], '2026-06-05T00:00:00Z', '2026-09-02T00:00:00Z', 'day')`, [sup])
+      ).rows.map((r) => Date.parse(String(r.bucket_start)));
+      assert.ok(days.length >= 3, `${days.length} days`);
+      for (let i = 1; i < days.length; i++) assert.ok(days[i] < days[i - 1], `row ${i} is not older than row ${i - 1}`);
+      const total = (await c.query(`SELECT sessions, settled_claims FROM ${S}.get_supplier_sessions($1::text[], NULL, NULL)`, [sup])).rows[0];
+      assert.ok(Number(total.settled_claims) - Number(total.sessions) >= 2, "the shared session counts once");
+      for (const [list, err] of [
+        ["ARRAY[]::text[]", /suppliers must have between 1 and 200 elements/],
+        ["ARRAY(SELECT 's' || g FROM generate_series(1, 201) g)", /suppliers must have between 1 and 200 elements \(has 201\)/],
+      ] as const) {
+        await c.query("SAVEPOINT e");
+        await assert.rejects(c.query(`SELECT * FROM ${S}.get_supplier_sessions(${list}, NULL, NULL)`), err);
+        await c.query("ROLLBACK TO SAVEPOINT e");
+      }
     } finally {
       await c.query("ROLLBACK");
     }
@@ -4144,9 +4308,18 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_native_transfers: "ARRAY['acc-s']",
         get_morse_claims: "NULL, NULL, NULL, NULL",
         get_tx_counts: "NULL, NULL",
+        get_staked_suppliers_by_service: "NULL, NULL",
+        get_supply: "NULL, NULL",
+        get_supply_composition: "NULL, NULL",
+        get_network_rewards: "NULL, NULL",
+        get_network_claims: "NULL, NULL",
+        get_overserviced: "ARRAY['op-l'], NULL, NULL",
+        get_domain_service_rewards: "ARRAY['dom-l'], NULL, NULL",
+        get_supplier_sessions: `ARRAY(SELECT DISTINCT supplier_id FROM ${S}.claim_settlements ORDER BY 1 LIMIT 200), NULL, NULL`,
+        get_domain_staked_suppliers: "ARRAY['sup-l'], ARRAY['dom-l'], NULL, NULL",
       };
       await stubEntityTables();
-      assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
+      assert.deepEqual(Object.keys(calls).sort(), [...MONEY_CATALOG].sort());
       const numbers = (v: unknown, path: string): string[] =>
         typeof v === "number" ? [path] : v !== null && typeof v === "object"
           ? Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => numbers(x, `${path}.${k}`)) : [];
@@ -4342,17 +4515,32 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_native_transfers: "ARRAY['acc-r'], NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_morse_claims: "NULL, NULL, '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
         get_tx_counts: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_staked_suppliers_by_service: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_supply: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_supply_composition: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z'",
+        get_network_rewards: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
+        get_network_claims: "'2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
+        get_overserviced: "ARRAY['op-l'], '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'hour'",
+        get_domain_service_rewards: "ARRAY['dom-l'], NULL, NULL",
+        get_supplier_sessions: `ARRAY(SELECT DISTINCT supplier_id FROM ${S}.claim_settlements ORDER BY 1 LIMIT 200), '2026-06-05T00:00:00Z', '2026-09-02T00:00:00Z', 'day'`,
+        get_domain_staked_suppliers: "ARRAY['sup-l'], ARRAY['dom-l'], NULL, NULL",
       };
       await stubEntityTables();
-      assert.deepEqual(Object.keys(calls).sort(), [...CATALOG_FUNCTIONS].sort());
+      assert.deepEqual(Object.keys(calls).sort(), [...MONEY_CATALOG].sort());
       // the functions that list rows one by one order them by height
       const byHeight = [
         "get_param_history", "get_claims", "get_actor_lifecycle", "get_relay_mining_difficulty", "get_created_claims", "get_morse_claims",
         "get_native_transfers",
       ];
       for (const [fn, args] of Object.entries(calls)) {
-        // rows by message type and status: no time or height to order by
-        if (fn === "get_tx_counts") continue;
+        // rows by message type and status, or by service: no time or height to order by
+        if (fn === "get_tx_counts" || fn === "get_staked_suppliers_by_service" || fn === "get_domain_service_rewards") continue;
+        // rows by day, domain and service: get_domain_staked_suppliers orders them by day (old_fn_catalog.db.spec.ts)
+        if (fn === "get_domain_staked_suppliers") continue;
+        // the fixtures' settled claims are on one day here: its buckets across days are checked by the bucketed test below
+        if (fn === "get_supplier_sessions") continue;
+        // one point per day bucket, from a rollup empty here: one bucket in this range (old_fn_rollups.db.spec.ts orders them)
+        if (fn === "get_supply" || fn === "get_supply_composition") continue;
         const col = byHeight.includes(fn) ? "height" : fn === "money_coverage" ? "first_height" : "bucket_start";
         // get_service_usage orders by its top rank first: newest first within each service
         const group = fn === "get_service_usage" ? "service_id" : "''";
@@ -5066,6 +5254,10 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
         get_app_auto_unstakes: ["NULL, ", "unstakes"],
         get_supplier_proofs: ["NULL, ", "proofs_submitted"],
         get_block_stats: ["", "blocks"],
+        get_network_rewards: ["", "relays"],
+        get_network_claims: ["", "claims"],
+        get_overserviced: ["ARRAY['op-l'], ", "events"],
+        get_supplier_sessions: [`ARRAY(SELECT DISTINCT supplier_id FROM ${S}.claim_settlements ORDER BY 1 LIMIT 200), `, "settled_claims"],
       };
       await stubEntityTables();
       const bucketed = (
@@ -5074,7 +5266,9 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
              AND proname = ANY($2::text[]) ORDER BY 1`,
           [S, [...CATALOG_FUNCTIONS]]
         )
-      ).rows.map((r) => String(r.proname));
+      ).rows.map((r) => String(r.proname))
+        // a point per bucket (its last block's supply), not a sum, and no NULL or hour bucket: old_fn_rollups.db.spec.ts
+        .filter((f) => f !== "get_supply" && f !== "get_supply_composition");
       assert.deepEqual(bucketed, Object.keys(calls).sort());
       const end = "2026-09-02T00:00:00Z";
       const before = (days: number, extraSeconds = 0) =>

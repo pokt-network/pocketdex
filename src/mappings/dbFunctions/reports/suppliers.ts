@@ -1,3 +1,5 @@
+import { refreshStakedSuppliersDailyFnName } from "../stakedSuppliersDaily";
+
 // This will create a function that receives the height (id) and
 // updates the `staked_suppliers` and `staked_suppliers_tokens` columns on blocks table for that height (id)
 export function updateStakedSuppliersDataOnBlockFn(dbSchema: string): string {
@@ -170,6 +172,9 @@ BEGIN
     AND s._block_range @> p_block_id
     AND ss._block_range @> p_block_id
   GROUP BY ss.service_id;
+
+  -- add the block's rows to its day (get_staked_suppliers_by_service)
+  PERFORM ${dbSchema}.${refreshStakedSuppliersDailyFnName}(p_block_id);
 END;
 $$ LANGUAGE plpgsql;
 `

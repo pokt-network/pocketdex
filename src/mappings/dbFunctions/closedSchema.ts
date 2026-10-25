@@ -58,6 +58,8 @@ export const OMITTED_OLD_FUNCTIONS = [
   "get_data_by_delegator_addresses_and_blocks",
   "get_claim_proofs_data_by_delegators_and_time",
   "services_performance_between_times",
+  // hidden with the rollups' release (2026-10-20): get_staked_suppliers_by_service gives its per-service sums
+  "get_suppliers_staked_and_blocks_by_point_json",
 ];
 
 export function createClosedSchemaFn(dbSchema: string): string {

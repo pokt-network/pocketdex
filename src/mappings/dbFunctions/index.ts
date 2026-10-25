@@ -11,6 +11,7 @@ import { getDataByDelegatorAddressesAndBlocksFn } from "./dataByDelegatorAddress
 import {
   getDataByDelegatorAddressesAndTimesFn,
 } from "./dataByDelegatorAddressesAndTimes";
+import { createDeprecationsFn } from "./deprecations";
 import {
   createDomainServiceDailyRewardsTableFn,
   getPerformanceIndexSqls,
@@ -50,10 +51,21 @@ import {
 } from "./rewardsByAddressesAndTime";
 import { getRewardsByDelegatorAddressesAndTimesGroupByServiceFn } from "./rewardsByServicesAddressesAndTime";
 import { getAmountOfBlocksAndSuppliersByTimesFn, servicesPerformanceBetweenTimesFn } from "./servicePerformance";
+import {
+  createSessionRosterFunctionsFn,
+  createSessionRosterTablesFn,
+  createSessionRosterWritersFn,
+} from "./sessionRosters";
 import { createSettlementFunctionsFn } from "./settlement/functions";
 import { createSettlementTablesFn } from "./settlement/schema";
 import { createSettlementSmartTagsFn } from "./settlement/smartTags";
 import { createSettlementWriterFn } from "./settlement/writer";
+import {
+  createStakedSuppliersDailyTableFn,
+  createStakedSuppliersOfBlocksFn,
+  rebuildStakedSuppliersDailyFn,
+  refreshStakedSuppliersDailyFn,
+} from "./stakedSuppliersDaily";
 import { getSuppliersStakedAndBlocksByPointJsonFn } from "./supplierStakedAndBlocksPoints";
 import {
   getBurnBreakdownBetweenDatesFn,
@@ -62,6 +74,13 @@ import {
   getTotalSupplyBetweenDatesFn,
   getTotalSupplyByDay,
 } from "./supply";
+import {
+  createSupplyAtFn,
+  createSupplyDailyTablesFn,
+  createSupplyPointsFn,
+  rebuildSupplyDailyFn,
+  refreshSupplyDailyFn,
+} from "./supplyDaily";
 import {
   createTxCountsDailyTableFn,
   createTxCountsOfBlocksFn,
@@ -152,10 +171,27 @@ export async function createDbFunctions(): Promise<void> {
     createTxCountsOfBlocksFn,
     rebuildTxCountsDailyFn,
     refreshTxCountsDailyFn,
+    // the staked suppliers per day and service that get_staked_suppliers_by_service reads, and their writers
+    createStakedSuppliersDailyTableFn,
+    createStakedSuppliersOfBlocksFn,
+    rebuildStakedSuppliersDailyFn,
+    refreshStakedSuppliersDailyFn,
+    // the supply at the last block of each day that get_supply / get_supply_composition read, the one computation they
+    // and the writers share (_supply_at), and the writers
+    createSupplyDailyTablesFn,
+    createSupplyAtFn,
+    createSupplyPointsFn,
+    rebuildSupplyDailyFn,
+    refreshSupplyDailyFn,
     // the per-block claim counts get_claim_proofs_data_by_time reads, and their writer
     createClaimsByBlockFn,
     // the (wallet, supplier) pairs of every rev_share, which operator_scope ever reads
     createSupplierRevShareWalletsFn,
+    // the session rosters, their writers and the catalog functions over them (after supplier_numbers; the _json twins
+    // are made with the settlement functions below)
+    createSessionRosterTablesFn,
+    createSessionRosterWritersFn,
+    createSessionRosterFunctionsFn,
   )
   // settlement money tables, their single writer (src/mappings/money) and the catalog functions over them;
   // a failure here is fatal
@@ -203,6 +239,8 @@ export async function createDbFunctions(): Promise<void> {
     getTotalSupplyBetweenDatesFn,
     getOverservicedsByDelegatorAddressesAndTimesFn,
     getComputeUnitsToTokensMultiplierEvolutionFn,
+    // @deprecated, with its replacement, on the old functions above (after them: they rewrite their own comments)
+    createDeprecationsFn,
     // hides what the GraphQL schema no longer exposes and removes the relations (docs/graphql-migration.md): in the
     // same transaction as the functions that rewrite their own comments (supply.ts), so no start publishes them
     createClosedSchemaFn,
