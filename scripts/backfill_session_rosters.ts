@@ -10,7 +10,8 @@
 // TO_HEIGHT defaults to the first start the rosters already hold minus 1 (the indexer's), or the latest block.
 // Several runs over disjoint ranges can write rosters at once with SKIP_FINAL_STATES=1, which leaves the progress
 // alone (the ranges are not contiguous while they run); then one run with FINAL_STATES_ONLY=1 over the whole range
-// writes the final states and lowers from_height to FROM_HEIGHT.
+// writes the final states and lowers from_height to FROM_HEIGHT. Only with the indexer stopped: those runs leave every
+// session open, and the indexer's next block would settle all of them in its block transaction.
 // FROM_HEIGHT below the chain's v0.1.33 height (sessionRostersFromHeight of the chain id: CHAIN_ID, or the blocks
 // table's) is refused: the rosters before it are not the chain's. Run it on the primary once the indexer with the rosters
 // is running. The sessions of claims with no roster are looked for LATE_CHUNK blocks of claims at a time (default
@@ -114,6 +115,15 @@ export async function backfillSessionRosters(
       Math.min(a + chunk - 1, latest),
       from
     );
+    // the sessions just written whose settlement block has come settle here, as the starts above do
+    if (w.written > 0) {
+      const due = await q(
+        `SELECT DISTINCT settlement_height::bigint h FROM ${s}.session_rosters
+         WHERE settled_height IS NULL AND settlement_height <= $1 AND start_height >= $2 ORDER BY 1`,
+        [latest, from]
+      );
+      for (const { h: at } of due) await q(`SELECT ${s}.finalize_session_rosters($1::bigint)`, [at]);
+    }
     await q("COMMIT");
     late += w.written;
     unmatched.push(...w.unmatched);
