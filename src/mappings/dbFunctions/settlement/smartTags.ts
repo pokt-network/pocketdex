@@ -136,6 +136,7 @@ const OMITTED_FUNCTIONS = [
   "_array_add",
   "_claims_without_roster",
   "finalize_session_rosters",
+  "rebuild_session_rollups",
   "refresh_tx_counts_daily",
   // the staked suppliers' and the supply's daily rollups: helpers and writers (stakedSuppliersDaily.ts, supplyDaily.ts)
   "_staked_suppliers_of_blocks",

@@ -104,6 +104,12 @@ describe("closed GraphQL schema (introspection)", () => {
     }
   });
 
+  // a writer must never be callable through the API: subql-query v2.22.2 with --unsafe=false serves no mutation, even
+  // for a VOLATILE function left out of smartTags.ts OMITTED_FUNCTIONS (measured 2026-10-25 with rebuild_session_rollups)
+  it("serves no mutation", () => {
+    assert.deepEqual((types.get("Mutation")?.fields ?? []).map((f) => f.name), []);
+  });
+
   it("describes every function root field and every field of every entity", () => {
     const missing: string[] = [];
     for (const f of rootFields()) {
