@@ -362,8 +362,12 @@ BEGIN
         -- 894,421 and 904,821: the chain's roster held such a supplier; 46 claims in 60 days)
         -- activated: a stake's config is written with no activation until the next session start writes its activated
         -- version (mainnet 894,421: a supplier staked at 894,420 is no candidate; every such row of 60 days lasted 20
-        -- blocks at most)
-        WHERE c._block_range && int8range(p_height - 1, p_height, '[]') AND c.activated_at_id <= p_height
+        -- blocks at most). A row opened before the start with no activation counts as activated: the chain activates a
+        -- config at the session start after its stake (poktroll msg_server_stake_supplier.go), and a restake in the start
+        -- block itself closes the row before the indexer writes that activation (suppliers.ts; mainnet 979,961: 3 claims
+        -- of a supplier the rule without it left out). One opened by the start block is pending still.
+        WHERE c._block_range && int8range(p_height - 1, p_height, '[]')
+          AND (c.activated_at_id <= p_height OR (c.activated_at_id IS NULL AND lower(c._block_range) < p_height))
           AND c.service_id IN (SELECT DISTINCT e->>1 FROM jsonb_array_elements(pairs) e)
         GROUP BY c.service_id) c;
 END $$;
@@ -436,7 +440,9 @@ BEGIN
                   FROM jsonb_array_elements(coalesce(c.rev_share, '[]')) r WHERE r->>'address' IS NOT NULL GROUP BY 1) y) op_pct
         FROM ${s}.supplier_service_configs c
         WHERE c.service_id IN (SELECT DISTINCT y.svc FROM _sr_mem y)
-          AND c._block_range && int8range(v_start - 1, v_start, '[]') AND c.activated_at_id <= v_start
+          AND c._block_range && int8range(v_start - 1, v_start, '[]')
+          -- activated as for the candidates (_session_roster_inputs)
+          AND (c.activated_at_id <= v_start OR (c.activated_at_id IS NULL AND lower(c._block_range) < v_start))
         -- the version that serves the session: the one live before the start block, over one opened by it
         ORDER BY c.service_id, c.supplier_id, (c._block_range @> v_start - 1) DESC, lower(c._block_range) DESC) d
   WHERE d.service_id = x.svc AND d.supplier_id = x.sup;

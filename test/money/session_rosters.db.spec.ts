@@ -189,12 +189,19 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
         -- so it is a candidate from 13 on, not at 9 (mainnet 894,421)
         UNION ALL SELECT 'p7', 's1', NULL, '[]', '[]', '[9,13)'
         UNION ALL SELECT 'p7', 's1', 13, '[]', '[]', '[13,)'
-        UNION ALL SELECT q, 's2', 1, '[]', '[]', '[1,)' FROM unnest(ARRAY['q1', 'q2']) q;
+        UNION ALL SELECT q, 's2', 1, '[]', '[]', '[1,)' FROM unnest(ARRAY['q1', 'q2']) q
+        -- q3 restakes at 6 (C2, from c.org to d.org: the chain activates it at the start 9) and again in the start block
+        -- 9 (C3): C2's row closes at 9 with no activation, the BeginBlock activation of that block lost to the restake
+        -- (suppliers.ts), yet the chain serves the session 9-12 with C2 (mainnet 979,961)
+        UNION ALL SELECT 'q3', 's2', 1, '[]', '["c.org"]', '[1,6)'
+        UNION ALL SELECT 'q3', 's2', NULL, '[]', '["d.org"]', '[6,9)'
+        UNION ALL SELECT 'q3', 's2', NULL, '[]', '["e.org"]', '[9,13)'
+        UNION ALL SELECT 'q3', 's2', 13, '[]', '["e.org"]', '[13,)';
       CREATE TABLE ${S}.suppliers (id text, owner_id text, stake_status text, _block_range int8range);
       -- p4 passes from o2 to o3 at the start block 13 (its seats are o3's from the start 17 on)
       INSERT INTO ${S}.suppliers SELECT p, CASE WHEN p IN ('p1', 'p2') THEN 'o1' ELSE 'o2' END, 'Staked',
           CASE WHEN p = 'p4' THEN '[1,13)' ELSE '[1,)' END::int8range
-        FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'q1', 'q2']) p
+        FROM unnest(ARRAY['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'q1', 'q2', 'q3']) p
         UNION ALL SELECT 'p4', 'o3', 'Staked', '[13,)';
       CREATE TABLE ${S}.msg_create_claims (supplier_id text, application_id text, service_id text, session_id text,
         block_id numeric, _block_range int8range, session_start_height numeric);`);
@@ -451,17 +458,24 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
       [
         [1, "a1", "s1", 3, 5, 4, 10],
         [1, "a2", "s1", 3, 5, 4, 10],
-        [1, "a3", "s2", 2, 2, 4, 10],
+        [1, "a3", "s2", 3, 3, 4, 10],
         [9, "a1", "s1", 3, 6, 12, 18],
         [9, "a2", "s1", 3, 6, 12, 18],
-        [9, "a3", "s2", 2, 2, 12, 18],
+        [9, "a3", "s2", 3, 3, 12, 18],
         [9, "a4", "s1", 3, 6, 12, 18],
         [13, "a1", "s1", 3, 6, 16, 22],
         [13, "a2", "s1", 3, 6, 16, 22],
         [13, "a4", "s1", 3, 6, 16, 22],
       ]
     );
-    assert.deepEqual(await members("a3", "s2", 1), ["q1", "q2"]);
+    assert.deepEqual(await members("a3", "s2", 1), ["q1", "q2", "q3"]);
+    // q3 at the start 9: its restake of 6 (activated by the chain at 9, the row closed in that block before the
+    // activation was written) serves the session, from d.org
+    assert.deepEqual(await members("a3", "s2", 9), ["q1", "q2", "q3"]);
+    const [dom] = await q(`SELECT d.domain FROM ${S}.session_suppliers ss JOIN ${S}.session_rosters r USING (session_num)
+      JOIN ${S}.supplier_numbers n USING (supplier_num) JOIN ${S}.domain_numbers d USING (domain_num)
+      WHERE r.start_height = 9 AND n.supplier_id = 'q3'`);
+    assert.equal(dom.domain, "d.org");
     // the lifecycle heights, by the params at the session end: the proof window grew at 22
     const life = await q(`SELECT DISTINCT start_height, grace_end_height, claim_open_height, claim_close_height,
         proof_open_height, settlement_height FROM ${S}.session_rosters WHERE start_height IN (17, 21) ORDER BY 1`);
@@ -809,8 +823,8 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     );
     assert.equal(next.length, all.length - 1);
     const one = all.find((x) => (x.member_ids as string[]).includes("q1") && Number(x.start_height) === 1) as Row;
-    assert.deepEqual(one.member_ids, ["q1", "q2"]);
-    assert.deepEqual(one.member_states, ["discarded", "settled_zero"]);
+    assert.deepEqual(one.member_ids, ["q1", "q2", "q3"]);
+    assert.deepEqual(one.member_states, ["discarded", "settled_zero", "idle_others_worked"]);
     const mine = await q(
       `SELECT * FROM ${S}.get_supplier_session_list(ARRAY['q1'], $1, $2, states => ARRAY['discarded'])`,
       RANGE
