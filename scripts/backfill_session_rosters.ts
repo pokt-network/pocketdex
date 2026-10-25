@@ -34,6 +34,8 @@ export interface BackfillOptions {
   finalStatesOnly?: boolean;
   lateChunk?: number;
   log?: (line: string) => void;
+  // awaited after each start's transaction (the spec checks there that no settled-due session is left open)
+  afterStart?: (start: number) => Promise<void>;
 }
 
 export async function backfillSessionRosters(
@@ -64,6 +66,25 @@ export async function backfillSessionRosters(
     await q(`SELECT ${s}._write_session_rosters($1::jsonb)`, [
       JSON.stringify(buildSessionRosters(h, inputs as unknown as SessionRosterInputs)),
     ]);
+    // the start's sessions settle in the same transaction when their settlement block has come: left open, the
+    // indexer's next block would settle every one of them in its block transaction (finalize_session_rosters takes
+    // every open session whose settlement height has passed; beta 2026-10-25: 8,535 starts of 60 days, the block never
+    // ended and the indexer was restarted over and over). Newest first, so only this start's sessions are due here.
+    // As the indexer does, a session settles at the first block where one of its claims settled, expired or was
+    // discarded, if that came before the predicted settlement height, else at the predicted one (the outcomes come after
+    // the session end: the height range reads the primary keys).
+    const settle = Number(inputs.settlement_height);
+    if (!parallel && settle <= latest) {
+      const early = await q(
+        `SELECT DISTINCT x.height::bigint h FROM (
+           SELECT height FROM ${s}.claim_settlements WHERE height > $1 AND height < $2 AND session_end = $1
+           UNION SELECT height FROM ${s}.claim_expirations WHERE height > $1 AND height < $2 AND session_end = $1
+           UNION SELECT height FROM ${s}.claim_discards WHERE height > $1 AND height < $2 AND session_end = $1) x ORDER BY 1`,
+        [Number(inputs.end_height), settle]
+      );
+      for (const { h: at } of [...early, { h: settle }])
+        await q(`SELECT ${s}.finalize_session_rosters($1::bigint)`, [at]);
+    }
     if (!parallel) {
       await q(
         `INSERT INTO ${s}.session_roster_progress AS t (singleton, from_height, height) VALUES (true, $1, $2)
@@ -72,6 +93,7 @@ export async function backfillSessionRosters(
       );
     }
     await q("COMMIT");
+    if (o.afterStart) await o.afterStart(h);
     written += 1;
     if (written % 100 === 0)
       log(`start ${h}: ${written} of ${starts.length}, ${Math.round((Date.now() - t0) / 1000)} s`);
@@ -104,7 +126,8 @@ export async function backfillSessionRosters(
       [from, to]
     );
   }
-  // the final states, at every block where a session written here settles or a claim of one settled
+  // the final states again, at every block where a session written here settles or a claim of one settled: the late
+  // sessions, and claims settled at another height than the one predicted (a window param change)
   const heights = await q(
     `SELECT h FROM (SELECT DISTINCT r.settlement_height::bigint h FROM ${s}.session_rosters r
                     WHERE r.settled_height IS NULL AND r.start_height BETWEEN $1 AND $2
