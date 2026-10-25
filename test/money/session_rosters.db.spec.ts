@@ -887,8 +887,28 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     assert.ok((indexed.rosters as Row[]).length > 0);
     await q(`TRUNCATE ${S}.session_rosters, ${S}.session_suppliers, ${S}.session_roster_progress, ${tables.map((t) => `${S}.${t}`).join(", ")}`);
     // the late pass three blocks of claims at a time: a4's claim at 10 is found in the chunk 10..12
-    const got = await backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, lateChunk: 3 });
+    // after each start, no session whose settlement block has come is left open for the indexer's next block
+    const openDue: number[] = [];
+    const afterStart = async () => {
+      openDue.push(Number((await q(`SELECT count(*) n FROM ${S}.session_rosters WHERE settled_height IS NULL AND settlement_height <= 41`))[0].n));
+    };
+    const got = await backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, lateChunk: 3, afterStart });
+    assert.equal(openDue.length, 11);
+    assert.deepEqual(openDue.filter((n) => n > 0), []);
     assert.deepEqual([got.starts, got.late, got.unmatched], [11, 1, []]);
+    assert.deepEqual(await snapshot(), indexed);
+    await checkRollups();
+    // parallel runs: a stretch left unwritten stops FINAL_STATES_ONLY before it reports the range as covered
+    await q(`TRUNCATE ${S}.session_rosters, ${S}.session_suppliers, ${S}.session_roster_progress, ${tables.map((t) => `${S}.${t}`).join(", ")}`);
+    await backfillSessionRosters(q, S, { from: 1, to: 20, latest: 41, skipFinalStates: true });
+    await backfillSessionRosters(q, S, { from: 31, to: 41, latest: 41, skipFinalStates: true });
+    await assert.rejects(
+      backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, finalStatesOnly: true, lateChunk: 3 }),
+      /3 session starts of 1\.\.41 hold no rosters \(first: 21, 25, 29\)/
+    );
+    assert.deepEqual(await q(`SELECT * FROM ${S}.session_roster_progress`), []);
+    await backfillSessionRosters(q, S, { from: 21, to: 30, latest: 41, skipFinalStates: true });
+    await backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, finalStatesOnly: true, lateChunk: 3 });
     assert.deepEqual(await snapshot(), indexed);
     await checkRollups();
   });
