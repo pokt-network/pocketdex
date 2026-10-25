@@ -898,6 +898,19 @@ describe("session rosters (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG not set"
     assert.deepEqual([got.starts, got.late, got.unmatched], [11, 1, []]);
     assert.deepEqual(await snapshot(), indexed);
     await checkRollups();
+    // parallel runs: a stretch left unwritten stops FINAL_STATES_ONLY before it reports the range as covered
+    await q(`TRUNCATE ${S}.session_rosters, ${S}.session_suppliers, ${S}.session_roster_progress, ${tables.map((t) => `${S}.${t}`).join(", ")}`);
+    await backfillSessionRosters(q, S, { from: 1, to: 20, latest: 41, skipFinalStates: true });
+    await backfillSessionRosters(q, S, { from: 31, to: 41, latest: 41, skipFinalStates: true });
+    await assert.rejects(
+      backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, finalStatesOnly: true, lateChunk: 3 }),
+      /3 session starts of 1\.\.41 hold no rosters \(first: 21, 25, 29\)/
+    );
+    assert.deepEqual(await q(`SELECT * FROM ${S}.session_roster_progress`), []);
+    await backfillSessionRosters(q, S, { from: 21, to: 30, latest: 41, skipFinalStates: true });
+    await backfillSessionRosters(q, S, { from: 1, to: 41, latest: 41, finalStatesOnly: true, lateChunk: 3 });
+    assert.deepEqual(await snapshot(), indexed);
+    await checkRollups();
   });
 
   it("settles where the money tables do not cover the block, and completes it when they do", async () => {
