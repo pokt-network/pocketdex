@@ -7,7 +7,10 @@ export const refreshSupplyDailyFnName = "refresh_supply_daily";
 // use too (get_supply, get_supply_composition). A day with a row is a day held; a held day with no block with an upokt
 // supply (mainnet has six days without blocks, 2025-05-01..06) has a NULL height and no composition rows: it has no
 // point, and a bucket takes the point of its last day that has one. first_height / last_height are the day's first and
-// last block (NULL with no block); they are the same on every row of a day. Plain DDL, hidden from the API.
+// last block (NULL with no block); they are the same on every row of a day. unmigrated_unstaked_balance_upokt,
+// unmigrated_supplier_stake_upokt and unmigrated_application_stake_upokt split unmigrated_upokt as
+// get_total_supply_by_day gives it; they came later, so a day written before holds them NULL until
+// scripts/fill_supply_daily.sql writes it again. Plain DDL, hidden from the API.
 export function createSupplyDailyTablesFn(dbSchema: string): string {
   return `
 CREATE TABLE IF NOT EXISTS ${dbSchema}.supply_daily (
@@ -19,6 +22,9 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.supply_daily (
   first_height         BIGINT,
   last_height          BIGINT
 );
+ALTER TABLE ${dbSchema}.supply_daily ADD COLUMN IF NOT EXISTS unmigrated_unstaked_balance_upokt NUMERIC,
+  ADD COLUMN IF NOT EXISTS unmigrated_supplier_stake_upokt NUMERIC,
+  ADD COLUMN IF NOT EXISTS unmigrated_application_stake_upokt NUMERIC;
 
 CREATE TABLE IF NOT EXISTS ${dbSchema}.supply_composition_daily (
   day          DATE    NOT NULL,
@@ -34,7 +40,8 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.supply_composition_daily (
 // The supply at block p_height, as get_supply_composition_between_dates computes it at a bucket's latest block:
 // network_supply_upokt = the upokt supply recorded at that block (NULL when it has none); unmigrated_upokt = the Morse
 // balances not claimed at that block (the unclaimed accounts now plus the ones claimed after it: unstaked balance,
-// supplier and application stake); total_supply_upokt = their sum; composition = {label: upokt} of the upokt balances at
+// supplier and application stake), split into unmigrated_unstaked_balance_upokt, unmigrated_supplier_stake_upokt and
+// unmigrated_application_stake_upokt; total_supply_upokt = network_supply_upokt + unmigrated_upokt; composition = {label: upokt} of the upokt balances at
 // that block, by module account name, 'dao' (the tokenomics dao_reward_address at that block), 'wrapped' (the bridge
 // address) or 'others', NULL without p_composition (get_supply: the totals need no balances, which are most of the
 // ~60 ms). The point's height is chosen by the caller (_supply_height).
@@ -43,12 +50,25 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.supply_composition_daily (
 // on the mainnet replica, 2026-10-20, which is all of get_total_supply_by_day's 30 days): unclaimed now plus claimed
 // after a height only loses, from one height to a later one, the accounts claimed between them, whenever it is read.
 // The day the rollup holds was written by this function in full, so a live point reads what the rollup would hold; with
-// no such day it is computed in full.
+// no such day, or one written before the split was (its split NULL), it is computed in full.
+// The split came later to the rows: a return type CREATE OR REPLACE cannot change, so an older one is dropped first.
 export function createSupplyAtFn(dbSchema: string): string {
   return `
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p
+           WHERE p.pronamespace = '${dbSchema}'::regnamespace AND p.proname = '_supply_at'
+             AND NOT ('unmigrated_supplier_stake_upokt' = ANY(coalesce(p.proargnames, '{}'))) LOOP
+    EXECUTE format('DROP FUNCTION %s', f);
+  END LOOP;
+END $$;
+
 CREATE OR REPLACE FUNCTION ${dbSchema}._supply_at(p_height bigint, p_composition boolean DEFAULT true,
   p_anchor boolean DEFAULT false)
-RETURNS TABLE(network_supply_upokt numeric, unmigrated_upokt numeric, total_supply_upokt numeric, composition jsonb)
+RETURNS TABLE(network_supply_upokt numeric, unmigrated_upokt numeric, total_supply_upokt numeric, composition jsonb,
+  unmigrated_unstaked_balance_upokt numeric, unmigrated_supplier_stake_upokt numeric,
+  unmigrated_application_stake_upokt numeric)
 LANGUAGE plpgsql STABLE
 SET jit = off
 -- planned for the height: a generic plan of the balances read took 160-220 ms a point on the mainnet replica, a custom
@@ -57,11 +77,17 @@ SET plan_cache_mode = force_custom_plan
 AS $$
 DECLARE
   a_height bigint;
-  a_unmigrated numeric;
+  a_a numeric;
+  a_s numeric;
+  a_p numeric;
 BEGIN
   IF p_anchor AND NOT p_composition THEN
-    SELECT sd.height, sd.unmigrated_upokt INTO a_height, a_unmigrated
+    SELECT sd.height, sd.unmigrated_unstaked_balance_upokt, sd.unmigrated_supplier_stake_upokt,
+           sd.unmigrated_application_stake_upokt INTO a_height, a_a, a_s, a_p
     FROM ${dbSchema}.supply_daily sd WHERE sd.height IS NOT NULL AND sd.height <= p_height ORDER BY sd.day DESC LIMIT 1;
+    IF a_a IS NULL OR a_s IS NULL OR a_p IS NULL THEN
+      a_height := NULL;
+    END IF;
   END IF;
   IF a_height IS NOT NULL THEN
     RETURN QUERY
@@ -73,11 +99,13 @@ BEGIN
       LIMIT 1
     ),
     m AS (
-      SELECT a_unmigrated - COALESCE(SUM(unstaked_balance_amount), 0) - COALESCE(SUM(supplier_stake_amount), 0)
-               - COALESCE(SUM(application_stake_amount), 0) unmigrated
+      SELECT a_a - COALESCE(SUM(unstaked_balance_amount), 0) a, a_s - COALESCE(SUM(supplier_stake_amount), 0) s,
+             a_p - COALESCE(SUM(application_stake_amount), 0) p
       FROM ${dbSchema}.morse_claimable_accounts WHERE claimed_at_id > a_height AND claimed_at_id <= p_height
     )
-    SELECT (SELECT amount FROM sp), m.unmigrated, COALESCE((SELECT amount FROM sp), 0) + m.unmigrated, NULL::jsonb FROM m;
+    SELECT (SELECT amount FROM sp), m.a + m.s + m.p, COALESCE((SELECT amount FROM sp), 0) + m.a + m.s + m.p, NULL::jsonb,
+           m.a, m.s, m.p
+    FROM m;
     RETURN;
   END IF;
   RETURN QUERY
@@ -97,7 +125,7 @@ BEGIN
     FROM ${dbSchema}.morse_claimable_accounts WHERE claimed_at_id > p_height
   ),
   m AS (
-    SELECT COALESCE(u.a, 0) + COALESCE(r.a, 0) + COALESCE(u.s, 0) + COALESCE(r.s, 0) + COALESCE(u.p, 0) + COALESCE(r.p, 0) unmigrated
+    SELECT COALESCE(u.a, 0) + COALESCE(r.a, 0) a, COALESCE(u.s, 0) + COALESCE(r.s, 0) s, COALESCE(u.p, 0) + COALESCE(r.p, 0) p
     FROM u CROSS JOIN r
   ),
   c AS (
@@ -120,8 +148,8 @@ BEGIN
     WHERE b.denom = 'upokt' AND b._block_range @> p_height
     GROUP BY 1
   )
-  SELECT (SELECT amount FROM sp), m.unmigrated, COALESCE((SELECT amount FROM sp), 0) + m.unmigrated,
-         CASE WHEN p_composition THEN (SELECT jsonb_object_agg(c.label, c.amount) FROM c) END
+  SELECT (SELECT amount FROM sp), m.a + m.s + m.p, COALESCE((SELECT amount FROM sp), 0) + m.a + m.s + m.p,
+         CASE WHEN p_composition THEN (SELECT jsonb_object_agg(c.label, c.amount) FROM c) END, m.a, m.s, m.p
   FROM m;
 END
 $$;
@@ -177,8 +205,10 @@ BEGIN
   END IF;
 
   SELECT * INTO r FROM ${dbSchema}._supply_at(v_h);
-  INSERT INTO ${dbSchema}.supply_daily (day, height, network_supply_upokt, unmigrated_upokt, total_supply_upokt, first_height, last_height)
-  VALUES (p_day, v_h, r.network_supply_upokt, r.unmigrated_upokt, r.total_supply_upokt, v_lo, v_hi);
+  INSERT INTO ${dbSchema}.supply_daily (day, height, network_supply_upokt, unmigrated_upokt, total_supply_upokt, first_height, last_height,
+    unmigrated_unstaked_balance_upokt, unmigrated_supplier_stake_upokt, unmigrated_application_stake_upokt)
+  VALUES (p_day, v_h, r.network_supply_upokt, r.unmigrated_upokt, r.total_supply_upokt, v_lo, v_hi,
+    r.unmigrated_unstaked_balance_upokt, r.unmigrated_supplier_stake_upokt, r.unmigrated_application_stake_upokt);
   INSERT INTO ${dbSchema}.supply_composition_daily (day, label, amount_upokt, first_height, last_height)
   SELECT p_day, e.key, e.value::numeric, v_lo, v_hi FROM jsonb_each_text(r.composition) e;
   RETURN v_h;
