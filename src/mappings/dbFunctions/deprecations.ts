@@ -8,7 +8,8 @@ export const MIGRATION_DOC = "https://github.com/pokt-network/pocketdex/blob/mai
 // each old function, by name (every overload), with what replaces it
 export const DEPRECATED_OLD_FUNCTIONS: Record<string, string> = {
   get_total_supply_by_day: "getSupplyList or getSupplyJson (bucket day)",
-  get_total_supply_between_dates: "getSupplyList or getSupplyJson with bucket null (one row at the range's last point)",
+  get_total_supply_between_dates:
+    "getSupplyList or getSupplyJson with bucket year, its newest row (the range's last point; GraphQL drops an explicit bucket: null and applies the default day)",
   get_supply_composition_between_dates:
     "getSupplyCompositionList or getSupplyCompositionJson (and getSupplyList for the totals; getSupplyCompositionAtList for one block)",
   get_amount_of_blocks_and_suppliers_by_times: "getStakedSuppliersByServiceList or getStakedSuppliersByServiceJson",

@@ -2501,12 +2501,14 @@ BEGIN
   SELECT ${s}._bucket(bucket, p.bucket_start AT TIME ZONE 'UTC', NULL), ${s}._bucket_end(bucket, p.bucket_start AT TIME ZONE 'UTC', NULL),
          p.height, (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = p.height LIMIT 1),
          x.label, x.amount_upokt, cv.covered_from, cv.covered_to, gp
-  FROM ${s}._supply_points(f, t, bucket) p
-  LEFT JOIN LATERAL (SELECT * FROM ${s}._supply_at(p.height) WHERE p.kind = 'live') l ON true
+  -- the live points' composition in a CASE: a lateral _supply_at(p.height) filtered on p.kind still ran for every point
+  -- (a year by day: 365 calls of ~35 ms, 13.4 s on the mainnet replica, 2026-10-27; with the CASE, 5 ms)
+  FROM (SELECT q.*, CASE WHEN q.kind = 'live' THEN (SELECT a.composition FROM ${s}._supply_at(q.height) a LIMIT 1) END lc
+        FROM ${s}._supply_points(f, t, bucket) q) p
   CROSS JOIN LATERAL (
     SELECT c.label, c.amount_upokt FROM ${s}.supply_composition_daily c WHERE p.kind = 'rollup' AND c.day = p.day
     UNION ALL
-    SELECT e.key, e.value::numeric FROM jsonb_each_text(l.composition) e WHERE p.kind = 'live'
+    SELECT e.key, e.value::numeric FROM jsonb_each_text(p.lc) e WHERE p.kind = 'live'
   ) x(label, amount_upokt)
   WHERE p.kind <> 'gap'
   ORDER BY 1 DESC, 5;
