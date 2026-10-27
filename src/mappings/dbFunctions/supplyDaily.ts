@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS ${dbSchema}.supply_composition_daily (
 // network_supply_upokt = the upokt supply recorded at that block (NULL when it has none); unmigrated_upokt = the Morse
 // balances not claimed at that block (the unclaimed accounts now plus the ones claimed after it: unstaked balance,
 // supplier and application stake), split into unmigrated_unstaked_balance_upokt, unmigrated_supplier_stake_upokt and
-// unmigrated_application_stake_upokt; total_supply_upokt = network_supply_upokt + unmigrated_upokt; composition = {label: upokt} of the upokt balances at
+// unmigrated_application_stake_upokt; total_supply_upokt = network_supply_upokt (0 when NULL) + unmigrated_upokt; composition = {label: upokt} of the upokt balances at
 // that block, by module account name, 'dao' (the tokenomics dao_reward_address at that block), 'wrapped' (the bridge
 // address) or 'others', NULL without p_composition (get_supply: the totals need no balances, which are most of the
 // ~60 ms). The point's height is chosen by the caller (_supply_height).
