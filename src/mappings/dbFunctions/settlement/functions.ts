@@ -1649,7 +1649,19 @@ LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan AS $$
 BEGIN
   PERFORM ${s}._validate(suppliers, 'suppliers', NULL, NULL, NULL);
   IF services IS NOT NULL THEN PERFORM ${s}._validate(services, 'services', NULL, NULL, NULL); END IF;
-  RETURN (SELECT coalesce(jsonb_agg(${s}._json_strings(to_jsonb(h)) ORDER BY h.supplier_id, h.service_id, h.first_height), '[]'::jsonb)
+  -- the numbers are the heights and, in each endpoint, its rpcType (an enum number) and its configs' keys: each endpoint is
+  -- converted one key at a time, not by walking the whole row (200 suppliers of 8 services, 12.8k rows: 12.3 s -> 2.1 s on
+  -- the mainnet replica, 2026-10-27, the same answer)
+  RETURN (SELECT coalesce(jsonb_agg(jsonb_build_object('supplier_id', h.supplier_id, 'service_id', h.service_id,
+            'first_height', h.first_height::text, 'last_height', h.last_height::text,
+            'rev_share', ${s}._json_strings(h.rev_share),
+            'endpoints', (SELECT coalesce(jsonb_agg(CASE WHEN jsonb_typeof(e) <> 'object' THEN ${s}._json_strings(e)
+                                                         ELSE (SELECT coalesce(jsonb_object_agg(k, CASE jsonb_typeof(v) WHEN 'number' THEN to_jsonb(v #>> '{}')
+                                                                                       WHEN 'array' THEN ${s}._json_strings(v)
+                                                                                       WHEN 'object' THEN ${s}._json_strings(v) ELSE v END), '{}'::jsonb)
+                                                               FROM jsonb_each(e) kv(k, v)) END ORDER BY i), '[]'::jsonb)
+                          FROM jsonb_array_elements(h.endpoints) WITH ORDINALITY x(e, i)),
+            'domains', to_jsonb(h.domains)) ORDER BY h.supplier_id, h.service_id, h.first_height), '[]'::jsonb)
           FROM ${s}._supplier_config_history(suppliers, services, NULL, NULL, NULL, NULL) h);
 END $$;
 COMMENT ON FUNCTION ${s}.get_suppliers_config_history_json(text[], text[]) IS
@@ -4293,13 +4305,19 @@ BEGIN
 END $$;
 
 -- Every number inside a jsonb (arrays and objects, at any depth) as a JSON string: the twins' nested values, such as
--- coverage heights and get_supplier_proofs.invalid_by_reason counts.
+-- coverage heights and get_supplier_proofs.invalid_by_reason counts. A value with no number is returned as it is, and an
+-- array of scalars is converted in one pass: the recursion, one SQL call per element, was most of a twin's time
+-- (get_session_rosters_json, 1000 sessions of 50 members: 1.2 s of 2.0 s on the mainnet replica, 2026-10-27).
 CREATE OR REPLACE FUNCTION ${s}._json_strings(j jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
-  SELECT CASE jsonb_typeof(j)
-    WHEN 'number' THEN to_jsonb(j #>> '{}')
-    WHEN 'array' THEN (SELECT coalesce(jsonb_agg(${s}._json_strings(x) ORDER BY i), '[]'::jsonb)
-                       FROM jsonb_array_elements(j) WITH ORDINALITY a(x, i))
-    WHEN 'object' THEN (SELECT coalesce(jsonb_object_agg(k, ${s}._json_strings(v)), '{}'::jsonb) FROM jsonb_each(j) e(k, v))
+  SELECT CASE
+    WHEN jsonb_typeof(j) = 'number' THEN to_jsonb(j #>> '{}')
+    WHEN NOT jsonb_path_exists(j, 'strict $.**.type() ? (@ == "number")') THEN j
+    WHEN jsonb_typeof(j) = 'array' AND NOT jsonb_path_exists(j, '$[*] ? (@.type() == "array" || @.type() == "object")')
+      THEN (SELECT coalesce(jsonb_agg(CASE WHEN jsonb_typeof(x) = 'number' THEN to_jsonb(x #>> '{}') ELSE x END ORDER BY i), '[]'::jsonb)
+            FROM jsonb_array_elements(j) WITH ORDINALITY a(x, i))
+    WHEN jsonb_typeof(j) = 'array' THEN (SELECT coalesce(jsonb_agg(${s}._json_strings(x) ORDER BY i), '[]'::jsonb)
+                                         FROM jsonb_array_elements(j) WITH ORDINALITY a(x, i))
+    WHEN jsonb_typeof(j) = 'object' THEN (SELECT coalesce(jsonb_object_agg(k, ${s}._json_strings(v)), '{}'::jsonb) FROM jsonb_each(j) e(k, v))
     ELSE j END
 $$;
 
