@@ -2055,6 +2055,32 @@ describe("settlement money writer (PostgreSQL)", { skip: !URL && "MONEY_TEST_PG 
       assert.equal(parsed.length, both.length);
       assert.deepEqual(parsed.map((r) => `${r.supplier_id} ${r.service_id} ${r.first_height}`), both.map((k) => k.split(" ").slice(0, 3).join(" ")));
       assert.equal(typeof parsed[0].first_height, "string");
+      // the same answer as converting every row by recursion (the function before 2026-10-27), and the endpoint's
+      // rpcType (an enum number in the configs) as a string
+      await c.query(`CREATE FUNCTION pg_temp.json_strings_ref(j jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+        SELECT CASE jsonb_typeof(j)
+          WHEN 'number' THEN to_jsonb(j #>> '{}')
+          WHEN 'array' THEN (SELECT coalesce(jsonb_agg(pg_temp.json_strings_ref(x) ORDER BY i), '[]'::jsonb)
+                             FROM jsonb_array_elements(j) WITH ORDINALITY a(x, i))
+          WHEN 'object' THEN (SELECT coalesce(jsonb_object_agg(k, pg_temp.json_strings_ref(v)), '{}'::jsonb) FROM jsonb_each(j) e(k, v))
+          ELSE j END $$`);
+      const [same] = (
+        await c.query(`SELECT ${S}.get_suppliers_config_history_json(ARRAY['sk', 'other']) =
+                         (SELECT jsonb_agg(pg_temp.json_strings_ref(to_jsonb(h)) ORDER BY h.supplier_id, h.service_id, h.first_height)
+                          FROM ${S}._supplier_config_history(ARRAY['sk', 'other'], NULL, NULL, NULL, NULL, NULL) h) ok`)
+      ).rows;
+      assert.equal(same.ok, true);
+      assert.equal((parsed[0].endpoints as Array<Record<string, unknown>>)[0].rpcType, "3");
+      // _json_strings: every shape the twins hand it, against the recursion
+      const shapes = [
+        "null", "1", "1.5", "\"s\"", "true", "[]", "{}", "[\"a\",\"b\"]", "[1,2,null,\"x\",true]", "[[1],[\"a\"],{}]",
+        "{\"a\":1,\"b\":{\"c\":[2,{\"d\":3}]},\"e\":\"s\"}", "[{\"url\":\"u\",\"rpcType\":3,\"configs\":[{\"key\":1,\"value\":\"v\"}]}]",
+        "{\"from\":12,\"to\":null}", "[{\"from\":1,\"to\":2}]",
+      ];
+      for (const v of shapes) {
+        const [r] = (await c.query(`SELECT ${S}._json_strings($1::jsonb) = pg_temp.json_strings_ref($1::jsonb) ok, ${S}._json_strings($1::jsonb)::text got`, [v])).rows;
+        assert.equal(r.ok, true, `${v} -> ${r.got}`);
+      }
       for (const [args, err] of [
         ["ARRAY(SELECT 's' || g FROM generate_series(1, 201) g)", /suppliers must have between 1 and 200 elements/],
         ["ARRAY['sk'], after_service_id => 'kava', after_first_height => 1", /pass after_supplier_id, after_service_id and after_first_height/],
