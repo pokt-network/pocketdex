@@ -4,6 +4,8 @@
 -- held; until then the day is a gap in covered_gaps, never a zero. A day without blocks (mainnet 2025-05-01..06) has
 -- nothing to hold and is no gap. The latest block's day is the indexer's: its per-block refresh rebuilds a day it does
 -- not hold at its first block.
+-- A day held from before suppliers_stake_upokt was added (a row with it NULL) is written again too: the stake is the
+-- tokens of the same rows, nothing is read from the chain.
 -- Idempotent: a stopped run is resumed by running it again; a day already held is skipped. A day is read once, from the
 -- staked_suppliers_by_block_and_services rows of its blocks (249k rows, ~0.3 s on the mainnet replica, 2026-10-20), so
 -- a year is about 365 short transactions; each takes row locks on that day's rollup rows only.
@@ -25,7 +27,8 @@ FROM generate_series(
        greatest(:'since'::date, (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp, b.id LIMIT 1)),
        (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp DESC, b.id DESC LIMIT 1) - 1,
        interval '1 day') d
-WHERE NOT EXISTS (SELECT 1 FROM staked_suppliers_daily t WHERE t.day = d::date)
+WHERE (NOT EXISTS (SELECT 1 FROM staked_suppliers_daily t WHERE t.day = d::date)
+       OR EXISTS (SELECT 1 FROM staked_suppliers_daily t WHERE t.day = d::date AND t.suppliers_stake_upokt IS NULL))
   AND EXISTS (SELECT 1 FROM blocks b WHERE b.timestamp >= d AND b.timestamp < d + interval '1 day')
 ORDER BY d DESC
 \gexec
@@ -34,5 +37,6 @@ FROM generate_series(
        greatest(:'since'::date, (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp, b.id LIMIT 1)),
        (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp DESC, b.id DESC LIMIT 1) - 1,
        interval '1 day') d
-WHERE NOT EXISTS (SELECT 1 FROM staked_suppliers_daily t WHERE t.day = d::date)
+WHERE (NOT EXISTS (SELECT 1 FROM staked_suppliers_daily t WHERE t.day = d::date)
+       OR EXISTS (SELECT 1 FROM staked_suppliers_daily t WHERE t.day = d::date AND t.suppliers_stake_upokt IS NULL))
   AND EXISTS (SELECT 1 FROM blocks b WHERE b.timestamp >= d AND b.timestamp < d + interval '1 day');

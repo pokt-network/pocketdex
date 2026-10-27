@@ -622,6 +622,8 @@ BEGIN
                       , ('get_relay_mining_difficulty', 'row_offset')
                       , ('get_service_usage', 'search_text')
                       , ('get_supplier_distribution', 'by_service')
+                      , ('get_staked_suppliers_by_service', 'suppliers_stake_upokt')
+                      , ('get_supply', 'unmigrated_supplier_stake_upokt')
                 ) n(name, arg) ON n.name = p.proname
            WHERE p.pronamespace = '${s}'::regnamespace AND NOT (n.arg = ANY(coalesce(p.proargnames, '{}'))) LOOP
     EXECUTE format('DROP FUNCTION %s', f);
@@ -2346,7 +2348,10 @@ END $$;
 -- Staked suppliers per service over a range, without summing staked_suppliers_by_block_and_services
 -- (staked_suppliers_daily, stakedSuppliersDaily.ts): blocks = the blocks with a row for the service, suppliers_staked = the
 -- staked suppliers summed over them (divide by blocks for the average per block), as
--- get_amount_of_blocks_and_suppliers_by_times gives them (the rollup's '*' rows only mark a day as held). services
+-- get_amount_of_blocks_and_suppliers_by_times gives them (the rollup's '*' rows only mark a day as held);
+-- suppliers_stake_upokt = their stake summed over those blocks the same way, a supplier's whole stake in each of its
+-- services, as get_suppliers_staked_and_blocks_by_point_json's tokens (NULL while a day of the range is held without it,
+-- until scripts/fill_staked_suppliers_daily.sql writes that day again: never a sum short of it). services
 -- filters (NULL: every service). The UTC days inside the range come from the rollup, the partial days at its ends from
 -- their blocks' rows, read as _blocks_and_suppliers_by_service reads them: each end's first and last block by two probes
 -- of idx_blocks_timestamp_id, then count(*) / sum over that id range inside RETURN QUERY, where the scan can run
@@ -2357,8 +2362,8 @@ END $$;
 -- (covered(..., true)), as get_tx_counts.
 CREATE OR REPLACE FUNCTION ${s}.get_staked_suppliers_by_service(range_start timestamptz, range_end timestamptz,
   services text[] DEFAULT NULL)
-RETURNS TABLE(service_id text, blocks bigint, suppliers_staked bigint, first_height bigint, last_height bigint,
-  covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
+RETURNS TABLE(service_id text, blocks bigint, suppliers_staked bigint, suppliers_stake_upokt numeric, first_height bigint,
+  last_height bigint, covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE cv record; f timestamp; t timestamp; d1 date; d2 date; gp jsonb := '[]'; ea timestamp[]; eb timestamp[];
   lo1 bigint; hi1 bigint; lo2 bigint; hi2 bigint;
@@ -2400,38 +2405,42 @@ BEGIN
   END IF;
   RETURN QUERY
   WITH parts AS (
-    SELECT d.service_id, d.blocks, d.suppliers_staked, d.first_height, d.last_height
+    SELECT d.service_id, d.blocks, d.suppliers_staked, d.suppliers_stake_upokt, d.first_height, d.last_height
     FROM ${s}.staked_suppliers_daily d
     WHERE d1 < d2 AND d.day >= d1 AND d.day < d2 AND d.service_id <> '*'
       AND (get_staked_suppliers_by_service.services IS NULL OR d.service_id = ANY(get_staked_suppliers_by_service.services))
     UNION ALL
     -- one row per block and service (upsert_staked_suppliers_by_block_and_services), so count(*) counts blocks
-    SELECT ss.service_id, count(*)::bigint, sum(ss.amount)::bigint, lo1, hi1
+    SELECT ss.service_id, count(*)::bigint, sum(ss.amount)::bigint, sum(ss.tokens)::numeric, lo1, hi1
     FROM ${s}.staked_suppliers_by_block_and_services ss
     WHERE ss.block_id BETWEEN lo1 AND hi1
       AND (get_staked_suppliers_by_service.services IS NULL OR ss.service_id = ANY(get_staked_suppliers_by_service.services))
     GROUP BY ss.service_id
     UNION ALL
-    SELECT ss.service_id, count(*)::bigint, sum(ss.amount)::bigint, lo2, hi2
+    SELECT ss.service_id, count(*)::bigint, sum(ss.amount)::bigint, sum(ss.tokens)::numeric, lo2, hi2
     FROM ${s}.staked_suppliers_by_block_and_services ss
     WHERE ss.block_id BETWEEN lo2 AND hi2
       AND (get_staked_suppliers_by_service.services IS NULL OR ss.service_id = ANY(get_staked_suppliers_by_service.services))
     GROUP BY ss.service_id
   )
-  SELECT p.service_id, sum(p.blocks)::bigint, sum(p.suppliers_staked)::bigint, min(p.first_height)::bigint,
-         max(p.last_height)::bigint, cv.covered_from, cv.covered_to, gp
+  SELECT p.service_id, sum(p.blocks)::bigint, sum(p.suppliers_staked)::bigint,
+         CASE WHEN bool_and(p.suppliers_stake_upokt IS NOT NULL) THEN sum(p.suppliers_stake_upokt) END,
+         min(p.first_height)::bigint, max(p.last_height)::bigint, cv.covered_from, cv.covered_to, gp
   FROM parts p
   GROUP BY p.service_id
   ORDER BY p.service_id;
   IF NOT FOUND AND jsonb_array_length(gp) > 0 THEN
     -- nothing to read but gaps: one row of NULLs, which carries them (an empty answer would report the range as covered)
-    RETURN QUERY SELECT NULL::text, NULL::bigint, NULL::bigint, NULL::bigint, NULL::bigint, cv.covered_from, cv.covered_to, gp;
+    RETURN QUERY SELECT NULL::text, NULL::bigint, NULL::bigint, NULL::numeric, NULL::bigint, NULL::bigint, cv.covered_from,
+      cv.covered_to, gp;
   END IF;
 END $$;
 
 -- The supply per bucket at its point, the bucket's last block with an upokt supply inside the range (supplyDaily.ts):
 -- height and block_time; network_supply_upokt, the upokt supply recorded at that block; unmigrated_upokt, the Morse
--- balances not claimed at that block; total_supply_upokt, their sum; as get_supply_composition_between_dates and
+-- balances not claimed at that block, split into unmigrated_unstaked_balance_upokt, unmigrated_supplier_stake_upokt and
+-- unmigrated_application_stake_upokt (NULL for a day the rollup holds without the split, until
+-- scripts/fill_supply_daily.sql writes it again); total_supply_upokt, their sum; as get_supply_composition_between_dates and
 -- get_total_supply_by_day give them. bucket = day (default), week, month or year, in UTC; NULL = one row at the range's
 -- last point, get_total_supply_between_dates' snapshot (bucket_start / bucket_end = the range). A bucket whose point is a full
 -- day inside the range reads it from supply_daily; the partial days at the ends of the range are computed live by
@@ -2440,8 +2449,9 @@ END $$;
 -- range with no row and gaps answers one row of NULLs that carries them. Covers the indexed blocks.
 CREATE OR REPLACE FUNCTION ${s}.get_supply(range_start timestamptz, range_end timestamptz, bucket text DEFAULT 'day')
 RETURNS TABLE(bucket_start timestamptz, bucket_end timestamptz, height bigint, block_time timestamptz,
-  network_supply_upokt numeric, unmigrated_upokt numeric, total_supply_upokt numeric, covered_from timestamptz,
-  covered_to timestamptz, covered_gaps jsonb)
+  network_supply_upokt numeric, unmigrated_upokt numeric, unmigrated_unstaked_balance_upokt numeric,
+  unmigrated_supplier_stake_upokt numeric, unmigrated_application_stake_upokt numeric, total_supply_upokt numeric,
+  covered_from timestamptz, covered_to timestamptz, covered_gaps jsonb)
 LANGUAGE plpgsql STABLE SET plan_cache_mode = force_custom_plan SET jit = off AS $$
 DECLARE cv record; f timestamp; t timestamp; gp jsonb;
 BEGIN
@@ -2462,6 +2472,9 @@ BEGIN
          p.height, (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = p.height LIMIT 1),
          CASE p.kind WHEN 'rollup' THEN sd.network_supply_upokt ELSE l.network_supply_upokt END,
          CASE p.kind WHEN 'rollup' THEN sd.unmigrated_upokt ELSE l.unmigrated_upokt END,
+         CASE p.kind WHEN 'rollup' THEN sd.unmigrated_unstaked_balance_upokt ELSE l.unmigrated_unstaked_balance_upokt END,
+         CASE p.kind WHEN 'rollup' THEN sd.unmigrated_supplier_stake_upokt ELSE l.unmigrated_supplier_stake_upokt END,
+         CASE p.kind WHEN 'rollup' THEN sd.unmigrated_application_stake_upokt ELSE l.unmigrated_application_stake_upokt END,
          CASE p.kind WHEN 'rollup' THEN sd.total_supply_upokt ELSE l.total_supply_upokt END,
          cv.covered_from, cv.covered_to, gp
   FROM ${s}._supply_points(f, t, bucket) p
@@ -2472,7 +2485,7 @@ BEGIN
   ORDER BY 1 DESC;
   IF NOT FOUND AND jsonb_array_length(gp) > 0 THEN
     RETURN QUERY SELECT NULL::timestamptz, NULL::timestamptz, NULL::bigint, NULL::timestamptz, NULL::numeric, NULL::numeric,
-      NULL::numeric, cv.covered_from, cv.covered_to, gp;
+      NULL::numeric, NULL::numeric, NULL::numeric, NULL::numeric, cv.covered_from, cv.covered_to, gp;
   END IF;
 END $$;
 
@@ -2501,12 +2514,14 @@ BEGIN
   SELECT ${s}._bucket(bucket, p.bucket_start AT TIME ZONE 'UTC', NULL), ${s}._bucket_end(bucket, p.bucket_start AT TIME ZONE 'UTC', NULL),
          p.height, (SELECT bl.timestamp AT TIME ZONE 'UTC' FROM ${s}.blocks bl WHERE bl.id = p.height LIMIT 1),
          x.label, x.amount_upokt, cv.covered_from, cv.covered_to, gp
-  FROM ${s}._supply_points(f, t, bucket) p
-  LEFT JOIN LATERAL (SELECT * FROM ${s}._supply_at(p.height) WHERE p.kind = 'live') l ON true
+  -- the live points' composition in a CASE: a lateral _supply_at(p.height) filtered on p.kind still ran for every point
+  -- (a year by day: 365 calls of ~35 ms, 13.4 s on the mainnet replica, 2026-10-27; with the CASE, 5 ms)
+  FROM (SELECT q.*, CASE WHEN q.kind = 'live' THEN (SELECT a.composition FROM ${s}._supply_at(q.height) a LIMIT 1) END lc
+        FROM ${s}._supply_points(f, t, bucket) q) p
   CROSS JOIN LATERAL (
     SELECT c.label, c.amount_upokt FROM ${s}.supply_composition_daily c WHERE p.kind = 'rollup' AND c.day = p.day
     UNION ALL
-    SELECT e.key, e.value::numeric FROM jsonb_each_text(l.composition) e WHERE p.kind = 'live'
+    SELECT e.key, e.value::numeric FROM jsonb_each_text(p.lc) e WHERE p.kind = 'live'
   ) x(label, amount_upokt)
   WHERE p.kind <> 'gap'
   ORDER BY 1 DESC, 5;

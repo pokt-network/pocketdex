@@ -4,6 +4,9 @@
 -- held; until then a bucket whose point is that day has no row and the day is a gap in covered_gaps, never an earlier
 -- point. A day without blocks, or with no block with an upokt supply, is held with no point. The latest block's day is
 -- the indexer's: refresh_supply_daily writes it when the next day's first block comes.
+-- A day held from before the unmigrated split was added (its point with no unmigrated_supplier_stake_upokt) is written
+-- again too: everything it needs is in the database (morse_claimable_accounts with claimed_at_id), nothing is read from
+-- the chain.
 -- Idempotent: a stopped run is resumed by running it again; a day already held is skipped. A day is one point, the
 -- upokt balances at its last block (~60-250 ms on the mainnet replica, 2026-10-20), so the whole chain (~570 days) is
 -- a few minutes of short transactions; each takes row locks on that day's rollup rows only.
@@ -25,7 +28,8 @@ FROM generate_series(
        greatest(:'since'::date, (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp, b.id LIMIT 1)),
        (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp DESC, b.id DESC LIMIT 1) - 1,
        interval '1 day') d
-WHERE NOT EXISTS (SELECT 1 FROM supply_daily t WHERE t.day = d::date)
+WHERE NOT EXISTS (SELECT 1 FROM supply_daily t WHERE t.day = d::date
+                    AND (t.height IS NULL OR t.unmigrated_supplier_stake_upokt IS NOT NULL))
 ORDER BY d DESC
 \gexec
 SELECT count(*) AS days_not_held
@@ -33,4 +37,5 @@ FROM generate_series(
        greatest(:'since'::date, (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp, b.id LIMIT 1)),
        (SELECT b.timestamp::date FROM blocks b ORDER BY b.timestamp DESC, b.id DESC LIMIT 1) - 1,
        interval '1 day') d
-WHERE NOT EXISTS (SELECT 1 FROM supply_daily t WHERE t.day = d::date);
+WHERE NOT EXISTS (SELECT 1 FROM supply_daily t WHERE t.day = d::date
+                    AND (t.height IS NULL OR t.unmigrated_supplier_stake_upokt IS NOT NULL));
