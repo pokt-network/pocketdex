@@ -1,9 +1,9 @@
 // The get_rewards_* functions kept their names, arguments and return types, and now answer from the money tables:
 // each returns the data of its legacy_* twin (settlement/functions.ts), which holds what the function returned while it
-// read mod_to_acct_transfers (that table is no longer written). They are plpgsql so that they resolve the legacy_*
+// read mod_to_acct_transfers (that table is dropped, ./modToAcctTransfers.ts). They are plpgsql so that they resolve the legacy_*
 // function when called, not when created. A scalar reads 0 where the twin has nothing covered, as it did with no rows.
 // Only the twin's data is returned, not its range: a part of the range the money tables do not cover reads as nothing, as
-// the unwritten part of mod_to_acct_transfers would. The money tables cover mainnet from height 1 to the tip (checked
+// an unwritten part of mod_to_acct_transfers did. The money tables cover mainnet from height 1 to the tip (checked
 // 2026-10-16), so this is the same answer there; call the legacy_* function for the range and the gaps.
 export function getRewardsByAddressesAndTimeGroupByDate(dbSchema: string): string {
   return `CREATE OR REPLACE FUNCTION ${dbSchema}.get_rewards_by_addresses_and_time_group_by_date(
