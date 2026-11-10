@@ -2,7 +2,7 @@
 // distributions, supplier penalties, and the rollups the catalog functions read. They are written only by
 // write_settlement (./writer.ts), once per settlement height, inside the block transaction.
 //
-// Like mod_to_acct_transfers, these tables are plain DDL that SubQuery does not manage: no _block_range,
+// These tables are plain DDL that SubQuery does not manage: no _block_range,
 // no GiST indexes, and SubQuery's rewind does not touch them. A reindex or a history job rewrites a height
 // through write_settlement, which first subtracts that height's old contribution from the rollups.
 //

@@ -1404,8 +1404,8 @@ export async function handleEventClaimExpired(events: Array<CosmosEvent>): Promi
   await optimizedBulkCreate("EventClaimExpired", events.map(_handleEventClaimExpired), 'block_id');
 }
 
-// mod_to_acct_transfers and mod_to_acct_transfers_summarized are no longer written (release 2): the tables and their rows
-// stay, hidden from the API, until they are dropped. The money tables (src/mappings/money) hold what they held.
+// mod_to_acct_transfers and mod_to_acct_transfers_summarized are no longer written (release 2) and are dropped
+// (../dbFunctions/modToAcctTransfers.ts). The money tables (src/mappings/money) hold what they held.
 export async function handleEventClaimSettled(
   events: Array<CosmosEvent>,
   overservices: Array<CosmosEvent>,

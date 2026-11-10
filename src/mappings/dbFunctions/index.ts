@@ -19,7 +19,7 @@ import {
 } from "./domainRewards";
 import { addEntityColumnsFn } from "./entityColumns";
 import { createEntityDescriptionsFn } from "./entityDescriptions";
-import { createModToAcctTransfersTableFn, createModToAcctTransfersSummarizedTableFn } from "./modToAcctTransfers";
+import { dropRawTransferReadersFn } from "./modToAcctTransfers";
 import { getOverservicedsByDelegatorAddressesAndTimesFn } from "./overserviced";
 import { getComputeUnitsToTokensMultiplierEvolutionFn } from "./params";
 import { getRelaysByServicePerPointJsonFn } from "./relaysByServicePerPoint";
@@ -162,8 +162,7 @@ export async function createDbFunctions(): Promise<void> {
   // create the domain_service_daily_rewards summary table and its refresh function
   await createFunctions(
     schema,
-    createModToAcctTransfersTableFn,
-    createModToAcctTransfersSummarizedTableFn,
+    dropRawTransferReadersFn,
     createDomainServiceDailyRewardsTableFn,
     refreshDomainServiceDailyRewardsFn,
     // the transactions per day, message type and status that get_tx_counts reads, and their writers
