@@ -57,16 +57,6 @@ import {
 import { effectiveMintRatio } from "../utils/params_history";
 import { getDenomAndAmount } from "../utils/primitives";
 
-type ModToAcctTransferRecord = {
-  id: string;
-  eventClaimSettledId: string;
-  blockId: bigint;
-  opReason: string;
-  recipientId: string;
-  amount: bigint;
-  denom: string;
-};
-
 // this can return undefined because older events do not have this attribute
 export function getClaimProofStatusFromSDK(item: typeof ClaimProofStatusSDKType | string | number): ClaimProofStatus | undefined {
   if (!item) return undefined;
@@ -571,7 +561,6 @@ function _handleMsgSubmitProof(msg: CosmosMessage<MsgSubmitProof>): MsgSubmitPro
 }
 
 interface SettlementParts {
-  modToAcctTransfers: Array<ModToAcctTransferRecord>;
   mints: EventClaimSettledProps["mints"];
   burns: EventClaimSettledProps["burns"];
   modToModTransfers: EventClaimSettledProps["modToModTransfers"];
@@ -645,24 +634,10 @@ function _buildBurnsAndMintsFromRewardTotal(
 
 function _buildSettlementFromResult(
   settlementResult: ClaimSettlementResultSDKType,
-  eventId: string,
-  blockId: bigint,
   effectiveBurn: string,
   claimed: CoinSDKType,
   mintedUpokt: CoinSDKType | undefined,
 ): SettlementParts {
-  const modToAcctTransfers = settlementResult.mod_to_acct_transfers?.map((item, index) => ({
-    id: `${eventId}-${index}`,
-    blockId,
-    eventClaimSettledId: eventId,
-
-    recipientId: item.RecipientAddress,
-    amount: BigInt(item.coin.amount),
-    denom: item.coin.denom,
-    opReason: getSettlementOpReasonFromSDK(item.op_reason),
-
-  })) || [];
-
   if (!mintedUpokt) {
     // if we get settlementResult that means mintRatio is equal to 1, so the amount minted will be equal to the settled amount, to the effective burn too due to burn being equal to mint
     mintedUpokt = {
@@ -693,40 +668,22 @@ function _buildSettlementFromResult(
     denom: item.coin.denom,
   })) || [];
 
-  return { modToAcctTransfers, mints, burns, modToModTransfers, mintedUpokt };
+  return { mints, burns, modToModTransfers, mintedUpokt };
 }
 
 function _buildSettlementFromDetailedDistribution(
   rewardDistributionDetailed: Array<{ amount: string; op_reason: typeof SettlementOpReasonSDKType | number | string; recipient_address: string }>,
-  eventId: string,
-  blockId: bigint,
   effectiveBurn: string,
   claimed: CoinSDKType,
   mintedUpokt: CoinSDKType | undefined,
 ): SettlementParts {
   let reimbursementAmount = BigInt(0);
 
-  const modToAcctTransfers = rewardDistributionDetailed.map((item, index) => {
-    const coin = getDenomAndAmount(item.amount)
-    const coinAmount = BigInt(coin.amount);
-    const reason = getSettlementOpReasonFromSDK(item.op_reason);
-
-    if (reason === SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER) {
-      reimbursementAmount += coinAmount;
+  for (const item of rewardDistributionDetailed) {
+    if (getSettlementOpReasonFromSDK(item.op_reason) === SettlementOpReason.TLM_GLOBAL_MINT_REIMBURSEMENT_REQUEST_ESCROW_DAO_TRANSFER) {
+      reimbursementAmount += BigInt(getDenomAndAmount(item.amount).amount);
     }
-
-    return {
-      opReason: reason,
-      amount: coinAmount,
-      id: `${eventId}-${index}`,
-      blockId,
-      eventClaimSettledId: eventId,
-      senderModule: "",
-      recipientId: item.recipient_address,
-      relayId: "",
-      denom: coin.denom,
-    };
-  });
+  }
 
   const resolvedMintedUpokt: CoinSDKType = mintedUpokt || {
     amount: effectiveBurn,
@@ -784,67 +741,47 @@ function _buildSettlementFromDetailedDistribution(
     });
   }
 
-  return { modToAcctTransfers, mints, burns, modToModTransfers: [], mintedUpokt: resolvedMintedUpokt };
+  return { mints, burns, modToModTransfers: [], mintedUpokt: resolvedMintedUpokt };
 }
 
 function _buildSettlementFromDistribution(
   rewardDistribution: Record<string, string>,
-  eventId: string,
-  blockId: bigint,
   effectiveBurn: string,
   mintRatio: number,
   claimed: CoinSDKType,
 ): SettlementParts {
   let totalFromRewardDistribution = BigInt(0);
 
-  const modToAcctTransfers = Object.entries(rewardDistribution).map(([address, coinString], index) => {
-    const coin = getDenomAndAmount(coinString);
-    const coinAmount = BigInt(coin.amount);
-    totalFromRewardDistribution = totalFromRewardDistribution + coinAmount;
-
-    return {
-      id: `${eventId}-${index}`,
-      blockId,
-      eventClaimSettledId: eventId,
-      senderModule: "",
-      recipientId: address,
-      opReason: SettlementOpReason.UNSPECIFIED,
-      relayId: "",
-      denom: coin.denom,
-      amount: coinAmount,
-    };
-  });
+  for (const coinString of Object.values(rewardDistribution)) {
+    totalFromRewardDistribution += BigInt(getDenomAndAmount(coinString).amount);
+  }
 
   const { burns, mintedUpokt, mints } =
     _buildBurnsAndMintsFromRewardTotal(totalFromRewardDistribution, effectiveBurn, mintRatio, claimed, undefined);
 
-  return { modToAcctTransfers, mints, burns, modToModTransfers: [], mintedUpokt };
+  return { mints, burns, modToModTransfers: [], mintedUpokt };
 }
 
 function _resolveSettlementParts(
   attributes: ReturnType<typeof getAttributes>,
-  eventId: string,
-  blockId: bigint,
   effectiveBurn: string,
   mintRatio: number,
 ): SettlementParts {
   const { claimed, mintedUpokt, rewardDistribution, rewardDistributionDetailed, settlementResult } = attributes;
 
   if (settlementResult) {
-    return _buildSettlementFromResult(settlementResult, eventId, blockId, effectiveBurn, claimed, mintedUpokt);
+    return _buildSettlementFromResult(settlementResult, effectiveBurn, claimed, mintedUpokt);
   }
 
   if (rewardDistributionDetailed) {
-    return _buildSettlementFromDetailedDistribution(
-      rewardDistributionDetailed, eventId, blockId, effectiveBurn, claimed, mintedUpokt,
-    );
+    return _buildSettlementFromDetailedDistribution(rewardDistributionDetailed, effectiveBurn, claimed, mintedUpokt);
   }
 
   if (rewardDistribution) {
-    return _buildSettlementFromDistribution(rewardDistribution, eventId, blockId, effectiveBurn, mintRatio, claimed);
+    return _buildSettlementFromDistribution(rewardDistribution, effectiveBurn, mintRatio, claimed);
   }
 
-  return { modToAcctTransfers: [], mints: [], burns: [], modToModTransfers: [], mintedUpokt };
+  return { mints: [], burns: [], modToModTransfers: [], mintedUpokt };
 }
 
 function _computeNumEstimatedRelays(
@@ -967,16 +904,13 @@ function _handleEventClaimSettled(
   const mintRatio = mintRatioStr ? parseFloat(mintRatioStr) : getMintRatioFromParams();
   const { session_header, supplier_operator_address } = claim;
 
-  const eventId = getEventId(event);
-  const blockId = getBlockId(event.block);
-
   // Use chain-provided settled_upokt if available (post-aggregation upgrade),
   // otherwise fall back to overserviced effective_burn, then claimed amount
   const effectiveBurn = settledUpokt
     ? settledUpokt.amount
     : (getEffectiveBurn(session_header?.application_address || "", supplier_operator_address) || claimed.amount);
 
-  const settlement = _resolveSettlementParts(attributes, eventId, blockId, effectiveBurn, mintRatio);
+  const settlement = _resolveSettlementParts(attributes, effectiveBurn, mintRatio);
   const props = _buildClaimSettledProps(event, attributes, settlement, effectiveBurn, mintRatio);
 
   return props;

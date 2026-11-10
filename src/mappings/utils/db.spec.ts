@@ -1,4 +1,4 @@
-// Unit test: optimizedBulkCreate and rawBulkInsert write only through the block transaction, one query at a time,
+// Unit test: optimizedBulkCreate writes only through the block transaction, one query at a time,
 // and refuse to write without it, against fake SubQuery globals (logger, store). A write in its own transaction
 // commits before the block does, so readers saw half-written settlement blocks (mainnet 964793). Run with
 //   yarn test:unit
@@ -51,16 +51,9 @@ globals.store = {
 };
 
 process.env.POCKETDEX_DB_BATCH_SIZE = "2";
-const { optimizedBulkCreate, rawBulkInsert } = require("./db") as typeof import("./db");
+const { optimizedBulkCreate } = require("./db") as typeof import("./db");
 
 const docs = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `doc-${i}` }));
-const rawArgs = (n: number) => ({
-  table: "s.mod_to_acct_transfers",
-  columns: ["id", "block_id"],
-  rows: Array.from({ length: n }, (_, i) => `('t-${i}', ${HEIGHT})`),
-  conflictCol: "id",
-  blockId: HEIGHT,
-});
 
 describe("block writes", () => {
   beforeEach(() => {
@@ -100,33 +93,15 @@ describe("block writes", () => {
     );
   });
 
-  it("rawBulkInsert deletes the block's rows and inserts them in the block transaction, one batch at a time", async () => {
-    await rawBulkInsert(rawArgs(5));
-    assert.deepEqual(
-      writes.map(({ op }) => op),
-      ["DELETE", "INSERT", "INSERT", "INSERT"]
-    );
-    assert.match(
-      writes[0].sql as string,
-      new RegExp(`^DELETE FROM s.mod_to_acct_transfers WHERE block_id = ${HEIGHT}$`)
-    );
-    for (const { op, transaction } of writes) {
-      assert.equal(transaction, BLOCK_TX, `${op} outside the block transaction`);
-    }
-    assert.equal(maxInFlight, 1);
-  });
-
-  it("both refuse to write without the block transaction (--enable-cache=true)", async () => {
+  it("refuses to write without the block transaction (--enable-cache=true)", async () => {
     context.transaction = undefined;
     await assert.rejects(optimizedBulkCreate("Event", docs(1), "block_id"), /no block transaction/);
-    await assert.rejects(rawBulkInsert(rawArgs(1)), /no block transaction/);
     assert.deepEqual(writes, []);
   });
 
   it("nothing to write needs no transaction", async () => {
     context.transaction = undefined;
     await optimizedBulkCreate("Event", [], "block_id");
-    await rawBulkInsert(rawArgs(0));
     assert.deepEqual(writes, []);
   });
 });
